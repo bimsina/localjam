@@ -1,0 +1,19 @@
+name: localjam_net
+description: >-
+  Network transport for the LocalJam protocol: WebSocket control plane and
+  HTTP media plane (PROTOCOL.md §1), host server and guest client.
+version: 0.1.0
+publish_to: none
+
+environment:
+  sdk: ^3.12.2
+
+dependencies:
+  crypto: ^3.0.3
+  localjam_core:
+    path: ../localjam_core
+  meta: ^1.11.0
+
+dev_dependencies:
+  lints: ^6.0.0
+  test: ^1.25.6
