@@ -41,8 +41,7 @@ void main() {
       expect(snap.anchor!.hostTimeUs, 11_500_000);
     });
 
-    test('positionAt before the anchor time clamps to the anchor position',
-        () {
+    test('positionAt before the anchor time clamps to the anchor position', () {
       final s = HostSession();
       s.setMedia('m_1', nowUs: 0);
       s.seek(30_000_000, nowUs: 100); // frozen position while loading
@@ -69,8 +68,7 @@ void main() {
       expect(snap.anchor!.positionUs, 2_000_000);
     });
 
-    test('pause freezes the correctly advanced position and clears anchor',
-        () {
+    test('pause freezes the correctly advanced position and clears anchor', () {
       final s = HostSession();
       s.setMedia('m_1', nowUs: 0);
       s.play(nowUs: 1_000_000); // anchor (1_750_000, 0)
@@ -80,8 +78,7 @@ void main() {
       expect(snap.anchor, isNull);
     });
 
-    test('pause before the scheduled start freezes at the anchor position',
-        () {
+    test('pause before the scheduled start freezes at the anchor position', () {
       final s = HostSession();
       s.setMedia('m_1', nowUs: 0);
       s.seek(9_000_000, nowUs: 10);
@@ -203,15 +200,66 @@ void main() {
       expect(s.allPeersReady('m_1'), isFalse);
     });
 
-    test('readiness for a stale mediaId does not count', () {
+    test('readiness is per (peer, mediaId) and retained across reports', () {
       final s = HostSession();
       s.setPeerMediaState('p1', 'm_old', MediaReadiness.ready);
       expect(s.allPeersReady('m_old'), isTrue);
       expect(s.allPeersReady('m_new'), isFalse);
       s.setPeerMediaState('p1', 'm_new', MediaReadiness.ready);
       expect(s.allPeersReady('m_new'), isTrue);
-      // The latest report supersedes the old one.
-      expect(s.allPeersReady('m_old'), isFalse);
+      // Readiness is per-file possession: a report on m_new does not
+      // supersede the peer's readiness for m_old.
+      expect(s.allPeersReady('m_old'), isTrue);
+      // A later downgrade only touches its own (peer, mediaId) pair.
+      s.setPeerMediaState('p1', 'm_new', MediaReadiness.fetching);
+      expect(s.allPeersReady('m_old'), isTrue);
+      expect(s.allPeersReady('m_new'), isFalse);
+    });
+
+    test('peerMediaState defaults to none and tracks per-media reports', () {
+      final s = HostSession();
+      expect(s.peerMediaState('p1', 'm_1'), MediaReadiness.none);
+      s.upsertPeer('p1');
+      expect(s.peerMediaState('p1', 'm_1'), MediaReadiness.none);
+      s.setPeerMediaState('p1', 'm_1', MediaReadiness.fetching);
+      s.setPeerMediaState('p1', 'm_2', MediaReadiness.ready);
+      expect(s.peerMediaState('p1', 'm_1'), MediaReadiness.fetching);
+      expect(s.peerMediaState('p1', 'm_2'), MediaReadiness.ready);
+      expect(s.peerMediaState('p1', 'm_3'), MediaReadiness.none);
+      s.setPeerMediaState('p1', 'm_1', MediaReadiness.ready);
+      expect(s.peerMediaState('p1', 'm_1'), MediaReadiness.ready);
+    });
+
+    test('peerMediaStates covers all known peers, defaulting to none', () {
+      final s = HostSession();
+      expect(s.peerMediaStates('m_1'), isEmpty);
+      s.upsertPeer('p1'); // Present but silent.
+      s.setPeerMediaState('p2', 'm_1', MediaReadiness.ready);
+      s.setPeerMediaState('p3', 'm_1', MediaReadiness.fetching);
+      s.setPeerMediaState('p3', 'm_2', MediaReadiness.ready);
+      expect(s.peerMediaStates('m_1'), {
+        'p1': MediaReadiness.none,
+        'p2': MediaReadiness.ready,
+        'p3': MediaReadiness.fetching,
+      });
+      expect(s.peerMediaStates('m_2'), {
+        'p1': MediaReadiness.none,
+        'p2': MediaReadiness.none,
+        'p3': MediaReadiness.ready,
+      });
+    });
+
+    test('removePeer drops the peer\'s entries for every media item', () {
+      final s = HostSession();
+      s.setPeerMediaState('p1', 'm_1', MediaReadiness.ready);
+      s.setPeerMediaState('p1', 'm_2', MediaReadiness.fetching);
+      s.removePeer('p1');
+      expect(s.peerMediaState('p1', 'm_1'), MediaReadiness.none);
+      expect(s.peerMediaState('p1', 'm_2'), MediaReadiness.none);
+      expect(s.peerMediaStates('m_1'), isEmpty);
+      s.upsertPeer('p1');
+      expect(s.peerMediaState('p1', 'm_1'), MediaReadiness.none);
+      expect(s.allPeersReady('m_1'), isFalse); // No report after rejoin.
     });
 
     test('removing the only non-ready peer makes the rest ready', () {

@@ -22,7 +22,8 @@ enum JamHostEventKind {
   peerLeft,
 
   /// A guest reported `media_status` ([JamHostEvent.peerId],
-  /// [JamHostEvent.mediaId], and [JamHostEvent.mediaState] set).
+  /// [JamHostEvent.mediaId], and [JamHostEvent.mediaState] set;
+  /// [JamHostEvent.progress] set when the report carried one).
   peerMediaStatus,
 
   /// A new authoritative state snapshot was broadcast
@@ -43,6 +44,7 @@ class JamHostEvent {
     this.peerId,
     this.mediaId,
     this.mediaState,
+    this.progress,
     this.snapshot,
     this.playlist,
   });
@@ -52,6 +54,11 @@ class JamHostEvent {
   final String? peerId;
   final String? mediaId;
   final MediaFetchState? mediaState;
+
+  /// Fetch progress in [0, 1] from the guest's `media_status` report, when
+  /// it carried one (§6.3). Only set for [JamHostEventKind.peerMediaStatus].
+  final double? progress;
+
   final PlaybackSnapshot? snapshot;
   final List<MediaItem>? playlist;
 
@@ -167,6 +174,16 @@ class JamHostServer {
 
   /// Whether every joined peer has reported `ready` for [mediaId] (§6.3).
   bool allPeersReady(String mediaId) => _session.allPeersReady(mediaId);
+
+  /// The readiness [peerId] last reported for [mediaId] (§6.3;
+  /// [MediaReadiness.none] if it never reported on that item).
+  MediaReadiness peerMediaState(String peerId, String mediaId) =>
+      _session.peerMediaState(peerId, mediaId);
+
+  /// Readiness for [mediaId] across all known peers: peerId -> readiness,
+  /// defaulting to [MediaReadiness.none] for peers with no report on it.
+  Map<String, MediaReadiness> peerMediaStates(String mediaId) =>
+      _session.peerMediaStates(mediaId);
 
   static String _randomHex(int bytes) {
     final rng = Random.secure();
@@ -481,6 +498,7 @@ class JamHostServer {
         peerId: conn.peerId,
         mediaId: status.mediaId,
         mediaState: status.state,
+        progress: status.progress,
       ),
     );
   }

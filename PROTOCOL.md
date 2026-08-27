@@ -234,6 +234,12 @@ H→*  playlist { rev, items: [ {mediaId, kind: "audio"|"video"|"image",
 G→H  media_status { mediaId, state: "none"|"fetching"|"ready", progress: 0.87 }
 ```
 
+The host tracks readiness per (peer, mediaId) and retains it across track
+switches — readiness is per-file possession (guests prefetch the whole
+playlist, §6.2), so a report on one item never supersedes a peer's readiness
+for another. A peer's readiness for all media is forgotten when the peer is
+dropped (matching §3.3: guests re-send `media_status` after resuming).
+
 Host UX rule (not protocol): when selecting a new track, wait for all guests
 `ready` or a 10 s timeout — whichever first — then broadcast the scheduled
 `state`. Stragglers late-join per §5.3.

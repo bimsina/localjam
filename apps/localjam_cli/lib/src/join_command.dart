@@ -61,8 +61,10 @@ Future<int> runJoinCommand(ArgResults args) async {
   }
 
   try {
-    screen.log('joined "${client.sessionName}" (${client.sessionId}) '
-        'as ${client.selfPeerId}');
+    screen.log(
+      'joined "${client.sessionName}" (${client.sessionId}) '
+      'as ${client.selfPeerId}',
+    );
     for (final peer in client.peers) {
       screen.log('  peer: ${peer.clientName} (${peer.peerId})');
     }
@@ -89,10 +91,15 @@ Future<int> _runLoop(
   Future<void> prefetch(MediaItem item) async {
     if (!fetched.add(item.mediaId)) return;
     try {
-      await client.fetchMedia(item.mediaId, onProgress: (p) {
-        screen.status('fetch ${item.name.padRight(20)} '
-            '${progressBar(p)}');
-      });
+      await client.fetchMedia(
+        item.mediaId,
+        onProgress: (p) {
+          screen.status(
+            'fetch ${item.name.padRight(20)} '
+            '${progressBar(p)}',
+          );
+        },
+      );
       screen.log('fetched ${item.mediaId}  ${item.name}  (sha256 ok)');
     } on Object catch (e) {
       fetched.remove(item.mediaId);
@@ -100,28 +107,43 @@ Future<int> _runLoop(
     }
   }
 
-  subs.add(client.peerEvents.listen((event) {
-    switch (event.kind) {
-      case JamPeerEventKind.joined:
-        screen.log('+ peer joined: ${event.peer!.clientName} (${event.peerId})');
-      case JamPeerEventKind.left:
-        screen.log('- peer left: ${event.peerId}');
-    }
-  }));
-  subs.add(client.playlistUpdates.listen((items) {
-    screen.log('> playlist: ${items.length} item(s)');
-    for (final item in items) {
-      unawaited(prefetch(item));
-    }
-  }));
-  subs.add(client.states.listen(
-    (s) => screen.log('> state rev=${s.rev} ${s.status.name} '
-        'media=${s.mediaId ?? '-'} pos=${formatPositionUs(s.positionUs)}'),
-    onDone: () {
+  subs.add(
+    client.peerEvents.listen((event) {
+      switch (event.kind) {
+        case JamPeerEventKind.joined:
+          screen.log(
+            '+ peer joined: ${event.peer!.clientName} (${event.peerId})',
+          );
+        case JamPeerEventKind.left:
+          screen.log('- peer left: ${event.peerId}');
+      }
+    }),
+  );
+  subs.add(
+    client.playlistUpdates.listen((items) {
+      screen.log('> playlist: ${items.length} item(s)');
+      for (final item in items) {
+        unawaited(prefetch(item));
+      }
+    }),
+  );
+  subs.add(
+    client.states.listen(
+      (s) => screen.log(
+        '> state rev=${s.rev} ${s.status.name} '
+        'media=${s.mediaId ?? '-'} pos=${formatPositionUs(s.positionUs)}',
+      ),
+    ),
+  );
+  // The socket closing (host shutdown or drop) ends the session. `done` also
+  // completes on our own close() after quitting, hence the guard.
+  unawaited(
+    client.done.then((_) {
+      if (quit.isCompleted) return;
       screen.log('connection closed by host');
       finish(0);
-    },
-  ));
+    }),
+  );
 
   // §6.2 v1 policy: fully prefetch everything before playing.
   for (final item in client.playlist) {
@@ -133,10 +155,14 @@ Future<int> _runLoop(
     if (quit.isCompleted) return quit.future;
     await Future<void>.delayed(const Duration(milliseconds: 20));
   }
-  screen.log('clock synchronized: offset=${client.clock.offsetUs}us '
-      'bestRtt=${client.clock.bestRttUs}us');
-  screen.log('keys: p = play/pause | s = +10s | S = -10s | q = quit '
-      '(requests; the host applies them)');
+  screen.log(
+    'clock synchronized: offset=${client.clock.offsetUs}us '
+    'bestRtt=${client.clock.bestRttUs}us',
+  );
+  screen.log(
+    'keys: p = play/pause | s = +10s | S = -10s | q = quit '
+    '(requests; the host applies them)',
+  );
 
   final sim = SimPlayer(skewPpm: skewPpm);
 
@@ -144,18 +170,23 @@ Future<int> _runLoop(
     final snapshot = client.snapshot;
     switch (key) {
       case 'p':
-        unawaited(snapshot.status == PlaybackStatus.playing
-            ? client.requestPause()
-            : client.requestPlay());
+        unawaited(
+          snapshot.status == PlaybackStatus.playing
+              ? client.requestPause()
+              : client.requestPlay(),
+        );
       case 's':
-        unawaited(client.requestSeek(
-          snapshot.positionAt(client.sessionNowUs) + _seekStepUs,
-        ));
+        unawaited(
+          client.requestSeek(
+            snapshot.positionAt(client.sessionNowUs) + _seekStepUs,
+          ),
+        );
       case 'S':
-        unawaited(client.requestSeek(math.max(
-          0,
-          snapshot.positionAt(client.sessionNowUs) - _seekStepUs,
-        )));
+        unawaited(
+          client.requestSeek(
+            math.max(0, snapshot.positionAt(client.sessionNowUs) - _seekStepUs),
+          ),
+        );
       case 'q':
         finish(0);
       case '\x03':
@@ -185,14 +216,16 @@ Future<int> _runLoop(
     );
     final expectedUs = snapshot.positionAt(sessionNowUs);
 
-    screen.status('offset=${formatSignedUs(client.clock.offsetUs ?? 0)} '
-        'rtt=${client.clock.bestRttUs}us | '
-        '${snapshot.status.name.padRight(7)} '
-        'exp=${formatPositionUs(expectedUs)} '
-        'act=${formatPositionUs(sim.positionUs)} '
-        'drift=${formatSignedUs(sim.lastDriftUs)} '
-        'action=${describeDriftAction(sim.lastAction)} '
-        'slews=${sim.slews} resyncs=${sim.hardResyncs}');
+    screen.status(
+      'offset=${formatSignedUs(client.clock.offsetUs ?? 0)} '
+      'rtt=${client.clock.bestRttUs}us | '
+      '${snapshot.status.name.padRight(7)} '
+      'exp=${formatPositionUs(expectedUs)} '
+      'act=${formatPositionUs(sim.positionUs)} '
+      'drift=${formatSignedUs(sim.lastDriftUs)} '
+      'action=${describeDriftAction(sim.lastAction)} '
+      'slews=${sim.slews} resyncs=${sim.hardResyncs}',
+    );
   });
 
   try {

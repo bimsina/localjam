@@ -53,15 +53,19 @@ Future<int> runHostCommand(ArgResults args) async {
         mime: mimeForPath(path),
       );
       server.addMedia(item, file);
-      screen.log('added ${item.mediaId}  ${item.name}  '
-          '(${item.sizeBytes} bytes, ${item.mime})');
+      screen.log(
+        'added ${item.mediaId}  ${item.name}  '
+        '(${item.sizeBytes} bytes, ${item.mime})',
+      );
     }
     server.setMedia(server.playlist.first.mediaId);
 
     await _printJoinInfo(server, screen);
     screen.log('');
-    screen.log('keys: p = play/pause | s = +10s | S = -10s | '
-        'n = next track | q = quit');
+    screen.log(
+      'keys: p = play/pause | s = +10s | S = -10s | '
+      'n = next track | q = quit',
+    );
 
     return await _runLoop(server, screen);
   } finally {
@@ -84,8 +88,10 @@ Future<void> _printJoinInfo(JamHostServer server, StatusScreen screen) async {
   }
   if (addresses.isEmpty) addresses.add(InternetAddress.loopbackIPv4);
 
-  screen.log('session "${server.sessionName}" (${server.sessionId}) '
-      'on port ${server.port}');
+  screen.log(
+    'session "${server.sessionName}" (${server.sessionId}) '
+    'on port ${server.port}',
+  );
   for (final addr in addresses) {
     screen.log('  ${addr.address.padRight(15)} ${server.joinUriFor(addr)}');
   }
@@ -113,28 +119,42 @@ Future<int> _runLoop(JamHostServer server, StatusScreen screen) async {
     if (!quit.isCompleted) quit.complete(code);
   }
 
-  // Per-peer readiness for the status line, maintained from host events
-  // (the server itself only exposes the aggregate allPeersReady()).
-  final peerMedia = <String, ({String mediaId, MediaFetchState state})>{};
+  // Latest fetch progress per peer for the status line (readiness itself
+  // comes from the server's peerMediaStates(); progress only rides events).
+  final fetchProgress = <String, ({String mediaId, double progress})>{};
 
   final events = server.events.listen((event) {
     switch (event.kind) {
       case JamHostEventKind.peerJoined:
         final p = event.peer!;
-        screen.log('+ peer joined: ${p.clientName} '
-            '(${p.peerId}, ${p.clientKind})');
+        screen.log(
+          '+ peer joined: ${p.clientName} '
+          '(${p.peerId}, ${p.clientKind})',
+        );
       case JamHostEventKind.peerLeft:
-        peerMedia.remove(event.peerId);
+        fetchProgress.remove(event.peerId);
         screen.log('- peer left: ${event.peerId}');
       case JamHostEventKind.peerMediaStatus:
-        peerMedia[event.peerId!] =
-            (mediaId: event.mediaId!, state: event.mediaState!);
-        screen.log('  ${event.peerId} media ${event.mediaId}: '
-            '${event.mediaState!.wire}');
+        final progress = event.progress;
+        if (event.mediaState == MediaFetchState.fetching && progress != null) {
+          fetchProgress[event.peerId!] = (
+            mediaId: event.mediaId!,
+            progress: progress,
+          );
+        } else {
+          fetchProgress.remove(event.peerId);
+        }
+        screen.log(
+          '  ${event.peerId} media ${event.mediaId}: '
+          '${event.mediaState!.wire}'
+          '${progress != null ? ' ${(progress * 100).round()}%' : ''}',
+        );
       case JamHostEventKind.stateBroadcast:
         final s = event.snapshot!;
-        screen.log('> state rev=${s.rev} ${s.status.name} '
-            'media=${s.mediaId ?? '-'} pos=${formatPositionUs(s.positionUs)}');
+        screen.log(
+          '> state rev=${s.rev} ${s.status.name} '
+          'media=${s.mediaId ?? '-'} pos=${formatPositionUs(s.positionUs)}',
+        );
       case JamHostEventKind.playlistBroadcast:
         screen.log('> playlist: ${event.playlist!.length} item(s)');
     }
@@ -154,15 +174,18 @@ Future<int> _runLoop(JamHostServer server, StatusScreen screen) async {
             server.snapshot.positionAt(monotonicNowUs()) + _seekStepUs,
           );
         case 'S':
-          server.seek(math.max(
-            0,
-            server.snapshot.positionAt(monotonicNowUs()) - _seekStepUs,
-          ));
+          server.seek(
+            math.max(
+              0,
+              server.snapshot.positionAt(monotonicNowUs()) - _seekStepUs,
+            ),
+          );
         case 'n':
           final playlist = server.playlist;
           if (playlist.isEmpty) break;
-          final index = playlist
-              .indexWhere((i) => i.mediaId == server.snapshot.mediaId);
+          final index = playlist.indexWhere(
+            (i) => i.mediaId == server.snapshot.mediaId,
+          );
           server.setMedia(playlist[(index + 1) % playlist.length].mediaId);
         case 'q':
           finish(0);
@@ -187,12 +210,19 @@ Future<int> _runLoop(JamHostServer server, StatusScreen screen) async {
     final peers = server.peers;
     if (peers.isEmpty) return 'peers(0)';
     final mediaId = server.snapshot.mediaId;
+    final states = mediaId == null
+        ? const <String, MediaReadiness>{}
+        : server.peerMediaStates(mediaId);
     final parts = peers.map((p) {
-      final report = peerMedia[p.peerId];
-      final state = (report != null && report.mediaId == mediaId)
-          ? report.state.wire
-          : 'none';
-      return '${p.clientName}:$state';
+      final state = states[p.peerId] ?? MediaReadiness.none;
+      var label = state.name;
+      if (state == MediaReadiness.fetching) {
+        final report = fetchProgress[p.peerId];
+        if (report != null && report.mediaId == mediaId) {
+          label = 'fetching ${(report.progress * 100).round()}%';
+        }
+      }
+      return '${p.clientName}:$label';
     });
     return 'peers(${peers.length}) [${parts.join(' ')}]';
   }
@@ -203,10 +233,12 @@ Future<int> _runLoop(JamHostServer server, StatusScreen screen) async {
         .where((i) => i.mediaId == s.mediaId)
         .map((i) => i.name)
         .firstOrNull;
-    screen.status('rev=${s.rev} ${s.status.name.padRight(7)} '
-        '${(name ?? s.mediaId ?? '-')} '
-        'pos=${formatPositionUs(s.positionAt(monotonicNowUs()))} | '
-        '${peerSummary()}');
+    screen.status(
+      'rev=${s.rev} ${s.status.name.padRight(7)} '
+      '${(name ?? s.mediaId ?? '-')} '
+      'pos=${formatPositionUs(s.positionAt(monotonicNowUs()))} | '
+      '${peerSummary()}',
+    );
   });
 
   try {

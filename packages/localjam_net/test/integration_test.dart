@@ -464,6 +464,137 @@ void main() {
     },
   );
 
+  test('per-peer readiness is retained across setMedia switches', () async {
+    final host = await startHost();
+    final file1 = await writeTempMedia(makeMediaBytes(2048, seed: 1));
+    final file2 = await writeTempMedia(makeMediaBytes(2048, seed: 2));
+    final item1 = await JamHostServer.describeFile(
+      file1,
+      kind: MediaKind.audio,
+    );
+    final item2 = await JamHostServer.describeFile(
+      file2,
+      kind: MediaKind.audio,
+    );
+    host.addMedia(item1, file1);
+    host.addMedia(item2, file2);
+
+    // g1 is a real guest that fully fetches m1 (-> ready).
+    final g1 = await joinGuest(host, clientName: 'alice');
+    await g1.fetchMedia(item1.mediaId);
+
+    // g2 is a raw socket so we can hold it in `fetching` for m2.
+    final ws = await WebSocket.connect('ws://127.0.0.1:${host.port}/ws');
+    addTearDown(ws.close);
+    final frames = StreamQueue(ws);
+    ws.add(
+      _codec.encode(
+        HelloMessage(token: host.token, clientName: 'bob', clientKind: 'test'),
+        seq: 0,
+      ),
+    );
+    final welcome =
+        _codec.decode(await frames.next as String).message as WelcomeMessage;
+    final g2Id = welcome.selfPeerId;
+    ws.add(
+      _codec.encode(
+        MediaStatusMessage(
+          mediaId: item1.mediaId,
+          state: MediaFetchState.ready,
+        ),
+        seq: 1,
+      ),
+    );
+    await waitFor(
+      () => host.allPeersReady(item1.mediaId),
+      reason: 'both peers ready for m1',
+    );
+
+    // Switch tracks; g2 starts fetching m2.
+    host.setMedia(item2.mediaId);
+    ws.add(
+      _codec.encode(
+        MediaStatusMessage(
+          mediaId: item2.mediaId,
+          state: MediaFetchState.fetching,
+          progress: 0.5,
+        ),
+        seq: 2,
+      ),
+    );
+    await waitFor(
+      () => host.peerMediaState(g2Id, item2.mediaId) == MediaReadiness.fetching,
+      reason: 'g2 fetching m2',
+    );
+
+    // Readiness for m1 survived the switch and the m2 report.
+    expect(host.allPeersReady(item1.mediaId), isTrue);
+    expect(
+      host.peerMediaState(g1.selfPeerId, item1.mediaId),
+      MediaReadiness.ready,
+    );
+    expect(host.peerMediaState(g2Id, item1.mediaId), MediaReadiness.ready);
+    expect(host.peerMediaStates(item1.mediaId), {
+      g1.selfPeerId: MediaReadiness.ready,
+      g2Id: MediaReadiness.ready,
+    });
+    expect(host.peerMediaStates(item2.mediaId), {
+      g1.selfPeerId: MediaReadiness.none,
+      g2Id: MediaReadiness.fetching,
+    });
+    expect(host.allPeersReady(item2.mediaId), isFalse);
+
+    // Switching back changes nothing: readiness is per-file possession.
+    host.setMedia(item1.mediaId);
+    expect(host.allPeersReady(item1.mediaId), isTrue);
+  });
+
+  test('peerMediaStatus events carry the reported fetch progress', () async {
+    final host = await startHost();
+    final bytes = makeMediaBytes(64 * 1024);
+    final file = await writeTempMedia(bytes);
+    final item = await JamHostServer.describeFile(file, kind: MediaKind.audio);
+    host.addMedia(item, file);
+    final guest = await joinGuest(host);
+
+    final statuses = <JamHostEvent>[];
+    host.events.listen((e) {
+      if (e.kind == JamHostEventKind.peerMediaStatus) statuses.add(e);
+    });
+    await guest.fetchMedia(item.mediaId);
+    await waitFor(
+      () => statuses.any((e) => e.mediaState == MediaFetchState.ready),
+      reason: 'ready media_status event',
+    );
+
+    final fetching = statuses.firstWhere(
+      (e) => e.mediaState == MediaFetchState.fetching,
+    );
+    expect(fetching.progress, isNotNull);
+    expect(fetching.progress, inInclusiveRange(0.0, 1.0));
+    final ready = statuses.firstWhere(
+      (e) => e.mediaState == MediaFetchState.ready,
+    );
+    expect(ready.progress, isNull); // The ready report carries no progress.
+  });
+
+  test('guest.done completes when the host closes', () async {
+    final host = await startHost();
+    final guest = await joinGuest(host);
+    await host.close();
+    await guest.done.timeout(const Duration(seconds: 5));
+  });
+
+  test('guest.done completes on local close()', () async {
+    final host = await startHost();
+    final guest = await joinGuest(host);
+    await guest.close();
+    await guest.done.timeout(const Duration(seconds: 5));
+    // Idempotent: awaiting again (and closing again) is harmless.
+    await guest.close();
+    await guest.done;
+  });
+
   test('long-lived guest is kept alive by its clock-ping heartbeat', () async {
     final host = await startHost(
       silenceTimeout: const Duration(milliseconds: 600),

@@ -30,10 +30,11 @@ class HostSession {
   /// The current authoritative snapshot. Starts at [PlaybackSnapshot.initial].
   PlaybackSnapshot get snapshot => _snapshot;
 
-  /// Last reported `media_status` per peer: peerId -> (mediaId, readiness).
-  /// Only the most recent report per peer is kept — readiness for a media
-  /// item a peer reported earlier is superseded by any later report.
-  final Map<String, ({String mediaId, MediaReadiness state})> _peerMedia = {};
+  /// Reported `media_status` per (peer, mediaId): peerId -> mediaId ->
+  /// readiness. Readiness is per-file possession, not a mood: a guest that
+  /// reported `ready` for track A stays ready for A after reporting on
+  /// track B (guests prefetch the whole playlist, §6.2).
+  final Map<String, Map<String, MediaReadiness>> _peerMedia = {};
 
   /// Peers currently in the session (present even before any media_status).
   final Set<String> _peers = {};
@@ -145,10 +146,7 @@ class HostSession {
         rate: rate,
       );
     }
-    return _snapshot = _snapshot.copyWith(
-      rev: _snapshot.rev + 1,
-      rate: rate,
-    );
+    return _snapshot = _snapshot.copyWith(rev: _snapshot.rev + 1, rate: rate);
   }
 
   // --- Peer readiness bookkeeping (§6.3) -------------------------------------
@@ -156,32 +154,41 @@ class HostSession {
   /// Register a peer (idempotent: an existing peer keeps its reported state).
   void upsertPeer(String peerId) => _peers.add(peerId);
 
-  /// Remove a peer and forget its readiness reports.
+  /// Remove a peer and forget its readiness reports (for every media item).
   void removePeer(String peerId) {
     _peers.remove(peerId);
     _peerMedia.remove(peerId);
   }
 
   /// Record a peer's `media_status` report (§6.3). Implicitly registers the
-  /// peer if it was unknown. Only the latest report per peer is retained.
+  /// peer if it was unknown. Updates only the (peer, [mediaId]) pair: the
+  /// peer's readiness for other media items is retained.
   void setPeerMediaState(String peerId, String mediaId, MediaReadiness state) {
     _peers.add(peerId);
-    _peerMedia[peerId] = (mediaId: mediaId, state: state);
+    (_peerMedia[peerId] ??= {})[mediaId] = state;
   }
+
+  /// The readiness [peerId] last reported for [mediaId]
+  /// ([MediaReadiness.none] if it never reported on that item).
+  MediaReadiness peerMediaState(String peerId, String mediaId) =>
+      _peerMedia[peerId]?[mediaId] ?? MediaReadiness.none;
+
+  /// Readiness for [mediaId] across all known peers: peerId -> readiness,
+  /// defaulting to [MediaReadiness.none] for peers with no report on it.
+  Map<String, MediaReadiness> peerMediaStates(String mediaId) => {
+    for (final peerId in _peers) peerId: peerMediaState(peerId, mediaId),
+  };
 
   /// Whether every current peer has reported `ready` for [mediaId].
   ///
   /// Vacuously true when there are no peers (a solo host never waits).
-  /// A peer whose latest report is for a *different* (stale) mediaId, or who
-  /// has reported nothing, counts as not ready. The wait-vs-timeout policy
-  /// (§6.3 "all ready or 10 s") is the host app's job; this only answers the
-  /// instantaneous question.
+  /// A peer that has never reported on [mediaId] counts as not ready; a
+  /// report on a *different* media item neither helps nor hurts. The
+  /// wait-vs-timeout policy (§6.3 "all ready or 10 s") is the host app's job;
+  /// this only answers the instantaneous question.
   bool allPeersReady(String mediaId) {
     for (final peerId in _peers) {
-      final report = _peerMedia[peerId];
-      if (report == null ||
-          report.mediaId != mediaId ||
-          report.state != MediaReadiness.ready) {
+      if (peerMediaState(peerId, mediaId) != MediaReadiness.ready) {
         return false;
       }
     }

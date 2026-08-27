@@ -139,6 +139,7 @@ class JamGuestClient {
   final HttpClient _http = HttpClient();
 
   late final StreamSubscription<Object?> _sub;
+  final Completer<void> _done = Completer<void>();
   Completer<Message>? _handshakeCompleter;
   Timer? _pingTimer;
   int _seq = 0;
@@ -190,6 +191,11 @@ class JamGuestClient {
 
   /// Presence changes (§3.2).
   Stream<JamPeerEvent> get peerEvents => _peerEvents.stream;
+
+  /// Completes when the WebSocket to the host closes for any reason — host
+  /// shutdown, a drop, or a local [close]. Completes exactly once and never
+  /// errors.
+  Future<void> get done => _done.future;
 
   /// This guest's local monotonic clock (µs, arbitrary epoch) — the `t0`/`t3`
   /// timebase of §4 and the input side of [clock].
@@ -310,6 +316,7 @@ class JamGuestClient {
         const SocketException('Connection closed during handshake'),
       );
     }
+    if (!_done.isCompleted) _done.complete();
     unawaited(close());
   }
 
@@ -425,6 +432,7 @@ class JamGuestClient {
     try {
       await _ws.close(WebSocketStatus.normalClosure);
     } catch (_) {}
+    if (!_done.isCompleted) _done.complete();
     _http.close(force: true);
     await _states.close();
     await _playlists.close();
