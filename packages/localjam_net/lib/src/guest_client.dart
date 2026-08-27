@@ -67,8 +67,7 @@ class JamGuestClient {
   /// clock-sync schedule (burst of 8 pings, then one every [pingInterval]).
   ///
   /// Pass [resumePeerId] to resume a dropped slot within the host's grace
-  /// window (§3.3): the peer id rides the WS URL (`/ws?resume=<peerId>`)
-  /// because the wire `hello` has no peerId field.
+  /// window (§3.3); it is carried in the `hello` payload.
   ///
   /// Throws [JamRejectedException] if the host rejects the join, or
   /// [SocketException] if no candidate host is reachable.
@@ -99,13 +98,7 @@ class JamGuestClient {
 
     Object? lastError;
     for (final host in hosts) {
-      final wsUri = Uri(
-        scheme: 'ws',
-        host: host,
-        port: port,
-        path: '/ws',
-        queryParameters: resumePeerId == null ? null : {'resume': resumePeerId},
-      );
+      final wsUri = Uri(scheme: 'ws', host: host, port: port, path: '/ws');
       final WebSocket ws;
       try {
         ws = await WebSocket.connect('$wsUri').timeout(connectTimeout);
@@ -120,6 +113,7 @@ class JamGuestClient {
           clientKind: clientKind,
           caps: caps,
           timeout: connectTimeout,
+          resumePeerId: resumePeerId,
         );
         return client;
       } on JamRejectedException {
@@ -214,6 +208,7 @@ class JamGuestClient {
     required String clientKind,
     required List<String> caps,
     required Duration timeout,
+    String? resumePeerId,
   }) async {
     final completer = Completer<Message>();
     _handshakeCompleter = completer;
@@ -223,6 +218,7 @@ class JamGuestClient {
         clientName: clientName,
         clientKind: clientKind,
         caps: caps,
+        resumePeerId: resumePeerId,
       ),
     );
     final reply = await completer.future.timeout(timeout);

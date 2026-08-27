@@ -82,7 +82,8 @@ Message direction key below: **G→H** guest to host, **H→G** host to guest,
 
 ```
 G→H  hello     { token, clientName, clientKind: "flutter"|"web"|...,
-                 caps: ["audio","video"], encodings: ["json"] }   // reserved for future binary negotiation
+                 caps: ["audio","video"], encodings: ["json"],    // encodings reserved for future binary negotiation
+                 resumePeerId? }                                   // §3.3 reconnect: resume this peer slot
 H→G  welcome   { sessionId, sessionName, you: {peerId}, peers: [...], snapshot: <state §5.1>, playlist: [...] }
      — or —
 H→G  reject    { reason: "bad_token" | "full" | "version" }
@@ -101,8 +102,12 @@ H→*  peer_left   { peerId }
 ### 3.3 Liveness
 
 WebSocket ping/pong at transport level; a peer is dropped after 10 s silence.
-Guests reconnect with the same `token` + `peerId` to resume (host keeps a
-30 s grace slot).
+Guests reconnect by sending `hello` with the same `token` plus
+`resumePeerId: <their old peerId>`; the host keeps a 30 s grace slot per
+dropped peer. A valid resume reclaims the old peerId (re-announced via
+`peer_joined`); an expired or unknown `resumePeerId` silently falls back to a
+fresh join. Readiness reports (§6.3) are forgotten on drop — guests re-send
+`media_status` after resuming.
 
 ---
 

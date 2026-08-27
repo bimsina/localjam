@@ -442,10 +442,9 @@ void main() {
       expect((await dropped).peerId, peerId);
       await ws.close();
 
-      // §3.3: reconnect with the same token + peerId resumes the slot.
-      final ws2 = await WebSocket.connect(
-        'ws://127.0.0.1:${host.port}/ws?resume=$peerId',
-      );
+      // §3.3: reconnect with the same token + resumePeerId in hello resumes
+      // the slot.
+      final ws2 = await WebSocket.connect('ws://127.0.0.1:${host.port}/ws');
       final frames2 = StreamQueue(ws2);
       ws2.add(
         _codec.encode(
@@ -453,6 +452,7 @@ void main() {
             token: host.token,
             clientName: 'sleepy',
             clientKind: 'test',
+            resumePeerId: peerId,
           ),
           seq: 0,
         ),

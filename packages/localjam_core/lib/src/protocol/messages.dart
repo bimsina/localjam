@@ -232,6 +232,7 @@ class HelloMessage extends Message {
     required this.clientKind,
     this.caps = const [],
     this.encodings = const ['json'],
+    this.resumePeerId,
   });
 
   static const wireType = 'hello';
@@ -239,6 +240,10 @@ class HelloMessage extends Message {
   final String token;
   final String clientName;
   final String clientKind;
+
+  /// Peer id to resume within the host's reconnect grace window (§3.3).
+  /// Omitted from the wire when null (fresh join).
+  final String? resumePeerId;
 
   /// Capabilities, e.g. "audio", "video".
   final List<String> caps;
@@ -256,6 +261,7 @@ class HelloMessage extends Message {
         'clientKind': clientKind,
         'caps': caps,
         'encodings': encodings,
+        if (resumePeerId != null) 'resumePeerId': resumePeerId,
       };
 
   factory HelloMessage.fromPayload(Map<String, Object?> json) => HelloMessage(
@@ -264,6 +270,7 @@ class HelloMessage extends Message {
         clientKind: (json['clientKind'] as String?) ?? '',
         caps: _stringList(json['caps']),
         encodings: _stringList(json['encodings'], fallback: const ['json']),
+        resumePeerId: json['resumePeerId'] as String?,
       );
 }
 

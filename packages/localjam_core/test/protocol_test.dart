@@ -48,6 +48,23 @@ void main() {
       expect(m.clientKind, 'flutter');
       expect(m.caps, ['audio', 'video']);
       expect(m.encodings, ['json']);
+      expect(m.resumePeerId, isNull);
+    });
+
+    test('hello with resumePeerId (§3.3 reconnect)', () {
+      final m = roundTrip(const HelloMessage(
+        token: 'tok-123',
+        clientName: 'Bibek’s phone',
+        clientKind: 'flutter',
+        resumePeerId: 'p_7',
+      ));
+      expect(m.resumePeerId, 'p_7');
+      // Omitted from the wire entirely when null (fresh join).
+      final fresh = codec.encode(
+        const HelloMessage(token: 't', clientName: 'n', clientKind: 'k'),
+        seq: 1,
+      );
+      expect(fresh, isNot(contains('resumePeerId')));
     });
 
     test('welcome', () {

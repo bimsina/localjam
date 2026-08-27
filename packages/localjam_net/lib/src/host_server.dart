@@ -64,13 +64,9 @@ class JamHostEvent {
 
 /// One connected (or connecting) guest socket.
 class _GuestConn {
-  _GuestConn(this.ws, this.resumeId, {required int nowUs})
-    : lastFrameUs = nowUs;
+  _GuestConn(this.ws, {required int nowUs}) : lastFrameUs = nowUs;
 
   final WebSocket ws;
-
-  /// Peer id the guest asked to resume (`/ws?resume=<peerId>`, §3.3).
-  final String? resumeId;
 
   /// Assigned after a valid `hello`; null while the handshake is pending.
   String? peerId;
@@ -257,9 +253,8 @@ class JamHostServer {
       await req.response.close();
       return;
     }
-    final resumeId = req.uri.queryParameters['resume'];
     final ws = await WebSocketTransformer.upgrade(req);
-    final conn = _GuestConn(ws, resumeId, nowUs: _nowUs());
+    final conn = _GuestConn(ws, nowUs: _nowUs());
     _conns.add(conn);
     ws.listen(
       (data) => _onFrame(conn, data),
@@ -400,10 +395,9 @@ class JamHostServer {
     }
 
     // §3.3 reconnect: same token + peerId within the grace window resumes
-    // the slot. The peerId rides the WS URL (`/ws?resume=<peerId>`) because
-    // the core `hello` payload has no peerId field.
+    // the slot.
     String peerId;
-    final resumeId = conn.resumeId;
+    final resumeId = hello.resumePeerId;
     final graceExpiry = resumeId == null ? null : _graceUntilUs[resumeId];
     if (resumeId != null &&
         graceExpiry != null &&
