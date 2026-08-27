@@ -1,0 +1,37 @@
+name: localjam_app
+description: "LocalJam — synchronized local-network audio playback."
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.12.2
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  cupertino_icons: ^1.0.8
+
+  # LocalJam protocol transport (re-exports localjam_core).
+  localjam_net:
+    path: ../../packages/localjam_net
+  # Pinned scheduled-audio plugin API (native side developed in parallel).
+  localjam_audio:
+    path: ../../packages/localjam_audio
+
+  qr_flutter: ^4.1.0
+  file_selector: ^1.0.3
+  path_provider: ^2.1.4
+  shared_preferences: ^2.3.2
+
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  fake_async: ^1.3.1
+
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
