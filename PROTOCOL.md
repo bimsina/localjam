@@ -1,0 +1,295 @@
+# LocalJam Protocol — v0.1 (draft)
+
+Synchronized local-network media playback. One **host** owns the files and the
+authoritative session state; N **guests** join over LAN, fetch media, and play
+in sync on their own output devices.
+
+Design goals, in priority order:
+
+1. Works fully offline (same Wi-Fi or host's hotspot; no internet, no accounts).
+2. Audio is the primary medium. Video and images ride the same model as
+   best-effort extras.
+3. Sync target: ±40 ms across devices after calibration (per-person headphones,
+   not shared-speaker grade).
+4. Boring and debuggable over clever: JSON control plane, plain HTTP media plane.
+5. Browser clients are a possible future guest (never a host); the protocol
+   avoids gratuitously breaking them but v1 targets native mobile + desktop only.
+
+---
+
+## 1. Transport
+
+Two channels, both served by the host on a single TCP port:
+
+| Plane   | Transport                  | Purpose                                  |
+|---------|----------------------------|------------------------------------------|
+| Control | WebSocket `ws://host:port/ws` | Session state, clock sync, playback commands |
+| Media   | HTTP `http://host:port/media/{mediaId}` | File transfer. MUST support `Range` requests |
+
+- Control messages are JSON text frames in v1. The `hello` handshake reserves
+  an `encodings` field (§3.1) so clients and host can negotiate a binary
+  encoding (CBOR/MessagePack — same data model, no schema tooling) in a later
+  version without a breaking change. Note the control plane is low-rate
+  (a clock ping every 2 s, state changes only on user action) and the media
+  plane is already binary HTTP — JSON is not a bottleneck here; binary framing
+  is a polish item, not a performance requirement.
+- UDP is deliberately **not** used in v1: LAN TCP jitter is low enough that
+  min-RTT filtering (§4) gets clock sync well under our target, and one
+  transport keeps every client simple. With web off the v1 roster, a UDP
+  clock-sync fast path is a possible later optimization — measure first.
+
+### Discovery / join
+
+Primary: the host renders a QR code / shareable string:
+
+```
+localjam://join?v=1&host=192.168.1.7&port=44100&token=<sessionToken>&name=RoadTrip
+```
+
+(The host may listen on multiple interfaces and encode several `host` candidates,
+comma-separated; guests try them in order.)
+
+Secondary (later): mDNS advertisement `_localjam._tcp` with the same fields in
+TXT records, for in-app "nearby sessions" listing. QR is the v1 path — it works
+on hotspots and networks where mDNS is blocked.
+
+---
+
+## 2. Message envelope
+
+Every control message:
+
+```json
+{
+  "v": 1,               // protocol version
+  "type": "play",       // message type
+  "seq": 42,            // sender-local monotonically increasing sequence number
+  "payload": { ... }
+}
+```
+
+- Unknown `type` or unknown payload fields MUST be ignored (forward compat).
+- `seq` is for logging/dedup; ordering is otherwise guaranteed by TCP.
+
+Message direction key below: **G→H** guest to host, **H→G** host to guest,
+**H→\*** host broadcast to all guests.
+
+---
+
+## 3. Session lifecycle
+
+### 3.1 Join handshake
+
+```
+G→H  hello     { token, clientName, clientKind: "flutter"|"web"|...,
+                 caps: ["audio","video"], encodings: ["json"] }   // reserved for future binary negotiation
+H→G  welcome   { sessionId, sessionName, you: {peerId}, peers: [...], snapshot: <state §5.1>, playlist: [...] }
+     — or —
+H→G  reject    { reason: "bad_token" | "full" | "version" }
+```
+
+`welcome.snapshot` makes late join trivial: it contains the full current
+playback state, and the guest converges on it like any other state update.
+
+### 3.2 Presence
+
+```
+H→*  peer_joined { peer: {peerId, clientName, clientKind} }
+H→*  peer_left   { peerId }
+```
+
+### 3.3 Liveness
+
+WebSocket ping/pong at transport level; a peer is dropped after 10 s silence.
+Guests reconnect with the same `token` + `peerId` to resume (host keeps a
+30 s grace slot).
+
+---
+
+## 4. Clock synchronization
+
+The host's monotonic clock is the **session clock** (`hostTime`, in
+microseconds, from an arbitrary epoch — NOT wall clock; wall clocks jump).
+
+NTP-style exchange, initiated by each guest:
+
+```
+G→H  clock_ping { t0 }                 // guest monotonic µs at send
+H→G  clock_pong { t0, t1, t2 }         // t1 = host receive, t2 = host send
+                                        // guest records t3 = receive time
+offset = ((t1 - t0) + (t2 - t3)) / 2
+rtt    = (t3 - t0) - (t2 - t1)
+```
+
+Guest algorithm (client-side, not on the wire):
+
+- Burst of 8 pings at join; keep the sample with **minimum RTT** (least queued,
+  most symmetric) as the initial offset.
+- Steady state: 1 ping every 2 s; accept a sample only if its RTT is within
+  1.5× of the best RTT seen; blend accepted samples with an EWMA (α ≈ 0.1).
+- Never step the offset while playing; slew it (≤ 1 ms per second) to avoid
+  audible jumps. Large error (> 50 ms) ⇒ hard resync: pause locally, step,
+  rejoin playback at the correct position.
+
+Expected accuracy on LAN: 1–5 ms. The dominant residual error is per-device
+**output latency** (§7), not the network.
+
+---
+
+## 5. Playback model
+
+### 5.1 State snapshot
+
+The entire playback state is one small struct. The host is the only writer;
+every mutation broadcasts a full new snapshot (no deltas — it's tiny):
+
+```json
+{
+  "type": "state",
+  "payload": {
+    "rev": 17,                    // increments on every change
+    "mediaId": "m_9f2c",          // current item, or null
+    "status": "playing",          // "idle" | "loading" | "playing" | "paused"
+    "anchor": {                   // meaningful when status == "playing"
+      "hostTime": 8123456789,     // session-clock µs...
+      "positionUs": 45000000      // ...at which media position was/will be here
+    },
+    "positionUs": 45000000,       // when paused: the frozen position
+    "rate": 1.0
+  }
+}
+```
+
+The **anchor** is the whole trick: `position(t) = anchor.positionUs +
+(t - anchor.hostTime) * rate`. Any client at any time can compute where
+playback should be and correct itself. Play, seek, and resume are all just
+"here is a new anchor."
+
+### 5.2 Commands (host-side UI → state changes)
+
+Guests never mutate state directly; a guest UI sends *requests* the host may
+apply (making remote-control a feature, not a protocol change):
+
+```
+G→H  request { action: "play"|"pause"|"seek"|"set_media", ... }
+```
+
+This is also the future "multiple admins" path: an admin is just a peer whose
+requests the host auto-approves. Pure host-side policy — no protocol change,
+still exactly one state writer.
+
+### 5.3 Scheduled start (the sync-critical path)
+
+Starting playback "now" is unsynchronizable. The host always schedules starts
+in the near future:
+
+```
+H→*  state { status: "playing", anchor: { hostTime: <now + leadTime>, positionUs: P } }
+```
+
+- `leadTime` default 750 ms; the host may raise it if guests are slow (§6).
+- Each client converts `anchor.hostTime` to its local clock via its offset and
+  schedules audio to begin at exactly that instant using its platform's
+  sample-accurate scheduler (AVAudioEngine / ExoPlayer / Web Audio
+  `AudioBufferSourceNode.start(when)`).
+- A client that misses the deadline (e.g. still buffering) joins late: it
+  computes the current position from the anchor and starts there — it never
+  delays the group.
+
+### 5.4 Drift correction
+
+Clients self-check ~1×/s: compare actual playback position against the anchor
+formula. Error < 15 ms: ignore. 15–50 ms: correct by micro rate adjustment
+(±0.5 % for a bounded interval) — inaudible. > 50 ms: hard resync (local
+pause/seek/rejoin). No protocol messages involved; the anchor is the truth.
+
+---
+
+## 6. Media distribution
+
+### 6.1 Playlist
+
+```
+H→*  playlist { rev, items: [ {mediaId, kind: "audio"|"video"|"image",
+                               name, mime, sizeBytes, durationUs, sha256} ] }
+```
+
+### 6.2 Transfer
+
+- Guest fetches `GET /media/{mediaId}` (with `Range` as needed) over the media
+  plane. Auth: `Authorization: Bearer <sessionToken>`.
+- v1 policy: **fully prefetch before playing** (LAN is fast; an entire class of
+  rebuffer-desync bugs disappears). Streaming with a large lead buffer is a v2
+  option for video.
+- `sha256` lets guests cache across sessions and verify transfer.
+
+### 6.3 Readiness
+
+```
+G→H  media_status { mediaId, state: "none"|"fetching"|"ready", progress: 0.87 }
+```
+
+Host UX rule (not protocol): when selecting a new track, wait for all guests
+`ready` or a 10 s timeout — whichever first — then broadcast the scheduled
+`state`. Stragglers late-join per §5.3.
+
+---
+
+## 7. Output-latency calibration (client-local)
+
+Bluetooth headphones add 100–300 ms of device-specific latency — the largest
+error source by far. Handling is client-local (each client shifts its own
+scheduling earlier by its known output latency), but the protocol supports it:
+
+- Clients SHOULD use platform-reported latency when available
+  (`AVAudioSession.outputLatency`, Web Audio `outputLatency`, Android
+  `AudioTrack#getTimestamp`-derived) as the default.
+- Clients SHOULD offer a manual nudge (±500 ms, 10 ms steps), persisted per
+  output device.
+- `G→H media_status` MAY include `reportedLatencyUs` for host-side diagnostics.
+
+---
+
+## 8. Errors
+
+```
+H→G  error { code, message, fatal: bool }
+```
+
+Codes: `bad_token`, `version_unsupported`, `session_full`, `media_gone`,
+`internal`. Fatal errors are followed by a close.
+
+---
+
+## 9. Security model (v1 = honest-guest, hostile-network-lite)
+
+- The session token (128-bit random, in the QR) gates both planes. Possession
+  of the QR = invitation.
+- Traffic is plaintext in v1 (it's your living room / car). TLS with a
+  self-signed cert pinned via the QR is the upgrade path — required before any
+  future web guest client (browser secure-context rules), optional until then.
+- Host MUST bind to LAN interfaces only, never 0.0.0.0 on a public interface.
+
+---
+
+## 10. Decided (v0.1 review)
+
+- **Targets**: native mobile + desktop. Web is a possible later guest-only
+  client; never a host.
+- **Media priority**: audio-first. Video ships later as "best effort ±100 ms"
+  on the same anchor model; images are trivial (`state.mediaId` + display).
+- **Session lifetime**: one host; host death ends the room. No migration.
+  "Multiple admins" (§5.2) may come later as host-side policy.
+- **Encoding**: JSON v1; binary (CBOR/MessagePack) negotiable later via
+  `hello.encodings`. Not a performance requirement — control plane is low-rate.
+
+## 11. Open questions
+
+1. **Video sync quality bar** — same anchor model, but players
+   (AVPlayer/ExoPlayer) have coarser scheduling than audio engines. Define the
+   acceptable drift for "cherry on top" video when it lands.
+2. **Guests contributing files** — "anyone can add to the queue" means guests
+   upload to host (`POST /media`). Nice v1.5; protocol shape already allows it.
+3. **TLS** — plaintext is fine for v1 native clients; a self-signed cert
+   pinned via the QR becomes relevant if/when a web guest client appears
+   (secure-context requirements) or if hostile-network hardening matters.
