@@ -10,3 +10,4 @@ export 'package:localjam_core/localjam_core.dart';
 
 export 'src/guest_client.dart';
 export 'src/host_server.dart';
+export 'src/monotonic.dart';
