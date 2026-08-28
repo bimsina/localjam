@@ -56,9 +56,11 @@ devices, iOS + Android).
 
 - **macOS**: live-verified (app joined a session at −0.4 ms drift). Full
   format support via AVAudioEngine.
-- **Windows / Linux**: implemented on a shared miniaudio C++ core whose
-  scheduling was measured at ≤0.01 ms start error on CoreAudio; the platform
-  plugin glue is thin but **build-unverified** — first task on a real
-  Windows/Linux machine is `flutter build windows` / `flutter build linux`,
-  then the same checks as mobile. Desktop v1 formats: mp3/flac/wav/ogg
+- **Linux**: `flutter build linux --debug` verified in an Ubuntu 24.04
+  (arm64) container — plugin glue compiles clean under -Wall -Werror.
+  Runtime audio (PulseAudio/ALSA) still needs a real machine with a sound
+  device: run the app, join a session, check the same telemetry as mobile.
+- **Windows**: shared miniaudio core (measured ≤0.01 ms start error on
+  CoreAudio); plugin glue **build-unverified** — first task on a Windows
+  machine is `flutter build windows`, then the mobile checks. Desktop v1 formats: mp3/flac/wav/ogg
   (m4a/AAC returns unsupported_format; OS-codec decode is a later add).
