@@ -4,6 +4,7 @@
 library;
 
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -340,16 +341,20 @@ class JamGuestClient {
 
   // --- Media plane (§6.2, §6.3) ----------------------------------------------------
 
-  /// Fetches `GET /media/{mediaId}` with Bearer auth (§6.2), reporting
-  /// `media_status` upstream (§6.3): `fetching` with progress while
-  /// downloading, `ready` once the sha256 digest matches the playlist entry.
+  /// Fetches `GET /media/{mediaId}` with Bearer auth (§6.2), streaming the
+  /// body straight to [destination] while hashing incrementally — the file is
+  /// never held in memory. Reports `media_status` upstream (§6.3): `fetching`
+  /// with progress while downloading, `ready` once the sha256 digest matches
+  /// the playlist entry.
   ///
-  /// [onProgress] receives values in [0, 1]. Throws [ArgumentError] if
-  /// [mediaId] is not in the current playlist, [HttpException] on a non-200
-  /// response, and [StateError] on a digest mismatch (after reporting
-  /// `media_status: none`).
-  Future<Uint8List> fetchMedia(
-    String mediaId, {
+  /// [onProgress] receives values in [0, 1]. Returns [destination]. Throws
+  /// [ArgumentError] if [mediaId] is not in the current playlist,
+  /// [HttpException] on a non-200 response, and [StateError] on a digest
+  /// mismatch — after deleting the partial [destination] and reporting
+  /// `media_status: none`.
+  Future<File> fetchMediaToFile(
+    String mediaId,
+    File destination, {
     void Function(double progress)? onProgress,
   }) async {
     final item = _playlist.firstWhere(
@@ -385,32 +390,44 @@ class JamGuestClient {
       ),
     );
     final total = item.sizeBytes > 0 ? item.sizeBytes : response.contentLength;
-    final builder = BytesBuilder(copy: false);
+    final digestSink = _DigestSink();
+    final hasher = sha256.startChunkedConversion(digestSink);
+    await destination.parent.create(recursive: true);
+    final sink = destination.openWrite();
+    var received = 0;
     var lastReported = 0.0;
-    await for (final chunk in response) {
-      builder.add(chunk);
-      final progress = total > 0
-          ? (builder.length / total).clamp(0.0, 1.0)
-          : 0.0;
-      onProgress?.call(progress);
-      // Throttle upstream progress reports to quarter steps (§6.3 is for
-      // host UX, not telemetry).
-      if (progress - lastReported >= 0.25 && progress < 1.0) {
-        lastReported = progress;
-        _send(
-          MediaStatusMessage(
-            mediaId: mediaId,
-            state: MediaFetchState.fetching,
-            progress: progress,
-          ),
-        );
+    try {
+      await for (final chunk in response) {
+        hasher.add(chunk);
+        sink.add(chunk);
+        received += chunk.length;
+        final progress = total > 0 ? (received / total).clamp(0.0, 1.0) : 0.0;
+        onProgress?.call(progress);
+        // Throttle upstream progress reports to quarter steps (§6.3 is for
+        // host UX, not telemetry).
+        if (progress - lastReported >= 0.25 && progress < 1.0) {
+          lastReported = progress;
+          _send(
+            MediaStatusMessage(
+              mediaId: mediaId,
+              state: MediaFetchState.fetching,
+              progress: progress,
+            ),
+          );
+        }
       }
+      await sink.flush();
+    } finally {
+      await sink.close();
     }
-    final bytes = builder.takeBytes();
+    hasher.close();
 
     // §6.2: sha256 verifies the transfer (and enables cross-session caching).
-    final digest = sha256.convert(bytes).toString();
+    final digest = digestSink.value!.toString();
     if (item.sha256.isNotEmpty && digest != item.sha256) {
+      try {
+        await destination.delete();
+      } catch (_) {}
       _send(MediaStatusMessage(mediaId: mediaId, state: MediaFetchState.none));
       throw StateError(
         'sha256 mismatch for $mediaId: expected ${item.sha256}, got $digest',
@@ -418,7 +435,96 @@ class JamGuestClient {
     }
     onProgress?.call(1.0);
     _send(MediaStatusMessage(mediaId: mediaId, state: MediaFetchState.ready));
-    return bytes;
+    return destination;
+  }
+
+  /// Fetches `GET /media/{mediaId}` into memory (§6.2), reporting
+  /// `media_status` upstream (§6.3): `fetching` with progress while
+  /// downloading, `ready` once the sha256 digest matches the playlist entry.
+  ///
+  /// Implemented on top of [fetchMediaToFile] via a temp file (one fetch
+  /// path); the returned bytes are read back after verification. Prefer
+  /// [fetchMediaToFile] for anything large.
+  ///
+  /// [onProgress] receives values in [0, 1]. Throws [ArgumentError] if
+  /// [mediaId] is not in the current playlist, [HttpException] on a non-200
+  /// response, and [StateError] on a digest mismatch (after reporting
+  /// `media_status: none`).
+  Future<Uint8List> fetchMedia(
+    String mediaId, {
+    void Function(double progress)? onProgress,
+  }) async {
+    final dir = await Directory.systemTemp.createTemp('localjam_fetch_');
+    try {
+      final file = await fetchMediaToFile(
+        mediaId,
+        File('${dir.path}/$mediaId'),
+        onProgress: onProgress,
+      );
+      return await file.readAsBytes();
+    } finally {
+      try {
+        await dir.delete(recursive: true);
+      } catch (_) {}
+    }
+  }
+
+  /// Uploads [file] to the host over the media plane (`POST /media`, §6.4),
+  /// streaming it from disk — the file is never read into memory whole.
+  /// Metadata travels in `X-LocalJam-*` headers; the host computes the sha256
+  /// and mediaId itself, adds the item to the playlist, and broadcasts it.
+  ///
+  /// [name] defaults to the file's basename (sent percent-encoded, §6.4).
+  /// [onProgress] receives values in [0, 1] as body bytes are flushed.
+  ///
+  /// Returns the host's [MediaItem] — the newly created item (201), or the
+  /// pre-existing item when this content was already in the session (200,
+  /// idempotent). Throws [HttpException] on any other response (401 bad
+  /// token, 413 over the host's size limit, ...).
+  Future<MediaItem> uploadMedia(
+    File file, {
+    required MediaKind kind,
+    String? name,
+    String mime = 'application/octet-stream',
+    int? durationUs,
+    void Function(double progress)? onProgress,
+  }) async {
+    final total = await file.length();
+    final uri = Uri(scheme: 'http', host: _host, port: _port, path: '/media');
+    final request = await _http.postUrl(uri);
+    request.headers.set(HttpHeaders.authorizationHeader, 'Bearer $_token');
+    request.headers.set('X-LocalJam-Kind', kind.wire);
+    request.headers.set(
+      'X-LocalJam-Name',
+      Uri.encodeComponent(name ?? Uri.file(file.path).pathSegments.last),
+    );
+    request.headers.set('X-LocalJam-Mime', mime);
+    if (durationUs != null) {
+      request.headers.set('X-LocalJam-Duration-Us', '$durationUs');
+    }
+    request.headers.set('X-LocalJam-Peer-Id', _selfPeerId);
+    request.headers.contentType = ContentType.binary;
+    request.contentLength = total;
+
+    var sent = 0;
+    await for (final chunk in file.openRead()) {
+      request.add(chunk);
+      // Flush per chunk: backpressure keeps memory flat and makes progress
+      // reflect bytes actually handed to the socket.
+      await request.flush();
+      sent += chunk.length;
+      onProgress?.call(total > 0 ? (sent / total).clamp(0.0, 1.0) : 1.0);
+    }
+    final response = await request.close();
+    final body = await utf8.decodeStream(response);
+    if (response.statusCode != HttpStatus.created &&
+        response.statusCode != HttpStatus.ok) {
+      throw HttpException(
+        'POST $uri failed with ${response.statusCode}',
+        uri: uri,
+      );
+    }
+    return MediaItem.fromJson(jsonDecode(body) as Map<String, Object?>);
   }
 
   // --- Teardown ------------------------------------------------------------------
@@ -449,4 +555,16 @@ class JamGuestClient {
       // Sink closed underneath us mid-teardown; close() handles the rest.
     }
   }
+}
+
+/// Terminal sink for one chunked sha256 conversion (avoids a package:convert
+/// dependency for `AccumulatorSink`).
+class _DigestSink implements Sink<Digest> {
+  Digest? value;
+
+  @override
+  void add(Digest data) => value = data;
+
+  @override
+  void close() {}
 }

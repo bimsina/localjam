@@ -36,6 +36,7 @@ Future<JamHostServer> startHost({
   Duration silenceTimeout = const Duration(seconds: 10),
   Duration reconnectGrace = const Duration(seconds: 30),
   Duration livenessCheckInterval = const Duration(seconds: 1),
+  int maxUploadBytes = 512 * 1024 * 1024,
 }) async {
   final host = JamHostServer(
     sessionName: sessionName,
@@ -44,6 +45,7 @@ Future<JamHostServer> startHost({
     silenceTimeout: silenceTimeout,
     reconnectGrace: reconnectGrace,
     livenessCheckInterval: livenessCheckInterval,
+    maxUploadBytes: maxUploadBytes,
   );
   await host.start(address: InternetAddress.loopbackIPv4);
   addTearDown(host.close);
@@ -371,6 +373,223 @@ void main() {
       final res = await get('/media/${item.mediaId}', bearer: 'wrong');
       expect(res.statusCode, 401);
       await res.drain<void>();
+    });
+  });
+
+  group('guest uploads (§6.4)', () {
+    test('upload round trip: playlist broadcast, event, idempotent re-upload, '
+        'other guest fetches to file', () async {
+      final host = await startHost();
+      final bytes = makeMediaBytes(48 * 1024, seed: 7);
+      final file = await writeTempMedia(bytes);
+      final expectedSha = sha256.convert(bytes).toString();
+
+      final uploader = await joinGuest(host, clientName: 'uploader');
+      final listener = await joinGuest(host, clientName: 'listener');
+
+      final hostEvents = <JamHostEvent>[];
+      host.events.listen(hostEvents.add);
+      final playlistUpdate = listener.playlistUpdates.first.timeout(
+        const Duration(seconds: 5),
+      );
+
+      final progresses = <double>[];
+      final item = await uploader.uploadMedia(
+        file,
+        kind: MediaKind.audio,
+        name: 'My Song.mp3',
+        mime: 'audio/mpeg',
+        durationUs: 1_000_000,
+        onProgress: progresses.add,
+      );
+
+      // The host computed sha/size/id itself; metadata came from headers.
+      expect(item.sha256, expectedSha);
+      expect(item.mediaId, 'm_${expectedSha.substring(0, 12)}');
+      expect(item.sizeBytes, bytes.length);
+      expect(item.durationUs, 1_000_000);
+      expect(item.name, 'My Song.mp3');
+      expect(item.mime, 'audio/mpeg');
+      expect(item.kind, MediaKind.audio);
+      expect(progresses.last, 1.0);
+
+      // The playlist broadcast reached the other guest with the same item.
+      final items = await playlistUpdate;
+      expect(items.map((i) => i.mediaId), [item.mediaId]);
+      expect(items.single.sha256, expectedSha);
+      expect(items.single.durationUs, 1_000_000);
+      expect(host.playlist, hasLength(1));
+
+      // mediaUploaded fired with the uploader's peerId, before the
+      // playlist broadcast.
+      final uploadedIdx = hostEvents.indexWhere(
+        (e) => e.kind == JamHostEventKind.mediaUploaded,
+      );
+      expect(uploadedIdx, isNonNegative);
+      expect(hostEvents[uploadedIdx].peerId, uploader.selfPeerId);
+      expect(hostEvents[uploadedIdx].mediaId, item.mediaId);
+      final broadcastIdx = hostEvents.indexWhere(
+        (e) => e.kind == JamHostEventKind.playlistBroadcast,
+      );
+      expect(broadcastIdx, greaterThan(uploadedIdx));
+
+      // A second identical upload is idempotent: 200 with the existing
+      // item (first upload's metadata wins), no duplicate playlist entry,
+      // no second mediaUploaded event.
+      final again = await uploader.uploadMedia(
+        file,
+        kind: MediaKind.audio,
+        name: 'Renamed.mp3',
+      );
+      expect(again.mediaId, item.mediaId);
+      expect(again.name, 'My Song.mp3');
+      expect(host.playlist, hasLength(1));
+      expect(
+        hostEvents.where((e) => e.kind == JamHostEventKind.mediaUploaded),
+        hasLength(1),
+      );
+
+      // Another guest can stream-fetch the uploaded item byte-for-byte.
+      final dir = await Directory.systemTemp.createTemp('localjam_dl');
+      addTearDown(() => dir.delete(recursive: true));
+      final dest = File('${dir.path}/fetched.bin');
+      await listener.fetchMediaToFile(item.mediaId, dest);
+      expect(await dest.readAsBytes(), equals(bytes));
+    });
+
+    test('upload over maxUploadBytes is answered 413', () async {
+      final host = await startHost(maxUploadBytes: 100);
+      final guest = await joinGuest(host);
+      final file = await writeTempMedia(makeMediaBytes(1000));
+      await expectLater(
+        guest.uploadMedia(file, kind: MediaKind.audio),
+        throwsA(
+          isA<HttpException>().having(
+            (e) => e.message,
+            'message',
+            contains('413'),
+          ),
+        ),
+      );
+      expect(host.playlist, isEmpty);
+    });
+
+    test('upload with a bad bearer token is answered 401', () async {
+      final host = await startHost();
+      final http = HttpClient();
+      addTearDown(() => http.close(force: true));
+      final req = await http.postUrl(
+        Uri.parse('http://127.0.0.1:${host.port}/media'),
+      );
+      req.headers.set(HttpHeaders.authorizationHeader, 'Bearer wrong');
+      req.headers.set('X-LocalJam-Kind', 'audio');
+      req.add(makeMediaBytes(64));
+      final res = await req.close();
+      expect(res.statusCode, 401);
+      await res.drain<void>();
+      expect(host.playlist, isEmpty);
+    });
+
+    test('upload without a valid X-LocalJam-Kind is answered 400', () async {
+      final host = await startHost();
+      final http = HttpClient();
+      addTearDown(() => http.close(force: true));
+      final req = await http.postUrl(
+        Uri.parse('http://127.0.0.1:${host.port}/media'),
+      );
+      req.headers.set(HttpHeaders.authorizationHeader, 'Bearer ${host.token}');
+      req.add(makeMediaBytes(64));
+      final res = await req.close();
+      expect(res.statusCode, 400);
+      await res.drain<void>();
+      expect(host.playlist, isEmpty);
+    });
+  });
+
+  group('fetchMediaToFile', () {
+    test('streams to disk, progress reaches 1.0, host sees ready', () async {
+      final host = await startHost();
+      final bytes = makeMediaBytes(64 * 1024);
+      final file = await writeTempMedia(bytes);
+      final item = await JamHostServer.describeFile(
+        file,
+        kind: MediaKind.audio,
+      );
+      host.addMedia(item, file);
+      final guest = await joinGuest(host);
+
+      final dir = await Directory.systemTemp.createTemp('localjam_dl');
+      addTearDown(() => dir.delete(recursive: true));
+      final dest = File('${dir.path}/track.bin');
+
+      final progresses = <double>[];
+      final result = await guest.fetchMediaToFile(
+        item.mediaId,
+        dest,
+        onProgress: progresses.add,
+      );
+      expect(result.path, dest.path);
+      expect(await dest.readAsBytes(), equals(bytes));
+      expect(progresses.last, 1.0);
+
+      await waitFor(
+        () => host.allPeersReady(item.mediaId),
+        reason: 'host to record readiness',
+      );
+    });
+
+    test(
+      'sha256 mismatch deletes the destination, reports none, throws',
+      () async {
+        final host = await startHost();
+        final bytes = makeMediaBytes(8 * 1024);
+        final file = await writeTempMedia(bytes);
+        final honest = await JamHostServer.describeFile(
+          file,
+          kind: MediaKind.audio,
+        );
+        // Playlist advertises a digest the served bytes cannot match.
+        final tampered = MediaItem(
+          mediaId: honest.mediaId,
+          kind: honest.kind,
+          name: honest.name,
+          mime: honest.mime,
+          sizeBytes: honest.sizeBytes,
+          durationUs: honest.durationUs,
+          sha256: 'deadbeef' * 8,
+        );
+        host.addMedia(tampered, file);
+        final guest = await joinGuest(host);
+
+        final statuses = <JamHostEvent>[];
+        host.events.listen((e) {
+          if (e.kind == JamHostEventKind.peerMediaStatus) statuses.add(e);
+        });
+
+        final dir = await Directory.systemTemp.createTemp('localjam_dl');
+        addTearDown(() => dir.delete(recursive: true));
+        final dest = File('${dir.path}/track.bin');
+
+        await expectLater(
+          guest.fetchMediaToFile(tampered.mediaId, dest),
+          throwsStateError,
+        );
+        // The partial file was cleaned up.
+        expect(dest.existsSync(), isFalse);
+        // The guest reported media_status none (§6.3), exactly like
+        // fetchMedia.
+        await waitFor(
+          () => statuses.any((e) => e.mediaState == MediaFetchState.none),
+          reason: 'none media_status after the mismatch',
+        );
+      },
+    );
+
+    test('rejects unknown media id', () async {
+      final host = await startHost();
+      final guest = await joinGuest(host);
+      final dest = File('${Directory.systemTemp.path}/never_written.bin');
+      expect(() => guest.fetchMediaToFile('m_nope', dest), throwsArgumentError);
     });
   });
 

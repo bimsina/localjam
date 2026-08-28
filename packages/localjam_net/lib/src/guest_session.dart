@@ -4,6 +4,7 @@
 library;
 
 import 'dart:async';
+import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
 
@@ -257,6 +258,43 @@ class JamGuestSession {
   }) {
     _ensureConnected();
     return _client.fetchMedia(mediaId, onProgress: onProgress);
+  }
+
+  /// Streams media over the HTTP plane straight to [destination] (§6.2) via
+  /// the current client, verifying its sha256 on completion. Throws
+  /// [StateError] unless connected.
+  Future<File> fetchMediaToFile(
+    String mediaId,
+    File destination, {
+    void Function(double progress)? onProgress,
+  }) {
+    _ensureConnected();
+    return _client.fetchMediaToFile(
+      mediaId,
+      destination,
+      onProgress: onProgress,
+    );
+  }
+
+  /// Uploads [file] to the host (`POST /media`, §6.4) via the current
+  /// client, streaming it from disk. Throws [StateError] unless connected.
+  Future<MediaItem> uploadMedia(
+    File file, {
+    required MediaKind kind,
+    String? name,
+    String mime = 'application/octet-stream',
+    int? durationUs,
+    void Function(double progress)? onProgress,
+  }) {
+    _ensureConnected();
+    return _client.uploadMedia(
+      file,
+      kind: kind,
+      name: name,
+      mime: mime,
+      durationUs: durationUs,
+      onProgress: onProgress,
+    );
   }
 
   void _ensureConnected() {

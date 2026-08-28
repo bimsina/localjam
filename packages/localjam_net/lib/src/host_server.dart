@@ -4,6 +4,7 @@
 library;
 
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 
@@ -49,6 +50,12 @@ enum JamHostEventKind {
 
   /// A new playlist was broadcast ([JamHostEvent.playlist] set).
   playlistBroadcast,
+
+  /// A guest uploaded a new media item over the media plane (§6.4;
+  /// [JamHostEvent.mediaId] set, [JamHostEvent.peerId] set when the upload
+  /// carried `X-LocalJam-Peer-Id`). Emitted before the playlist broadcast the
+  /// upload produces. Idempotent re-uploads of existing content do not fire.
+  mediaUploaded,
 
   /// The current item reached its end ([JamHostEvent.mediaId] set to the
   /// ended item). Emitted exactly once per track end, before the state
@@ -123,6 +130,11 @@ class JamHostServer {
   /// [livenessCheckInterval] cadence, so end handling lags the exact end by
   /// up to one interval — the broadcast position still lands exactly on the
   /// duration because positions clamp to it).
+  ///
+  /// [uploadDir] is where guest uploads (§6.4) are stored; when null a fresh
+  /// temp directory is created per server instance in [start] and deleted on
+  /// [close]. [maxUploadBytes] caps one upload's size (default 512 MB;
+  /// over-limit uploads are answered 413).
   JamHostServer({
     required this.sessionName,
     String? token,
@@ -131,6 +143,8 @@ class JamHostServer {
     this.silenceTimeout = const Duration(seconds: 10),
     this.reconnectGrace = const Duration(seconds: 30),
     this.livenessCheckInterval = const Duration(seconds: 1),
+    this.uploadDir,
+    this.maxUploadBytes = 512 * 1024 * 1024,
   }) : token = token ?? _randomHex(16),
        sessionId = 's_${_randomHex(4)}',
        _session = HostSession(leadTimeUs: leadTimeUs);
@@ -158,11 +172,28 @@ class JamHostServer {
   /// position reaches its playlist `durationUs`.
   final JamEndPolicy endPolicy;
 
+  /// Where guest uploads (§6.4) are stored. Null means a per-instance temp
+  /// directory, created in [start] and deleted (with its contents) on
+  /// [close]; a caller-supplied directory is created if missing and never
+  /// deleted.
+  final Directory? uploadDir;
+
+  /// Upper bound on a single guest upload's size in bytes (§6.4).
+  final int maxUploadBytes;
+
   final HostSession _session;
   static const MessageCodec _codec = MessageCodec();
 
   HttpServer? _server;
   Timer? _livenessTimer;
+
+  /// The resolved upload directory (§6.4), set in [start].
+  Directory? _uploadDir;
+
+  /// Whether [_uploadDir] was created by this instance (and so is deleted on
+  /// [close]).
+  bool _ownsUploadDir = false;
+
   int _seq = 0;
   int _peerCounter = 0;
   int _playlistRev = 0;
@@ -235,6 +266,14 @@ class JamHostServer {
   /// 0.0.0.0 — choosing the interface is the caller's job.
   Future<void> start({InternetAddress? address, int port = 0}) async {
     if (_server != null) throw StateError('JamHostServer already started');
+    final configuredDir = uploadDir;
+    if (configuredDir == null) {
+      _uploadDir = await Directory.systemTemp.createTemp('localjam_upload_');
+      _ownsUploadDir = true;
+    } else {
+      await configuredDir.create(recursive: true);
+      _uploadDir = configuredDir;
+    }
     final server = await HttpServer.bind(
       address ?? InternetAddress.loopbackIPv4,
       port,
@@ -272,6 +311,13 @@ class JamHostServer {
     _conns.clear();
     _peers.clear();
     await _server?.close(force: true);
+    if (_ownsUploadDir) {
+      try {
+        await _uploadDir?.delete(recursive: true);
+      } catch (_) {
+        // Best-effort cleanup of the per-instance temp dir.
+      }
+    }
     await _events.close();
   }
 
@@ -282,6 +328,8 @@ class JamHostServer {
       final path = req.uri.path;
       if (path == '/ws') {
         await _handleWsUpgrade(req);
+      } else if (path == '/media') {
+        await _handleUpload(req);
       } else if (path.startsWith('/media/')) {
         await _serveMedia(req);
       } else {
@@ -370,6 +418,141 @@ class JamHostServer {
     }
     res.contentLength = end - start + 1;
     await entry.file.openRead(start, end + 1).pipe(res);
+  }
+
+  // --- Guest uploads (§6.4) ------------------------------------------------------
+
+  /// Handles `POST /media`: streams the raw body to disk while hashing
+  /// incrementally (never buffering the file in memory), derives the mediaId
+  /// from the host-computed sha256 exactly like [describeFile], registers the
+  /// item via [addMedia], and answers 201 with the MediaItem JSON — or 200
+  /// with the existing item when the content was already uploaded
+  /// (idempotency, §6.4).
+  Future<void> _handleUpload(HttpRequest req) async {
+    final res = req.response;
+    // §6.4/§9: Authorization: Bearer <sessionToken> gates uploads too.
+    final auth = req.headers.value(HttpHeaders.authorizationHeader);
+    if (auth != 'Bearer $token') {
+      res.statusCode = HttpStatus.unauthorized;
+      await res.close();
+      return;
+    }
+    if (req.method != 'POST') {
+      res.statusCode = HttpStatus.methodNotAllowed;
+      await res.close();
+      return;
+    }
+
+    final MediaKind kind;
+    try {
+      kind = MediaKind.fromWire(req.headers.value('X-LocalJam-Kind') ?? '');
+    } on FormatException {
+      res.statusCode = HttpStatus.badRequest;
+      await res.close();
+      return;
+    }
+    final String? rawName = req.headers.value('X-LocalJam-Name');
+    final String name;
+    try {
+      // §6.4: the name header is percent-encoded UTF-8.
+      name = rawName == null ? 'upload' : Uri.decodeComponent(rawName);
+    } on ArgumentError {
+      res.statusCode = HttpStatus.badRequest;
+      await res.close();
+      return;
+    }
+    final mime =
+        req.headers.value('X-LocalJam-Mime') ?? 'application/octet-stream';
+    final durationUs = int.tryParse(
+      req.headers.value('X-LocalJam-Duration-Us') ?? '',
+    );
+    final peerId = req.headers.value('X-LocalJam-Peer-Id');
+
+    // §6.4: a declared over-limit size is rejected without reading the body.
+    if (req.contentLength > maxUploadBytes) {
+      res.persistentConnection = false;
+      res.statusCode = HttpStatus.requestEntityTooLarge;
+      await res.close();
+      return;
+    }
+
+    final dir = _uploadDir!;
+    final tmp = File('${dir.path}/incoming_${_randomHex(8)}.part');
+    final digestSink = _DigestSink();
+    final hasher = sha256.startChunkedConversion(digestSink);
+    final sink = tmp.openWrite();
+    var received = 0;
+    var overLimit = false;
+    try {
+      // Stream to disk while hashing — the file is never held in memory.
+      await for (final chunk in req) {
+        received += chunk.length;
+        if (received > maxUploadBytes) {
+          overLimit = true;
+          break;
+        }
+        hasher.add(chunk);
+        sink.add(chunk);
+      }
+      await sink.flush();
+    } finally {
+      await sink.close();
+    }
+    hasher.close();
+
+    if (overLimit) {
+      try {
+        await tmp.delete();
+      } catch (_) {}
+      res.persistentConnection = false;
+      res.statusCode = HttpStatus.requestEntityTooLarge;
+      await res.close();
+      return;
+    }
+
+    final digest = digestSink.value!.toString();
+    final mediaId = 'm_${digest.substring(0, 12)}';
+
+    final existing = _media[mediaId];
+    if (existing != null) {
+      // §6.4 idempotency: the mediaId is content-derived, so an existing id
+      // means the same bytes — answer 200 with the existing item, keep its
+      // original metadata, and broadcast nothing.
+      try {
+        await tmp.delete();
+      } catch (_) {}
+      res.statusCode = HttpStatus.ok;
+      res.headers.contentType = ContentType.json;
+      res.write(jsonEncode(existing.item.toJson()));
+      await res.close();
+      return;
+    }
+
+    final stored = await tmp.rename('${dir.path}/$mediaId');
+    final item = MediaItem(
+      mediaId: mediaId,
+      kind: kind,
+      name: name,
+      mime: mime,
+      sizeBytes: received,
+      durationUs: durationUs,
+      sha256: digest,
+    );
+    // §6.4: the upload event first, then addMedia's playlist broadcast
+    // (which also threads durationUs into the session per §5.5).
+    _emit(
+      JamHostEvent._(
+        JamHostEventKind.mediaUploaded,
+        peerId: peerId,
+        mediaId: mediaId,
+      ),
+    );
+    addMedia(item, stored);
+
+    res.statusCode = HttpStatus.created;
+    res.headers.contentType = ContentType.json;
+    res.write(jsonEncode(item.toJson()));
+    await res.close();
   }
 
   /// Parses a single-range `Range` header against a resource of [size] bytes.
@@ -743,4 +926,16 @@ class JamHostServer {
   void _emit(JamHostEvent event) {
     if (!_events.isClosed) _events.add(event);
   }
+}
+
+/// Terminal sink for one chunked sha256 conversion (avoids a package:convert
+/// dependency for `AccumulatorSink`).
+class _DigestSink implements Sink<Digest> {
+  Digest? value;
+
+  @override
+  void add(Digest data) => value = data;
+
+  @override
+  void close() {}
 }

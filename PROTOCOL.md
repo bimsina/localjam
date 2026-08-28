@@ -24,7 +24,7 @@ Two channels, both served by the host on a single TCP port:
 | Plane   | Transport                  | Purpose                                  |
 |---------|----------------------------|------------------------------------------|
 | Control | WebSocket `ws://host:port/ws` | Session state, clock sync, playback commands |
-| Media   | HTTP `http://host:port/media/{mediaId}` | File transfer. MUST support `Range` requests |
+| Media   | HTTP `http://host:port/media/{mediaId}` | File transfer. MUST support `Range` requests. Guest uploads via `POST /media` (§6.4) |
 
 - Control messages are JSON text frames in v1. The `hello` handshake reserves
   an `encodings` field (§3.1) so clients and host can negotiate a binary
@@ -259,6 +259,51 @@ Host UX rule (not protocol): when selecting a new track, wait for all guests
 `ready` or a 10 s timeout — whichever first — then broadcast the scheduled
 `state`. Stragglers late-join per §5.3.
 
+### 6.4 Guest uploads
+
+"Anyone adds songs to the jam": guests contribute files by uploading them to
+the host over the media plane.
+
+```
+POST /media
+Authorization: Bearer <sessionToken>
+<body: the raw file bytes>
+```
+
+Metadata rides in request headers (the body stays raw bytes so nothing ever
+re-encodes the file):
+
+| Header                   | Required | Meaning                                          |
+|--------------------------|----------|--------------------------------------------------|
+| `X-LocalJam-Name`        | no       | Display filename, percent-encoded UTF-8          |
+| `X-LocalJam-Mime`        | no       | MIME type (default `application/octet-stream`)   |
+| `X-LocalJam-Kind`        | yes      | `audio` \| `video` \| `image`                    |
+| `X-LocalJam-Duration-Us` | no       | Duration in µs (SHOULD be set for audio, §5.5)   |
+| `X-LocalJam-Peer-Id`     | no       | Uploader's peerId — informational/diagnostics only |
+
+The host streams the body to disk while hashing incrementally, computes the
+`sha256` **itself** (it never trusts a sender-supplied digest), and derives
+the `mediaId` from the digest exactly as it does for its own files
+(`m_` + first 12 hex chars of the sha256). It then stores the bytes, appends
+the item to the playlist, and broadcasts the ordinary §6.1 `playlist` —
+uploads need no new control-plane message.
+
+Responses:
+
+- `201 Created` — item added; the body is the new item's §6.1 MediaItem JSON.
+- `200 OK` — an item with this `mediaId` already exists. Because the mediaId
+  is content-derived, that means the same bytes: uploads are **idempotent**.
+  The body is the *existing* item's JSON (the first upload's metadata wins);
+  no playlist change and no broadcast happens. (`409` is reserved for the
+  cryptographically-negligible case of a mediaId collision with different
+  content; hosts are not required to detect it.)
+- `400 Bad Request` — missing/unknown `X-LocalJam-Kind`, or malformed
+  percent-encoding in `X-LocalJam-Name`.
+- `401 Unauthorized` — bad or missing bearer token (§9).
+- `413 Content Too Large` — the body exceeds the host's upload size limit
+  (host policy; default 512 MB). The host MAY reject from `Content-Length`
+  alone without reading the body.
+
 ---
 
 ## 7. Output-latency calibration (client-local)
@@ -314,8 +359,6 @@ Codes: `bad_token`, `version_unsupported`, `session_full`, `media_gone`,
 1. **Video sync quality bar** — same anchor model, but players
    (AVPlayer/ExoPlayer) have coarser scheduling than audio engines. Define the
    acceptable drift for "cherry on top" video when it lands.
-2. **Guests contributing files** — "anyone can add to the queue" means guests
-   upload to host (`POST /media`). Nice v1.5; protocol shape already allows it.
-3. **TLS** — plaintext is fine for v1 native clients; a self-signed cert
+2. **TLS** — plaintext is fine for v1 native clients; a self-signed cert
    pinned via the QR becomes relevant if/when a web guest client appears
    (secure-context requirements) or if hostile-network hardening matters.
