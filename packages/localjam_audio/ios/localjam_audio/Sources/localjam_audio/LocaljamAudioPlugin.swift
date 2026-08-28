@@ -236,16 +236,23 @@ public class LocaljamAudioPlugin: NSObject, FlutterPlugin {
 
     timePitch.rate = Float(rate)
 
+    // A "start ASAP" path is deliberately absent: an unscheduled start incurs
+    // the engine's unpredictable spin-up delay (tens of ms), which shows up as
+    // a constant position lag that drift correction can never remove (it
+    // re-anchors through this same path and lags again). Instead a late
+    // anchor (§5.3 late join) is re-anchored minLeadUs into the future with
+    // the media position advanced to match, so the engine itself lands the
+    // start sample-accurately.
+    let minLeadUs: Int64 = 150_000
     let now = Self.machNowUs()
     var startPositionUs = positionUs
-    var startTime: AVAudioTime? = nil
-    if nativeTimeUs > now {
-      startTime = AVAudioTime(hostTime: Self.hostTicks(fromUs: nativeTimeUs))
-    } else {
-      // Late join (§5.3): the anchor instant already passed — start ASAP at
-      // the correspondingly advanced media position.
-      startPositionUs = positionUs + Int64((Double(now - nativeTimeUs) * rate).rounded())
+    var effectiveAnchorUs = nativeTimeUs
+    if nativeTimeUs < now + minLeadUs {
+      effectiveAnchorUs = now + minLeadUs
+      startPositionUs =
+        positionUs + Int64((Double(effectiveAnchorUs - nativeTimeUs) * rate).rounded())
     }
+    let startTime = AVAudioTime(hostTime: Self.hostTicks(fromUs: effectiveAnchorUs))
 
     let sampleRate = audioFile.processingFormat.sampleRate
     let startFrame = AVAudioFramePosition((Double(startPositionUs) * sampleRate / 1_000_000.0).rounded())
