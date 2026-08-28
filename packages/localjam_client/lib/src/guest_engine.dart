@@ -35,7 +35,34 @@ class JamPrefetchState {
   bool get ready => path != null;
 }
 
+/// Why a [JamGuestEngine]'s session reached its terminal state — published
+/// on [JamGuestEngine.sessionEnded] so player UIs never hang on a
+/// "reconnecting…" banner forever.
+enum JamSessionEndReason {
+  /// The connection dropped and stayed in [JamConnectionState.reconnecting]
+  /// for longer than [JamGuestEngine.hostGoneTimeout]; the engine stopped
+  /// the retries. The host is gone (host death ends the room — PROTOCOL.md
+  /// §10; the host closes sockets with `goingAway`, and this timeout is the
+  /// guest-side contract for detecting it when no reject ever arrives).
+  hostGone,
+
+  /// The host answered a (re)join with `reject` (§3.1) — e.g. `bad_token`
+  /// after a host restart, or `full`/`version`. Immediate and final.
+  rejected,
+
+  /// [JamGuestEngine.close] was called locally.
+  closedLocally,
+}
+
 /// One joined guest: session + clock sync + prefetch + synchronized playback.
+///
+/// On app resume the inherited lifecycle guard re-verifies playback sync
+/// (see [JamEngine.handleLifecycleState]). Clock-sync freshness after a
+/// background gap rides the existing machinery: `ClockSync`/`JamGuestClient`
+/// expose no way to trigger an extra ping burst, so the steady §4 schedule
+/// (one ping every 2 s, resuming with the event loop) re-converges the
+/// offset — and if the connection dropped while backgrounded, the reconnect
+/// path re-runs the full join burst on a fresh `ClockSync` anyway.
 ///
 /// Create with [join]; release with [close]. The engine feeds every
 /// authoritative snapshot into its [AudioSyncController] — holding the first
@@ -44,7 +71,12 @@ class JamPrefetchState {
 /// future) into [mediaCacheDir], and resolves media for the controller from
 /// that cache.
 class JamGuestEngine extends JamEngine {
-  JamGuestEngine._(this._session, this.player, this._cacheDir) {
+  JamGuestEngine._(
+    this._session,
+    this.player,
+    this._cacheDir, {
+    required this.hostGoneTimeout,
+  }) {
     sync = AudioSyncController(
       player: player,
       sessionNowUs: () => _session.sessionNowUs,
@@ -55,6 +87,7 @@ class JamGuestEngine extends JamEngine {
     _subs = [
       _session.states.listen(_onSnapshot),
       _session.playlistUpdates.listen(_prefetchAll),
+      _session.connectionStates.listen(_onConnectionState),
     ];
     _prefetchAll(_session.playlist);
     // Late join (§5.3): converge on whatever the host is doing right now, as
@@ -67,7 +100,9 @@ class JamGuestEngine extends JamEngine {
   ///
   /// [mediaCacheDir] is where fetched media files land; defaults to the
   /// platform temp directory (`path_provider`). [backoff] shapes the
-  /// session's reconnect schedule (§3.3).
+  /// session's reconnect schedule (§3.3). [hostGoneTimeout] bounds how long
+  /// the engine keeps reconnecting before declaring the host gone and
+  /// publishing [JamSessionEndReason.hostGone] on [sessionEnded].
   ///
   /// Throws [JamRejectedException] if the host rejects the join, or
   /// [SocketException] if no host candidate is reachable.
@@ -77,6 +112,7 @@ class JamGuestEngine extends JamEngine {
     String clientKind = 'flutter',
     Directory? mediaCacheDir,
     JamBackoff? backoff,
+    Duration hostGoneTimeout = const Duration(seconds: 90),
   }) async {
     final session = await JamGuestSession.connect(
       joinUri,
@@ -91,13 +127,35 @@ class JamGuestEngine extends JamEngine {
       await session.close();
       rethrow;
     }
-    final engine = JamGuestEngine._(session, LocaljamAudio(), cacheDir);
+    final engine = JamGuestEngine._(
+      session,
+      LocaljamAudio(),
+      cacheDir,
+      hostGoneTimeout: hostGoneTimeout,
+    );
     await engine.restorePersistedNudge();
+    await engine.startSessionGuards();
     return engine;
   }
 
   final JamGuestSession _session;
   final Directory _cacheDir;
+
+  /// How long the session may sit in [JamConnectionState.reconnecting]
+  /// before the engine gives up, stops the retries, and publishes
+  /// [JamSessionEndReason.hostGone] on [sessionEnded]. A reconnect that
+  /// succeeds within the window cancels the countdown.
+  final Duration hostGoneTimeout;
+
+  Timer? _hostGoneTimer;
+
+  /// The session's terminal state: null while the session is (or may come
+  /// back) alive, then set exactly once. Player UIs should render a terminal
+  /// "session ended"/"join rejected" screen on this — distinct from the
+  /// transient [JamConnectionState.reconnecting] banner, which
+  /// [hostGoneTimeout] guarantees cannot last forever.
+  final ValueNotifier<JamSessionEndReason?> sessionEnded =
+      ValueNotifier<JamSessionEndReason?>(null);
 
   @override
   final LocaljamAudio player;
@@ -211,6 +269,47 @@ class JamGuestEngine extends JamEngine {
     }
   }
 
+  // --- Session-end contract ------------------------------------------------
+
+  void _onConnectionState(JamConnectionState state) {
+    if (_closed) return;
+    switch (state) {
+      case JamConnectionState.connected:
+        // A reconnect succeeded: the host is alive, cancel the countdown.
+        _hostGoneTimer?.cancel();
+        _hostGoneTimer = null;
+      case JamConnectionState.reconnecting:
+        _hostGoneTimer ??= Timer(hostGoneTimeout, _onHostGoneTimeout);
+      case JamConnectionState.failed:
+        // §3.1: a reject is authoritative and immediate — the session is
+        // gone (bad_token after a host restart, full, version).
+        _end(JamSessionEndReason.rejected);
+      case JamConnectionState.closed:
+        // Only reachable via a local close (ours or _end's); the reason has
+        // already been published by whoever initiated it.
+        break;
+    }
+  }
+
+  void _onHostGoneTimeout() {
+    _hostGoneTimer = null;
+    if (_closed) return;
+    if (_session.connectionState != JamConnectionState.reconnecting) return;
+    _end(JamSessionEndReason.hostGone);
+  }
+
+  /// Publishes the terminal [reason] (first writer wins) and stops the
+  /// underlying session's reconnect retries.
+  void _end(JamSessionEndReason reason) {
+    _hostGoneTimer?.cancel();
+    _hostGoneTimer = null;
+    if (sessionEnded.value == null) sessionEnded.value = reason;
+    if (_session.connectionState == JamConnectionState.reconnecting ||
+        _session.connectionState == JamConnectionState.connected) {
+      unawaited(_session.close());
+    }
+  }
+
   // --- Prefetch (§6.2: fully prefetch before playing) -----------------------
 
   void _prefetchAll(List<MediaItem> items) {
@@ -266,6 +365,12 @@ class JamGuestEngine extends JamEngine {
   Future<void> close() async {
     if (_closed) return;
     _closed = true;
+    if (sessionEnded.value == null) {
+      sessionEnded.value = JamSessionEndReason.closedLocally;
+    }
+    _hostGoneTimer?.cancel();
+    _hostGoneTimer = null;
+    await stopSessionGuards();
     for (final sub in _subs) {
       unawaited(sub.cancel());
     }
@@ -277,6 +382,7 @@ class JamGuestEngine extends JamEngine {
     }
     await _session.close();
     prefetchStates.dispose();
+    sessionEnded.dispose();
     nudgeUs.dispose();
   }
 }

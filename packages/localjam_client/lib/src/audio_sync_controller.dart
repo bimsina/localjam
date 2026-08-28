@@ -227,6 +227,62 @@ class AudioSyncController {
     if (_snapshot != null) await _apply();
   }
 
+  /// Re-verifies playback after the app returns to the foreground.
+  ///
+  /// While backgrounded the OS may have suspended timers or killed the audio
+  /// engine, so the drift loop's knowledge is stale. This runs one immediate
+  /// check against the anchor formula:
+  ///
+  /// * snapshot `playing` but the player reports no position (audio died
+  ///   while backgrounded), or the measured error exceeds the [driftPolicy]'s
+  ///   hard-resync threshold → the snapshot is re-applied from scratch (the
+  ///   native clock calibration is re-measured, playback re-scheduled from
+  ///   the authoritative anchor);
+  /// * smaller errors → one ordinary drift check ([checkDriftNow]), letting
+  ///   the policy slew as usual;
+  /// * `paused`/`loading`/`idle` snapshots → a cheap idempotent re-apply so
+  ///   the loaded media and player mode still match the snapshot.
+  Future<void> reverifySync() async {
+    if (_disposed) return;
+    final snapshot = _snapshot;
+    if (snapshot == null) return;
+    if (snapshot.status != PlaybackStatus.playing) {
+      await _apply();
+      return;
+    }
+    if (trackFinished.value) return;
+    int? actualUs;
+    try {
+      actualUs = await player.positionUs();
+    } catch (_) {
+      actualUs = null; // Player unreachable: treat as stale.
+    }
+    if (_disposed) return;
+    final int expectedUs;
+    try {
+      expectedUs = snapshot.positionAt(sessionNowUs());
+    } catch (_) {
+      // Session clock unknown (a guest mid-reconnect): nothing to verify
+      // against yet — the snapshot is re-fed once the clock re-syncs.
+      return;
+    }
+    // The anchor ran past the end while backgrounded: the track is over.
+    final durationUs = loadedDurationUs.value;
+    if (durationUs != null && expectedUs >= durationUs) {
+      _enterTrackFinished();
+      return;
+    }
+    final stale =
+        actualUs == null ||
+        (actualUs - expectedUs).abs() > driftPolicy.hardResyncAboveUs;
+    if (stale) {
+      _calibration = null; // The engine may have restarted while backgrounded.
+      await _apply();
+    } else {
+      await checkDriftNow();
+    }
+  }
+
   // --- Player events (interruptions, route changes, end of file) ----------
 
   void _onPlayerEvent(LocaljamAudioEvent event) {

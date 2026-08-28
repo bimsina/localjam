@@ -57,6 +57,7 @@ class JamHostEngine extends JamEngine {
       final joinUri = await _buildCombinedJoinUri(server);
       final engine = JamHostEngine._(server, joinUri);
       await engine.restorePersistedNudge();
+      await engine.startSessionGuards();
       // Preload whatever the (idle) snapshot says — a no-op until setMedia.
       unawaited(engine.sync.onSnapshot(server.snapshot));
       return engine;
@@ -283,10 +284,23 @@ class JamHostEngine extends JamEngine {
 
   // --- Teardown ------------------------------------------------------------------
 
+  /// Tears the session down: server, sockets, local playback.
+  ///
+  /// Session-end contract for guests: the server closes every guest socket
+  /// with WebSocket status `goingAway`, and no protocol-level
+  /// `error {code: session_closed}` is broadcast first (that message would
+  /// have to be sent by `localjam_net`, which owns the sockets). Guests
+  /// therefore detect host shutdown via the socket close: their sessions
+  /// enter `reconnecting`, and `JamGuestEngine` publishes
+  /// [JamSessionEndReason.hostGone] once its `hostGoneTimeout` elapses (or
+  /// [JamSessionEndReason.rejected] immediately, if another host answers
+  /// with `reject` in the meantime). That guest-side timeout IS the
+  /// contract — PROTOCOL.md §10: host death ends the room.
   @override
   Future<void> close() async {
     if (_closed) return;
     _closed = true;
+    await stopSessionGuards();
     await _eventsSub?.cancel();
     _eventsSub = null;
     await sync.dispose();

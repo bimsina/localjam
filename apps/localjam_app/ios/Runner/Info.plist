@@ -28,6 +28,10 @@
 	<true/>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>LocalJam connects to other devices on your Wi-Fi to host and join synchronized listening sessions.</string>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>audio</string>
+	</array>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

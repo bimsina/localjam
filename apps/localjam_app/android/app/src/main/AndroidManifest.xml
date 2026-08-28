@@ -1,4 +1,15 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Control + media planes are plain sockets on the LAN (PROTOCOL.md §1). -->
+    <uses-permission android:name="android.permission.INTERNET"/>
+    <!-- KeepAliveService holds a Wi-Fi lock while a session is active. -->
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE"/>
+    <uses-permission android:name="android.permission.WAKE_LOCK"/>
+    <!-- Foreground service keeping playback (and a host's server) alive while
+         the app is backgrounded; started via the localjam/keepalive channel. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"/>
+    <!-- The foreground service's "LocalJam session active" notification (13+). -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <application
         android:label="localjam_app"
         android:name="${applicationName}"
@@ -25,6 +36,13 @@
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity>
+        <!-- Keeps audio playback and the host's server sockets alive while the
+             app is backgrounded. Driven by the engines through MainActivity's
+             localjam/keepalive MethodChannel. -->
+        <service
+            android:name=".KeepAliveService"
+            android:exported="false"
+            android:foregroundServiceType="mediaPlayback" />
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
         <meta-data

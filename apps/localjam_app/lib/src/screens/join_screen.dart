@@ -39,6 +39,7 @@ class _JoinScreenState extends State<JoinScreen> {
       sub.cancel();
     }
     _engine?.prefetchStates.removeListener(_onPrefetch);
+    _engine?.sessionEnded.removeListener(_onSessionEnded);
     // Fire-and-forget teardown; the screen is going away.
     unawaited(_engine?.close());
     _uriController.dispose();
@@ -46,6 +47,10 @@ class _JoinScreenState extends State<JoinScreen> {
   }
 
   void _onPrefetch() {
+    if (mounted) setState(() {});
+  }
+
+  void _onSessionEnded() {
     if (mounted) setState(() {});
   }
 
@@ -85,6 +90,7 @@ class _JoinScreenState extends State<JoinScreen> {
       _subs.add(engine.peerEvents.listen(refresh));
       _subs.add(engine.connectionStates.listen(refresh));
       engine.prefetchStates.addListener(_onPrefetch);
+      engine.sessionEnded.addListener(_onSessionEnded);
 
       _uiTicker = Timer.periodic(
         const Duration(milliseconds: 250),
@@ -167,9 +173,63 @@ class _JoinScreenState extends State<JoinScreen> {
     );
   }
 
+  /// Terminal screen for an ended session — distinct from the transient
+  /// "reconnecting…" banner: nothing here will recover, so offer the way out.
+  Widget _buildEnded(BuildContext context, JamSessionEndReason reason) {
+    final theme = Theme.of(context);
+    final (icon, title, message) = switch (reason) {
+      JamSessionEndReason.rejected => (
+        Icons.block,
+        'Join rejected',
+        'The host declined this connection — the session may have '
+            'restarted, be full, or the invite is no longer valid.',
+      ),
+      JamSessionEndReason.hostGone => (
+        Icons.portable_wifi_off,
+        'Session ended',
+        'The host could not be reached again. The jam is over.',
+      ),
+      JamSessionEndReason.closedLocally => (
+        Icons.check_circle_outline,
+        'Left the session',
+        'You left this jam.',
+      ),
+    };
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(32),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 56, color: theme.colorScheme.onSurfaceVariant),
+            const SizedBox(height: 16),
+            Text(title, style: theme.textTheme.headlineSmall),
+            const SizedBox(height: 8),
+            Text(
+              message,
+              textAlign: TextAlign.center,
+              style: theme.textTheme.bodyMedium?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+            const SizedBox(height: 24),
+            FilledButton.icon(
+              icon: const Icon(Icons.home_outlined),
+              label: const Text('Back to Home'),
+              onPressed: () =>
+                  Navigator.of(context).popUntil((route) => route.isFirst),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _buildSession(BuildContext context) {
     final theme = Theme.of(context);
     final engine = _engine!;
+    final endReason = engine.sessionEnded.value;
+    if (endReason != null) return _buildEnded(context, endReason);
     final snapshot = engine.snapshot;
     final currentItem = engine.currentItem;
 
