@@ -51,3 +51,14 @@ devices, iOS + Android).
 - **Slews** = inaudible ±0.5 % corrections (normal to see a few).
 - **Resyncs** = audible corrections. More than one after settling = file a bug
   with the numbers on screen.
+
+## Desktop platforms
+
+- **macOS**: live-verified (app joined a session at −0.4 ms drift). Full
+  format support via AVAudioEngine.
+- **Windows / Linux**: implemented on a shared miniaudio C++ core whose
+  scheduling was measured at ≤0.01 ms start error on CoreAudio; the platform
+  plugin glue is thin but **build-unverified** — first task on a real
+  Windows/Linux machine is `flutter build windows` / `flutter build linux`,
+  then the same checks as mobile. Desktop v1 formats: mp3/flac/wav/ogg
+  (m4a/AAC returns unsupported_format; OS-codec decode is a later add).

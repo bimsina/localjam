@@ -41,6 +41,10 @@ flutter:
         pluginClass: LocaljamAudioPlugin
       macos:
         pluginClass: LocaljamAudioPlugin
+      linux:
+        pluginClass: LocaljamAudioPlugin
+      windows:
+        pluginClass: LocaljamAudioPluginCApi
 
   # To add assets to your plugin package, add an assets section, like this:
   # assets:
