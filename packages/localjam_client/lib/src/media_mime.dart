@@ -23,15 +23,15 @@ String mimeForPath(String path) {
 /// A sensible file extension for a playlist item's MIME type (used when a
 /// guest writes fetched bytes to a temp file).
 String extensionForMime(String mime) => switch (mime) {
-      'audio/mpeg' => 'mp3',
-      'audio/wav' => 'wav',
-      'audio/flac' => 'flac',
-      'audio/mp4' => 'm4a',
-      'audio/aac' => 'aac',
-      'audio/ogg' => 'ogg',
-      'audio/opus' => 'opus',
-      _ => 'bin',
-    };
+  'audio/mpeg' => 'mp3',
+  'audio/wav' => 'wav',
+  'audio/flac' => 'flac',
+  'audio/mp4' => 'm4a',
+  'audio/aac' => 'aac',
+  'audio/ogg' => 'ogg',
+  'audio/opus' => 'opus',
+  _ => 'bin',
+};
 
 /// Whether [path] looks like an audio file we can host.
 bool isSupportedAudioPath(String path) {

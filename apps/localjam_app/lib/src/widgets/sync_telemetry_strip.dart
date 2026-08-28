@@ -1,9 +1,8 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:localjam_net/localjam_net.dart';
+import 'package:localjam_client/localjam_client.dart';
 
-import '../sync/audio_sync_controller.dart';
 import '../util/format.dart';
 
 /// The small sync-telemetry strip shown on both host and join screens:
@@ -51,12 +50,12 @@ class _SyncTelemetryStripState extends State<SyncTelemetryStrip> {
   }
 
   String _describeAction(DriftAction? action) => switch (action) {
-        null => '—',
-        DriftNone() => 'in sync',
-        DriftSlew(:final rateMultiplier) =>
-          'slew ×${rateMultiplier.toStringAsFixed(3)}',
-        DriftHardResync() => 'hard resync',
-      };
+    null => '—',
+    DriftNone() => 'in sync',
+    DriftSlew(:final rateMultiplier) =>
+      'slew ×${rateMultiplier.toStringAsFixed(3)}',
+    DriftHardResync() => 'hard resync',
+  };
 
   @override
   Widget build(BuildContext context) {
@@ -67,30 +66,33 @@ class _SyncTelemetryStripState extends State<SyncTelemetryStrip> {
     final error = controller.lastError.value;
 
     Widget cell(String label, String value, {Color? color}) => Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(label,
-                style: theme.textTheme.labelSmall
-                    ?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
-            const SizedBox(height: 2),
-            Text(
-              value,
-              style: theme.textTheme.bodyMedium?.copyWith(
-                fontFeatures: const [FontFeature.tabularFigures()],
-                color: color,
-              ),
-            ),
-          ],
-        );
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          label,
+          style: theme.textTheme.labelSmall?.copyWith(
+            color: theme.colorScheme.onSurfaceVariant,
+          ),
+        ),
+        const SizedBox(height: 2),
+        Text(
+          value,
+          style: theme.textTheme.bodyMedium?.copyWith(
+            fontFeatures: const [FontFeature.tabularFigures()],
+            color: color,
+          ),
+        ),
+      ],
+    );
 
     final driftColor = sample == null
         ? null
         : sample.errorUs.abs() > 50000
-            ? theme.colorScheme.error
-            : sample.errorUs.abs() >= 15000
-                ? theme.colorScheme.tertiary
-                : theme.colorScheme.primary;
+        ? theme.colorScheme.error
+        : sample.errorUs.abs() >= 15000
+        ? theme.colorScheme.tertiary
+        : theme.colorScheme.primary;
 
     return Card(
       margin: EdgeInsets.zero,
@@ -101,13 +103,19 @@ class _SyncTelemetryStripState extends State<SyncTelemetryStrip> {
           children: [
             Row(
               children: [
-                Icon(Icons.multitrack_audio,
-                    size: 16, color: theme.colorScheme.primary),
+                Icon(
+                  Icons.multitrack_audio,
+                  size: 16,
+                  color: theme.colorScheme.primary,
+                ),
                 const SizedBox(width: 6),
-                Text('SYNC', style: theme.textTheme.labelSmall?.copyWith(
-                      letterSpacing: 1.2,
-                      color: theme.colorScheme.onSurfaceVariant,
-                    )),
+                Text(
+                  'SYNC',
+                  style: theme.textTheme.labelSmall?.copyWith(
+                    letterSpacing: 1.2,
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
               ],
             ),
             const SizedBox(height: 8),
@@ -134,8 +142,9 @@ class _SyncTelemetryStripState extends State<SyncTelemetryStrip> {
               const SizedBox(height: 8),
               Text(
                 'Player: $error',
-                style: theme.textTheme.bodySmall
-                    ?.copyWith(color: theme.colorScheme.error),
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.error,
+                ),
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
               ),

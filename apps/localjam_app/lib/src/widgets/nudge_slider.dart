@@ -1,15 +1,14 @@
 import 'package:flutter/material.dart';
-
-import '../sync/audio_sync_controller.dart';
-import '../sync/latency_prefs.dart';
+import 'package:localjam_client/localjam_client.dart';
 
 /// The §7 manual latency nudge: ±500 ms in 10 ms steps, persisted per output
-/// route via [LatencyPrefs]. Positive values play audio earlier (compensating
-/// extra output latency, e.g. Bluetooth headphones).
+/// route by the engine. Positive values play audio earlier (compensating
+/// extra output latency, e.g. Bluetooth headphones). Works against either
+/// [JamHostEngine] or [JamGuestEngine] through the shared [JamEngine] surface.
 class NudgeSlider extends StatefulWidget {
-  const NudgeSlider({super.key, required this.controller});
+  const NudgeSlider({super.key, required this.engine});
 
-  final AudioSyncController controller;
+  final JamEngine engine;
 
   @override
   State<NudgeSlider> createState() => _NudgeSliderState();
@@ -24,14 +23,24 @@ class _NudgeSliderState extends State<NudgeSlider> {
   @override
   void initState() {
     super.initState();
-    _restore();
+    _ms = _clampMs(widget.engine.nudgeUs.value);
+    // The engine restores the persisted nudge asynchronously at startup;
+    // follow whatever value it lands on.
+    widget.engine.nudgeUs.addListener(_onEngineNudge);
   }
 
-  Future<void> _restore() async {
-    final us = await LatencyPrefs.load(widget.controller.player);
-    if (!mounted) return;
-    setState(() => _ms = (us ~/ 1000).clamp(-_maxMs, _maxMs));
-    await widget.controller.setManualOffsetUs(_ms * 1000);
+  @override
+  void dispose() {
+    widget.engine.nudgeUs.removeListener(_onEngineNudge);
+    super.dispose();
+  }
+
+  static int _clampMs(int us) => (us ~/ 1000).clamp(-_maxMs, _maxMs);
+
+  void _onEngineNudge() {
+    final ms = _clampMs(widget.engine.nudgeUs.value);
+    if (!mounted || ms == _ms) return;
+    setState(() => _ms = ms);
   }
 
   @override
@@ -63,15 +72,15 @@ class _NudgeSliderState extends State<NudgeSlider> {
             final ms = (v / _stepMs).round() * _stepMs;
             if (ms == _ms) return;
             setState(() => _ms = ms);
-            widget.controller.setManualOffsetUs(ms * 1000);
+            widget.engine.setNudgeUs(ms * 1000, persist: false);
           },
-          onChangeEnd: (_) =>
-              LatencyPrefs.save(widget.controller.player, _ms * 1000),
+          onChangeEnd: (_) => widget.engine.setNudgeUs(_ms * 1000),
         ),
         Text(
           'Positive = play earlier (for high-latency outputs like Bluetooth).',
-          style: theme.textTheme.bodySmall
-              ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+          style: theme.textTheme.bodySmall?.copyWith(
+            color: theme.colorScheme.onSurfaceVariant,
+          ),
         ),
       ],
     );

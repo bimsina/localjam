@@ -5,24 +5,16 @@ import 'dart:math' as math;
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' hide MessageCodec;
-import 'package:localjam_audio/localjam_audio.dart';
-import 'package:localjam_net/localjam_net.dart';
-import 'package:path_provider/path_provider.dart';
+import 'package:localjam_client/localjam_client.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
-import '../sync/audio_sync_controller.dart';
 import '../util/format.dart';
-import '../util/media_mime.dart';
 import '../widgets/nudge_slider.dart';
 import '../widgets/sync_telemetry_strip.dart';
 
-/// Host flow: pick files, start a [JamHostServer], share the join URI (QR +
-/// text), watch peers' readiness, drive the transport — and play along.
-///
-/// The host is a listener too: its own [AudioSyncController] follows the
-/// server's authoritative snapshots exactly like a guest would, except the
-/// host's session clock IS `monotonicNowUs()` (identity mapping, no
-/// ClockSync).
+/// Host flow: pick files, start a [JamHostEngine], share the join URI (QR +
+/// text), watch peers' readiness, and drive the transport. All server, clock,
+/// and audio wiring lives in the engine — this screen only renders it.
 class HostScreen extends StatefulWidget {
   const HostScreen({super.key});
 
@@ -31,32 +23,24 @@ class HostScreen extends StatefulWidget {
 }
 
 class _HostScreenState extends State<HostScreen> {
-  final TextEditingController _nameController =
-      TextEditingController(text: 'LocalJam');
+  final TextEditingController _nameController = TextEditingController(
+    text: 'LocalJam',
+  );
 
   /// Setup phase: absolute paths picked (or found in Documents), in order.
   final List<String> _pickedPaths = [];
 
-  JamHostServer? _server;
+  JamHostEngine? _engine;
   bool _starting = false;
   String? _setupError;
 
-  /// Live phase state.
-  final Map<String, String> _mediaPaths = {}; // mediaId -> local path
-  Uri? _combinedJoinUri;
-  LocaljamAudio? _player;
-  AudioSyncController? _sync;
   StreamSubscription<JamHostEvent>? _events;
   Timer? _uiTicker;
-
-  /// Latest fetch progress per peer (readiness itself comes from
-  /// [JamHostServer.peerMediaStates]).
-  final Map<String, ({String mediaId, double progress})> _fetchProgress = {};
 
   /// Local slider state while the user is dragging.
   double? _dragPositionUs;
 
-  bool get _live => _server != null;
+  bool get _live => _engine != null;
 
   @override
   void initState() {
@@ -68,17 +52,8 @@ class _HostScreenState extends State<HostScreen> {
   void dispose() {
     _uiTicker?.cancel();
     _events?.cancel();
-    final sync = _sync;
-    final player = _player;
-    final server = _server;
     // Fire-and-forget teardown; the screen is going away.
-    unawaited(() async {
-      await sync?.dispose();
-      try {
-        await player?.dispose();
-      } catch (_) {}
-      await server?.close();
-    }());
+    unawaited(_engine?.close());
     _nameController.dispose();
     super.dispose();
   }
@@ -88,24 +63,13 @@ class _HostScreenState extends State<HostScreen> {
   /// Auto-include audio files from the app's Documents directory, so files
   /// pushed via `xcrun simctl` (or saved by other apps) show up.
   Future<void> _scanDocumentsDirectory() async {
-    try {
-      final docs = await getApplicationDocumentsDirectory();
-      final found = <String>[];
-      await for (final entity in docs.list()) {
-        if (entity is File && isSupportedAudioPath(entity.path)) {
-          found.add(entity.path);
-        }
+    final found = await findAudioFilesInDocuments();
+    if (!mounted) return;
+    setState(() {
+      for (final path in found) {
+        if (!_pickedPaths.contains(path)) _pickedPaths.add(path);
       }
-      found.sort();
-      if (!mounted) return;
-      setState(() {
-        for (final path in found) {
-          if (!_pickedPaths.contains(path)) _pickedPaths.add(path);
-        }
-      });
-    } catch (_) {
-      // No Documents dir (or unreadable): picking still works.
-    }
+    });
   }
 
   Future<void> _pickFiles() async {
@@ -138,51 +102,27 @@ class _HostScreenState extends State<HostScreen> {
     final name = _nameController.text.trim().isEmpty
         ? 'LocalJam'
         : _nameController.text.trim();
-    final server = JamHostServer(sessionName: name);
+    JamHostEngine? engine;
     try {
-      await server.start(address: InternetAddress.anyIPv4, port: 0);
+      engine = await JamHostEngine.start(sessionName: name);
       for (final path in _pickedPaths) {
-        final file = File(path);
-        final item = await JamHostServer.describeFile(
-          file,
-          kind: MediaKind.audio,
-          mime: mimeForPath(path),
-        );
-        server.addMedia(item, file);
-        _mediaPaths[item.mediaId] = path;
+        await engine.addMediaFile(File(path));
       }
-      server.setMedia(server.playlist.first.mediaId);
+      engine.setMedia(engine.playlist.first.mediaId);
 
-      _combinedJoinUri = await _buildCombinedJoinUri(server);
-
-      // The host plays audio too — same sync engine as a guest, with the
-      // identity session→local mapping (the host's clock IS the session
-      // clock).
-      final player = LocaljamAudio();
-      final sync = AudioSyncController(
-        player: player,
-        sessionNowUs: monotonicNowUs,
-        localNowUs: monotonicNowUs,
-        sessionToLocalUs: (sessionUs) => sessionUs,
-        resolveMediaPath: (mediaId) async => _mediaPaths[mediaId],
-      );
-      _player = player;
-      _sync = sync;
-
-      _events = server.events.listen(_onHostEvent);
+      _events = engine.events.listen((_) {
+        if (mounted) setState(() {});
+      });
       _uiTicker = Timer.periodic(
         const Duration(milliseconds: 250),
         (_) => setState(() {}),
       );
-
       setState(() {
-        _server = server;
+        _engine = engine;
         _starting = false;
       });
-      // Preload the selected track (snapshot is paused at this point).
-      unawaited(sync.onSnapshot(server.snapshot));
     } catch (e) {
-      await server.close();
+      await engine?.close();
       if (mounted) {
         setState(() {
           _starting = false;
@@ -192,59 +132,7 @@ class _HostScreenState extends State<HostScreen> {
     }
   }
 
-  /// One URI carrying every non-loopback IPv4 candidate, comma-joined,
-  /// exactly like the CLI's combined join line (§1: guests try in order).
-  static Future<Uri> _buildCombinedJoinUri(JamHostServer server) async {
-    final addresses = <InternetAddress>[];
-    try {
-      for (final iface in await NetworkInterface.list(
-        type: InternetAddressType.IPv4,
-        includeLoopback: false,
-      )) {
-        addresses.addAll(iface.addresses);
-      }
-    } catch (_) {
-      // NetworkInterface.list can fail on locked-down systems.
-    }
-    if (addresses.isEmpty) addresses.add(InternetAddress.loopbackIPv4);
-    return Uri(
-      scheme: 'localjam',
-      host: 'join',
-      queryParameters: {
-        'v': '${MessageCodec.protocolVersion}',
-        'host': addresses.map((a) => a.address).join(','),
-        'port': '${server.port}',
-        'token': server.token,
-        'name': server.sessionName,
-      },
-    );
-  }
-
   // --- Live phase ------------------------------------------------------------
-
-  void _onHostEvent(JamHostEvent event) {
-    switch (event.kind) {
-      case JamHostEventKind.stateBroadcast:
-        unawaited(_sync?.onSnapshot(event.snapshot!));
-      case JamHostEventKind.peerMediaStatus:
-        final progress = event.progress;
-        if (event.mediaState == MediaFetchState.fetching && progress != null) {
-          _fetchProgress[event.peerId!] =
-              (mediaId: event.mediaId!, progress: progress);
-        } else {
-          _fetchProgress.remove(event.peerId);
-        }
-      case JamHostEventKind.peerLeft:
-        _fetchProgress.remove(event.peerId);
-      case JamHostEventKind.peerJoined:
-      case JamHostEventKind.playlistBroadcast:
-      // The end policy's own state broadcast follows and drives the sync
-      // controller; nothing extra to do here.
-      case JamHostEventKind.mediaEnded:
-        break;
-    }
-    if (mounted) setState(() {});
-  }
 
   void _guarded(void Function() mutate) {
     try {
@@ -264,25 +152,12 @@ class _HostScreenState extends State<HostScreen> {
   }
 
   void _togglePlay() {
-    final server = _server!;
+    final engine = _engine!;
     _guarded(() {
-      server.snapshot.status == PlaybackStatus.playing
-          ? server.pause()
-          : server.play();
+      engine.snapshot.status == PlaybackStatus.playing
+          ? engine.pause()
+          : engine.play();
     });
-  }
-
-  void _skip(int delta) {
-    final server = _server!;
-    final playlist = server.playlist;
-    if (playlist.isEmpty) return;
-    final index =
-        playlist.indexWhere((i) => i.mediaId == server.snapshot.mediaId);
-    final next = (index + delta) % playlist.length;
-    _guarded(
-      () => server.setMedia(playlist[next < 0 ? next + playlist.length : next]
-          .mediaId),
-    );
   }
 
   // --- Build -------------------------------------------------------------------
@@ -290,12 +165,8 @@ class _HostScreenState extends State<HostScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: Text(_live ? _server!.sessionName : 'Host a Jam'),
-      ),
-      body: SafeArea(
-        child: _live ? _buildLive(context) : _buildSetup(context),
-      ),
+      appBar: AppBar(title: Text(_live ? _engine!.sessionName : 'Host a Jam')),
+      body: SafeArea(child: _live ? _buildLive(context) : _buildSetup(context)),
     );
   }
 
@@ -329,8 +200,9 @@ class _HostScreenState extends State<HostScreen> {
             child: Text(
               'No audio yet. Add mp3 / m4a / aac / wav files — anything in '
               'the app\'s Documents folder is included automatically.',
-              style: theme.textTheme.bodyMedium
-                  ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+              style: theme.textTheme.bodyMedium?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
             ),
           )
         else
@@ -358,8 +230,9 @@ class _HostScreenState extends State<HostScreen> {
           const SizedBox(height: 12),
           Text(
             _setupError!,
-            style: theme.textTheme.bodySmall
-                ?.copyWith(color: theme.colorScheme.error),
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.error,
+            ),
           ),
         ],
         const SizedBox(height: 24),
@@ -375,8 +248,7 @@ class _HostScreenState extends State<HostScreen> {
                 )
               : const Icon(Icons.wifi_tethering),
           label: Text(_starting ? 'Starting…' : 'Start session'),
-          onPressed:
-              _pickedPaths.isEmpty || _starting ? null : _startSession,
+          onPressed: _pickedPaths.isEmpty || _starting ? null : _startSession,
         ),
       ],
     );
@@ -384,16 +256,13 @@ class _HostScreenState extends State<HostScreen> {
 
   Widget _buildLive(BuildContext context) {
     final theme = Theme.of(context);
-    final server = _server!;
-    final sync = _sync!;
-    final snapshot = server.snapshot;
-    final joinUri = _combinedJoinUri.toString();
-    final currentItem = server.playlist
-        .where((i) => i.mediaId == snapshot.mediaId)
-        .firstOrNull;
+    final engine = _engine!;
+    final snapshot = engine.snapshot;
+    final joinUri = engine.joinUri.toString();
+    final currentItem = engine.currentItem;
 
-    final positionUs = snapshot.positionAt(monotonicNowUs());
-    final durationUs = sync.loadedDurationUs.value ?? currentItem?.durationUs;
+    final positionUs = engine.positionUsNow() ?? 0;
+    final durationUs = engine.loadedDurationUs.value ?? currentItem?.durationUs;
     final playing = snapshot.status == PlaybackStatus.playing;
 
     return ListView(
@@ -459,8 +328,9 @@ class _HostScreenState extends State<HostScreen> {
                 const SizedBox(height: 4),
                 Text(
                   snapshot.status.name,
-                  style: theme.textTheme.labelSmall
-                      ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+                  style: theme.textTheme.labelSmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
                 ),
                 const SizedBox(height: 8),
                 Row(
@@ -489,12 +359,14 @@ class _HostScreenState extends State<HostScreen> {
                             ? null
                             : (v) {
                                 setState(() => _dragPositionUs = null);
-                                _guarded(() => server.seek(v.round()));
+                                _guarded(() => engine.seek(v.round()));
                               },
                       ),
                     ),
                     Text(
-                      durationUs == null ? '--:--' : formatPositionUs(durationUs),
+                      durationUs == null
+                          ? '--:--'
+                          : formatPositionUs(durationUs),
                       style: theme.textTheme.bodySmall,
                     ),
                   ],
@@ -505,7 +377,7 @@ class _HostScreenState extends State<HostScreen> {
                     IconButton(
                       iconSize: 32,
                       icon: const Icon(Icons.skip_previous),
-                      onPressed: () => _skip(-1),
+                      onPressed: () => _guarded(engine.previous),
                     ),
                     const SizedBox(width: 16),
                     IconButton.filled(
@@ -517,7 +389,7 @@ class _HostScreenState extends State<HostScreen> {
                     IconButton(
                       iconSize: 32,
                       icon: const Icon(Icons.skip_next),
-                      onPressed: () => _skip(1),
+                      onPressed: () => _guarded(engine.next),
                     ),
                   ],
                 ),
@@ -528,32 +400,35 @@ class _HostScreenState extends State<HostScreen> {
         const SizedBox(height: 16),
 
         // --- Telemetry + nudge ----------------------------------------------
-        SyncTelemetryStrip(controller: sync),
+        SyncTelemetryStrip(controller: engine.sync),
         const SizedBox(height: 16),
         Card(
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-            child: NudgeSlider(controller: sync),
+            child: NudgeSlider(engine: engine),
           ),
         ),
         const SizedBox(height: 16),
 
         // --- Peers -----------------------------------------------------------
-        Text('Peers (${server.peers.length})',
-            style: theme.textTheme.titleMedium),
+        Text(
+          'Peers (${engine.peers.length})',
+          style: theme.textTheme.titleMedium,
+        ),
         const SizedBox(height: 8),
-        if (server.peers.isEmpty)
+        if (engine.peers.isEmpty)
           Text(
             'No one has joined yet — share the QR or the URI above.',
-            style: theme.textTheme.bodyMedium
-                ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+            style: theme.textTheme.bodyMedium?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
           )
         else
           Card(
             child: Column(
               children: [
-                for (final peer in server.peers)
-                  _buildPeerTile(theme, server, snapshot, peer),
+                for (final peer in engine.peers)
+                  _buildPeerTile(theme, engine, snapshot, peer),
               ],
             ),
           ),
@@ -565,7 +440,7 @@ class _HostScreenState extends State<HostScreen> {
         Card(
           child: Column(
             children: [
-              for (final item in server.playlist)
+              for (final item in engine.playlist)
                 ListTile(
                   dense: true,
                   selected: item.mediaId == snapshot.mediaId,
@@ -579,7 +454,7 @@ class _HostScreenState extends State<HostScreen> {
                     '${(item.sizeBytes / (1024 * 1024)).toStringAsFixed(1)} MB'
                     ' · ${item.mime}',
                   ),
-                  onTap: () => _guarded(() => server.setMedia(item.mediaId)),
+                  onTap: () => _guarded(() => engine.setMedia(item.mediaId)),
                 ),
             ],
           ),
@@ -591,24 +466,24 @@ class _HostScreenState extends State<HostScreen> {
 
   Widget _buildPeerTile(
     ThemeData theme,
-    JamHostServer server,
+    JamHostEngine engine,
     PlaybackSnapshot snapshot,
     PeerInfo peer,
   ) {
     final mediaId = snapshot.mediaId;
     final readiness = mediaId == null
         ? MediaReadiness.none
-        : server.peerMediaStates(mediaId)[peer.peerId] ?? MediaReadiness.none;
-    final progress = _fetchProgress[peer.peerId];
+        : engine.peerMediaStates(mediaId)[peer.peerId] ?? MediaReadiness.none;
+    final progress = engine.peerFetchProgress[peer.peerId];
 
     final (label, color) = switch (readiness) {
       MediaReadiness.ready => ('ready', theme.colorScheme.primary),
       MediaReadiness.fetching => (
-          progress != null && progress.mediaId == mediaId
-              ? 'fetching ${(progress.progress * 100).round()}%'
-              : 'fetching',
-          theme.colorScheme.tertiary,
-        ),
+        progress != null && progress.mediaId == mediaId
+            ? 'fetching ${(progress.progress * 100).round()}%'
+            : 'fetching',
+        theme.colorScheme.tertiary,
+      ),
       MediaReadiness.none => ('no media', theme.colorScheme.onSurfaceVariant),
     };
 

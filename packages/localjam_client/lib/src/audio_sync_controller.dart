@@ -213,6 +213,20 @@ class AudioSyncController {
     }
   }
 
+  /// Forgets which media is loaded in the [player] and re-applies the current
+  /// snapshot, so the snapshot's media is reloaded (and re-scheduled from its
+  /// anchor when playing).
+  ///
+  /// Call this after loading a *different* file into the shared [player]
+  /// behind the controller's back — e.g. probing another file's duration
+  /// through the same native engine (see `JamHostEngine.addMediaFile`).
+  Future<void> invalidateLoadedMedia() async {
+    if (_disposed) return;
+    _loadedMediaId = null;
+    loadedDurationUs.value = null;
+    if (_snapshot != null) await _apply();
+  }
+
   // --- Player events (interruptions, route changes, end of file) ----------
 
   void _onPlayerEvent(LocaljamAudioEvent event) {
@@ -336,8 +350,7 @@ class AudioSyncController {
 
     // Calibrate the Dart↔native clock offset once per session; a hard resync
     // or player event clears the cache so it re-measures (§5.4).
-    final calibration =
-        _calibration ??= await player.calibrate(localNowUs);
+    final calibration = _calibration ??= await player.calibrate(localNowUs);
     if (generation != _generation) return;
 
     // Prefer the route latency reported by the most recent routeChanged
@@ -348,7 +361,8 @@ class AudioSyncController {
 
     // A playing snapshot always carries an anchor (§5.1); if one is somehow
     // missing, synthesize "start now at the frozen position".
-    final anchor = snapshot.anchor ??
+    final anchor =
+        snapshot.anchor ??
         PlaybackAnchor(
           hostTimeUs: sessionNowUs(),
           positionUs: snapshot.positionUs,
@@ -356,7 +370,8 @@ class AudioSyncController {
 
     // session µs → local µs → native µs (see library docs).
     final localAnchorUs = sessionToLocalUs(anchor.hostTimeUs);
-    final nativeAnchorUs = localAnchorUs +
+    final nativeAnchorUs =
+        localAnchorUs +
         calibration.offsetUs -
         outputLatencyUs -
         _manualOffsetUs;

@@ -1,0 +1,30 @@
+name: localjam_client
+description: "The embeddable LocalJam client engine: host and guest playback engines wrapping localjam_net transport and localjam_audio scheduled playback behind one API."
+version: 0.1.0
+publish_to: 'none'
+
+environment:
+  sdk: ^3.12.2
+  flutter: ">=1.17.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  # LocalJam protocol transport (re-exports localjam_core).
+  localjam_net:
+    path: ../localjam_net
+  # Pinned scheduled-audio plugin API (native side developed in parallel).
+  localjam_audio:
+    path: ../localjam_audio
+  # Default guest media cache directory.
+  path_provider: ^2.1.4
+  # Manual sync-nudge persistence (PROTOCOL.md §7).
+  shared_preferences: ^2.3.2
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  fake_async: ^1.3.1
+  flutter_lints: ^6.0.0
+
+flutter:
