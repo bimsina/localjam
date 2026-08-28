@@ -341,6 +341,30 @@ class JamGuestClient {
 
   // --- Media plane (§6.2, §6.3) ----------------------------------------------------
 
+  /// Sends a §6.3 `media_status` report directly, without an in-flight
+  /// fetch — e.g. a cache hit, where the guest already possesses the file
+  /// and never touches the network for it. [fetchMediaToFile]/[fetchMedia]
+  /// send their own reports as a fetch progresses; this is the public door
+  /// for callers (the prefetch pipeline) that resolve readiness some other
+  /// way.
+  ///
+  /// Permissive by design: [mediaId] need not be in the current playlist
+  /// (mirrors the wire protocol itself, which carries no such constraint —
+  /// the host just records readiness per (peer, mediaId) and a report for
+  /// an id it doesn't yet know about is simply inert until that id shows up
+  /// in a playlist). Silently dropped if the socket isn't open, exactly like
+  /// every other outgoing message on this client (see [_send]) — a report
+  /// that arrives too late to matter is not worth surfacing as an error.
+  void sendMediaStatus(
+    String mediaId,
+    MediaFetchState state, {
+    double? progress,
+  }) {
+    _send(
+      MediaStatusMessage(mediaId: mediaId, state: state, progress: progress),
+    );
+  }
+
   /// Fetches `GET /media/{mediaId}` with Bearer auth (§6.2), streaming the
   /// body straight to [destination] while hashing incrementally — the file is
   /// never held in memory. Reports `media_status` upstream (§6.3): `fetching`

@@ -252,6 +252,15 @@ class JamGuestEngine extends JamEngine {
   /// goes next.
   String? _fetchingId;
 
+  /// The last `media_status` state reported to the host for each mediaId on
+  /// the CURRENT connection, so repeated prefetch re-evaluations don't spam
+  /// duplicate reports (§6.3 says nothing about dedup — this is purely to
+  /// avoid flooding the control plane). Cleared on every reconnect (see
+  /// [_onConnectionState]), since PROTOCOL.md §3.3 has the host forget all
+  /// readiness on drop — a resumed connection must re-report everything
+  /// this guest already considers ready.
+  final Map<String, MediaFetchState> _lastReportedMediaState = {};
+
   /// Re-entrancy guard for [_pumpPrefetch]: doubles as "one fetch in flight
   /// at a time".
   bool _pumping = false;
@@ -455,6 +464,11 @@ class JamGuestEngine extends JamEngine {
         // A reconnect succeeded: the host is alive, cancel the countdown.
         _hostGoneTimer?.cancel();
         _hostGoneTimer = null;
+        // §3.3: the host forgot every readiness report on the drop. Clear
+        // the dedup map so the re-emitted welcome playlist (which follows
+        // this transition — see JamGuestSession._reconnectLoop) triggers
+        // fresh `ready` reports for everything already local.
+        _lastReportedMediaState.clear();
       case JamConnectionState.reconnecting:
         _hostGoneTimer ??= Timer(hostGoneTimeout, _onHostGoneTimeout);
       case JamConnectionState.failed:
@@ -547,7 +561,73 @@ class JamGuestEngine extends JamEngine {
       }
     }
     prefetchStates.value = Map.unmodifiable(next);
+    // Re-announce anything already ready (e.g. after a reconnect cleared the
+    // dedup map below) and scan the WHOLE playlist — not just this window —
+    // for cache hits the host doesn't know about yet (a rejoining guest may
+    // have everything cached already).
+    _reportReadyStates();
+    unawaited(_reportCachedReadinessForAll());
     unawaited(_pumpPrefetch());
+  }
+
+  /// Sends `ready` to the host for every mediaId currently marked
+  /// [JamPrefetchState.ready] in [prefetchStates] — a no-op per id beyond
+  /// the first call, thanks to [_lastReportedMediaState], except right
+  /// after a reconnect clears that dedup map (§3.3: the host forgot).
+  void _reportReadyStates() {
+    for (final entry in prefetchStates.value.entries) {
+      if (entry.value.ready) {
+        _reportMediaStatus(entry.key, MediaFetchState.ready);
+      }
+    }
+  }
+
+  /// Checks every playlist item — not just the fetch window — against the
+  /// local cache and reports `ready` (§6.3) for any hit that isn't already
+  /// tracked, without ever triggering a network fetch for an out-of-window
+  /// item. This is what lets a rejoining guest that already has the whole
+  /// playlist cached from a previous session announce full readiness
+  /// immediately, instead of waiting for the prefetch window to reach each
+  /// item one at a time.
+  Future<void> _reportCachedReadinessForAll() async {
+    for (final item in _session.playlist) {
+      if (_closed) return;
+      final id = item.mediaId;
+      if ((prefetchStates.value[id]?.ready ?? false) || id == _fetchingId) {
+        continue;
+      }
+      File? cached;
+      try {
+        cached = await _cache.lookup(item);
+      } catch (_) {
+        continue; // Cache probe failed: leave it to the ordinary pipeline.
+      }
+      if (cached == null || _closed) continue;
+      // The pump may have resolved this item (via _fetchOne) while the
+      // lookup above was in flight; re-check before clobbering its state.
+      if ((prefetchStates.value[id]?.ready ?? false) || id == _fetchingId) {
+        continue;
+      }
+      _setPrefetch(
+        id,
+        JamPrefetchState(
+          phase: JamPrefetchPhase.ready,
+          progress: 1,
+          path: cached.path,
+        ),
+      );
+      _reportMediaStatus(id, MediaFetchState.ready);
+      unawaited(sync.notifyMediaAvailable(id));
+    }
+  }
+
+  /// Reports [state] for [mediaId] to the host (§6.3) unless it's exactly
+  /// what was last reported on this connection — see
+  /// [_lastReportedMediaState].
+  void _reportMediaStatus(String mediaId, MediaFetchState state) {
+    if (_lastReportedMediaState[mediaId] == state) return;
+    _lastReportedMediaState[mediaId] = state;
+    _session.sendMediaStatus(mediaId, state);
   }
 
   /// Runs the fetch pipeline: one fetch in flight at a time, always picking
@@ -582,12 +662,9 @@ class JamGuestEngine extends JamEngine {
 
   /// Fetches one item into the sha-keyed cache — unless the cache already
   /// holds it (right name, right size), in which case the network is skipped
-  /// entirely and the item reports ready immediately.
-  ///
-  /// Known gap: on a cache hit no `media_status: ready` reaches the host —
-  /// `localjam_net` sends §6.3 reports only from inside `fetchMediaToFile`,
-  /// and exposes no API to send one directly. The host sees such a guest as
-  /// `none` for that item until it re-reports; readiness here is local.
+  /// entirely, the item reports ready immediately, and the host is told
+  /// directly via [JamGuestSession.sendMediaStatus] (§6.3) since no
+  /// `fetchMediaToFile` call happens to report it for us.
   Future<void> _fetchOne(MediaItem item) async {
     final id = item.mediaId;
     try {
@@ -602,6 +679,7 @@ class JamGuestEngine extends JamEngine {
             path: cached.path,
           ),
         );
+        _reportMediaStatus(id, MediaFetchState.ready);
         await sync.notifyMediaAvailable(id);
         return;
       }
@@ -640,6 +718,9 @@ class JamGuestEngine extends JamEngine {
           path: stored.path,
         ),
       );
+      // fetchMediaToFile already sent the `ready` report on the wire (§6.3);
+      // just record it so the next _reportReadyStates() doesn't resend it.
+      _lastReportedMediaState[id] = MediaFetchState.ready;
       await sync.notifyMediaAvailable(id);
       await _cache.evict(protectedPaths: _protectedCachePaths());
     } on Object catch (e) {

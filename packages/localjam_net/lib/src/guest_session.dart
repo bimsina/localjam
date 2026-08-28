@@ -297,6 +297,30 @@ class JamGuestSession {
     );
   }
 
+  /// Sends a §6.3 `media_status` report directly via the current client
+  /// (see [JamGuestClient.sendMediaStatus]) — e.g. for a prefetch cache hit
+  /// that never touched the network.
+  ///
+  /// Unlike [requestPlay] and friends, this is close-tolerant rather than
+  /// strict: while not [JamConnectionState.connected] (mid-reconnect,
+  /// failed, or closed) it is silently dropped instead of throwing
+  /// [StateError]. That matches [JamGuestClient]'s own transport-level send
+  /// semantics (a message that can't reach the wire is just dropped, not an
+  /// error) and suits the caller this exists for — a background prefetch
+  /// loop that re-evaluates readiness on every playlist/track change and
+  /// should never crash because a reconnect happened to be in flight.
+  /// PROTOCOL.md §3.3 means nothing is lost either way: readiness is
+  /// forgotten by the host on drop, so the caller re-sends after every
+  /// resume (see [connectionStates]).
+  void sendMediaStatus(
+    String mediaId,
+    MediaFetchState state, {
+    double? progress,
+  }) {
+    if (_state != JamConnectionState.connected) return;
+    _client.sendMediaStatus(mediaId, state, progress: progress);
+  }
+
   void _ensureConnected() {
     if (_state != JamConnectionState.connected) {
       throw StateError('Session is ${_state.name}, not connected to the host');

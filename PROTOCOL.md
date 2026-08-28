@@ -135,6 +135,10 @@ Guest algorithm (client-side, not on the wire):
 - Never step the offset while playing; slew it (≤ 1 ms per second) to avoid
   audible jumps. Large error (> 50 ms) ⇒ hard resync: pause locally, step,
   rejoin playback at the correct position.
+- Clock discontinuity (device deep sleep pauses the monotonic clock): 2
+  consecutive accepted samples disagreeing with the estimate by > 0.5 s are a
+  jump, not drift — discard all sync state (offset, best RTT, slew) and
+  re-run the join burst from the steady ping stream, hard-resyncing playback.
 
 Expected accuracy on LAN: 1–5 ms. The dominant residual error is per-device
 **output latency** (§7), not the network.
@@ -258,6 +262,10 @@ dropped (matching §3.3: guests re-send `media_status` after resuming).
 Host UX rule (not protocol): when selecting a new track, wait for all guests
 `ready` or a 10 s timeout — whichever first — then broadcast the scheduled
 `state`. Stragglers late-join per §5.3.
+
+A client MAY send `media_status: ready` without ever fetching — e.g. a
+rejoining guest that finds the file already in a local cache — so the host's
+readiness gate does not wait on a redundant transfer.
 
 ### 6.4 Guest uploads
 

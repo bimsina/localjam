@@ -218,6 +218,37 @@ void main() {
     },
   );
 
+  test('sendMediaStatus reaches the host, and is a silent no-op while '
+      'reconnecting rather than throwing', () async {
+    final host = await startHost();
+    final file = await writeTempMedia(makeMediaBytes(1024));
+    final item = await JamHostServer.describeFile(file, kind: MediaKind.audio);
+    host.addMedia(item, file);
+    final session = await connectSession(host);
+
+    final statusEvent = host.events
+        .firstWhere((e) => e.kind == JamHostEventKind.peerMediaStatus)
+        .timeout(const Duration(seconds: 5));
+    session.sendMediaStatus(item.mediaId, MediaFetchState.ready);
+    final event = await statusEvent;
+    expect(event.peerId, session.selfPeerId);
+    expect(host.allPeersReady(item.mediaId), isTrue);
+
+    await host.close();
+    await waitFor(
+      () => session.connectionState == JamConnectionState.reconnecting,
+      reason: 'reconnecting after host death',
+    );
+    // Unlike requestPlay/requestPause/etc, this is close-tolerant: no
+    // StateError while not connected.
+    expect(
+      () => session.sendMediaStatus(item.mediaId, MediaFetchState.ready),
+      returnsNormally,
+    );
+
+    await session.close();
+  });
+
   test(
     'new host on the same port with a different token: reject -> failed',
     () async {

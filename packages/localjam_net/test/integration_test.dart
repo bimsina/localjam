@@ -801,6 +801,62 @@ void main() {
     expect(ready.progress, isNull); // The ready report carries no progress.
   });
 
+  group('sendMediaStatus (§6.3, direct report)', () {
+    test(
+      'reaches the host: peerMediaState updated, event carries it',
+      () async {
+        final host = await startHost();
+        final file = await writeTempMedia(makeMediaBytes(2048));
+        final item = await JamHostServer.describeFile(
+          file,
+          kind: MediaKind.audio,
+        );
+        host.addMedia(item, file);
+        final guest = await joinGuest(host);
+
+        final statusEvent = host.events
+            .firstWhere((e) => e.kind == JamHostEventKind.peerMediaStatus)
+            .timeout(const Duration(seconds: 5));
+
+        guest.sendMediaStatus(item.mediaId, MediaFetchState.ready);
+
+        final event = await statusEvent;
+        expect(event.peerId, guest.selfPeerId);
+        expect(event.mediaId, item.mediaId);
+        expect(event.mediaState, MediaFetchState.ready);
+        expect(
+          host.peerMediaState(guest.selfPeerId, item.mediaId),
+          MediaReadiness.ready,
+        );
+        expect(host.allPeersReady(item.mediaId), isTrue);
+      },
+    );
+
+    test(
+      'is permissive about a mediaId outside the current playlist',
+      () async {
+        final host = await startHost();
+        final guest = await joinGuest(host);
+
+        final statusEvent = host.events
+            .firstWhere((e) => e.kind == JamHostEventKind.peerMediaStatus)
+            .timeout(const Duration(seconds: 5));
+        guest.sendMediaStatus(
+          'm_not_in_playlist',
+          MediaFetchState.fetching,
+          progress: 0.3,
+        );
+        final event = await statusEvent;
+        expect(event.mediaId, 'm_not_in_playlist');
+        expect(event.progress, 0.3);
+        expect(
+          host.peerMediaState(guest.selfPeerId, 'm_not_in_playlist'),
+          MediaReadiness.fetching,
+        );
+      },
+    );
+  });
+
   test('guest.done completes when the host closes', () async {
     final host = await startHost();
     final guest = await joinGuest(host);

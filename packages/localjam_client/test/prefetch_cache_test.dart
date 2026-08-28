@@ -56,6 +56,7 @@ void main() {
     required Directory cacheDir,
     JamPrefetchPolicy policy = const JamPrefetchPolicy(),
     int cacheMaxBytes = 1 << 30,
+    JamBackoff? backoff,
   }) async {
     final engine = await JamGuestEngine.join(
       host.joinUriFor(InternetAddress.loopbackIPv4),
@@ -63,6 +64,7 @@ void main() {
       mediaCacheDir: cacheDir,
       prefetchPolicy: policy,
       cacheMaxBytes: cacheMaxBytes,
+      backoff: backoff,
     );
     addTearDown(engine.close);
     return engine;
@@ -151,7 +153,8 @@ void main() {
     }
   });
 
-  test('a cache hit skips the network entirely', () async {
+  test('a cache hit skips the network entirely and still reports ready, '
+      'making the host allPeersReady with no fetch', () async {
     mockAudioChannel();
     final host = await startHost();
     final track = await addTrack(host, seed: 9);
@@ -167,7 +170,9 @@ void main() {
 
     final statuses = <JamHostEvent>[];
     host.events.listen((event) {
-      if (event.kind == JamHostEventKind.peerMediaStatus) statuses.add(event);
+      if (event.kind == JamHostEventKind.peerMediaStatus) {
+        statuses.add(event);
+      }
     });
 
     final engine = await joinEngine(host, cacheDir: cacheDir);
@@ -179,10 +184,106 @@ void main() {
     expect(state.path, cached.path);
     expect(state.progress, 1.0);
 
-    // Known gap: no media_status reaches the host on a cache hit (the
-    // transport only reports from inside fetchMediaToFile).
+    // The host's readiness gate learns this directly (sendMediaStatus,
+    // §6.3) — no fetch happened (the backing file was deleted above), yet
+    // the host still sees the guest as ready.
+    await waitFor(
+      () => host.allPeersReady(track.item.mediaId),
+      reason: 'host to record readiness from the cache-hit report',
+    );
+
+    // Settle, then confirm exactly one report reached the host — a
+    // `ready`, no `fetching` progress (the network was never touched),
+    // and no duplicate from the concurrent whole-playlist cache scan.
     await Future<void>.delayed(const Duration(milliseconds: 50));
-    expect(statuses, isEmpty);
+    expect(statuses, hasLength(1));
+    expect(statuses.single.mediaId, track.item.mediaId);
+    expect(statuses.single.mediaState, MediaFetchState.ready);
+  });
+
+  test(
+    'readiness is re-reported to the host after a kick + resume reconnect',
+    () async {
+      mockAudioChannel();
+      final host = await startHost();
+      final track = await addTrack(host);
+      host.setMedia(track.item.mediaId);
+
+      final engine = await joinEngine(
+        host,
+        cacheDir: await makeTempDir(),
+        backoff: JamBackoff(
+          initialDelay: const Duration(milliseconds: 20),
+          maxDelay: const Duration(milliseconds: 50),
+          jitterRatio: 0,
+        ),
+      );
+      await waitFor(() => ready(engine, track.item), reason: 'track fetched');
+      await waitFor(
+        () => host.allPeersReady(track.item.mediaId),
+        reason: 'host sees ready before the kick',
+      );
+
+      final peerId = engine.selfPeerId;
+      host.kickPeer(peerId);
+      await waitFor(
+        () =>
+            host.peerMediaState(peerId, track.item.mediaId) ==
+            MediaReadiness.none,
+        reason: '§3.3: host forgets readiness on drop',
+      );
+
+      await waitFor(
+        () => engine.connectionState == JamConnectionState.connected,
+        reason: 'resume completes',
+      );
+      expect(engine.selfPeerId, peerId, reason: 'resumed the same slot');
+      // The file never left the local cache (prefetchStates still shows it
+      // ready) — the engine must re-announce it without re-fetching.
+      await waitFor(
+        () => host.allPeersReady(track.item.mediaId),
+        reason: 'readiness re-reported after resume',
+      );
+    },
+  );
+
+  test('repeated prefetch re-evaluations do not spam duplicate media_status '
+      'reports', () async {
+    mockAudioChannel();
+    final host = await startHost();
+    final items = await addTracks(host, 3);
+    host.setMedia(items[0].mediaId);
+
+    final readyEvents = <JamHostEvent>[];
+    host.events.listen((e) {
+      if (e.kind == JamHostEventKind.peerMediaStatus &&
+          e.mediaState == MediaFetchState.ready) {
+        readyEvents.add(e);
+      }
+    });
+
+    final engine = await joinEngine(host, cacheDir: await makeTempDir());
+    await waitFor(
+      () => items.every((i) => ready(engine, i)),
+      reason: 'whole (small) playlist fetched',
+    );
+    final countAfterFetch = readyEvents.length;
+    expect(countAfterFetch, greaterThanOrEqualTo(1));
+
+    // Re-evaluations with no new local state: cycling the current track
+    // re-triggers _reevaluatePrefetch repeatedly with nothing new to
+    // report.
+    for (var i = 0; i < 6; i++) {
+      host.setMedia(items[i % items.length].mediaId);
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+    }
+    await Future<void>.delayed(const Duration(milliseconds: 100));
+
+    expect(
+      readyEvents.length,
+      countAfterFetch,
+      reason: 'no duplicate ready reports from re-evaluation',
+    );
   });
 
   test('LRU eviction respects the cap and evicts oldest first', () async {
