@@ -31,12 +31,16 @@ Future<File> writeTempMedia(Uint8List bytes) async {
 
 Future<JamHostServer> startHost({
   String sessionName = 'TestJam',
+  int leadTimeUs = 750_000,
+  JamEndPolicy endPolicy = JamEndPolicy.pause,
   Duration silenceTimeout = const Duration(seconds: 10),
   Duration reconnectGrace = const Duration(seconds: 30),
   Duration livenessCheckInterval = const Duration(seconds: 1),
 }) async {
   final host = JamHostServer(
     sessionName: sessionName,
+    leadTimeUs: leadTimeUs,
+    endPolicy: endPolicy,
     silenceTimeout: silenceTimeout,
     reconnectGrace: reconnectGrace,
     livenessCheckInterval: livenessCheckInterval,
@@ -593,6 +597,181 @@ void main() {
     // Idempotent: awaiting again (and closing again) is harmless.
     await guest.close();
     await guest.done;
+  });
+
+  group('end of media (§5.5)', () {
+    // Short synthetic track: 300 ms duration, no scheduled-start lead, end
+    // check every 20 ms.
+    const durationUs = 300_000;
+    const checkInterval = Duration(milliseconds: 20);
+
+    Future<(JamHostServer, List<MediaItem>)> startEndedHost(
+      JamEndPolicy policy, {
+      int tracks = 1,
+    }) async {
+      final host = await startHost(
+        leadTimeUs: 0,
+        endPolicy: policy,
+        livenessCheckInterval: checkInterval,
+      );
+      final items = <MediaItem>[];
+      for (var i = 0; i < tracks; i++) {
+        final file = await writeTempMedia(makeMediaBytes(1024, seed: i));
+        final item = await JamHostServer.describeFile(
+          file,
+          kind: MediaKind.audio,
+          durationUs: durationUs,
+        );
+        host.addMedia(item, file);
+        items.add(item);
+      }
+      return (host, items);
+    }
+
+    test('pause policy freezes at exactly the duration', () async {
+      final (host, items) = await startEndedHost(JamEndPolicy.pause);
+      final guest = await joinGuest(host);
+
+      final ended = <JamHostEvent>[];
+      host.events.listen((e) {
+        if (e.kind == JamHostEventKind.mediaEnded) ended.add(e);
+      });
+
+      host.setMedia(items.single.mediaId);
+      host.play();
+      await waitFor(
+        () => host.snapshot.status == PlaybackStatus.paused,
+        reason: 'end policy to pause',
+      );
+      expect(host.snapshot.positionUs, durationUs);
+      expect(host.snapshot.anchor, isNull);
+      expect(ended, hasLength(1));
+      expect(ended.single.mediaId, items.single.mediaId);
+
+      // Guests see only the ordinary state broadcast.
+      await waitFor(
+        () => guest.snapshot.status == PlaybackStatus.paused,
+        reason: 'guest to converge on the paused-at-end state',
+      );
+      expect(guest.snapshot.positionUs, durationUs);
+    });
+
+    test('mediaEnded fires exactly once per end (no repeat firing)', () async {
+      final (host, items) = await startEndedHost(JamEndPolicy.pause);
+      final events = <JamHostEvent>[];
+      host.events.listen(events.add);
+
+      host.setMedia(items.single.mediaId);
+      host.play();
+      await waitFor(
+        () => host.snapshot.status == PlaybackStatus.paused,
+        reason: 'end policy to pause',
+      );
+      // The session stays ended (paused at the duration) across many further
+      // check ticks; the event and the pause must not re-fire.
+      final revAfterEnd = host.snapshot.rev;
+      await Future<void>.delayed(checkInterval * 10);
+      final ended = events.where((e) => e.kind == JamHostEventKind.mediaEnded);
+      expect(ended, hasLength(1));
+      expect(host.snapshot.rev, revAfterEnd);
+
+      // A new end (replaying the same track) fires a fresh event.
+      host.seek(0);
+      host.play();
+      await waitFor(
+        () =>
+            events.where((e) => e.kind == JamHostEventKind.mediaEnded).length ==
+            2,
+        reason: 'second end of the replayed track',
+      );
+    });
+
+    test(
+      'advance policy broadcasts setMedia(next) + playing, wrapping',
+      () async {
+        final (host, items) = await startEndedHost(
+          JamEndPolicy.advance,
+          tracks: 2,
+        );
+        final guest = await joinGuest(host);
+        final events = <JamHostEvent>[];
+        host.events.listen(events.add);
+
+        host.setMedia(items[0].mediaId);
+        host.play();
+        await waitFor(
+          () =>
+              host.snapshot.mediaId == items[1].mediaId &&
+              host.snapshot.status == PlaybackStatus.playing,
+          reason: 'advance to track 2',
+        );
+
+        // The end event precedes the policy's state broadcasts (§5.5).
+        final endedIdx = events.indexWhere(
+          (e) => e.kind == JamHostEventKind.mediaEnded,
+        );
+        expect(endedIdx, isNonNegative);
+        expect(events[endedIdx].mediaId, items[0].mediaId);
+        final loadingIdx = events.indexWhere(
+          (e) =>
+              e.kind == JamHostEventKind.stateBroadcast &&
+              e.snapshot!.mediaId == items[1].mediaId,
+        );
+        expect(loadingIdx, greaterThan(endedIdx));
+
+        // Guests just see ordinary state broadcasts.
+        await waitFor(
+          () =>
+              guest.snapshot.mediaId == items[1].mediaId &&
+              guest.snapshot.status == PlaybackStatus.playing,
+          reason: 'guest to follow the advance',
+        );
+
+        // Track 2 ends too: the playlist wraps back to track 1.
+        await waitFor(
+          () =>
+              events
+                  .where((e) => e.kind == JamHostEventKind.mediaEnded)
+                  .length ==
+              2,
+          reason: 'track 2 to end',
+        );
+        await waitFor(
+          () =>
+              host.snapshot.mediaId == items[0].mediaId &&
+              host.snapshot.status == PlaybackStatus.playing,
+          reason: 'wrap back to track 1',
+        );
+      },
+    );
+
+    test('stop policy returns to idle with no media', () async {
+      final (host, items) = await startEndedHost(JamEndPolicy.stop);
+      host.setMedia(items.single.mediaId);
+      host.play();
+      await waitFor(
+        () => host.snapshot.status == PlaybackStatus.idle,
+        reason: 'end policy to stop',
+      );
+      expect(host.snapshot.mediaId, isNull);
+      expect(host.snapshot.positionUs, 0);
+    });
+
+    test('request-driven seek beyond the duration clamps', () async {
+      final (host, items) = await startEndedHost(JamEndPolicy.pause);
+      final guest = await joinGuest(host);
+
+      host.setMedia(items.single.mediaId);
+      await guest.requestSeek(durationUs + 60_000_000);
+      await waitFor(
+        () => host.snapshot.positionUs == durationUs,
+        reason: 'seek to clamp to the duration',
+      );
+      await waitFor(
+        () => guest.snapshot.positionUs == durationUs,
+        reason: 'guest to see the clamped position',
+      );
+    });
   });
 
   test('long-lived guest is kept alive by its clock-ping heartbeat', () async {

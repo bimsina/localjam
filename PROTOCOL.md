@@ -208,6 +208,21 @@ formula. Error < 15 ms: ignore. 15–50 ms: correct by micro rate adjustment
 (±0.5 % for a bounded interval) — inaudible. > 50 ms: hard resync (local
 pause/seek/rejoin). No protocol messages involved; the anchor is the truth.
 
+### 5.5 End of media
+
+Durations travel in the playlist (§6.1 `durationUs`), which SHOULD be set for
+audio items. Reaching the end of the current item does **not** change the
+broadcast state on its own — the anchor formula is oblivious to file length,
+so the snapshot would extrapolate `playing` forever. Instead the host applies
+an end-of-media *policy* (advance to another track, pause at the end, or
+stop) and broadcasts the resulting ordinary `state`; guests never see a
+special message.
+
+Clients MUST clamp positions computed from the anchor to `[0, durationUs]`
+when the duration is known, and treat a position clamped at the end as
+track-finished locally (stop pulling samples) while remaining converged on
+the broadcast snapshot.
+
 ---
 
 ## 6. Media distribution

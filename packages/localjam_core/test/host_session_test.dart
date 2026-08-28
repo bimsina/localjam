@@ -177,6 +177,205 @@ void main() {
     });
   });
 
+  group('PlaybackSnapshot.clampedPositionAt (§5.5)', () {
+    PlaybackSnapshot playingFrom(int anchorTimeUs) => PlaybackSnapshot(
+      rev: 1,
+      status: PlaybackStatus.playing,
+      mediaId: 'm_1',
+      anchor: PlaybackAnchor(hostTimeUs: anchorTimeUs, positionUs: 0),
+    );
+
+    test('is plain positionAt when durationUs is null', () {
+      final snap = playingFrom(0);
+      expect(snap.clampedPositionAt(99_000_000), 99_000_000);
+      expect(snap.clampedPositionAt(99_000_000), snap.positionAt(99_000_000));
+    });
+
+    test('clamps past-the-end positions to the duration', () {
+      final snap = playingFrom(0);
+      expect(
+        snap.clampedPositionAt(10_000_000, durationUs: 3_000_000),
+        3_000_000,
+      );
+    });
+
+    test('position exactly == duration stays at the duration', () {
+      final snap = playingFrom(0);
+      expect(
+        snap.clampedPositionAt(3_000_000, durationUs: 3_000_000),
+        3_000_000,
+      );
+    });
+
+    test('in-range positions pass through unchanged', () {
+      final snap = playingFrom(0);
+      expect(
+        snap.clampedPositionAt(1_500_000, durationUs: 3_000_000),
+        1_500_000,
+      );
+      expect(snap.clampedPositionAt(0, durationUs: 3_000_000), 0);
+    });
+
+    test('clamps below zero to 0 when a duration is given', () {
+      // A frozen snapshot can carry a negative position only if it was
+      // constructed that way; clamping still bounds it.
+      const snap = PlaybackSnapshot(
+        rev: 1,
+        status: PlaybackStatus.paused,
+        mediaId: 'm_1',
+        positionUs: -5,
+      );
+      expect(snap.clampedPositionAt(0, durationUs: 3_000_000), 0);
+      expect(snap.clampedPositionAt(0), -5); // No duration: plain positionAt.
+    });
+
+    test('when paused, clamps the frozen position', () {
+      const snap = PlaybackSnapshot(
+        rev: 1,
+        status: PlaybackStatus.paused,
+        mediaId: 'm_1',
+        positionUs: 9_000_000,
+      );
+      expect(snap.clampedPositionAt(0, durationUs: 3_000_000), 3_000_000);
+    });
+  });
+
+  group('HostSession end of media (§5.5)', () {
+    const dur = 3_000_000; // 3 s track
+
+    HostSession playing({int? durationUs = dur}) {
+      final s = HostSession();
+      s.setMedia('m_1', nowUs: 0, durationUs: durationUs);
+      s.play(nowUs: 0); // anchor (lead, 0)
+      return s;
+    }
+
+    test('setMedia stores the duration as currentDurationUs', () {
+      final s = HostSession();
+      expect(s.currentDurationUs, isNull);
+      s.setMedia('m_1', nowUs: 0, durationUs: dur);
+      expect(s.currentDurationUs, dur);
+    });
+
+    test('setMedia without a duration clears the previous one', () {
+      final s = HostSession();
+      s.setMedia('m_1', nowUs: 0, durationUs: dur);
+      s.setMedia('m_2', nowUs: 1);
+      expect(s.currentDurationUs, isNull);
+    });
+
+    test('hasEnded is false while the track is still going', () {
+      final s = playing();
+      expect(s.hasEnded(lead + dur - 1), isFalse);
+    });
+
+    test('hasEnded at position exactly == duration (boundary)', () {
+      final s = playing();
+      expect(s.hasEnded(lead + dur), isTrue);
+    });
+
+    test('hasEnded past the duration', () {
+      final s = playing();
+      expect(s.hasEnded(lead + dur + 60_000_000), isTrue);
+    });
+
+    test('hasEnded is false when the duration is unknown', () {
+      final s = playing(durationUs: null);
+      expect(s.hasEnded(lead + 3_600_000_000), isFalse);
+    });
+
+    test('hasEnded is false while loading or idle', () {
+      final s = HostSession();
+      expect(s.hasEnded(0), isFalse); // idle
+      s.setMedia('m_1', nowUs: 0, durationUs: dur);
+      expect(s.hasEnded(1_000_000_000), isFalse); // loading
+    });
+
+    test('hasEnded when paused exactly at the duration', () {
+      final s = playing();
+      s.seek(dur, nowUs: lead + 1);
+      s.pause(nowUs: lead + 2);
+      expect(s.snapshot.positionUs, dur);
+      expect(s.hasEnded(lead + 3), isTrue);
+    });
+
+    test('hasEnded does not mutate state or rev', () {
+      final s = playing();
+      final before = s.snapshot;
+      s.hasEnded(lead + dur + 1);
+      expect(s.snapshot, same(before));
+    });
+
+    test('pause after the end freezes at exactly the duration', () {
+      final s = playing();
+      final snap = s.pause(nowUs: lead + dur + 5_000_000);
+      expect(snap.status, PlaybackStatus.paused);
+      expect(snap.positionUs, dur);
+      expect(snap.anchor, isNull);
+    });
+
+    test('play after the end re-anchors at the clamped duration', () {
+      final s = playing();
+      final snap = s.play(nowUs: lead + dur + 5_000_000);
+      expect(snap.anchor!.positionUs, dur);
+    });
+
+    test('seek beyond the duration clamps to it (playing and paused)', () {
+      final s = playing();
+      var snap = s.seek(dur + 10_000_000, nowUs: lead + 1);
+      expect(snap.anchor!.positionUs, dur);
+      expect(snap.positionUs, dur);
+      s.pause(nowUs: lead + 2);
+      snap = s.seek(dur + 1, nowUs: lead + 3);
+      expect(snap.positionUs, dur);
+    });
+
+    test('seek below zero clamps to 0 when the duration is known', () {
+      final s = playing();
+      final snap = s.seek(-1, nowUs: lead + 1);
+      expect(snap.anchor!.positionUs, 0);
+    });
+
+    test('seek is unclamped when the duration is unknown', () {
+      final s = playing(durationUs: null);
+      final snap = s.seek(7_200_000_000, nowUs: lead + 1);
+      expect(snap.anchor!.positionUs, 7_200_000_000);
+    });
+
+    test('stop returns to idle, clears media/anchor/duration, bumps rev', () {
+      final s = playing();
+      final rev = s.snapshot.rev;
+      final snap = s.stop(nowUs: lead + dur + 1);
+      expect(snap.status, PlaybackStatus.idle);
+      expect(snap.mediaId, isNull);
+      expect(snap.anchor, isNull);
+      expect(snap.positionUs, 0);
+      expect(snap.rev, rev + 1);
+      expect(s.currentDurationUs, isNull);
+      expect(s.hasEnded(lead + dur + 2), isFalse);
+    });
+
+    test('stop when already idle with no media is a no-op', () {
+      final s = HostSession();
+      final before = s.snapshot;
+      expect(s.stop(nowUs: 0), same(before));
+      expect(s.snapshot.rev, 0);
+    });
+
+    test('rev/anchor semantics are unchanged by an in-range duration', () {
+      final s = HostSession();
+      s.setMedia('m_1', nowUs: 0, durationUs: dur);
+      expect(s.snapshot.rev, 1);
+      final snap = s.play(nowUs: 1_000_000);
+      expect(snap.rev, 2);
+      expect(snap.anchor!.hostTimeUs, 1_000_000 + lead);
+      expect(snap.anchor!.positionUs, 0);
+      final paused = s.pause(nowUs: 1_750_000 + 1_000_000);
+      expect(paused.rev, 3);
+      expect(paused.positionUs, 1_000_000);
+    });
+  });
+
   group('HostSession readiness (§6.3)', () {
     test('allPeersReady is vacuously true with no peers', () {
       final s = HostSession();

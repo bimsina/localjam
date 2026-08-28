@@ -15,13 +15,15 @@ class PlaybackAnchor {
   /// Media position (microseconds) at [hostTimeUs].
   final int positionUs;
 
-  Map<String, Object?> toJson() =>
-      {'hostTime': hostTimeUs, 'positionUs': positionUs};
+  Map<String, Object?> toJson() => {
+    'hostTime': hostTimeUs,
+    'positionUs': positionUs,
+  };
 
   factory PlaybackAnchor.fromJson(Map<String, Object?> json) => PlaybackAnchor(
-        hostTimeUs: json['hostTime'] as int,
-        positionUs: json['positionUs'] as int,
-      );
+    hostTimeUs: json['hostTime'] as int,
+    positionUs: json['positionUs'] as int,
+  );
 
   @override
   bool operator ==(Object other) =>
@@ -70,6 +72,17 @@ class PlaybackSnapshot {
     return a.positionUs + (elapsed * rate).round();
   }
 
+  /// [positionAt], clamped to `[0, durationUs]` when [durationUs] is known
+  /// (PROTOCOL.md §5.5). With a null [durationUs] this is plain [positionAt]:
+  /// the anchor formula extrapolates forever, and without a duration there is
+  /// nothing to clamp against.
+  int clampedPositionAt(int hostTimeUs, {int? durationUs}) {
+    final position = positionAt(hostTimeUs);
+    if (durationUs == null) return position;
+    if (position <= 0) return 0;
+    return position >= durationUs ? durationUs : position;
+  }
+
   PlaybackSnapshot copyWith({
     required int rev,
     PlaybackStatus? status,
@@ -79,24 +92,23 @@ class PlaybackSnapshot {
     bool clearAnchor = false,
     int? positionUs,
     double? rate,
-  }) =>
-      PlaybackSnapshot(
-        rev: rev,
-        status: status ?? this.status,
-        mediaId: clearMedia ? null : (mediaId ?? this.mediaId),
-        anchor: clearAnchor ? null : (anchor ?? this.anchor),
-        positionUs: positionUs ?? this.positionUs,
-        rate: rate ?? this.rate,
-      );
+  }) => PlaybackSnapshot(
+    rev: rev,
+    status: status ?? this.status,
+    mediaId: clearMedia ? null : (mediaId ?? this.mediaId),
+    anchor: clearAnchor ? null : (anchor ?? this.anchor),
+    positionUs: positionUs ?? this.positionUs,
+    rate: rate ?? this.rate,
+  );
 
   Map<String, Object?> toJson() => {
-        'rev': rev,
-        'status': status.name,
-        'mediaId': mediaId,
-        'anchor': anchor?.toJson(),
-        'positionUs': positionUs,
-        'rate': rate,
-      };
+    'rev': rev,
+    'status': status.name,
+    'mediaId': mediaId,
+    'anchor': anchor?.toJson(),
+    'positionUs': positionUs,
+    'rate': rate,
+  };
 
   factory PlaybackSnapshot.fromJson(Map<String, Object?> json) =>
       PlaybackSnapshot(

@@ -157,6 +157,8 @@ Future<int> _runLoop(JamHostServer server, StatusScreen screen) async {
         );
       case JamHostEventKind.playlistBroadcast:
         screen.log('> playlist: ${event.playlist!.length} item(s)');
+      case JamHostEventKind.mediaEnded:
+        screen.log('> media ended: ${event.mediaId}');
     }
   });
 

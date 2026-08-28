@@ -13,6 +13,23 @@ import 'package:meta/meta.dart';
 
 import 'monotonic.dart';
 
+/// What a [JamHostServer] does when the current item reaches its end
+/// (PROTOCOL.md §5.5). End of media is only detectable for items whose
+/// playlist entry carries a `durationUs`; without one the anchor extrapolates
+/// and no policy fires. Guests see only the ordinary state broadcasts the
+/// policy produces — no protocol change.
+enum JamEndPolicy {
+  /// Pause, frozen at exactly the item's duration (the default).
+  pause,
+
+  /// Select the next playlist item (wrapping at the end of the playlist)
+  /// and immediately schedule playback.
+  advance,
+
+  /// Stop: back to idle with no media selected.
+  stop,
+}
+
 /// Kind of a [JamHostEvent].
 enum JamHostEventKind {
   /// A guest completed the join handshake ([JamHostEvent.peer] set).
@@ -32,6 +49,11 @@ enum JamHostEventKind {
 
   /// A new playlist was broadcast ([JamHostEvent.playlist] set).
   playlistBroadcast,
+
+  /// The current item reached its end ([JamHostEvent.mediaId] set to the
+  /// ended item). Emitted exactly once per track end, before the state
+  /// broadcast produced by the [JamEndPolicy].
+  mediaEnded,
 }
 
 /// One observability event from a [JamHostServer]. Fields other than [kind]
@@ -96,11 +118,16 @@ class JamHostServer {
   /// [leadTimeUs] is the scheduled-start lead (§5.3). [silenceTimeout],
   /// [reconnectGrace], and [livenessCheckInterval] implement §3.3 (defaults:
   /// drop after 10 s silence, 30 s reconnect grace) and are injectable so
-  /// tests can exercise drops quickly.
+  /// tests can exercise drops quickly. [endPolicy] is applied when the
+  /// current item reaches its end (§5.5; checked at the
+  /// [livenessCheckInterval] cadence, so end handling lags the exact end by
+  /// up to one interval — the broadcast position still lands exactly on the
+  /// duration because positions clamp to it).
   JamHostServer({
     required this.sessionName,
     String? token,
     int leadTimeUs = 750_000,
+    this.endPolicy = JamEndPolicy.pause,
     this.silenceTimeout = const Duration(seconds: 10),
     this.reconnectGrace = const Duration(seconds: 30),
     this.livenessCheckInterval = const Duration(seconds: 1),
@@ -123,8 +150,13 @@ class JamHostServer {
   /// How long a dropped peer's slot stays resumable (§3.3, default 30 s).
   final Duration reconnectGrace;
 
-  /// How often liveness is evaluated.
+  /// How often liveness is evaluated. End of media (§5.5) is checked at the
+  /// same cadence.
   final Duration livenessCheckInterval;
+
+  /// End-of-media policy (§5.5): what happens when the current item's
+  /// position reaches its playlist `durationUs`.
+  final JamEndPolicy endPolicy;
 
   final HostSession _session;
   static const MessageCodec _codec = MessageCodec();
@@ -505,14 +537,23 @@ class JamHostServer {
 
   // --- Host-initiated controls (§5) --------------------------------------------
 
-  /// Selects [mediaId] and broadcasts the new state (§5.1).
+  /// Selects [mediaId] and broadcasts the new state (§5.1). The item's
+  /// playlist `durationUs` (when set) is threaded into the session so seeks
+  /// clamp to it and end of media is detectable (§5.5).
   ///
   /// Throws [ArgumentError] if [mediaId] is not in the media registry.
   void setMedia(String mediaId) {
-    if (!_media.containsKey(mediaId)) {
+    final entry = _media[mediaId];
+    if (entry == null) {
       throw ArgumentError.value(mediaId, 'mediaId', 'unknown media id');
     }
-    _apply((now) => _session.setMedia(mediaId, nowUs: now));
+    _apply(
+      (now) => _session.setMedia(
+        mediaId,
+        nowUs: now,
+        durationUs: entry.item.durationUs,
+      ),
+    );
   }
 
   /// Starts (or resumes) playback with a scheduled anchor (§5.3).
@@ -521,9 +562,13 @@ class JamHostServer {
   /// Pauses playback, freezing the position (§5.1).
   void pause() => _apply((now) => _session.pause(nowUs: now));
 
-  /// Seeks to [positionUs] (§5.1/§5.3).
+  /// Seeks to [positionUs] (§5.1/§5.3), clamped to the current item's
+  /// duration when known (§5.5).
   void seek(int positionUs) =>
       _apply((now) => _session.seek(positionUs, nowUs: now));
+
+  /// Stops playback: back to idle with no media selected (§5.5).
+  void stop() => _apply((now) => _session.stop(nowUs: now));
 
   void _apply(PlaybackSnapshot Function(int nowUs) mutate) {
     final before = _session.snapshot.rev;
@@ -557,6 +602,11 @@ class JamHostServer {
   /// streaming sha256 digest (§6.1). [mediaId] defaults to `m_` + the first
   /// 12 hex chars of the digest (stable across sessions, which is what makes
   /// guest-side caching by sha256 work); [name] defaults to the file name.
+  ///
+  /// This never probes the file for its duration — duration extraction is
+  /// platform-dependent (afinfo, ffprobe, the app's audio engine), so callers
+  /// SHOULD supply [durationUs] for audio items (§5.5): without it the host
+  /// cannot detect end of media and no [JamEndPolicy] fires.
   static Future<MediaItem> describeFile(
     File file, {
     required MediaKind kind,
@@ -587,17 +637,80 @@ class JamHostServer {
       if (now - conn.lastFrameUs > silenceUs) _dropConn(conn);
     }
     _graceUntilUs.removeWhere((_, expiry) => expiry < now);
+    _checkEndOfMedia(now);
   }
 
-  void _dropConn(_GuestConn conn) {
+  // --- End of media (§5.5) ---------------------------------------------------
+
+  /// Set once the current track end has been handled; reset as soon as the
+  /// session is observed not-ended (new track, seek back, stop). Guards the
+  /// periodic check so [JamHostEventKind.mediaEnded] and the policy fire
+  /// exactly once per track end.
+  bool _endHandled = false;
+
+  void _checkEndOfMedia(int now) {
+    if (!_session.hasEnded(now)) {
+      _endHandled = false;
+      return;
+    }
+    if (_endHandled) return;
+    _endHandled = true;
+
+    final endedId = _session.snapshot.mediaId;
+    // §5.5: the end event first, then the policy's resulting state broadcast.
+    _emit(JamHostEvent._(JamHostEventKind.mediaEnded, mediaId: endedId));
+    switch (endPolicy) {
+      case JamEndPolicy.pause:
+        pause(); // Positions clamp to the duration: freezes exactly at it.
+      case JamEndPolicy.advance:
+        final next = _nextMediaId(endedId);
+        if (next == null) {
+          pause(); // Empty playlist: nothing to advance to.
+        } else {
+          setMedia(next);
+          play();
+        }
+      case JamEndPolicy.stop:
+        stop();
+    }
+  }
+
+  /// The playlist item after [current], wrapping; null if the playlist is
+  /// empty. An unknown [current] yields the first item.
+  String? _nextMediaId(String? current) {
+    if (_playlist.isEmpty) return null;
+    final index = _playlist.indexWhere((i) => i.mediaId == current);
+    return _playlist[(index + 1) % _playlist.length].mediaId;
+  }
+
+  /// Disconnects [peerId] (host moderation): closes its socket with
+  /// `goingAway` and broadcasts `peer_left` (§3.2).
+  ///
+  /// With [allowResume] (the default) the peer keeps a §3.3 grace slot
+  /// exactly like a silence drop, so a reconnecting guest reclaims the same
+  /// peerId. With `allowResume: false` no grace slot is kept: a reconnect
+  /// carrying the old `resumePeerId` silently falls back to a fresh join.
+  ///
+  /// Throws [ArgumentError] if [peerId] is not a currently joined peer.
+  void kickPeer(String peerId, {bool allowResume = true}) {
+    final conn = _peers[peerId];
+    if (conn == null) {
+      throw ArgumentError.value(peerId, 'peerId', 'not a joined peer');
+    }
+    _dropConn(conn, allowResume: allowResume);
+  }
+
+  void _dropConn(_GuestConn conn, {bool allowResume = true}) {
     if (!_conns.remove(conn)) return; // Already dropped.
     unawaited(conn.ws.close(WebSocketStatus.goingAway).catchError((_) {}));
     final peerId = conn.peerId;
     if (peerId == null || _closed) return;
     _peers.remove(peerId);
     _session.removePeer(peerId);
-    // §3.3: keep a grace slot so the guest can resume with the same peerId.
-    _graceUntilUs[peerId] = _nowUs() + reconnectGrace.inMicroseconds;
+    if (allowResume) {
+      // §3.3: keep a grace slot so the guest can resume with the same peerId.
+      _graceUntilUs[peerId] = _nowUs() + reconnectGrace.inMicroseconds;
+    }
     _broadcast(PeerLeftMessage(peerId: peerId));
     _emit(JamHostEvent._(JamHostEventKind.peerLeft, peerId: peerId));
   }

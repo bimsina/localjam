@@ -30,6 +30,38 @@ class HostSession {
   /// The current authoritative snapshot. Starts at [PlaybackSnapshot.initial].
   PlaybackSnapshot get snapshot => _snapshot;
 
+  int? _durationUs;
+
+  /// Duration of the current media item in microseconds, as supplied to
+  /// [setMedia] (PROTOCOL.md §5.5). Null when unknown (durations travel in
+  /// the playlist and SHOULD be set for audio items, but the session works
+  /// without one — it just cannot detect end of media).
+  int? get currentDurationUs => _durationUs;
+
+  /// Where playback is at [nowUs], clamped to the current duration when
+  /// known. Every position this session freezes into a snapshot goes through
+  /// this, so [PlaybackSnapshot.positionUs] never exceeds the duration.
+  int _clampedPositionAt(int nowUs) =>
+      _snapshot.clampedPositionAt(nowUs, durationUs: _durationUs);
+
+  /// Whether the current item has reached its end at [nowUs] (§5.5): status
+  /// is playing or paused, the duration is known, and the position computed
+  /// from the snapshot has reached (or passed) it. A position exactly equal
+  /// to the duration counts as ended. Always false when the duration is
+  /// unknown — end of media is undetectable without it.
+  ///
+  /// Reaching the end does not mutate anything by itself; the caller applies
+  /// a policy (advance / pause at end / stop) via the ordinary mutations.
+  bool hasEnded(int nowUs) {
+    final durationUs = _durationUs;
+    if (durationUs == null) return false;
+    if (_snapshot.status != PlaybackStatus.playing &&
+        _snapshot.status != PlaybackStatus.paused) {
+      return false;
+    }
+    return _snapshot.positionAt(nowUs) >= durationUs;
+  }
+
   /// Reported `media_status` per (peer, mediaId): peerId -> mediaId ->
   /// readiness. Readiness is per-file possession, not a mood: a guest that
   /// reported `ready` for track A stays ready for A after reporting on
@@ -44,7 +76,16 @@ class HostSession {
   /// Select a new media item: status becomes [PlaybackStatus.loading],
   /// position resets to 0, and any anchor is cleared. The host app should
   /// then wait for readiness (see [allPeersReady]) before calling [play].
-  PlaybackSnapshot setMedia(String mediaId, {required int nowUs}) {
+  ///
+  /// [durationUs] is the item's duration when known (§5.5, exposed as
+  /// [currentDurationUs]); it bounds [seek] and enables [hasEnded]. It always
+  /// replaces the previous item's duration — omitting it means "unknown".
+  PlaybackSnapshot setMedia(
+    String mediaId, {
+    required int nowUs,
+    int? durationUs,
+  }) {
+    _durationUs = durationUs;
     return _snapshot = _snapshot.copyWith(
       rev: _snapshot.rev + 1,
       status: PlaybackStatus.loading,
@@ -67,7 +108,7 @@ class HostSession {
     if (_snapshot.mediaId == null) {
       throw StateError('play() with no media selected');
     }
-    final position = _snapshot.positionAt(nowUs);
+    final position = _clampedPositionAt(nowUs);
     return _snapshot = _snapshot.copyWith(
       rev: _snapshot.rev + 1,
       status: PlaybackStatus.playing,
@@ -79,8 +120,10 @@ class HostSession {
     );
   }
 
-  /// Pause: freeze the position at `positionAt(nowUs)`, clear the anchor,
-  /// status becomes [PlaybackStatus.paused].
+  /// Pause: freeze the position at `positionAt(nowUs)` — clamped to the
+  /// duration when known (§5.5), so pausing an ended track freezes at
+  /// exactly [currentDurationUs] — clear the anchor, status becomes
+  /// [PlaybackStatus.paused].
   ///
   /// No-op if not currently playing (returns the current snapshot with the
   /// same rev): pausing while idle/loading/paused has nothing to freeze, and
@@ -91,7 +134,7 @@ class HostSession {
       rev: _snapshot.rev + 1,
       status: PlaybackStatus.paused,
       clearAnchor: true,
-      positionUs: _snapshot.positionAt(nowUs),
+      positionUs: _clampedPositionAt(nowUs),
     );
   }
 
@@ -99,25 +142,30 @@ class HostSession {
   ///
   /// While playing this is a scheduled re-anchor per §5.3:
   /// `(nowUs + leadTimeUs, positionUs)`. While paused/loading (or idle with
-  /// media) it just updates the frozen position. Throws [StateError] if no
-  /// media is selected.
+  /// media) it just updates the frozen position. When the current duration is
+  /// known (§5.5) the target is clamped to `[0, currentDurationUs]`. Throws
+  /// [StateError] if no media is selected.
   PlaybackSnapshot seek(int positionUs, {required int nowUs}) {
     if (_snapshot.mediaId == null) {
       throw StateError('seek() with no media selected');
     }
+    final durationUs = _durationUs;
+    final target = durationUs == null
+        ? positionUs
+        : positionUs.clamp(0, durationUs);
     if (_snapshot.status == PlaybackStatus.playing) {
       return _snapshot = _snapshot.copyWith(
         rev: _snapshot.rev + 1,
         anchor: PlaybackAnchor(
           hostTimeUs: nowUs + leadTimeUs,
-          positionUs: positionUs,
+          positionUs: target,
         ),
-        positionUs: positionUs,
+        positionUs: target,
       );
     }
     return _snapshot = _snapshot.copyWith(
       rev: _snapshot.rev + 1,
-      positionUs: positionUs,
+      positionUs: target,
     );
   }
 
@@ -138,7 +186,7 @@ class HostSession {
       throw ArgumentError.value(rate, 'rate', 'must be a positive number');
     }
     if (_snapshot.status == PlaybackStatus.playing) {
-      final position = _snapshot.positionAt(nowUs);
+      final position = _clampedPositionAt(nowUs);
       return _snapshot = _snapshot.copyWith(
         rev: _snapshot.rev + 1,
         anchor: PlaybackAnchor(hostTimeUs: nowUs, positionUs: position),
@@ -147,6 +195,25 @@ class HostSession {
       );
     }
     return _snapshot = _snapshot.copyWith(rev: _snapshot.rev + 1, rate: rate);
+  }
+
+  /// Stop: back to [PlaybackStatus.idle] with no media selected, position 0,
+  /// anchor and duration cleared. One of the §5.5 end-of-media policies.
+  ///
+  /// No-op if already idle with no media (returns the current snapshot with
+  /// the same rev).
+  PlaybackSnapshot stop({required int nowUs}) {
+    if (_snapshot.status == PlaybackStatus.idle && _snapshot.mediaId == null) {
+      return _snapshot;
+    }
+    _durationUs = null;
+    return _snapshot = _snapshot.copyWith(
+      rev: _snapshot.rev + 1,
+      status: PlaybackStatus.idle,
+      clearMedia: true,
+      clearAnchor: true,
+      positionUs: 0,
+    );
   }
 
   // --- Peer readiness bookkeeping (§6.3) -------------------------------------
