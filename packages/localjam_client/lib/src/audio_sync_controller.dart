@@ -32,6 +32,7 @@ library;
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart' show PlatformException;
 import 'package:localjam_audio/localjam_audio.dart';
 import 'package:localjam_net/localjam_net.dart';
 
@@ -379,7 +380,18 @@ class AudioSyncController {
       return false;
     }
     _waitingForMediaId = null;
-    final durationUs = await player.load(path);
+    int durationUs;
+    try {
+      durationUs = await player.load(path);
+    } on PlatformException {
+      // Transient native load failures happen (observed once in a 35-minute
+      // soak: the outgoing track's decoder had not fully released its codec
+      // at the moment of a track transition). One short-delay retry recovers;
+      // a second failure is real and propagates to lastPlayerError as before.
+      await Future<void>.delayed(const Duration(milliseconds: 250));
+      if (generation != _generation) return false;
+      durationUs = await player.load(path);
+    }
     if (generation != _generation) return false;
     _loadedMediaId = mediaId;
     loadedDurationUs.value = durationUs;
