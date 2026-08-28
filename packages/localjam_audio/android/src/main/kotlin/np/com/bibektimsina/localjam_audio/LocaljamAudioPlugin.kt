@@ -12,6 +12,7 @@ import android.media.AudioTrack
 import android.media.MediaCodec
 import android.media.MediaExtractor
 import android.media.MediaFormat
+import android.media.MediaMetadataRetriever
 import android.media.PlaybackParams
 import android.os.Build
 import android.os.Handler
@@ -24,7 +25,6 @@ import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import io.flutter.plugin.common.MethodChannel.MethodCallHandler
 import io.flutter.plugin.common.MethodChannel.Result
-import java.io.ByteArrayOutputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import kotlin.math.max
@@ -44,9 +44,10 @@ import kotlin.math.roundToLong
  * ## Playback pipeline
  * One [AudioTrack] in MODE_STREAM (USAGE_MEDIA / CONTENT_TYPE_MUSIC,
  * PERFORMANCE_MODE_LOW_LATENCY where available), fed by a dedicated writer
- * thread with blocking writes. Deviation from "one long-lived track": the
- * track is *recreated on every schedule* (playAt/stop/load), because the
- * epoch of AudioTimestamp.framePosition after stop()/flush() is
+ * thread with blocking writes; a decoder thread (see "Streaming decode")
+ * produces the PCM the writer consumes. Deviation from "one long-lived
+ * track": the track is *recreated on every schedule* (playAt/stop/load),
+ * because the epoch of AudioTimestamp.framePosition after stop()/flush() is
  * device-inconsistent, while a freshly created track has an unambiguous
  * frame 0. Creation costs tens of ms, well inside the minLeadUs re-anchor
  * budget below.
@@ -107,11 +108,47 @@ import kotlin.math.roundToLong
  * Residual error is |Δrate| × timestamp staleness — for §5.4's ±0.5% slews
  * that is well under the 15 ms ignore threshold.
  *
- * ## Decode
- * 'load' decodes the whole file (mp3/m4a/aac/wav) to 16-bit interleaved PCM
- * in memory via MediaExtractor + MediaCodec. Memory cost: ~10.6 MB per
- * stereo 44.1 kHz minute — acceptable for v1 (LocalJam plays single local
- * music tracks); a streaming decoder is the v2 option.
+ * ## Streaming decode (replaces the v1 full-decode-in-RAM)
+ * 'load' only *probes* the file: MediaExtractor for the container format and
+ * duration metadata, plus a bounded MediaCodec probe that decodes at most the
+ * first output buffer to learn the decoder's TRUE output format (HE-AAC
+ * containers under-report the sample rate 2×; frame math at the wrong rate
+ * would wreck every µs anchor in this file). No PCM is retained; 'load'
+ * returns in milliseconds regardless of file length.
+ *
+ * Duration accuracy contract: the value 'load' returns is METADATA-derived —
+ * MediaFormat.KEY_DURATION, falling back to MediaMetadataRetriever, last
+ * resort a compressed-packet pts scan (no decode; a full decode-count is
+ * deliberately avoided). It can differ from the true decoded length by up to
+ * a codec frame (~26 ms for mp3) plus encoder padding. End of playback is
+ * detected by decoder EOS, never by this number; it is only used for
+ * position clamping and playAt range checks.
+ *
+ * Each playAt starts its OWN decoder thread (fresh MediaExtractor +
+ * MediaCodec, generation-tagged exactly like the writer) which produces
+ * 16-bit interleaved PCM into a bounded [PcmQueue] the writer consumes.
+ * Memory target: O(queue cap) — [QUEUE_TARGET_SECONDS] (8 s) of PCM,
+ * hard-capped at [QUEUE_MAX_BYTES] (4 MB) — independent of file length
+ * (v1 held the whole file: ~10.6 MB per stereo 44.1 kHz minute).
+ *
+ * Seek / frame accuracy: the decoder seeks the extractor to the anchor media
+ * position with SEEK_TO_PREVIOUS_SYNC (lands on a sync frame at/before the
+ * target), then reads the FIRST output buffer's presentationTimeUs —
+ * container pts, the same timebase as KEY_DURATION — to learn where decode
+ * actually resumed, and drops exactly startFrame − round(pts·sr/1e6) PCM
+ * frames before queueing anything. The first frame the writer streams is
+ * therefore frame-exact at anchorMediaUs relative to container pts (absolute
+ * indexing may differ from v1's decode-from-zero count by the codec's
+ * priming frames, well under the §7 nudge range and consistent across
+ * re-schedules of the same file).
+ *
+ * The silence-priming path needs no PCM: the decoder starts at playAt entry
+ * and runs in parallel with priming (≥ MIN_LEAD_US), so the queue already
+ * holds decoded audio when the writer reaches the media phase. Pause = the
+ * writer parks, the queue fills, the decoder blocks on the full queue
+ * (natural backpressure) — resume is playAt (a new generation retires BOTH
+ * threads). A decode error mid-track surfaces as engineRestarted + stop,
+ * identical to an unrecoverable track error.
  *
  * ## outputLatencyUs
  * Android has no public output-latency API; we best-effort the hidden
@@ -124,9 +161,11 @@ import kotlin.math.roundToLong
  * ## Threading
  * Method-channel handlers run serialized on one background HandlerThread;
  * every handler posts its result back to the main thread exactly once.
- * The writer thread (one per schedule, tagged with a generation counter à la
- * iOS scheduleGeneration) is separate. All shared state is guarded by [lock].
- * Events are delivered on the main thread.
+ * The writer thread AND the decoder thread (one pair per schedule, both
+ * tagged with a generation counter à la iOS scheduleGeneration) are separate.
+ * All shared state is guarded by [lock]; the PCM queue has its own internal
+ * monitor and is retired (both sides unblocked) whenever the schedule is
+ * released. Events are delivered on the main thread.
  */
 class LocaljamAudioPlugin :
     FlutterPlugin,
@@ -145,27 +184,153 @@ class LocaljamAudioPlugin :
         /** Give getTimestamp this long to become valid before falling back. */
         const val TIMESTAMP_WARMUP_NS = 1_000_000_000L
 
+        /**
+         * Decoded-PCM queue sizing: the queue holds up to QUEUE_TARGET_SECONDS
+         * of audio, byte-capped at QUEUE_MAX_BYTES. This IS the memory target
+         * of the streaming design: peak decoded-audio memory per schedule is
+         * min(8 s × sampleRate × bytesPerFrame, 4 MB) — ~1.4 MB for stereo
+         * 44.1 kHz — independent of file length.
+         */
+        const val QUEUE_TARGET_SECONDS = 8
+        const val QUEUE_MAX_BYTES = 4 * 1024 * 1024
+
         /** Current native monotonic time in µs. */
         fun nowUs(): Long = System.nanoTime() / 1000
     }
 
     private enum class State { IDLE, LOADED, PLAYING, PAUSED, FINISHED }
 
-    /** Decoded file: interleaved 16-bit LE PCM, fully in memory (see class doc). */
-    private class DecodedAudio(
-        val pcm: ByteArray,
+    /**
+     * A loaded (probed, NOT decoded) file — see "Streaming decode" in the
+     * class doc. [sampleRate]/[channels] are the decoder's true OUTPUT format
+     * (probed), [durationUs] is metadata-derived (accuracy contract in the
+     * class doc).
+     */
+    private class LoadedAudio(
+        val path: String,
+        val mime: String,
         val sampleRate: Int,
-        val channels: Int
+        val channels: Int,
+        val durationUs: Long
     ) {
         val bytesPerFrame get() = 2 * channels
-        val totalFrames get() = pcm.size.toLong() / bytesPerFrame
-        val durationUs get() = totalFrames * 1_000_000L / sampleRate
+
+        /** Metadata-derived frame count; range checks only, never EOS. */
+        val totalFrames get() = durationUs * sampleRate / 1_000_000L
+    }
+
+    /**
+     * Bounded producer-consumer PCM queue between the decoder thread (push)
+     * and the writer thread (pop). Frame-aligned byte chunks; capacity is
+     * byte-capped (see [QUEUE_TARGET_SECONDS]/[QUEUE_MAX_BYTES]). Its own
+     * monitor — never touched while holding the plugin [lock] — and a
+     * [retire] switch that unblocks both sides when the schedule dies.
+     */
+    private class PcmQueue(private val capBytes: Int) {
+        companion object {
+            const val POP_EOS = -1
+            const val POP_ERROR = -2
+            const val POP_RETIRED = -3
+        }
+
+        private val qlock = Object()
+        private val chunks = ArrayDeque<ByteArray>()
+        private var bytes = 0
+        private var headOffset = 0
+        private var eos = false
+        private var retired = false
+
+        var error: String? = null
+            private set
+
+        /** Blocks while full. False once retired (caller must exit). */
+        fun push(chunk: ByteArray): Boolean {
+            synchronized(qlock) {
+                while (!retired && bytes >= capBytes) {
+                    try {
+                        qlock.wait()
+                    } catch (_: InterruptedException) {
+                    }
+                }
+                if (retired) return false
+                chunks.addLast(chunk)
+                bytes += chunk.size
+                qlock.notifyAll()
+                return true
+            }
+        }
+
+        /** Producer reached end of stream cleanly. */
+        fun close() {
+            synchronized(qlock) {
+                eos = true
+                qlock.notifyAll()
+            }
+        }
+
+        /** Producer failed; the writer surfaces this as engineRestarted. */
+        fun fail(msg: String) {
+            synchronized(qlock) {
+                if (error == null) error = msg
+                eos = true
+                qlock.notifyAll()
+            }
+        }
+
+        /** Unblocks both sides permanently (schedule retired). */
+        fun retire() {
+            synchronized(qlock) {
+                retired = true
+                qlock.notifyAll()
+            }
+        }
+
+        /**
+         * Copies up to dst.size queued bytes into dst. Returns the byte count
+         * (> 0), 0 on timeout (caller re-checks staleness), or POP_EOS /
+         * POP_ERROR / POP_RETIRED. An error is reported before any remaining
+         * buffered audio: a broken decode must stop the schedule, not play
+         * out its tail.
+         */
+        fun pop(dst: ByteArray, timeoutMs: Long): Int {
+            synchronized(qlock) {
+                val deadlineNs = System.nanoTime() + timeoutMs * 1_000_000L
+                while (true) {
+                    if (retired) return POP_RETIRED
+                    if (error != null) return POP_ERROR
+                    if (bytes > 0) break
+                    if (eos) return POP_EOS
+                    val remainMs = (deadlineNs - System.nanoTime()) / 1_000_000L
+                    if (remainMs <= 0) return 0
+                    try {
+                        qlock.wait(remainMs)
+                    } catch (_: InterruptedException) {
+                    }
+                }
+                var copied = 0
+                while (copied < dst.size && chunks.isNotEmpty()) {
+                    val head = chunks.first()
+                    val n = min(head.size - headOffset, dst.size - copied)
+                    System.arraycopy(head, headOffset, dst, copied, n)
+                    copied += n
+                    headOffset += n
+                    bytes -= n
+                    if (headOffset == head.size) {
+                        chunks.removeFirst()
+                        headOffset = 0
+                    }
+                }
+                qlock.notifyAll()
+                return copied
+            }
+        }
     }
 
     /**
      * One playAt schedule. Immutable identity + mutable position-mapping
      * fields; ALL fields (and the track's lifecycle) are guarded by [lock]
-     * except where noted in the writer, which snapshots under the lock.
+     * except where noted in the writer, which snapshots under the lock, and
+     * [queue], which has its own monitor.
      */
     private class Schedule(
         val generation: Long,
@@ -176,8 +341,10 @@ class LocaljamAudioPlugin :
         val targetNs: Long,
         /** Media position (µs, frame-exact) at the anchor — 'P'. */
         val anchorMediaUs: Long,
-        /** First decoded-PCM frame of the segment (before any overshoot trim). */
+        /** First media frame of the segment (before any overshoot trim). */
         val startFrame: Long,
+        /** Decoder → writer PCM hand-off (bounded; see class doc). */
+        val queue: PcmQueue,
         var rate: Double,
         /** Total silence frames 'S'; −1 until the priming timestamp lands. */
         var silenceFrames: Long = -1L,
@@ -202,12 +369,13 @@ class LocaljamAudioPlugin :
     /** Guards every field below (and Schedule mutables). */
     private val lock = Object()
     private var state = State.IDLE
-    private var decoded: DecodedAudio? = null
+    private var loaded: LoadedAudio? = null
     private var schedule: Schedule? = null
 
     /**
-     * Bumped on every (re)schedule/stop/load/dispose so stale writer threads
-     * and their completion signals can be ignored (iOS scheduleGeneration).
+     * Bumped on every (re)schedule/stop/load/dispose so stale writer AND
+     * decoder threads and their completion signals can be ignored (iOS
+     * scheduleGeneration).
      */
     private var generation = 0L
 
@@ -237,7 +405,7 @@ class LocaljamAudioPlugin :
         synchronized(lock) {
             bumpGenerationLocked()
             releaseTrackLocked()
-            decoded = null
+            loaded = null
             state = State.IDLE
         }
         abandonFocus()
@@ -326,22 +494,22 @@ class LocaljamAudioPlugin :
             bumpGenerationLocked()
             releaseTrackLocked()
             state = State.IDLE
-            decoded = null
+            loaded = null
         }
-        val audio: DecodedAudio
+        val audio: LoadedAudio
         try {
-            audio = decodeToPcm16(path)
+            audio = probeAudio(path)
         } catch (e: Throwable) {
-            replyError(result, "load_failed", "Could not decode audio file at $path: $e")
+            replyError(result, "load_failed", "Could not open audio file at $path: $e")
             return
         }
         Log.d(
             TAG,
-            "load: $path -> ${audio.totalFrames} frames @ ${audio.sampleRate} Hz x" +
-                "${audio.channels}ch (${audio.pcm.size} bytes, ${audio.durationUs} us)"
+            "load: $path -> ${audio.durationUs} us (metadata-derived) @ " +
+                "${audio.sampleRate} Hz x${audio.channels}ch, streaming decode"
         )
         synchronized(lock) {
-            decoded = audio
+            loaded = audio
             state = State.LOADED
         }
         replySuccess(result, audio.durationUs)
@@ -360,16 +528,17 @@ class LocaljamAudioPlugin :
             return
         }
 
-        val audio: DecodedAudio
+        val audio: LoadedAudio
         synchronized(lock) {
-            val a = decoded
+            val a = loaded
             if (a == null) {
                 replyError(result, "no_file", "playAt before load")
                 return
             }
             audio = a
             // Calling while already playing/scheduled: retire the old schedule
-            // (generation bump makes its writer exit; release unblocks it).
+            // (generation bump makes its writer AND decoder exit; release +
+            // queue retire unblock them).
             bumpGenerationLocked()
             releaseTrackLocked()
             state = State.LOADED // until the new schedule is installed below
@@ -417,6 +586,8 @@ class LocaljamAudioPlugin :
             Log.w(TAG, "setPlaybackParams(speed=$rate) failed, playing at 1.0", e)
         }
 
+        val queueCapBytes =
+            min(QUEUE_TARGET_SECONDS * sr * audio.bytesPerFrame, QUEUE_MAX_BYTES)
         val sched: Schedule
         synchronized(lock) {
             sched = Schedule(
@@ -427,6 +598,7 @@ class LocaljamAudioPlugin :
                 targetNs = anchorUs * 1000,
                 anchorMediaUs = anchorMediaUs,
                 startFrame = startFrame,
+                queue = PcmQueue(queueCapBytes),
                 rate = rate
             )
             schedule = sched
@@ -438,6 +610,9 @@ class LocaljamAudioPlugin :
                 "-> effective anchorUs=$anchorUs startPosUs=$startPosUs startFrame=$startFrame " +
                 "anchorMediaUs=$anchorMediaUs (now=$now leadUs=${anchorUs - now})"
         )
+        // Decoder starts NOW, in parallel with the writer's silence priming
+        // (≥ MIN_LEAD_US), so the queue holds PCM before the media phase.
+        Thread({ decoderMain(sched, audio) }, "localjam_audio-decoder").start()
         Thread({ writerMain(sched, audio) }, "localjam_audio-writer").start()
         replySuccess(result, null)
     }
@@ -450,6 +625,8 @@ class LocaljamAudioPlugin :
                 } catch (e: Throwable) {
                     Log.w(TAG, "pause failed", e)
                 }
+                // The writer parks; the decoder then blocks on the full queue
+                // (backpressure) — both effectively paused. Resume is playAt.
                 state = State.PAUSED
                 lock.notifyAll()
             }
@@ -461,7 +638,7 @@ class LocaljamAudioPlugin :
         synchronized(lock) {
             bumpGenerationLocked()
             releaseTrackLocked()
-            state = if (decoded != null) State.LOADED else State.IDLE
+            state = if (loaded != null) State.LOADED else State.IDLE
         }
         replySuccess(result, null)
     }
@@ -538,7 +715,7 @@ class LocaljamAudioPlugin :
         synchronized(lock) {
             bumpGenerationLocked()
             releaseTrackLocked()
-            decoded = null
+            loaded = null
             state = State.IDLE
         }
         abandonFocus()
@@ -547,7 +724,7 @@ class LocaljamAudioPlugin :
 
     // ------------------------------------------------------------ shared state
 
-    /** Must hold [lock]. Retires all outstanding writers/completions. */
+    /** Must hold [lock]. Retires all outstanding writers/decoders/completions. */
     private fun bumpGenerationLocked() {
         generation += 1
         lock.notifyAll() // wake any writer parked in PAUSED
@@ -557,6 +734,8 @@ class LocaljamAudioPlugin :
     private fun releaseTrackLocked() {
         val sched = schedule ?: return
         schedule = null
+        // Unblock a decoder parked in push() and a writer parked in pop().
+        sched.queue.retire()
         try {
             sched.track.pause()
             sched.track.flush()
@@ -570,7 +749,7 @@ class LocaljamAudioPlugin :
 
     /** Must hold [lock]. */
     private fun clampToDuration(us: Long): Long {
-        val duration = decoded?.durationUs ?: return max(0, us)
+        val duration = loaded?.durationUs ?: return max(0, us)
         return min(max(0, us), duration)
     }
 
@@ -580,10 +759,11 @@ class LocaljamAudioPlugin :
     // ------------------------------------------------------------ writer thread
 
     /**
-     * Streams one schedule: silence priming, then media PCM, then completion
-     * detection. Exits silently the moment its generation is stale.
+     * Streams one schedule: silence priming, then media PCM popped from the
+     * decoder's bounded queue, then completion detection. Exits silently the
+     * moment its generation is stale.
      */
-    private fun writerMain(sched: Schedule, audio: DecodedAudio) {
+    private fun writerMain(sched: Schedule, audio: LoadedAudio) {
         val track = sched.track
         val sr = sched.sampleRate
         val bpf = audio.bytesPerFrame
@@ -680,10 +860,11 @@ class LocaljamAudioPlugin :
         // Overshoot trim: written − s already-queued silence frames stand where
         // media should be; skip that many decoded frames so source frame s+k
         // still carries media position anchorMediaUs + k/sr (see class doc).
+        // The skip is applied to the queue output below — the decoder always
+        // produces from startFrame exactly.
         val mediaSkip = written - s
         val firstPcmFrame = sched.startFrame + mediaSkip
         val firstMediaSourceFrame = s + mediaSkip // == `written` at trim time
-        val endSourceFrame = s + (audio.totalFrames - sched.startFrame)
         if (mediaSkip > 0) {
             // The target instant passed while the mapping matured (the 150 ms
             // lead can be shorter than warm-up, esp. on emulators). This IS
@@ -709,19 +890,26 @@ class LocaljamAudioPlugin :
             TAG,
             "stream: mediaSkip=$mediaSkip firstPcmFrame=$firstPcmFrame " +
                 "firstMediaSourceFrame=$firstMediaSourceFrame " +
-                "endSourceFrame=$endSourceFrame totalFrames=${audio.totalFrames}"
+                "endSourceFrameEst=${s + (audio.totalFrames - sched.startFrame)} " +
+                "totalFramesMeta=${audio.totalFrames}"
         )
 
-        // ---- Phase 3: stream the media PCM.
-        var offset = (firstPcmFrame * bpf).toInt()
-        val chunkBytes = chunkFrames * bpf
+        // ---- Phase 3: stream the media PCM from the decoder queue. The
+        // decoder's first queued frame is exactly startFrame; the overshoot
+        // trim discards the first mediaSkip frames of it here.
+        val q = sched.queue
+        val buf = ByteArray(chunkFrames * bpf)
+        var skipBytes = mediaSkip * bpf
+        var mediaBytesWritten = 0L
         var startErrorLogged = false
-        while (offset < audio.pcm.size) {
+        var eosReached = false
+        while (!eosReached) {
             synchronized(lock) {
                 while (generation == sched.generation && state == State.PAUSED) {
-                    // Writer parks while paused. There is no resume-in-place:
-                    // the Dart side re-schedules via playAt (generation bump),
-                    // which wakes and retires this writer.
+                    // Writer parks while paused (the decoder then blocks on
+                    // the full queue). There is no resume-in-place: the Dart
+                    // side re-schedules via playAt (generation bump), which
+                    // wakes and retires this writer.
                     try {
                         lock.wait()
                     } catch (_: InterruptedException) {
@@ -729,47 +917,78 @@ class LocaljamAudioPlugin :
                 }
                 if (generation != sched.generation) return
             }
-            val n = track.write(
-                audio.pcm, offset, min(chunkBytes, audio.pcm.size - offset),
-                AudioTrack.WRITE_BLOCKING
-            )
-            if (n < 0) {
-                writerTrackFailure(sched, "write returned $n during media stream")
-                return
-            }
-            if (n > 0) offset += n
-            if (trackTimestamp(track, ts) && ts.framePosition > 0) {
-                synchronized(lock) {
-                    if (generation != sched.generation) return
-                    if (ts.nanoTime > sched.refNanos) {
-                        sched.refFrame = ts.framePosition.toDouble()
-                        sched.refNanos = ts.nanoTime
+            val n = q.pop(buf, 100)
+            when {
+                n == PcmQueue.POP_RETIRED -> return
+                n == PcmQueue.POP_ERROR -> {
+                    writerTrackFailure(sched, "decoder failed: ${q.error}")
+                    return
+                }
+                n == PcmQueue.POP_EOS -> eosReached = true
+                n == 0 -> {
+                    // Timed out waiting for the decoder (it is normally well
+                    // ahead); loop to re-check staleness/pause. A slow decode
+                    // can underrun the track — a glitch, not a schedule error:
+                    // the frame↔time anchor math is unaffected.
+                }
+                else -> {
+                    var off = 0
+                    var len = n
+                    if (skipBytes > 0) { // overshoot trim (see above)
+                        val drop = min(skipBytes, len.toLong()).toInt()
+                        off += drop
+                        len -= drop
+                        skipBytes -= drop
                     }
-                    if (!startErrorLogged) {
-                        // Measured start error for live verification: when did
-                        // the first real PCM frame actually present, vs the
-                        // instant the session anchor intended for it
-                        // (targetNs shifted by the media advance at ×rate)?
-                        startErrorLogged = true
-                        val measuredNs = ts.nanoTime +
-                            ((firstMediaSourceFrame - ts.framePosition).toDouble() * 1e9 /
-                                (sr * sched.rate)).toLong()
-                        val intendedNs = sched.targetNs +
-                            (mediaSkip.toDouble() * 1e9 / (sr * sched.rate)).toLong()
-                        Log.d(
-                            TAG,
-                            "start error: firstMediaSourceFrame=$firstMediaSourceFrame " +
-                                "measuredNs=$measuredNs intendedNs=$intendedNs " +
-                                "errorUs=${(measuredNs - intendedNs) / 1000}"
-                        )
+                    while (len > 0) {
+                        val w = track.write(buf, off, len, AudioTrack.WRITE_BLOCKING)
+                        if (w < 0) {
+                            writerTrackFailure(sched, "write returned $w during media stream")
+                            return
+                        }
+                        off += w
+                        len -= w
+                        mediaBytesWritten += w
+                    }
+                    if (trackTimestamp(track, ts) && ts.framePosition > 0) {
+                        synchronized(lock) {
+                            if (generation != sched.generation) return
+                            if (ts.nanoTime > sched.refNanos) {
+                                sched.refFrame = ts.framePosition.toDouble()
+                                sched.refNanos = ts.nanoTime
+                            }
+                            if (!startErrorLogged) {
+                                // Measured start error for live verification:
+                                // when did the first real PCM frame actually
+                                // present, vs the instant the session anchor
+                                // intended for it (targetNs shifted by the
+                                // media advance at ×rate)?
+                                startErrorLogged = true
+                                val measuredNs = ts.nanoTime +
+                                    ((firstMediaSourceFrame - ts.framePosition).toDouble() * 1e9 /
+                                        (sr * sched.rate)).toLong()
+                                val intendedNs = sched.targetNs +
+                                    (mediaSkip.toDouble() * 1e9 / (sr * sched.rate)).toLong()
+                                Log.d(
+                                    TAG,
+                                    "start error: firstMediaSourceFrame=$firstMediaSourceFrame " +
+                                        "measuredNs=$measuredNs intendedNs=$intendedNs " +
+                                        "errorUs=${(measuredNs - intendedNs) / 1000}"
+                                )
+                            }
+                        }
                     }
                 }
             }
         }
 
-        // ---- Phase 4: all frames written; wait until they are consumed
-        // (getTimestamp extrapolation reaches the last media frame), then
-        // report playbackFinished — matching iOS's .dataPlayedBack callback.
+        // ---- Phase 4: decoder EOS and all frames written; wait until they
+        // are consumed (getTimestamp extrapolation reaches the last media
+        // frame), then report playbackFinished — matching iOS's
+        // .dataPlayedBack callback. endSourceFrame is EXACT here: total source
+        // frames queued = silence (s) + overshoot standing in for media
+        // (mediaSkip) + media actually written.
+        val endSourceFrame = s + mediaSkip + mediaBytesWritten / bpf
         val remainingUs = synchronized(lock) {
             if (generation != sched.generation) return
             val fNow = sched.refFrame +
@@ -804,6 +1023,7 @@ class LocaljamAudioPlugin :
             if (generation != sched.generation) return
             state = State.FINISHED
             schedule = null
+            sched.queue.retire() // decoder already exited at EOS; belt-and-braces
             try {
                 sched.track.pause()
                 sched.track.flush()
@@ -839,9 +1059,10 @@ class LocaljamAudioPlugin :
         }
 
     /**
-     * A track error the schedule cannot survive: drop the schedule and tell
-     * Dart the engine restarted (its schedule is gone; re-schedule from the
-     * authoritative anchor) — iOS's configuration-change semantics.
+     * A track (or decoder) error the schedule cannot survive: drop the
+     * schedule and tell Dart the engine restarted (its schedule is gone;
+     * re-schedule from the authoritative anchor) — iOS's configuration-change
+     * semantics.
      */
     private fun writerTrackFailure(sched: Schedule, why: String) {
         synchronized(lock) {
@@ -849,14 +1070,175 @@ class LocaljamAudioPlugin :
             Log.w(TAG, "writer: unrecoverable track error: $why")
             bumpGenerationLocked()
             releaseTrackLocked()
-            state = if (decoded != null) State.LOADED else State.IDLE
+            state = if (loaded != null) State.LOADED else State.IDLE
         }
         emitEvent("engineRestarted")
     }
 
+    // ------------------------------------------------------------ decoder thread
+
+    /**
+     * Produces the PCM for one schedule into its bounded queue. One per
+     * schedule, generation-tagged like the writer; owns a private
+     * MediaExtractor + MediaCodec pair (no sharing across schedules, so a new
+     * playAt never fights an old decoder over extractor position).
+     *
+     * Frame accuracy (see class doc): seekTo(anchorMediaUs,
+     * SEEK_TO_PREVIOUS_SYNC) rewinds to a sync frame at/before the target;
+     * the first output buffer's presentationTimeUs says where decode actually
+     * resumed; exactly startFrame − round(pts·sr/1e6) frames are dropped so
+     * the FIRST queued frame is media frame startFrame.
+     */
+    private fun decoderMain(sched: Schedule, audio: LoadedAudio) {
+        val q = sched.queue
+        val sr = audio.sampleRate
+        val bpf = audio.bytesPerFrame
+        var extractor: MediaExtractor? = null
+        var codec: MediaCodec? = null
+        try {
+            val ex = MediaExtractor()
+            extractor = ex
+            ex.setDataSource(audio.path)
+            val (trackIndex, trackFormat) = findAudioTrack(ex)
+            ex.selectTrack(trackIndex)
+            ex.seekTo(sched.anchorMediaUs, MediaExtractor.SEEK_TO_PREVIOUS_SYNC)
+            val c = MediaCodec.createDecoderByType(audio.mime)
+            codec = c
+            c.configure(trackFormat, null, null, 0)
+            c.start()
+
+            var pcmEncoding = AudioFormat.ENCODING_PCM_16BIT
+            var framesToDrop = -1L // unknown until the first output pts
+            var carry: ByteArray? = null // frame-alignment remainder (rare)
+            val info = MediaCodec.BufferInfo()
+            var inputDone = false
+            var idleSpins = 0
+            while (true) {
+                if (isStale(sched)) return
+                var progressed = false
+                if (!inputDone) {
+                    val inIdx = c.dequeueInputBuffer(10_000)
+                    if (inIdx >= 0) {
+                        progressed = true
+                        val buf = c.getInputBuffer(inIdx)!!
+                        val n = ex.readSampleData(buf, 0)
+                        if (n < 0) {
+                            c.queueInputBuffer(
+                                inIdx, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM
+                            )
+                            inputDone = true
+                        } else {
+                            c.queueInputBuffer(inIdx, 0, n, ex.sampleTime, 0)
+                            ex.advance()
+                        }
+                    }
+                }
+                val outIdx = c.dequeueOutputBuffer(info, 10_000)
+                when {
+                    outIdx == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
+                        progressed = true
+                        val f = c.outputFormat
+                        val newSr = f.getInteger(MediaFormat.KEY_SAMPLE_RATE)
+                        val newCh = f.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
+                        pcmEncoding = if (f.containsKey(MediaFormat.KEY_PCM_ENCODING)) {
+                            f.getInteger(MediaFormat.KEY_PCM_ENCODING)
+                        } else {
+                            AudioFormat.ENCODING_PCM_16BIT
+                        }
+                        if (newSr != sr || newCh != audio.channels) {
+                            // The AudioTrack was created from the load-probed
+                            // format; a mid-stream change cannot be honored.
+                            q.fail(
+                                "decoder output format $newSr Hz x${newCh}ch != " +
+                                    "probed $sr Hz x${audio.channels}ch"
+                            )
+                            return
+                        }
+                    }
+                    outIdx >= 0 -> {
+                        progressed = true
+                        val eos = info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0
+                        var payload: ByteArray? = null
+                        if (info.size > 0) {
+                            val out = c.getOutputBuffer(outIdx)!!
+                            out.position(info.offset)
+                            out.limit(info.offset + info.size)
+                            var chunk = pcm16Bytes(out, pcmEncoding)
+                            if (framesToDrop < 0) {
+                                // First decoded buffer after the seek: its pts
+                                // (container timebase) tells where decode
+                                // resumed; drop up to startFrame exactly.
+                                val bufStartFrame =
+                                    (info.presentationTimeUs.toDouble() * sr / 1e6).roundToLong()
+                                framesToDrop = sched.startFrame - bufStartFrame
+                                if (framesToDrop < 0) {
+                                    Log.w(
+                                        TAG,
+                                        "decoder: seek resumed PAST the target " +
+                                            "(ptsFrame=$bufStartFrame startFrame=${sched.startFrame}); " +
+                                            "media content starts ${-framesToDrop} frames late"
+                                    )
+                                    framesToDrop = 0
+                                }
+                            }
+                            carry?.let { chunk = it + chunk; carry = null }
+                            val alignedBytes = chunk.size - chunk.size % bpf
+                            if (alignedBytes != chunk.size) {
+                                carry = chunk.copyOfRange(alignedBytes, chunk.size)
+                            }
+                            val frames = (alignedBytes / bpf).toLong()
+                            val drop = min(framesToDrop, frames)
+                            framesToDrop -= drop
+                            val startByte = (drop * bpf).toInt()
+                            if (startByte < alignedBytes) {
+                                payload = if (startByte == 0 && alignedBytes == chunk.size) {
+                                    chunk
+                                } else {
+                                    chunk.copyOfRange(startByte, alignedBytes)
+                                }
+                            }
+                        }
+                        // Release the codec buffer BEFORE the potentially long
+                        // blocking push (queue full while paused).
+                        c.releaseOutputBuffer(outIdx, false)
+                        if (payload != null && !q.push(payload)) return // retired
+                        if (eos) {
+                            // Includes "file ends before startFrame" (metadata
+                            // duration over-reported): the queue closes with
+                            // whatever was decodable and the writer finishes.
+                            q.close()
+                            return
+                        }
+                    }
+                }
+                idleSpins = if (progressed) 0 else idleSpins + 1
+                if (idleSpins > 500) { // ~10 s of no progress: codec wedged
+                    q.fail("decoder made no progress (stalled)")
+                    return
+                }
+            }
+        } catch (e: Throwable) {
+            if (!isStale(sched)) Log.w(TAG, "decoder: error", e)
+            q.fail("decoder exception: $e")
+        } finally {
+            try {
+                codec?.stop()
+            } catch (_: Throwable) {
+            }
+            try {
+                codec?.release()
+            } catch (_: Throwable) {
+            }
+            try {
+                extractor?.release()
+            } catch (_: Throwable) {
+            }
+        }
+    }
+
     // ------------------------------------------------------------- AudioTrack
 
-    private fun createTrack(audio: DecodedAudio): AudioTrack {
+    private fun createTrack(audio: LoadedAudio): AudioTrack {
         val channelMask = when (audio.channels) {
             1 -> AudioFormat.CHANNEL_OUT_MONO
             2 -> AudioFormat.CHANNEL_OUT_STEREO
@@ -897,44 +1279,63 @@ class LocaljamAudioPlugin :
         return track
     }
 
-    // ------------------------------------------------------------------ decode
+    // ------------------------------------------------------------------ probe
+
+    /** First audio track of [extractor], else throws. */
+    private fun findAudioTrack(extractor: MediaExtractor): Pair<Int, MediaFormat> {
+        for (i in 0 until extractor.trackCount) {
+            val f = extractor.getTrackFormat(i)
+            val mime = f.getString(MediaFormat.KEY_MIME) ?: continue
+            if (mime.startsWith("audio/")) return i to f
+        }
+        throw IllegalArgumentException("no audio track in file")
+    }
 
     /**
-     * Fully decodes [path] to interleaved 16-bit LE PCM in memory (see the
-     * class doc for the memory-cost tradeoff).
+     * Opens [path] and probes it WITHOUT decoding the file: duration from
+     * metadata (accuracy contract in the class doc) and the decoder's true
+     * output format from a bounded probe that decodes at most the first
+     * output buffer (a few frames, milliseconds — needed because containers
+     * can misreport the output rate, e.g. HE-AAC's 2× SBR).
      */
-    private fun decodeToPcm16(path: String): DecodedAudio {
+    private fun probeAudio(path: String): LoadedAudio {
         val extractor = MediaExtractor()
         try {
             extractor.setDataSource(path)
-            var trackIndex = -1
-            var format: MediaFormat? = null
-            for (i in 0 until extractor.trackCount) {
-                val f = extractor.getTrackFormat(i)
-                val mime = f.getString(MediaFormat.KEY_MIME) ?: continue
-                if (mime.startsWith("audio/")) {
-                    trackIndex = i
-                    format = f
-                    break
-                }
-            }
-            val trackFormat = format
-                ?: throw IllegalArgumentException("no audio track in file")
+            val (trackIndex, trackFormat) = findAudioTrack(extractor)
             extractor.selectTrack(trackIndex)
             val mime = trackFormat.getString(MediaFormat.KEY_MIME)!!
+
+            // Duration: KEY_DURATION → MediaMetadataRetriever → compressed
+            // packet scan (still no decode). A full decode-count is
+            // deliberately avoided (that is the O(file) cost 'load' sheds).
+            var durationUs = if (trackFormat.containsKey(MediaFormat.KEY_DURATION)) {
+                trackFormat.getLong(MediaFormat.KEY_DURATION)
+            } else {
+                -1L
+            }
+            if (durationUs <= 0) durationUs = retrieverDurationUs(path)
+            if (durationUs <= 0) {
+                Log.w(TAG, "load: no duration metadata for $path; scanning packet pts")
+                durationUs = scanDurationUs(extractor)
+                extractor.seekTo(0, MediaExtractor.SEEK_TO_PREVIOUS_SYNC)
+            }
+            if (durationUs <= 0) {
+                throw IllegalArgumentException("could not determine duration")
+            }
+
+            // Bounded format probe: decode until the first output buffer.
+            var sampleRate = trackFormat.getInteger(MediaFormat.KEY_SAMPLE_RATE)
+            var channels = trackFormat.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
             val codec = MediaCodec.createDecoderByType(mime)
             try {
                 codec.configure(trackFormat, null, null, 0)
                 codec.start()
-                var sampleRate = trackFormat.getInteger(MediaFormat.KEY_SAMPLE_RATE)
-                var channels = trackFormat.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
-                var pcmEncoding = AudioFormat.ENCODING_PCM_16BIT
-                val out = ByteArrayOutputStream()
                 val info = MediaCodec.BufferInfo()
                 var inputDone = false
-                var outputDone = false
                 var idleSpins = 0
-                while (!outputDone) {
+                var gotOutput = false
+                while (!gotOutput) {
                     var progressed = false
                     if (!inputDone) {
                         val inIdx = codec.dequeueInputBuffer(10_000)
@@ -960,37 +1361,24 @@ class LocaljamAudioPlugin :
                             val f = codec.outputFormat
                             sampleRate = f.getInteger(MediaFormat.KEY_SAMPLE_RATE)
                             channels = f.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
-                            pcmEncoding = if (f.containsKey(MediaFormat.KEY_PCM_ENCODING)) {
-                                f.getInteger(MediaFormat.KEY_PCM_ENCODING)
-                            } else {
-                                AudioFormat.ENCODING_PCM_16BIT
-                            }
                         }
                         outIdx >= 0 -> {
                             progressed = true
-                            if (info.size > 0) {
-                                val buf = codec.getOutputBuffer(outIdx)!!
-                                buf.position(info.offset)
-                                buf.limit(info.offset + info.size)
-                                appendPcm(out, buf, pcmEncoding)
-                            }
                             codec.releaseOutputBuffer(outIdx, false)
-                            if (info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) {
-                                outputDone = true
+                            if (info.size > 0) {
+                                gotOutput = true
+                            } else if (info.flags and
+                                MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0
+                            ) {
+                                throw IllegalArgumentException("decoded zero audio frames")
                             }
                         }
                     }
                     idleSpins = if (progressed) 0 else idleSpins + 1
                     if (idleSpins > 500) { // ~10 s of no progress: codec wedged
-                        throw IllegalStateException("decoder made no progress (stalled)")
+                        throw IllegalStateException("decoder made no progress (probe stalled)")
                     }
                 }
-                val pcm = out.toByteArray()
-                if (pcm.isEmpty()) throw IllegalArgumentException("decoded zero audio frames")
-                if (channels !in 1..2) {
-                    throw IllegalArgumentException("unsupported channel count $channels")
-                }
-                return DecodedAudio(pcm, sampleRate, channels)
             } finally {
                 try {
                     codec.stop()
@@ -998,32 +1386,70 @@ class LocaljamAudioPlugin :
                 }
                 codec.release()
             }
+            if (channels !in 1..2) {
+                throw IllegalArgumentException("unsupported channel count $channels")
+            }
+            return LoadedAudio(path, mime, sampleRate, channels, durationUs)
         } finally {
             extractor.release()
         }
     }
 
-    /** Appends one decoder output buffer as 16-bit LE PCM (converting float). */
-    private fun appendPcm(out: ByteArrayOutputStream, buf: ByteBuffer, encoding: Int) {
-        when (encoding) {
-            AudioFormat.ENCODING_PCM_16BIT -> {
-                val bytes = ByteArray(buf.remaining())
-                buf.get(bytes)
-                out.write(bytes)
+    /** Duration via MediaMetadataRetriever (ms metadata), −1 when unknown. */
+    private fun retrieverDurationUs(path: String): Long {
+        val r = MediaMetadataRetriever()
+        return try {
+            r.setDataSource(path)
+            val ms = r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
+                ?.toLongOrNull() ?: -1L
+            if (ms > 0) ms * 1000 else -1L
+        } catch (_: Throwable) {
+            -1L
+        } finally {
+            try {
+                r.release()
+            } catch (_: Throwable) {
             }
-            AudioFormat.ENCODING_PCM_FLOAT -> {
-                val floats = buf.order(ByteOrder.nativeOrder()).asFloatBuffer()
-                val scratch = ByteArray(floats.remaining() * 2)
-                var o = 0
-                while (floats.hasRemaining()) {
-                    val v = (floats.get() * 32767.0f).coerceIn(-32768.0f, 32767.0f).toInt()
-                    scratch[o++] = (v and 0xff).toByte()
-                    scratch[o++] = ((v shr 8) and 0xff).toByte()
-                }
-                out.write(scratch)
-            }
-            else -> throw IllegalArgumentException("unsupported decoder PCM encoding $encoding")
         }
+    }
+
+    /**
+     * Last-resort duration: walk the remaining compressed packets (sampleTime
+     * + advance — no decode, no sample reads) and estimate duration as the
+     * last pts plus one inter-packet gap.
+     */
+    private fun scanDurationUs(extractor: MediaExtractor): Long {
+        var prev = -1L
+        var last = -1L
+        while (true) {
+            val t = extractor.sampleTime
+            if (t < 0) break
+            if (t > last) {
+                prev = last
+                last = t
+            }
+            if (!extractor.advance()) break
+        }
+        if (last < 0) return -1
+        return last + if (prev in 0 until last) last - prev else 0
+    }
+
+    /** One decoder output buffer as interleaved 16-bit LE PCM bytes. */
+    private fun pcm16Bytes(buf: ByteBuffer, encoding: Int): ByteArray = when (encoding) {
+        AudioFormat.ENCODING_PCM_16BIT ->
+            ByteArray(buf.remaining()).also { buf.get(it) }
+        AudioFormat.ENCODING_PCM_FLOAT -> {
+            val floats = buf.order(ByteOrder.nativeOrder()).asFloatBuffer()
+            val out = ByteArray(floats.remaining() * 2)
+            var o = 0
+            while (floats.hasRemaining()) {
+                val v = (floats.get() * 32767.0f).coerceIn(-32768.0f, 32767.0f).toInt()
+                out[o++] = (v and 0xff).toByte()
+                out[o++] = ((v shr 8) and 0xff).toByte()
+            }
+            out
+        }
+        else -> throw IllegalArgumentException("unsupported decoder PCM encoding $encoding")
     }
 
     // ------------------------------------------------- focus / route / latency
