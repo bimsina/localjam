@@ -55,10 +55,15 @@ import kotlin.math.roundToLong
  * AudioTrack cannot start "at time T"; it can only start ASAP. So:
  *
  *  1. Start the track immediately and stream *silence* frames.
- *  2. Poll [AudioTrack.getTimestamp] between chunks. Once it returns a valid
- *     (framePosition F_ts, nanoTime T_ts) pair — "source frame F_ts was
- *     presented at the output at monotonic instant T_ts", latency already
- *     accounted for by the HAL — the source-frame index that will be
+ *  2. Poll [AudioTrack.getTimestamp] between chunks. Only a MATURE pair —
+ *     framePosition > 0 — counts: "source frame F_ts was presented at the
+ *     output at monotonic instant T_ts", latency already accounted for by
+ *     the HAL. (The first report typically has framePosition == 0, an
+ *     optimistic mapping that EXCLUDES pipeline latency; anchoring on it
+ *     makes the first real sample render ~an-output-latency late — a
+ *     constant error drift correction can never remove, because every hard
+ *     resync re-primes the same way. Measured −68 ms on a Pixel 9 Pro
+ *     emulator.) Given a mature pair, the source-frame index that will be
  *     presented exactly at the target instant is:
  *
  *         S = F_ts + (targetNs − T_ts) × sampleRate × rate / 1e9
@@ -478,9 +483,13 @@ class LocaljamAudioPlugin :
             }
             // Refresh the frame↔time mapping from the HAL if it has a newer
             // sample than our current reference (which may be a synthetic
-            // rate-change re-anchor; see setRate).
+            // rate-change re-anchor; see setRate). framePosition == 0 reports
+            // are immature (nothing presented yet, latency excluded) and are
+            // never accepted as a mapping.
             val ts = AudioTimestamp()
-            if (trackTimestamp(sched.track, ts) && ts.nanoTime > sched.refNanos) {
+            if (trackTimestamp(sched.track, ts) && ts.framePosition > 0 &&
+                ts.nanoTime > sched.refNanos
+            ) {
                 sched.refFrame = ts.framePosition.toDouble()
                 sched.refNanos = ts.nanoTime
             }
@@ -589,7 +598,14 @@ class LocaljamAudioPlugin :
             return
         }
 
-        // ---- Phase 1: silence until getTimestamp yields a frame↔time mapping.
+        // ---- Phase 1: silence until getTimestamp yields a MATURE frame↔time
+        // mapping. Maturity means framePosition > 0: the HAL has actually
+        // presented frames, so the pair includes the real pipeline latency.
+        // The very first report typically carries framePosition == 0 — an
+        // optimistic mapping that EXCLUDES latency; computing S from it lands
+        // the first real sample tens of ms late (measured −68 ms on a Pixel 9
+        // Pro emulator), an error the Dart drift check can never slew away
+        // because every hard resync re-primes and repeats it.
         val ts = AudioTimestamp()
         val warmupDeadline = System.nanoTime() + TIMESTAMP_WARMUP_NS
         var primed = false
@@ -601,7 +617,7 @@ class LocaljamAudioPlugin :
                 return
             }
             written += n / bpf
-            if (trackTimestamp(track, ts)) {
+            if (trackTimestamp(track, ts) && ts.framePosition > 0) {
                 primed = true
             } else if (System.nanoTime() >= warmupDeadline) {
                 // Some outputs (emulators, odd HALs) never publish timestamps.
@@ -644,9 +660,11 @@ class LocaljamAudioPlugin :
                 return
             }
             written += n / bpf
-            // Refine S against fresher timestamps while silence remains — the
-            // warm-up sample can be jittery; later samples are steadier.
-            if (trackTimestamp(track, ts)) {
+            // Refine S against fresher MATURE timestamps while silence
+            // remains — the warm-up sample can be jittery; later samples are
+            // steadier. framePosition == 0 reports are optimistic (no latency)
+            // and must never re-anchor the mapping.
+            if (trackTimestamp(track, ts) && ts.framePosition > 0) {
                 synchronized(lock) {
                     if (generation != sched.generation) return
                     if (ts.nanoTime > sched.refNanos) {
@@ -664,16 +682,40 @@ class LocaljamAudioPlugin :
         // still carries media position anchorMediaUs + k/sr (see class doc).
         val mediaSkip = written - s
         val firstPcmFrame = sched.startFrame + mediaSkip
+        val firstMediaSourceFrame = s + mediaSkip // == `written` at trim time
         val endSourceFrame = s + (audio.totalFrames - sched.startFrame)
+        if (mediaSkip > 0) {
+            // The target instant passed while the mapping matured (the 150 ms
+            // lead can be shorter than warm-up, esp. on emulators). This IS
+            // the late-anchor re-anchor path, expressed in frames: the media
+            // start advances by mediaSkip/sr µs — exactly rate × the delay
+            // past the anchor — so the SESSION anchor the Dart side passed
+            // remains the truth and its drift check converges to zero instead
+            // of seeing a constant offset.
+            val (rateNow, tsF, tsNs) = synchronized(lock) {
+                Triple(sched.rate, ts.framePosition, ts.nanoTime)
+            }
+            val achievedNs =
+                tsNs + ((written - tsF).toDouble() * 1e9 / (sr * rateNow)).toLong()
+            Log.d(
+                TAG,
+                "re-anchor during priming: requested targetNs=${sched.targetNs} " +
+                    "achievedStartNs~=$achievedNs " +
+                    "(late by ${(achievedNs - sched.targetNs) / 1000} us), " +
+                    "media advanced ${mediaSkip * 1_000_000L / sr} us to stay on the session anchor"
+            )
+        }
         Log.d(
             TAG,
             "stream: mediaSkip=$mediaSkip firstPcmFrame=$firstPcmFrame " +
+                "firstMediaSourceFrame=$firstMediaSourceFrame " +
                 "endSourceFrame=$endSourceFrame totalFrames=${audio.totalFrames}"
         )
 
         // ---- Phase 3: stream the media PCM.
         var offset = (firstPcmFrame * bpf).toInt()
         val chunkBytes = chunkFrames * bpf
+        var startErrorLogged = false
         while (offset < audio.pcm.size) {
             synchronized(lock) {
                 while (generation == sched.generation && state == State.PAUSED) {
@@ -696,12 +738,30 @@ class LocaljamAudioPlugin :
                 return
             }
             if (n > 0) offset += n
-            if (trackTimestamp(track, ts)) {
+            if (trackTimestamp(track, ts) && ts.framePosition > 0) {
                 synchronized(lock) {
                     if (generation != sched.generation) return
                     if (ts.nanoTime > sched.refNanos) {
                         sched.refFrame = ts.framePosition.toDouble()
                         sched.refNanos = ts.nanoTime
+                    }
+                    if (!startErrorLogged) {
+                        // Measured start error for live verification: when did
+                        // the first real PCM frame actually present, vs the
+                        // instant the session anchor intended for it
+                        // (targetNs shifted by the media advance at ×rate)?
+                        startErrorLogged = true
+                        val measuredNs = ts.nanoTime +
+                            ((firstMediaSourceFrame - ts.framePosition).toDouble() * 1e9 /
+                                (sr * sched.rate)).toLong()
+                        val intendedNs = sched.targetNs +
+                            (mediaSkip.toDouble() * 1e9 / (sr * sched.rate)).toLong()
+                        Log.d(
+                            TAG,
+                            "start error: firstMediaSourceFrame=$firstMediaSourceFrame " +
+                                "measuredNs=$measuredNs intendedNs=$intendedNs " +
+                                "errorUs=${(measuredNs - intendedNs) / 1000}"
+                        )
                     }
                 }
             }
@@ -721,7 +781,9 @@ class LocaljamAudioPlugin :
             if (isStale(sched)) return
             val fNow = synchronized(lock) {
                 if (generation != sched.generation) return
-                if (trackTimestamp(track, ts) && ts.nanoTime > sched.refNanos) {
+                if (trackTimestamp(track, ts) && ts.framePosition > 0 &&
+                    ts.nanoTime > sched.refNanos
+                ) {
                     sched.refFrame = ts.framePosition.toDouble()
                     sched.refNanos = ts.nanoTime
                 }
