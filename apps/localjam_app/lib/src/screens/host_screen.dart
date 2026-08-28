@@ -238,6 +238,9 @@ class _HostScreenState extends State<HostScreen> {
         _fetchProgress.remove(event.peerId);
       case JamHostEventKind.peerJoined:
       case JamHostEventKind.playlistBroadcast:
+      // The end policy's own state broadcast follows and drives the sync
+      // controller; nothing extra to do here.
+      case JamHostEventKind.mediaEnded:
         break;
     }
     if (mounted) setState(() {});

@@ -6,6 +6,8 @@
 /// run under fake_async.
 library;
 
+import 'dart:async';
+
 import 'package:fake_async/fake_async.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:localjam_app/src/sync/audio_sync_controller.dart';
@@ -16,6 +18,14 @@ import 'package:localjam_net/localjam_net.dart';
 /// [LocaljamAudio] API so the controller stays coupled only to that class.
 class FakeLocaljamAudio extends LocaljamAudio {
   FakeLocaljamAudio();
+
+  /// Test-scripted player events; [events] serves this instead of the real
+  /// event channel.
+  final StreamController<LocaljamAudioEvent> eventsController =
+      StreamController<LocaljamAudioEvent>.broadcast(sync: true);
+
+  @override
+  Stream<LocaljamAudioEvent> get events => eventsController.stream;
 
   final List<String> calls = [];
   final List<({int nativeTimeUs, int positionUs, double rate})> playAtCalls =
@@ -407,6 +417,269 @@ void main() {
         player.scriptedPositionUs = 0;
         async.elapse(const Duration(seconds: 3));
         expect(player.calls.where((c) => c == 'positionUs').length, 3);
+
+        controller.dispose();
+        async.flushMicrotasks();
+      });
+    });
+  });
+
+  group('player events (interruptions, route changes, end of file)', () {
+    int playAtCount() => player.playAtCalls.length;
+    int driftPolls() => player.calls.where((c) => c == 'positionUs').length;
+
+    test('a burst of events coalesces into one recalibrate + re-playAt', () {
+      fakeAsync((async) {
+        final controller = buildController();
+        controller.onSnapshot(playingSnapshot(
+          anchorHostTimeUs: 0,
+          anchorPositionUs: 0,
+        ));
+        async.flushMicrotasks();
+        expect(playAtCount(), 1);
+        expect(player.calibrateCount, 1);
+
+        // Route change + engine restart + interruption end arrive together.
+        player.eventsController
+          ..add(const LocaljamAudioEvent(
+              kind: LocaljamAudioEventKind.routeChanged))
+          ..add(const LocaljamAudioEvent(
+              kind: LocaljamAudioEventKind.engineRestarted))
+          ..add(const LocaljamAudioEvent(
+              kind: LocaljamAudioEventKind.interruptionEnded));
+        async.flushMicrotasks();
+        expect(playAtCount(), 1, reason: 'debounce still pending');
+
+        async.elapse(const Duration(milliseconds: 250));
+        expect(playAtCount(), 2, reason: 'exactly one re-apply per burst');
+        expect(player.calibrateCount, 2, reason: 'calibration cache dropped');
+        // Re-anchored from the SAME authoritative anchor.
+        expect(player.playAtCalls[1].positionUs, 0);
+
+        // No further re-applies without further events.
+        player.scriptedPositionUs = 0;
+        async.elapse(const Duration(seconds: 2));
+        expect(playAtCount(), 2);
+
+        controller.dispose();
+        async.flushMicrotasks();
+      });
+    });
+
+    test('events while paused refresh state but do not schedule', () {
+      fakeAsync((async) {
+        final controller = buildController();
+        controller.onSnapshot(const PlaybackSnapshot(
+          rev: 1,
+          status: PlaybackStatus.paused,
+          mediaId: 'm_1',
+          positionUs: 1000,
+        ));
+        async.flushMicrotasks();
+
+        player.eventsController.add(const LocaljamAudioEvent(
+            kind: LocaljamAudioEventKind.interruptionEnded));
+        async.elapse(const Duration(milliseconds: 500));
+        expect(playAtCount(), 0);
+
+        controller.dispose();
+        async.flushMicrotasks();
+      });
+    });
+
+    test('interruptionBegan stops the drift loop; ended resumes via re-apply',
+        () {
+      fakeAsync((async) {
+        final controller = buildController();
+        controller.onSnapshot(playingSnapshot(
+          anchorHostTimeUs: 0,
+          anchorPositionUs: 0,
+        ));
+        async.flushMicrotasks();
+        player.scriptedPositionUs = 0;
+        async.elapse(const Duration(seconds: 2));
+        expect(driftPolls(), 2);
+
+        player.eventsController.add(const LocaljamAudioEvent(
+            kind: LocaljamAudioEventKind.interruptionBegan));
+        async.elapse(const Duration(seconds: 5));
+        expect(driftPolls(), 2, reason: 'no drift polls while interrupted');
+        expect(playAtCount(), 1, reason: 'no re-apply on began');
+
+        player.eventsController.add(const LocaljamAudioEvent(
+            kind: LocaljamAudioEventKind.interruptionEnded));
+        async.elapse(const Duration(milliseconds: 250));
+        expect(playAtCount(), 2, reason: 're-applied after interruption');
+        async.elapse(const Duration(seconds: 1));
+        expect(driftPolls(), 3, reason: 'drift loop resumed');
+
+        controller.dispose();
+        async.flushMicrotasks();
+      });
+    });
+
+    test('routeChanged latency is used for the re-scheduled playAt', () {
+      fakeAsync((async) {
+        final controller = buildController();
+        controller.onSnapshot(playingSnapshot(
+          anchorHostTimeUs: 1000000,
+          anchorPositionUs: 0,
+        ));
+        async.flushMicrotasks();
+        expect(playAtCount(), 1);
+
+        player.eventsController.add(const LocaljamAudioEvent(
+          kind: LocaljamAudioEventKind.routeChanged,
+          outputLatencyUs: 120000,
+        ));
+        async.elapse(const Duration(milliseconds: 250));
+        expect(playAtCount(), 2);
+        // Same anchor and calibration; only the route latency changed.
+        expect(
+          player.playAtCalls[1].nativeTimeUs,
+          player.playAtCalls[0].nativeTimeUs - 120000,
+        );
+
+        controller.dispose();
+        async.flushMicrotasks();
+      });
+    });
+
+    test('manual nudge re-applies immediately despite a pending debounce', () {
+      fakeAsync((async) {
+        final controller = buildController();
+        controller.onSnapshot(playingSnapshot(
+          anchorHostTimeUs: 0,
+          anchorPositionUs: 0,
+        ));
+        async.flushMicrotasks();
+        expect(playAtCount(), 1);
+
+        player.eventsController.add(const LocaljamAudioEvent(
+            kind: LocaljamAudioEventKind.routeChanged));
+        controller.setManualOffsetUs(50000);
+        async.flushMicrotasks();
+        expect(playAtCount(), 2, reason: 'nudge not swallowed by debounce');
+        expect(
+          player.playAtCalls[1].nativeTimeUs,
+          player.playAtCalls[0].nativeTimeUs - 50000,
+        );
+
+        controller.dispose();
+        async.flushMicrotasks();
+      });
+    });
+
+    test('playbackFinished stops the drift loop and blocks re-playAt for the '
+        'rev', () {
+      fakeAsync((async) {
+        final controller = buildController();
+        controller.onSnapshot(playingSnapshot(
+          anchorHostTimeUs: 0,
+          anchorPositionUs: 0,
+        ));
+        async.flushMicrotasks();
+        expect(playAtCount(), 1);
+        expect(controller.trackFinished.value, isFalse);
+
+        player.eventsController.add(const LocaljamAudioEvent(
+            kind: LocaljamAudioEventKind.playbackFinished));
+        async.flushMicrotasks();
+        expect(controller.trackFinished.value, isTrue);
+
+        player.scriptedPositionUs = 180000000;
+        async.elapse(const Duration(seconds: 5));
+        expect(driftPolls(), 0, reason: 'drift loop stopped');
+
+        // A nudge re-apply must NOT re-schedule the finished rev.
+        controller.setManualOffsetUs(10000);
+        async.flushMicrotasks();
+        expect(playAtCount(), 1);
+        expect(controller.trackFinished.value, isTrue);
+
+        controller.dispose();
+        async.flushMicrotasks();
+      });
+    });
+
+    test('expected position beyond the duration never calls playAt', () {
+      fakeAsync((async) {
+        player.scriptedDurationUs = 180000000; // 3 min
+        final controller = buildController();
+        // Anchor extrapolates to 200 s — past the end of the file.
+        clock.localUs = 200000000;
+        controller.onSnapshot(playingSnapshot(
+          anchorHostTimeUs: 0,
+          anchorPositionUs: 0,
+        ));
+        async.flushMicrotasks();
+
+        expect(player.loadedPaths, hasLength(1));
+        expect(playAtCount(), 0, reason: 'no bad_position schedules');
+        expect(controller.trackFinished.value, isTrue);
+        async.elapse(const Duration(seconds: 5));
+        expect(driftPolls(), 0);
+
+        controller.dispose();
+        async.flushMicrotasks();
+      });
+    });
+
+    test('drift check past the end enters trackFinished instead of resyncing',
+        () {
+      fakeAsync((async) {
+        final controller = buildController();
+        controller.onSnapshot(playingSnapshot(
+          anchorHostTimeUs: 0,
+          anchorPositionUs: 0,
+        ));
+        async.flushMicrotasks();
+        expect(playAtCount(), 1);
+
+        // The anchor now extrapolates past the 180 s file; the player is
+        // pinned at the end. Without the clamp this would hard-resync.
+        clock.localUs = 181000000;
+        player.scriptedPositionUs = 179000000;
+        controller.checkDriftNow();
+        async.flushMicrotasks();
+
+        expect(controller.resyncCount, 0);
+        expect(controller.trackFinished.value, isTrue);
+        expect(playAtCount(), 1);
+
+        controller.dispose();
+        async.flushMicrotasks();
+      });
+    });
+
+    test('a fresh in-bounds snapshot recovers from trackFinished', () {
+      fakeAsync((async) {
+        final controller = buildController();
+        controller.onSnapshot(playingSnapshot(
+          anchorHostTimeUs: 0,
+          anchorPositionUs: 0,
+        ));
+        async.flushMicrotasks();
+        player.eventsController.add(const LocaljamAudioEvent(
+            kind: LocaljamAudioEventKind.playbackFinished));
+        async.flushMicrotasks();
+        expect(controller.trackFinished.value, isTrue);
+        expect(playAtCount(), 1);
+
+        // Host seeks / starts the next track: new rev, in-bounds anchor.
+        clock.localUs = 200000000;
+        controller.onSnapshot(playingSnapshot(
+          rev: 2,
+          anchorHostTimeUs: 200750000,
+          anchorPositionUs: 0,
+        ));
+        async.flushMicrotasks();
+        expect(playAtCount(), 2, reason: 'plays the re-anchored snapshot');
+        expect(controller.trackFinished.value, isFalse);
+
+        player.scriptedPositionUs = 0;
+        async.elapse(const Duration(seconds: 1));
+        expect(driftPolls(), 1, reason: 'drift loop running again');
 
         controller.dispose();
         async.flushMicrotasks();

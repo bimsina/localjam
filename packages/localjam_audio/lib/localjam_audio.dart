@@ -28,15 +28,99 @@ class NativeClockCalibration {
   final int rttUs;
 }
 
+/// What a [LocaljamAudioEvent] reports.
+enum LocaljamAudioEventKind {
+  /// The audio output route changed (headphones unplugged, Bluetooth
+  /// connected). [LocaljamAudioEvent.outputLatencyUs] carries the NEW
+  /// route's platform-reported output latency (§7).
+  routeChanged,
+
+  /// The OS interrupted playback (phone call, Siri, another app took the
+  /// session). Playback is ducked/stopped until [interruptionEnded].
+  interruptionBegan,
+
+  /// The OS interruption ended; the client should re-schedule from the
+  /// authoritative anchor.
+  interruptionEnded,
+
+  /// The native engine was restarted after a configuration change; any
+  /// schedule it held is gone and the client should re-schedule.
+  engineRestarted,
+
+  /// The scheduled segment played through to the end of the file.
+  playbackFinished,
+}
+
+/// One event from the native audio engine (event channel
+/// `localjam_audio/events`).
+class LocaljamAudioEvent {
+  const LocaljamAudioEvent({required this.kind, this.outputLatencyUs});
+
+  final LocaljamAudioEventKind kind;
+
+  /// The current route's output latency (µs), when the event carries one
+  /// (today: [LocaljamAudioEventKind.routeChanged]).
+  final int? outputLatencyUs;
+
+  @override
+  String toString() =>
+      'LocaljamAudioEvent(${kind.name}'
+      '${outputLatencyUs == null ? '' : ', outputLatencyUs: $outputLatencyUs'})';
+}
+
 /// Scheduled audio player backed by the platform's audio engine
 /// (AVAudioEngine on iOS/macOS, ExoPlayer/Oboe on Android).
 ///
 /// One instance = one loaded file at a time. All times are int microseconds.
 class LocaljamAudio {
-  LocaljamAudio({@visibleForTesting MethodChannel? channel})
-      : _ch = channel ?? const MethodChannel('localjam_audio');
+  LocaljamAudio({
+    @visibleForTesting MethodChannel? channel,
+    @visibleForTesting Stream<Object?>? rawEvents,
+  })  : _ch = channel ?? const MethodChannel('localjam_audio'),
+        _injectedRawEvents = rawEvents;
 
   final MethodChannel _ch;
+
+  static const EventChannel _eventChannel =
+      EventChannel('localjam_audio/events');
+
+  /// Test injection point for the raw (undecoded) native event stream.
+  final Stream<Object?>? _injectedRawEvents;
+
+  Stream<LocaljamAudioEvent>? _events;
+
+  /// Playback-interruption events from the native engine: route changes,
+  /// OS interruptions, engine restarts, end-of-file (see
+  /// [LocaljamAudioEventKind]).
+  ///
+  /// Broadcast; the native side is subscribed lazily on first listen.
+  /// Unknown event types are ignored, so old Dart keeps working against a
+  /// newer native side.
+  Stream<LocaljamAudioEvent> get events => _events ??=
+      (_injectedRawEvents ?? _eventChannel.receiveBroadcastStream())
+          .map(_decodeEvent)
+          .where((event) => event != null)
+          .cast<LocaljamAudioEvent>();
+
+  static const Map<String, LocaljamAudioEventKind> _eventKindsByType = {
+    'routeChanged': LocaljamAudioEventKind.routeChanged,
+    'interruptionBegan': LocaljamAudioEventKind.interruptionBegan,
+    'interruptionEnded': LocaljamAudioEventKind.interruptionEnded,
+    'engineRestarted': LocaljamAudioEventKind.engineRestarted,
+    'playbackFinished': LocaljamAudioEventKind.playbackFinished,
+  };
+
+  /// Decodes one native event map; null for anything unrecognized.
+  static LocaljamAudioEvent? _decodeEvent(Object? raw) {
+    if (raw is! Map) return null;
+    final kind = _eventKindsByType[raw['type']];
+    if (kind == null) return null;
+    final latency = raw['outputLatencyUs'];
+    return LocaljamAudioEvent(
+      kind: kind,
+      outputLatencyUs: latency is int ? latency : null,
+    );
+  }
 
   /// Current native monotonic time (µs). Cheap; used by [calibrate].
   Future<int> nativeNowUs() async => (await _ch.invokeMethod<int>('nowUs'))!;

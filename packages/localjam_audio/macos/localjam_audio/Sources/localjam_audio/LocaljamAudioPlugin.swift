@@ -53,7 +53,7 @@ import FlutterMacOS
 /// Also measured: AVAudioUnitTimePitch realizes rate 1.05 as ~1.0508 (small
 /// rate quantization). Irrelevant for drift slew — the §5.4 loop measures
 /// position and iterates, so exact rate realization doesn't matter.
-public class LocaljamAudioPlugin: NSObject, FlutterPlugin {
+public class LocaljamAudioPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
   public static func register(with registrar: FlutterPluginRegistrar) {
     #if os(iOS)
     let messenger = registrar.messenger()
@@ -63,6 +63,45 @@ public class LocaljamAudioPlugin: NSObject, FlutterPlugin {
     let channel = FlutterMethodChannel(name: "localjam_audio", binaryMessenger: messenger)
     let instance = LocaljamAudioPlugin()
     registrar.addMethodCallDelegate(instance, channel: channel)
+    let eventChannel = FlutterEventChannel(
+      name: "localjam_audio/events", binaryMessenger: messenger)
+    eventChannel.setStreamHandler(instance)
+  }
+
+  // MARK: - Event channel
+  //
+  // Emits maps {type: String, outputLatencyUs: Int64?} for playback
+  // interruptions the Dart side must react to (route changes, OS audio
+  // interruptions, engine restarts, natural end of the scheduled segment).
+
+  /// The Dart-side listener's sink. Only touched on the main thread
+  /// (onListen/onCancel arrive there; emitEvent hops there).
+  private var eventSink: FlutterEventSink?
+
+  public func onListen(
+    withArguments arguments: Any?, eventSink events: @escaping FlutterEventSink
+  ) -> FlutterError? {
+    eventSink = events
+    return nil
+  }
+
+  public func onCancel(withArguments arguments: Any?) -> FlutterError? {
+    eventSink = nil
+    return nil
+  }
+
+  /// Emits one event to Dart. Callable from any thread (including the serial
+  /// queue); delivery always happens on the main thread, per the
+  /// FlutterEventSink threading contract.
+  private func emitEvent(_ type: String, outputLatencyUs: Int64? = nil) {
+    DispatchQueue.main.async { [weak self] in
+      guard let sink = self?.eventSink else { return }
+      var payload: [String: Any] = ["type": type]
+      if let latencyUs = outputLatencyUs {
+        payload["outputLatencyUs"] = latencyUs
+      }
+      sink(payload)
+    }
   }
 
   // MARK: - Mach clock
@@ -120,6 +159,10 @@ public class LocaljamAudioPlugin: NSObject, FlutterPlugin {
   /// callbacks can be ignored.
   private var scheduleGeneration: UInt64 = 0
   private var configChangeObserver: NSObjectProtocol?
+  #if os(iOS)
+  private var routeChangeObserver: NSObjectProtocol?
+  private var interruptionObserver: NSObjectProtocol?
+  #endif
 
   // MARK: - Method channel
 
@@ -279,6 +322,7 @@ public class LocaljamAudioPlugin: NSObject, FlutterPlugin {
       self.queue.async {
         guard self.scheduleGeneration == generation else { return }
         self.state = .finished
+        self.emitEvent("playbackFinished")
       }
     }
     player.play(at: startTime)
@@ -358,6 +402,16 @@ public class LocaljamAudioPlugin: NSObject, FlutterPlugin {
       NotificationCenter.default.removeObserver(observer)
       configChangeObserver = nil
     }
+    #if os(iOS)
+    if let observer = routeChangeObserver {
+      NotificationCenter.default.removeObserver(observer)
+      routeChangeObserver = nil
+    }
+    if let observer = interruptionObserver {
+      NotificationCenter.default.removeObserver(observer)
+      interruptionObserver = nil
+    }
+    #endif
     engine = nil
     player = nil
     timePitch = nil
@@ -377,6 +431,40 @@ public class LocaljamAudioPlugin: NSObject, FlutterPlugin {
     let session = AVAudioSession.sharedInstance()
     try? session.setCategory(.playback, mode: .default)
     try? session.setActive(true)
+    if routeChangeObserver == nil {
+      routeChangeObserver = NotificationCenter.default.addObserver(
+        forName: AVAudioSession.routeChangeNotification,
+        object: nil,
+        queue: nil
+      ) { [weak self] _ in
+        // By the time this fires the session already reflects the NEW route,
+        // so this is the new route's output latency (§7).
+        let latencySeconds = AVAudioSession.sharedInstance().outputLatency
+        let latencyUs = latencySeconds.isFinite
+          ? Int64(latencySeconds * 1_000_000.0) : Int64(0)
+        self?.emitEvent("routeChanged", outputLatencyUs: latencyUs)
+      }
+    }
+    if interruptionObserver == nil {
+      interruptionObserver = NotificationCenter.default.addObserver(
+        forName: AVAudioSession.interruptionNotification,
+        object: nil,
+        queue: nil
+      ) { [weak self] note in
+        guard
+          let raw = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
+          let type = AVAudioSession.InterruptionType(rawValue: raw)
+        else { return }
+        switch type {
+        case .began:
+          self?.emitEvent("interruptionBegan")
+        case .ended:
+          self?.emitEvent("interruptionEnded")
+        @unknown default:
+          break
+        }
+      }
+    }
     #endif
     if engine == nil {
       let newEngine = AVAudioEngine()
@@ -387,11 +475,11 @@ public class LocaljamAudioPlugin: NSObject, FlutterPlugin {
       engine = newEngine
       player = newPlayer
       timePitch = newTimePitch
-      // TODO(route-changes): a route change (headphones unplugged, Bluetooth
-      // connect) fires this and may stop the engine and drop the player's
-      // schedule. For now we only restart the engine so subsequent calls
-      // work; we do not resume playback or notify Dart. Clients' §5.4 drift
-      // check will hard-resync. A dedicated event channel comes later.
+      // A route change (headphones unplugged, Bluetooth connect) fires this
+      // and may stop the engine and drop the player's schedule. We restart
+      // the engine so subsequent calls work and emit 'engineRestarted' on the
+      // event channel; the Dart side re-calibrates and re-schedules from the
+      // authoritative anchor.
       configChangeObserver = NotificationCenter.default.addObserver(
         forName: .AVAudioEngineConfigurationChange,
         object: newEngine,
@@ -439,12 +527,23 @@ public class LocaljamAudioPlugin: NSObject, FlutterPlugin {
     if !engine.isRunning {
       try? engine.start()
     }
+    // Tell Dart the engine was restarted (its schedule, if any, is gone) so
+    // it can re-calibrate and re-schedule from the authoritative anchor.
+    emitEvent("engineRestarted")
   }
 
   deinit {
     if let observer = configChangeObserver {
       NotificationCenter.default.removeObserver(observer)
     }
+    #if os(iOS)
+    if let observer = routeChangeObserver {
+      NotificationCenter.default.removeObserver(observer)
+    }
+    if let observer = interruptionObserver {
+      NotificationCenter.default.removeObserver(observer)
+    }
+    #endif
     player?.stop()
     engine?.stop()
   }

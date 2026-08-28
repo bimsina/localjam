@@ -114,6 +114,88 @@ void main() {
     expect(await audio.outputLatencyUs(), 0);
   });
 
+  group('events', () {
+    const eventChannel = EventChannel('localjam_audio/events');
+
+    /// Installs a mock native stream handler that emits [events] (then ends)
+    /// as soon as Dart subscribes.
+    void mockEvents(List<Object?> events) {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockStreamHandler(
+        eventChannel,
+        MockStreamHandler.inline(
+          onListen: (arguments, sink) {
+            for (final event in events) {
+              sink.success(event);
+            }
+            sink.endOfStream();
+          },
+        ),
+      );
+    }
+
+    tearDown(() {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockStreamHandler(eventChannel, null);
+    });
+
+    test('decodes every known kind', () async {
+      mockEvents(const [
+        {'type': 'routeChanged', 'outputLatencyUs': 120000},
+        {'type': 'interruptionBegan'},
+        {'type': 'interruptionEnded'},
+        {'type': 'engineRestarted'},
+        {'type': 'playbackFinished'},
+      ]);
+      final audio = LocaljamAudio();
+      final events = await audio.events.toList();
+      expect(events.map((e) => e.kind), const [
+        LocaljamAudioEventKind.routeChanged,
+        LocaljamAudioEventKind.interruptionBegan,
+        LocaljamAudioEventKind.interruptionEnded,
+        LocaljamAudioEventKind.engineRestarted,
+        LocaljamAudioEventKind.playbackFinished,
+      ]);
+    });
+
+    test('passes outputLatencyUs through and leaves it null when absent',
+        () async {
+      mockEvents(const [
+        {'type': 'routeChanged', 'outputLatencyUs': 250000},
+        {'type': 'routeChanged'},
+        {'type': 'interruptionEnded', 'outputLatencyUs': null},
+      ]);
+      final audio = LocaljamAudio();
+      final events = await audio.events.toList();
+      expect(events.map((e) => e.outputLatencyUs), [250000, null, null]);
+    });
+
+    test('ignores unknown event types and non-map payloads', () async {
+      mockEvents(const [
+        {'type': 'flyingSaucerDetected', 'outputLatencyUs': 1},
+        'not-a-map',
+        42,
+        {'noType': true},
+        {'type': 'playbackFinished'},
+      ]);
+      final audio = LocaljamAudio();
+      final events = await audio.events.toList();
+      expect(events, hasLength(1));
+      expect(events.single.kind, LocaljamAudioEventKind.playbackFinished);
+    });
+
+    test('events stream is broadcast and injectable', () async {
+      final raw = Stream<Object?>.fromIterable(const [
+        {'type': 'engineRestarted'},
+      ]).asBroadcastStream();
+      final audio = LocaljamAudio(rawEvents: raw);
+      expect(audio.events.isBroadcast, isTrue);
+      expect(identical(audio.events, audio.events), isTrue);
+      final events = await audio.events.toList();
+      expect(events.single.kind, LocaljamAudioEventKind.engineRestarted);
+    });
+  });
+
   test('calibrate keeps the minimum-RTT sample', () async {
     // Three samples. Per sample, calibrate reads dartNowUs (t0), awaits
     // nowUs (native), reads dartNowUs again (t3):

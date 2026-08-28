@@ -78,7 +78,11 @@ class AudioSyncController {
     required this.resolveMediaPath,
     this.driftPolicy = const DriftPolicy(),
     this.driftInterval = const Duration(seconds: 1),
-  });
+    this.eventReapplyDebounce = const Duration(milliseconds: 250),
+    @visibleForTesting Stream<LocaljamAudioEvent>? events,
+  }) {
+    _eventSub = (events ?? player.events).listen(_onPlayerEvent);
+  }
 
   /// The scheduled-audio player this controller drives.
   final LocaljamAudio player;
@@ -106,6 +110,11 @@ class AudioSyncController {
   /// How often the drift loop self-checks while playing (§5.4: ~1 Hz).
   final Duration driftInterval;
 
+  /// How long to coalesce a burst of player events (route change +
+  /// interruption end + engine restart often arrive together) into a single
+  /// recalibrate-and-re-apply.
+  final Duration eventReapplyDebounce;
+
   PlaybackSnapshot? _snapshot;
   NativeClockCalibration? _calibration;
   String? _loadedMediaId;
@@ -113,6 +122,19 @@ class AudioSyncController {
   int _manualOffsetUs = 0;
   int _generation = 0;
   bool _disposed = false;
+
+  StreamSubscription<LocaljamAudioEvent>? _eventSub;
+  Timer? _eventReapplyTimer;
+
+  /// Latest route output latency (µs) learned from a player event; null means
+  /// "query the player". Overwritten (possibly back to null) by every
+  /// route/interruption/restart event so it always describes the CURRENT
+  /// route.
+  int? _routeOutputLatencyUs;
+
+  /// The snapshot rev the player finished (end of file); no further playAt is
+  /// issued for this rev — a fresh rev clears it.
+  int? _finishedRev;
 
   Timer? _driftTimer;
   Timer? _slewRestoreTimer;
@@ -131,6 +153,13 @@ class AudioSyncController {
   /// Last player/platform error, for surfacing in the UI while the plugin's
   /// native side is still landing. Cleared on the next successful schedule.
   final ValueNotifier<String?> lastError = ValueNotifier<String?>(null);
+
+  /// True when the current track ran to its end — either the player reported
+  /// [LocaljamAudioEventKind.playbackFinished] or the anchor extrapolates
+  /// to/past the loaded duration. While true the drift loop is stopped and no
+  /// playAt is issued; a fresh snapshot that re-anchors within bounds
+  /// (seek/new track) clears it and plays normally. UI can show "finished".
+  final ValueNotifier<bool> trackFinished = ValueNotifier<bool>(false);
 
   /// Every drift self-check while playing (§5.4), ~1 per [driftInterval].
   Stream<DriftSample> get driftSamples => _samples.stream;
@@ -182,6 +211,57 @@ class AudioSyncController {
     if (_waitingForMediaId == mediaId) {
       await _apply();
     }
+  }
+
+  // --- Player events (interruptions, route changes, end of file) ----------
+
+  void _onPlayerEvent(LocaljamAudioEvent event) {
+    if (_disposed) return;
+    switch (event.kind) {
+      case LocaljamAudioEventKind.interruptionBegan:
+        // The OS ducked/stopped playback; drift measurements are meaningless
+        // until interruptionEnded re-applies the snapshot.
+        _stopDriftLoop();
+        _cancelSlew();
+      case LocaljamAudioEventKind.interruptionEnded:
+      case LocaljamAudioEventKind.engineRestarted:
+      case LocaljamAudioEventKind.routeChanged:
+        // The engine (and possibly the route) changed under us: remember the
+        // event's route latency (null → re-query at schedule time), drop the
+        // native-clock calibration so it is re-measured, and re-apply the
+        // current snapshot — debounced, because these events arrive in
+        // bursts (a route change typically also restarts the engine).
+        _routeOutputLatencyUs = event.outputLatencyUs;
+        _calibration = null;
+        _scheduleEventReapply();
+      case LocaljamAudioEventKind.playbackFinished:
+        _enterTrackFinished();
+    }
+  }
+
+  /// Coalesces a burst of player events into one re-apply after
+  /// [eventReapplyDebounce]. Manual nudges and fresh snapshots bypass this
+  /// entirely (they call [_apply] directly), so the debounce never delays
+  /// them.
+  void _scheduleEventReapply() {
+    _eventReapplyTimer?.cancel();
+    _eventReapplyTimer = Timer(eventReapplyDebounce, () {
+      _eventReapplyTimer = null;
+      if (_disposed) return;
+      if (_snapshot?.status == PlaybackStatus.playing) {
+        unawaited(_apply());
+      }
+    });
+  }
+
+  /// Enters the local trackFinished state: stop correcting, stop scheduling
+  /// for this snapshot rev, and tell the UI. Cleared by the next snapshot
+  /// that schedules within bounds.
+  void _enterTrackFinished() {
+    _finishedRev = _snapshot?.rev;
+    _stopDriftLoop();
+    _cancelSlew();
+    trackFinished.value = true;
   }
 
   // --- Snapshot application ----------------------------------------------
@@ -237,16 +317,33 @@ class AudioSyncController {
   }
 
   Future<void> _schedule(PlaybackSnapshot snapshot, int generation) async {
+    // The player already ran this rev to the end of the file: nothing left to
+    // schedule (a nudge or player event would otherwise re-playAt at/past the
+    // end). A fresh rev — seek, new track — schedules normally.
+    if (_finishedRev == snapshot.rev) return;
     if (!await _ensureLoaded(snapshot, generation)) return;
     if (generation != _generation) return;
 
+    // End-of-media clamp: when the anchor extrapolates to/past the loaded
+    // duration there is nothing left to play — scheduling would only produce
+    // native bad_position errors. Treat it as the track having finished.
+    final durationUs = loadedDurationUs.value;
+    if (durationUs != null &&
+        snapshot.positionAt(sessionNowUs()) >= durationUs) {
+      _enterTrackFinished();
+      return;
+    }
+
     // Calibrate the Dart↔native clock offset once per session; a hard resync
-    // clears the cache so it re-measures (§5.4).
+    // or player event clears the cache so it re-measures (§5.4).
     final calibration =
         _calibration ??= await player.calibrate(localNowUs);
     if (generation != _generation) return;
 
-    final outputLatencyUs = await player.outputLatencyUs();
+    // Prefer the route latency reported by the most recent routeChanged
+    // event (it is the NEW route's, §7); re-query when no event supplied one.
+    final outputLatencyUs =
+        _routeOutputLatencyUs ?? await player.outputLatencyUs();
     if (generation != _generation) return;
 
     // A playing snapshot always carries an anchor (§5.1); if one is somehow
@@ -272,6 +369,9 @@ class AudioSyncController {
       rate: snapshot.rate,
     );
     if (generation != _generation) return;
+    // An in-bounds schedule leaves any earlier trackFinished state.
+    _finishedRev = null;
+    trackFinished.value = false;
     _startDriftLoop();
   }
 
@@ -295,11 +395,19 @@ class AudioSyncController {
     if (_disposed) return;
     final snapshot = _snapshot;
     if (snapshot == null || snapshot.status != PlaybackStatus.playing) return;
+    if (trackFinished.value) return;
     final generation = _generation;
     try {
       final actualUs = await player.positionUs();
       if (actualUs == null || generation != _generation) return;
       final expectedUs = snapshot.positionAt(sessionNowUs());
+      // The anchor ran past the end of the file: the track is over, not
+      // drifting — a hard resync here would just re-schedule out of bounds.
+      final durationUs = loadedDurationUs.value;
+      if (durationUs != null && expectedUs >= durationUs) {
+        _enterTrackFinished();
+        return;
+      }
       final action = driftPolicy.decide(
         expectedPositionUs: expectedUs,
         actualPositionUs: actualUs,
@@ -367,8 +475,13 @@ class AudioSyncController {
     _generation++;
     _stopDriftLoop();
     _cancelSlew();
+    _eventReapplyTimer?.cancel();
+    _eventReapplyTimer = null;
+    await _eventSub?.cancel();
+    _eventSub = null;
     loadedDurationUs.dispose();
     lastError.dispose();
+    trackFinished.dispose();
     await _samples.close();
   }
 }
