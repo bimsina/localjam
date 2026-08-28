@@ -35,6 +35,7 @@ class _HostScreenState extends State<HostScreen> {
   String? _setupError;
 
   StreamSubscription<JamHostEvent>? _events;
+  StreamSubscription<({String mediaId, String? peerId})>? _uploads;
   Timer? _uiTicker;
 
   /// Local slider state while the user is dragging.
@@ -52,6 +53,7 @@ class _HostScreenState extends State<HostScreen> {
   void dispose() {
     _uiTicker?.cancel();
     _events?.cancel();
+    _uploads?.cancel();
     // Fire-and-forget teardown; the screen is going away.
     unawaited(_engine?.close());
     _nameController.dispose();
@@ -113,6 +115,7 @@ class _HostScreenState extends State<HostScreen> {
       _events = engine.events.listen((_) {
         if (mounted) setState(() {});
       });
+      _uploads = engine.mediaUploads.listen(_onGuestUpload);
       _uiTicker = Timer.periodic(
         const Duration(milliseconds: 250),
         (_) => setState(() {}),
@@ -149,6 +152,31 @@ class _HostScreenState extends State<HostScreen> {
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
       ..showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  /// Announces a guest upload (§6.4): who added what. By the time the event
+  /// arrives the item is already in the engine's playlist.
+  void _onGuestUpload(({String mediaId, String? peerId}) upload) {
+    final engine = _engine;
+    if (engine == null) return;
+    String? trackName;
+    for (final item in engine.playlist) {
+      if (item.mediaId == upload.mediaId) {
+        trackName = item.name;
+        break;
+      }
+    }
+    String? peerName;
+    for (final peer in engine.peers) {
+      if (peer.peerId == upload.peerId) {
+        peerName = peer.clientName;
+        break;
+      }
+    }
+    _showSnack(
+      '${peerName ?? upload.peerId ?? 'A guest'} added '
+      '"${trackName ?? upload.mediaId}"',
+    );
   }
 
   void _togglePlay() {

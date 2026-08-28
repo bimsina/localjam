@@ -122,6 +122,8 @@ class JamHostEngine extends JamEngine {
       StreamController<List<MediaItem>>.broadcast();
   final StreamController<String?> _mediaEnded =
       StreamController<String?>.broadcast();
+  final StreamController<({String mediaId, String? peerId})> _mediaUploads =
+      StreamController<({String mediaId, String? peerId})>.broadcast();
 
   // --- Server mirror -----------------------------------------------------------
 
@@ -162,6 +164,13 @@ class JamHostEngine extends JamEngine {
   /// The ended item's mediaId each time the current track reaches its end
   /// (§5.5), before the [JamEndPolicy]'s resulting state broadcast.
   Stream<String?> get mediaEnded => _mediaEnded.stream;
+
+  /// Each guest upload that added a new item (§6.4): the new mediaId plus
+  /// the uploader's peerId when the upload carried `X-LocalJam-Peer-Id`.
+  /// By the time an event is delivered the item is already in [playlist]
+  /// (idempotent re-uploads of existing content do not fire).
+  Stream<({String mediaId, String? peerId})> get mediaUploads =>
+      _mediaUploads.stream;
 
   /// Readiness for [mediaId] across all joined peers (§6.3).
   Map<String, MediaReadiness> peerMediaStates(String mediaId) =>
@@ -277,6 +286,10 @@ class JamHostEngine extends JamEngine {
         // The end policy's own state broadcast follows and drives the sync
         // controller; this stream just surfaces the moment.
         if (!_mediaEnded.isClosed) _mediaEnded.add(event.mediaId);
+      case JamHostEventKind.mediaUploaded:
+        if (!_mediaUploads.isClosed) {
+          _mediaUploads.add((mediaId: event.mediaId!, peerId: event.peerId));
+        }
       case JamHostEventKind.peerJoined:
         break;
     }
@@ -313,6 +326,7 @@ class JamHostEngine extends JamEngine {
     await _states.close();
     await _playlists.close();
     await _mediaEnded.close();
+    await _mediaUploads.close();
     nudgeUs.dispose();
   }
 }

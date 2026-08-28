@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'package:localjam_client/localjam_client.dart';
 
@@ -25,6 +26,7 @@ class _JoinScreenState extends State<JoinScreen> {
 
   JamGuestEngine? _engine;
   bool _connecting = false;
+  bool _uploading = false;
   String? _connectError;
 
   final List<StreamSubscription<Object?>> _subs = [];
@@ -105,6 +107,46 @@ class _JoinScreenState extends State<JoinScreen> {
         });
       }
     }
+  }
+
+  // --- Contribute files (§6.4) ---------------------------------------------
+
+  /// Picks audio files and uploads them to the host via the engine; the
+  /// playlist broadcast brings them back through the normal plumbing.
+  Future<void> _addFiles() async {
+    final engine = _engine;
+    if (engine == null || _uploading) return;
+    const typeGroup = XTypeGroup(
+      label: 'Audio',
+      extensions: supportedAudioExtensions,
+      // UTIs make the picker work on iOS/macOS where extensions alone don't.
+      uniformTypeIdentifiers: ['public.audio'],
+    );
+    final List<XFile> files;
+    try {
+      files = await openFiles(acceptedTypeGroups: const [typeGroup]);
+    } catch (e) {
+      _showSnack('File picker failed: $e');
+      return;
+    }
+    if (!mounted || files.isEmpty) return;
+    setState(() => _uploading = true);
+    try {
+      for (final file in files) {
+        await engine.addMediaFile(File(file.path));
+      }
+    } catch (e) {
+      _showSnack('Upload failed: $e');
+    } finally {
+      if (mounted) setState(() => _uploading = false);
+    }
+  }
+
+  void _showSnack(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(message)));
   }
 
   // --- Build ----------------------------------------------------------------------
@@ -361,7 +403,32 @@ class _JoinScreenState extends State<JoinScreen> {
         const SizedBox(height: 16),
 
         // --- Playlist + prefetch progress -----------------------------------------
-        Text('Playlist', style: theme.textTheme.titleMedium),
+        Row(
+          children: [
+            Text('Playlist', style: theme.textTheme.titleMedium),
+            const Spacer(),
+            TextButton.icon(
+              icon: _uploading
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.add),
+              label: Text(_uploading ? 'Uploading…' : 'Add files'),
+              onPressed: _uploading ? null : _addFiles,
+            ),
+          ],
+        ),
+        ValueListenableBuilder<double?>(
+          valueListenable: engine.uploadProgress,
+          builder: (context, progress, _) => progress == null
+              ? const SizedBox.shrink()
+              : Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: LinearProgressIndicator(value: progress),
+                ),
+        ),
         const SizedBox(height: 8),
         Card(
           child: Column(
@@ -393,19 +460,28 @@ class _JoinScreenState extends State<JoinScreen> {
             : Icons.audio_file_outlined,
       ),
       title: Text(item.name, overflow: TextOverflow.ellipsis),
-      subtitle: ready || fetch == null
-          ? Text(ready ? 'ready' : 'waiting')
-          : fetch.error != null
-          ? Text(
-              'retrying: ${fetch.error}',
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(color: theme.colorScheme.error),
-            )
-          : Padding(
-              padding: const EdgeInsets.only(top: 4),
-              child: LinearProgressIndicator(value: fetch.progress),
-            ),
+      subtitle: switch (fetch?.phase) {
+        null => const Text('waiting'),
+        JamPrefetchPhase.ready => const Text('ready'),
+        JamPrefetchPhase.notQueued => const Text('not queued'),
+        JamPrefetchPhase.queued when fetch!.error != null => Text(
+          'retrying: ${fetch.error}',
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(color: theme.colorScheme.error),
+        ),
+        JamPrefetchPhase.queued => const Text('queued'),
+        JamPrefetchPhase.failed => Text(
+          'failed: ${fetch!.error}',
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(color: theme.colorScheme.error),
+        ),
+        JamPrefetchPhase.fetching => Padding(
+          padding: const EdgeInsets.only(top: 4),
+          child: LinearProgressIndicator(value: fetch!.progress),
+        ),
+      },
       trailing: ready
           ? Icon(
               Icons.check_circle_outline,
