@@ -43,12 +43,14 @@ class JamHostEngine extends JamEngine {
   static Future<JamHostEngine> start({
     required String sessionName,
     JamEndPolicy endPolicy = JamEndPolicy.advance,
+    JamPolicy policy = JamPolicy.jam,
     int port = 0,
     InternetAddress? address,
   }) async {
     final server = JamHostServer(
       sessionName: sessionName,
       endPolicy: endPolicy,
+      policy: policy,
     );
     try {
       await server.start(
@@ -158,6 +160,17 @@ class JamHostEngine extends JamEngine {
   /// Currently joined peers.
   List<PeerInfo> get peers => _server.peers;
 
+  @override
+  String get selfPeerId => JamPermissions.hostPeerId;
+
+  @override
+  JamPermissions get permissions => _server.permissions;
+
+  @override
+  Stream<JamPermissions> get permissionUpdates => _server.events
+      .where((e) => e.kind == JamHostEventKind.permissionsBroadcast)
+      .map((e) => e.permissions!);
+
   /// Raw host observability events (peer joins/leaves, media status,
   /// broadcasts) — everything a host UI needs to repaint on.
   Stream<JamHostEvent> get events => _server.events;
@@ -227,6 +240,7 @@ class JamHostEngine extends JamEngine {
       artist: tags.artist,
       album: tags.album,
       artworkId: artworkId,
+      addedBy: JamPermissions.hostPeerId,
     );
     _mediaPaths[item.mediaId] = file.path;
     _server.addMedia(item, file);
@@ -280,20 +294,46 @@ class JamHostEngine extends JamEngine {
   void stop() => _server.stop();
 
   /// Selects the next playlist item, wrapping at the end.
-  void next() => _skip(1);
+  void next() => _server.next();
 
   /// Selects the previous playlist item, wrapping at the start.
-  void previous() => _skip(-1);
+  void previous() => _server.previous();
 
-  void _skip(int delta) {
-    final items = _server.playlist;
-    if (items.isEmpty) return;
-    final index = items.indexWhere(
-      (i) => i.mediaId == _server.snapshot.mediaId,
-    );
-    final target = (index + delta) % items.length;
-    setMedia(items[target < 0 ? target + items.length : target].mediaId);
-  }
+  // --- Queue ops (§5.6) ------------------------------------------------------
+
+  /// Moves [mediaId] to queue position [toIndex] (clamped) and broadcasts.
+  /// Throws [ArgumentError] for an unknown id.
+  void moveMediaItem(String mediaId, int toIndex) =>
+      _server.moveMediaItem(mediaId, toIndex);
+
+  /// Removes [mediaId] from the queue and broadcasts; removing the current
+  /// item advances (see [JamHostServer.removeMediaItem]). Throws
+  /// [ArgumentError] for an id not in the playlist.
+  void removeMediaItem(String mediaId) => _server.removeMediaItem(mediaId);
+
+  // --- Permissions & moderation (§5.6) ---------------------------------------
+
+  /// Replaces the guest-role policy and broadcasts.
+  void setPolicy(JamPolicy policy) => _server.setPolicy(policy);
+
+  /// Promotes [peerId] to co-host and broadcasts.
+  void promotePeer(String peerId) => _server.promotePeer(peerId);
+
+  /// Demotes [peerId] back to guest and broadcasts.
+  void demotePeer(String peerId) => _server.demotePeer(peerId);
+
+  /// Sets (or clears, with `allowed: null`) one per-peer capability override
+  /// and broadcasts.
+  void setCapabilityOverride(
+    String peerId,
+    JamCapability capability, {
+    required bool? allowed,
+  }) =>
+      _server.setCapabilityOverride(peerId, capability, allowed: allowed);
+
+  /// Kicks [peerId] from the session (§5.6): fatal `kicked` error, socket
+  /// close, no resume, role forgotten. Throws [ArgumentError] if not joined.
+  void kickPeer(String peerId) => _server.kickPeer(peerId);
 
   // --- Event plumbing --------------------------------------------------------
 
@@ -326,6 +366,9 @@ class JamHostEngine extends JamEngine {
           _mediaUploads.add((mediaId: event.mediaId!, peerId: event.peerId));
         }
       case JamHostEventKind.peerJoined:
+      case JamHostEventKind.permissionsBroadcast:
+      case JamHostEventKind.requestDenied:
+        // Surfaced via permissionUpdates / the raw events stream.
         break;
     }
   }

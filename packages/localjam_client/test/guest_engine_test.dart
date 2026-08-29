@@ -21,8 +21,13 @@ void main() {
     SharedPreferences.setMockInitialValues({});
   });
 
-  Future<JamHostServer> startHost({String sessionName = 'TestJam'}) async {
-    final host = JamHostServer(sessionName: sessionName);
+  Future<JamHostServer> startHost({
+    String sessionName = 'TestJam',
+    // Transport-focused tests run wide open; §5.6 enforcement is covered in
+    // localjam_net's integration suite and the dedicated tests below.
+    JamPolicy policy = JamPolicy.open,
+  }) async {
+    final host = JamHostServer(sessionName: sessionName, policy: policy);
     await host.start(address: InternetAddress.loopbackIPv4);
     addTearDown(host.close);
     return host;
@@ -217,6 +222,42 @@ void main() {
       mime: 'audio/mpeg',
     );
     expect(await engine2.artworkFor(bare), isNull);
+  });
+
+  test('permissions surface (§5.6): mirroring, denial errors, kicked end '
+      'reason', () async {
+    mockAudioChannel();
+    final host = await startHost(policy: JamPolicy.listenOnly);
+    await addTrack(host);
+    final engine = await joinEngine(host);
+
+    expect(engine.permissions.policy, JamPolicy.listenOnly);
+    expect(engine.myCapabilities, isEmpty);
+    expect(engine.can(JamCapability.controlPlayback), isFalse);
+
+    final docs = <JamPermissions>[];
+    engine.permissionUpdates.listen(docs.add);
+    final errors = <ErrorMessage>[];
+    engine.errors.listen(errors.add);
+
+    // A denied request surfaces as a transient not_allowed error.
+    await engine.requestPlay();
+    await waitFor(() => errors.isNotEmpty, reason: 'not_allowed to arrive');
+    expect(errors.single.code, ErrorCode.notAllowed);
+    expect(engine.sessionEnded.value, isNull);
+
+    // Promotion flows through the update stream and flips capabilities.
+    host.promotePeer(engine.selfPeerId);
+    await waitFor(() => docs.isNotEmpty, reason: 'permissions broadcast');
+    expect(engine.can(JamCapability.controlPlayback), isTrue);
+
+    // A real kick lands the terminal kicked reason, not hostGone/rejected.
+    host.kickPeer(engine.selfPeerId);
+    await waitFor(
+      () => engine.sessionEnded.value != null,
+      reason: 'terminal session end after kick',
+    );
+    expect(engine.sessionEnded.value, JamSessionEndReason.kicked);
   });
 
   test('request path works end to end (§5.2)', () async {

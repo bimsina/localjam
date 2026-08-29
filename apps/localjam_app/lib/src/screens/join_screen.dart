@@ -92,6 +92,26 @@ class _JoinScreenState extends State<JoinScreen> {
       _subs.add(engine.playlistUpdates.listen(refresh));
       _subs.add(engine.peerEvents.listen(refresh));
       _subs.add(engine.connectionStates.listen(refresh));
+      _subs.add(engine.permissionUpdates.listen(refresh));
+      _subs.add(
+        engine.errors.listen((error) {
+          // Transient denials surface as snackbars; fatal ones end the
+          // session and are handled by sessionEnded.
+          if (!error.fatal && mounted) {
+            ScaffoldMessenger.of(context)
+              ..hideCurrentSnackBar()
+              ..showSnackBar(
+                SnackBar(
+                  content: Text(
+                    error.code == ErrorCode.notAllowed
+                        ? 'The host has not allowed that.'
+                        : error.message,
+                  ),
+                ),
+              );
+          }
+        }),
+      );
       engine.prefetchStates.addListener(_onPrefetch);
       engine.sessionEnded.addListener(_onSessionEnded);
 
@@ -231,6 +251,11 @@ class _JoinScreenState extends State<JoinScreen> {
         Icons.portable_wifi_off,
         'Session ended',
         'The host could not be reached again. The jam is over.',
+      ),
+      JamSessionEndReason.kicked => (
+        Icons.person_remove_outlined,
+        'Removed from the jam',
+        'The host removed you from this session.',
       ),
       JamSessionEndReason.closedLocally => (
         Icons.check_circle_outline,
@@ -376,6 +401,36 @@ class _JoinScreenState extends State<JoinScreen> {
                     ),
                   ],
                 ),
+                // §5.6: transport appears only when the host allows guests
+                // to control playback (requests are re-validated host-side
+                // anyway; the snackbar handles the race).
+                if (engine.can(JamCapability.controlPlayback)) ...[
+                  const SizedBox(height: 4),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      IconButton(
+                        icon: const Icon(Icons.skip_previous),
+                        onPressed: () => engine.requestPrevious(),
+                      ),
+                      IconButton.filled(
+                        icon: Icon(
+                          snapshot.status == PlaybackStatus.playing
+                              ? Icons.pause
+                              : Icons.play_arrow,
+                        ),
+                        onPressed: () =>
+                            snapshot.status == PlaybackStatus.playing
+                            ? engine.requestPause()
+                            : engine.requestPlay(),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.skip_next),
+                        onPressed: () => engine.requestNext(),
+                      ),
+                    ],
+                  ),
+                ],
               ],
             ),
           ),
@@ -409,6 +464,14 @@ class _JoinScreenState extends State<JoinScreen> {
                 dense: true,
                 leading: const Icon(Icons.person),
                 title: Text('You (${engine.selfPeerId})'),
+                trailing:
+                    engine.permissions.roleOf(engine.selfPeerId) ==
+                        JamRole.cohost
+                    ? const Chip(
+                        label: Text('Co-host'),
+                        visualDensity: VisualDensity.compact,
+                      )
+                    : null,
               ),
               for (final peer in engine.peers)
                 ListTile(
@@ -416,6 +479,13 @@ class _JoinScreenState extends State<JoinScreen> {
                   leading: const Icon(Icons.person_outline),
                   title: Text(peer.clientName),
                   subtitle: Text('${peer.peerId} · ${peer.clientKind}'),
+                  trailing:
+                      engine.permissions.roleOf(peer.peerId) == JamRole.cohost
+                      ? const Chip(
+                          label: Text('Co-host'),
+                          visualDensity: VisualDensity.compact,
+                        )
+                      : null,
                 ),
             ],
           ),
@@ -427,17 +497,18 @@ class _JoinScreenState extends State<JoinScreen> {
           children: [
             Text('Playlist', style: theme.textTheme.titleMedium),
             const Spacer(),
-            TextButton.icon(
-              icon: _uploading
-                  ? const SizedBox(
-                      width: 16,
-                      height: 16,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Icon(Icons.add),
-              label: Text(_uploading ? 'Uploading…' : 'Add files'),
-              onPressed: _uploading ? null : _addFiles,
-            ),
+            if (engine.can(JamCapability.addTracks))
+              TextButton.icon(
+                icon: _uploading
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.add),
+                label: Text(_uploading ? 'Uploading…' : 'Add files'),
+                onPressed: _uploading ? null : _addFiles,
+              ),
           ],
         ),
         ValueListenableBuilder<double?>(
@@ -471,6 +542,11 @@ class _JoinScreenState extends State<JoinScreen> {
   ) {
     final fetch = engine.prefetchStates.value[item.mediaId];
     final ready = fetch?.ready ?? false;
+    final byline = engine.addedByLabel(item, engine.peers);
+    // §5.6: reorder needs editQueue; removing your own track never does.
+    final canEdit = engine.can(JamCapability.editQueue);
+    final canRemove = canEdit || item.addedBy == engine.selfPeerId;
+    final canSelect = engine.can(JamCapability.controlPlayback);
     return ListTile(
       dense: true,
       selected: item.mediaId == snapshot.mediaId,
@@ -482,9 +558,15 @@ class _JoinScreenState extends State<JoinScreen> {
             : Icons.audio_file_outlined,
       ),
       title: Text(item.displayTitle, overflow: TextOverflow.ellipsis),
+      onTap: canSelect
+          ? () => engine.requestSetMedia(item.mediaId)
+          : null,
       subtitle: switch (fetch?.phase) {
         null => const Text('waiting'),
-        JamPrefetchPhase.ready => const Text('ready'),
+        JamPrefetchPhase.ready => Text(
+          byline == null ? 'ready' : 'ready · added by $byline',
+          overflow: TextOverflow.ellipsis,
+        ),
         JamPrefetchPhase.notQueued => const Text('not queued'),
         JamPrefetchPhase.queued when fetch!.error != null => Text(
           'retrying: ${fetch.error}',
@@ -504,13 +586,42 @@ class _JoinScreenState extends State<JoinScreen> {
           child: LinearProgressIndicator(value: fetch!.progress),
         ),
       },
-      trailing: ready
-          ? Icon(
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (ready)
+            Icon(
               Icons.check_circle_outline,
               size: 18,
               color: theme.colorScheme.primary,
-            )
-          : null,
+            ),
+          if (canEdit || canRemove)
+            PopupMenuButton<String>(
+              iconSize: 18,
+              onSelected: (choice) {
+                final index = engine.playlist.indexWhere(
+                  (i) => i.mediaId == item.mediaId,
+                );
+                switch (choice) {
+                  case 'up':
+                    engine.requestQueueMove(item.mediaId, index - 1);
+                  case 'down':
+                    engine.requestQueueMove(item.mediaId, index + 1);
+                  case 'remove':
+                    engine.requestQueueRemove(item.mediaId);
+                }
+              },
+              itemBuilder: (context) => [
+                if (canEdit)
+                  const PopupMenuItem(value: 'up', child: Text('Move up')),
+                if (canEdit)
+                  const PopupMenuItem(value: 'down', child: Text('Move down')),
+                if (canRemove)
+                  const PopupMenuItem(value: 'remove', child: Text('Remove')),
+              ],
+            ),
+        ],
+      ),
     );
   }
 }

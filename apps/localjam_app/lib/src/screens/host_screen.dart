@@ -31,6 +31,10 @@ class _HostScreenState extends State<HostScreen> {
   /// Setup phase: absolute paths picked (or found in Documents), in order.
   final List<String> _pickedPaths = [];
 
+  /// Room preset chosen at setup (§5.6); live edits go through
+  /// [JamHostEngine.setPolicy].
+  JamPolicy _policy = JamPolicy.jam;
+
   JamHostEngine? _engine;
   bool _starting = false;
   String? _setupError;
@@ -107,7 +111,7 @@ class _HostScreenState extends State<HostScreen> {
         : _nameController.text.trim();
     JamHostEngine? engine;
     try {
-      engine = await JamHostEngine.start(sessionName: name);
+      engine = await JamHostEngine.start(sessionName: name, policy: _policy);
       for (final path in _pickedPaths) {
         await engine.addMediaFile(File(path));
       }
@@ -209,6 +213,44 @@ class _HostScreenState extends State<HostScreen> {
           decoration: const InputDecoration(
             labelText: 'Session name',
             prefixIcon: Icon(Icons.badge_outlined),
+          ),
+        ),
+        const SizedBox(height: 16),
+        Text('Guests can…', style: theme.textTheme.titleMedium),
+        const SizedBox(height: 8),
+        SegmentedButton<JamPolicy>(
+          segments: const [
+            ButtonSegment(
+              value: JamPolicy.open,
+              label: Text('Open'),
+              icon: Icon(Icons.lock_open),
+            ),
+            ButtonSegment(
+              value: JamPolicy.jam,
+              label: Text('Jam'),
+              icon: Icon(Icons.queue_music),
+            ),
+            ButtonSegment(
+              value: JamPolicy.listenOnly,
+              label: Text('Listen'),
+              icon: Icon(Icons.headphones),
+            ),
+          ],
+          selected: {_policy},
+          onSelectionChanged: (selection) =>
+              setState(() => _policy = selection.single),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          switch (_policy) {
+            JamPolicy.open =>
+              'Everyone can add songs, control playback, and edit the queue.',
+            JamPolicy.jam =>
+              'Guests add songs and shape the queue; you control playback.',
+            _ => 'Guests just listen; you run the room.',
+          },
+          style: theme.textTheme.bodySmall?.copyWith(
+            color: theme.colorScheme.onSurfaceVariant,
           ),
         ),
         const SizedBox(height: 24),
@@ -458,6 +500,41 @@ class _HostScreenState extends State<HostScreen> {
         ),
         const SizedBox(height: 16),
 
+        // --- Guest permissions (§5.6) ---------------------------------------
+        Text('Guests can…', style: theme.textTheme.titleMedium),
+        const SizedBox(height: 8),
+        Card(
+          child: Column(
+            children: [
+              SwitchListTile(
+                dense: true,
+                title: const Text('Add songs'),
+                value: engine.permissions.policy.addTracks,
+                onChanged: (v) => engine.setPolicy(
+                  engine.permissions.policy.copyWith(addTracks: v),
+                ),
+              ),
+              SwitchListTile(
+                dense: true,
+                title: const Text('Control playback'),
+                value: engine.permissions.policy.controlPlayback,
+                onChanged: (v) => engine.setPolicy(
+                  engine.permissions.policy.copyWith(controlPlayback: v),
+                ),
+              ),
+              SwitchListTile(
+                dense: true,
+                title: const Text('Edit the queue'),
+                value: engine.permissions.policy.editQueue,
+                onChanged: (v) => engine.setPolicy(
+                  engine.permissions.policy.copyWith(editQueue: v),
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 16),
+
         // --- Peers -----------------------------------------------------------
         Text(
           'Peers (${engine.peers.length})',
@@ -504,12 +581,38 @@ class _HostScreenState extends State<HostScreen> {
                     overflow: TextOverflow.ellipsis,
                   ),
                   subtitle: Text(
-                    artworkByline(item) ??
-                        '${(item.sizeBytes / (1024 * 1024)).toStringAsFixed(1)}'
-                            ' MB · ${item.mime}',
+                    [
+                      artworkByline(item) ??
+                          '${(item.sizeBytes / (1024 * 1024)).toStringAsFixed(1)}'
+                              ' MB · ${item.mime}',
+                      if (engine.addedByLabel(item, engine.peers)
+                          case final byline?)
+                        'added by $byline',
+                    ].join(' · '),
                     overflow: TextOverflow.ellipsis,
                   ),
                   onTap: () => _guarded(() => engine.setMedia(item.mediaId)),
+                  trailing: PopupMenuButton<String>(
+                    iconSize: 18,
+                    onSelected: (choice) => _guarded(() {
+                      final index = engine.playlist.indexWhere(
+                        (i) => i.mediaId == item.mediaId,
+                      );
+                      switch (choice) {
+                        case 'up':
+                          engine.moveMediaItem(item.mediaId, index - 1);
+                        case 'down':
+                          engine.moveMediaItem(item.mediaId, index + 1);
+                        case 'remove':
+                          engine.removeMediaItem(item.mediaId);
+                      }
+                    }),
+                    itemBuilder: (context) => const [
+                      PopupMenuItem(value: 'up', child: Text('Move up')),
+                      PopupMenuItem(value: 'down', child: Text('Move down')),
+                      PopupMenuItem(value: 'remove', child: Text('Remove')),
+                    ],
+                  ),
                 ),
             ],
           ),
@@ -542,15 +645,69 @@ class _HostScreenState extends State<HostScreen> {
       MediaReadiness.none => ('no media', theme.colorScheme.onSurfaceVariant),
     };
 
+    final isCohost = engine.permissions.roleOf(peer.peerId) == JamRole.cohost;
+    final addsBlocked =
+        engine.permissions.overrides[peer.peerId]?[JamCapability.addTracks] ==
+        false;
     return ListTile(
       dense: true,
-      leading: const Icon(Icons.person_outline),
-      title: Text(peer.clientName),
+      leading: Icon(isCohost ? Icons.person : Icons.person_outline),
+      title: Text(
+        isCohost ? '${peer.clientName} · Co-host' : peer.clientName,
+      ),
       subtitle: Text('${peer.peerId} · ${peer.clientKind}'),
-      trailing: Chip(
-        visualDensity: VisualDensity.compact,
-        label: Text(label, style: TextStyle(color: color, fontSize: 12)),
-        side: BorderSide(color: color.withValues(alpha: 0.4)),
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Chip(
+            visualDensity: VisualDensity.compact,
+            label: Text(label, style: TextStyle(color: color, fontSize: 12)),
+            side: BorderSide(color: color.withValues(alpha: 0.4)),
+          ),
+          PopupMenuButton<String>(
+            iconSize: 18,
+            onSelected: (choice) => _guarded(() {
+              switch (choice) {
+                case 'promote':
+                  engine.promotePeer(peer.peerId);
+                case 'demote':
+                  engine.demotePeer(peer.peerId);
+                case 'blockAdds':
+                  engine.setCapabilityOverride(
+                    peer.peerId,
+                    JamCapability.addTracks,
+                    allowed: false,
+                  );
+                case 'unblockAdds':
+                  engine.setCapabilityOverride(
+                    peer.peerId,
+                    JamCapability.addTracks,
+                    allowed: null,
+                  );
+                case 'kick':
+                  engine.kickPeer(peer.peerId);
+              }
+            }),
+            itemBuilder: (context) => [
+              PopupMenuItem(
+                value: isCohost ? 'demote' : 'promote',
+                child: Text(
+                  isCohost ? 'Demote to guest' : 'Promote to co-host',
+                ),
+              ),
+              PopupMenuItem(
+                value: addsBlocked ? 'unblockAdds' : 'blockAdds',
+                child: Text(
+                  addsBlocked ? 'Allow adding songs' : 'Block adding songs',
+                ),
+              ),
+              const PopupMenuItem(
+                value: 'kick',
+                child: Text('Remove from jam'),
+              ),
+            ],
+          ),
+        ],
       ),
     );
   }

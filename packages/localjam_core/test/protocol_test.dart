@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:localjam_core/src/protocol/codec.dart';
 import 'package:localjam_core/src/protocol/messages.dart';
+import 'package:localjam_core/src/session/permissions.dart';
 import 'package:localjam_core/src/session/playback_state.dart';
 import 'package:test/test.dart';
 
@@ -259,6 +260,83 @@ void main() {
       expect(json.containsKey('artist'), isFalse);
       expect(json.containsKey('album'), isFalse);
       expect(json.containsKey('artworkId'), isFalse);
+    });
+
+    test('request queue ops carry mediaId/toIndex (§5.6)', () {
+      final move = roundTrip(const RequestMessage(
+        action: RequestAction.queueMove,
+        mediaId: 'm_1',
+        toIndex: 3,
+      ));
+      expect(move.action, RequestAction.queueMove);
+      expect(move.mediaId, 'm_1');
+      expect(move.toIndex, 3);
+
+      final remove = roundTrip(const RequestMessage(
+        action: RequestAction.queueRemove,
+        mediaId: 'm_2',
+      ));
+      expect(remove.action, RequestAction.queueRemove);
+      expect(remove.mediaId, 'm_2');
+      expect(remove.toIndex, isNull);
+
+      expect(
+        roundTrip(const RequestMessage(action: RequestAction.next)).action,
+        RequestAction.next,
+      );
+      expect(
+        roundTrip(const RequestMessage(action: RequestAction.previous)).action,
+        RequestAction.previous,
+      );
+    });
+
+    test('permissions broadcast round-trips (§5.6)', () {
+      final perms = const JamPermissions.initial()
+          .promote('p_2')
+          .withOverride('p_3', JamCapability.addTracks, allowed: false);
+      final m = roundTrip(PermissionsMessage(permissions: perms));
+      expect(m.permissions, perms);
+    });
+
+    test('welcome carries the permission document; absent = null (§5.6)', () {
+      final perms = const JamPermissions.initial(policy: JamPolicy.open);
+      final m = roundTrip(WelcomeMessage(
+        sessionId: 's_1',
+        sessionName: 'RoadTrip',
+        selfPeerId: 'p_9',
+        snapshot: PlaybackSnapshot.initial,
+        permissions: perms,
+      ));
+      expect(m.permissions, perms);
+
+      final legacy = WelcomeMessage.fromPayload({
+        'sessionId': 's_1',
+        'you': {'peerId': 'p_9'},
+        'snapshot': PlaybackSnapshot.initial.toJson(),
+      });
+      expect(legacy.permissions, isNull);
+    });
+
+    test('playlist item addedBy round-trips and is omitted when null', () {
+      const item = MediaItem(
+        mediaId: 'm_1',
+        kind: MediaKind.audio,
+        name: 'a.mp3',
+        mime: 'audio/mpeg',
+        sizeBytes: 10,
+        sha256: '00000000',
+        addedBy: 'p_4',
+      );
+      expect(MediaItem.fromJson(item.toJson()), item);
+      const bare = MediaItem(
+        mediaId: 'm_1',
+        kind: MediaKind.audio,
+        name: 'a.mp3',
+        mime: 'audio/mpeg',
+        sizeBytes: 10,
+        sha256: '00000000',
+      );
+      expect(bare.toJson().containsKey('addedBy'), isFalse);
     });
 
     test('media_status', () {

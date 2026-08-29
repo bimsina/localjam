@@ -1,8 +1,9 @@
 # LocalJam Protocol — v0.2 (draft)
 
-> v0.1 → v0.2 is purely additive: optional tag metadata on playlist items
-> (§6.1) and the artwork endpoint (§6.5). v0.1 clients interoperate unchanged
-> (unknown JSON fields are ignored per §2).
+> v0.1 → v0.2 is purely additive: optional tag metadata and attribution on
+> playlist items (§6.1), the artwork endpoint (§6.5), and roles/permissions,
+> queue operations, and moderation (§5.6). v0.1 clients interoperate
+> unchanged (unknown JSON fields and message types are ignored per §2).
 
 Synchronized local-network media playback. One **host** owns the files and the
 authoritative session state; N **guests** join over LAN, fetch media, and play
@@ -180,16 +181,25 @@ playback should be and correct itself. Play, seek, and resume are all just
 
 ### 5.2 Commands (host-side UI → state changes)
 
-Guests never mutate state directly; a guest UI sends *requests* the host may
-apply (making remote-control a feature, not a protocol change):
+Guests never mutate state directly; a guest UI sends *requests* the host
+validates against the sender's capabilities (§5.6) and then applies or
+refuses:
 
 ```
-G→H  request { action: "play"|"pause"|"seek"|"set_media", ... }
+G→H  request { action: "play"|"pause"|"seek"|"set_media"|"next"|"previous"
+                       |"queue_move"|"queue_remove", ... }
 ```
 
-This is also the future "multiple admins" path: an admin is just a peer whose
-requests the host auto-approves. Pure host-side policy — no protocol change,
-still exactly one state writer.
+- `seek` carries `positionUs`; `set_media`, `queue_move`, `queue_remove`
+  carry `mediaId`; `queue_move` also carries `toIndex` (clamped host-side).
+- `next`/`previous` skip within the queue, wrapping. They exist so a guest
+  never has to compute "next" itself and race concurrent queue edits.
+- A refused request gets `error { code: "not_allowed", fatal: false }` (§8)
+  and changes nothing. Guests know their own capabilities from §5.6
+  broadcasts, so a well-behaved UI disables the controls up front; the error
+  is the backstop for races.
+
+There is still exactly one state writer: the host.
 
 ### 5.3 Scheduled start (the sync-critical path)
 
@@ -231,6 +241,57 @@ when the duration is known, and treat a position clamped at the end as
 track-finished locally (stop pulling samples) while remaining converged on
 the broadcast snapshot.
 
+### 5.6 Roles, permissions, queue operations, moderation (v0.2)
+
+The playlist doubles as the shared queue; who may do what to it (and to
+playback) is governed by one host-owned **permission document**, revisioned
+like the playlist, included in `welcome`, and broadcast on every change:
+
+```
+H→*  permissions {
+       rev,
+       policy:   { addTracks, controlPlayback, editQueue },   // guest role
+       cohosts:  [ peerId, ... ],
+       overrides:{ peerId: { "add_tracks": false, ... }, ... }
+     }
+```
+
+**Roles.** `host` (the serving device; the reserved peer id `"host"` is used
+for attribution — the host is not a joined peer) → `cohost` (promoted peers)
+→ `guest` (everyone else).
+
+**Capabilities.** `add_tracks` (upload, §6.4), `control_playback`
+(play/pause/seek/select/skip), `edit_queue` (reorder; remove *others'*
+tracks), `manage_members` and `change_settings` (host-only in v1, reserved
+on the wire for later delegation).
+
+**Effective capabilities** for a peer: host ⇒ everything; cohost ⇒
+`{add_tracks, control_playback, edit_queue}`; guest ⇒ whatever `policy`
+grants; then the peer's `overrides` entry is applied on top (a per-peer
+grant or revoke). Removing your **own** contribution (`addedBy` = you) is
+always allowed, `edit_queue` or not. The app-level presets map onto
+`policy`: *Open* = all three true, *Jam* (default) = add + edit without
+control, *Listen-only* = none.
+
+**Queue semantics.** `queue_move`/`queue_remove` (§5.2) mutate the playlist
+order and are answered with an ordinary §6.1 `playlist` broadcast — there is
+no separate queue object. Removing the current item makes the host select
+the item that slid into its slot (resuming playback if it was playing), or
+stop when the queue empties. Removal drops the item from the playlist only;
+the host MAY keep serving its bytes (guests can be mid-fetch; re-adding is
+instant).
+
+**Roles survive reconnects** (§3.3 resume keeps the peerId); a peer whose
+grace expires — or who is kicked — is forgotten (dropped from `cohosts` and
+`overrides`, with a broadcast when that changes the document).
+
+**Moderation.** A kick is: fatal `error { code: "kicked" }` (§8) → socket
+close `goingAway` → `peer_left`. No grace slot is kept, so a resume attempt
+falls back to a fresh join — but a kicked client MUST treat the fatal error
+as terminal and not auto-rejoin (rejoining deliberately via a new invite is
+the human's call). Attribution and upload gating ride the honest-guest model
+(§9): `X-LocalJam-Peer-Id` is client-asserted.
+
 ---
 
 ## 6. Media distribution
@@ -240,8 +301,12 @@ the broadcast snapshot.
 ```
 H→*  playlist { rev, items: [ {mediaId, kind: "audio"|"video"|"image",
                                name, mime, sizeBytes, durationUs, sha256,
-                               title?, artist?, album?, artworkId?} ] }
+                               title?, artist?, album?, artworkId?,
+                               addedBy?} ] }
 ```
+
+`addedBy` attributes the contribution (§5.6): a peerId, the reserved
+`"host"`, or absent for legacy items. Ordering is queue order (§5.6).
 
 `title`/`artist`/`album` are tag metadata, `artworkId` references embedded
 cover art servable via §6.5. All four are optional and **host-extracted**:
@@ -319,6 +384,8 @@ Responses:
 - `400 Bad Request` — missing/unknown `X-LocalJam-Kind`, or malformed
   percent-encoding in `X-LocalJam-Name`.
 - `401 Unauthorized` — bad or missing bearer token (§9).
+- `403 Forbidden` — the uploader (per `X-LocalJam-Peer-Id`, judged as a
+  plain guest when absent) lacks `add_tracks` (§5.6).
 - `413 Content Too Large` — the body exceeds the host's upload size limit
   (host policy; default 512 MB). The host MAY reject from `Content-Length`
   alone without reading the body.
@@ -369,6 +436,7 @@ H→G  error { code, message, fatal: bool }
 ```
 
 Codes: `bad_token`, `version_unsupported`, `session_full`, `media_gone`,
+`not_allowed` (§5.6, never fatal), `kicked` (§5.6, always fatal),
 `internal`. Fatal errors are followed by a close.
 
 ---
@@ -391,7 +459,8 @@ Codes: `bad_token`, `version_unsupported`, `session_full`, `media_gone`,
 - **Media priority**: audio-first. Video ships later as "best effort ±100 ms"
   on the same anchor model; images are trivial (`state.mediaId` + display).
 - **Session lifetime**: one host; host death ends the room. No migration.
-  "Multiple admins" (§5.2) may come later as host-side policy.
+  "Multiple admins" shipped in v0.2 as co-hosts (§5.6) — still exactly one
+  state writer.
 - **Encoding**: JSON v1; binary (CBOR/MessagePack) negotiable later via
   `hello.encodings`. Not a performance requirement — control plane is low-rate.
 

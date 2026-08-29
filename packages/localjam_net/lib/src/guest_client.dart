@@ -151,12 +151,21 @@ class JamGuestClient {
   List<MediaItem> _playlist = const [];
   final Map<String, PeerInfo> _peers = {};
 
+  /// Until a v0.2 host says otherwise, assume nothing is allowed (§5.6).
+  JamPermissions _permissions =
+      const JamPermissions.initial(policy: JamPolicy.listenOnly);
+  ErrorMessage? _lastFatalError;
+
   final StreamController<PlaybackSnapshot> _states =
       StreamController<PlaybackSnapshot>.broadcast();
   final StreamController<List<MediaItem>> _playlists =
       StreamController<List<MediaItem>>.broadcast();
   final StreamController<JamPeerEvent> _peerEvents =
       StreamController<JamPeerEvent>.broadcast();
+  final StreamController<JamPermissions> _permissionUpdates =
+      StreamController<JamPermissions>.broadcast();
+  final StreamController<ErrorMessage> _errors =
+      StreamController<ErrorMessage>.broadcast();
 
   late final String _selfPeerId;
   late final String _sessionId;
@@ -192,6 +201,27 @@ class JamGuestClient {
 
   /// Presence changes (§3.2).
   Stream<JamPeerEvent> get peerEvents => _peerEvents.stream;
+
+  /// The room's permission document (§5.6): from `welcome`, then every
+  /// `permissions` broadcast. Listen-only until a v0.2 host says otherwise.
+  JamPermissions get permissions => _permissions;
+
+  /// Permission-document broadcasts after the handshake (§5.6).
+  Stream<JamPermissions> get permissionUpdates => _permissionUpdates.stream;
+
+  /// This guest's own effective capabilities under [permissions] — what a
+  /// UI enables/disables. The host re-validates every request regardless.
+  Set<JamCapability> get myCapabilities =>
+      _permissions.capabilitiesOf(_selfPeerId);
+
+  /// Host error reports (§8), both transient (`not_allowed`, `media_gone`)
+  /// and fatal.
+  Stream<ErrorMessage> get errors => _errors.stream;
+
+  /// The fatal error that ended (or is about to end) this connection, if
+  /// any — e.g. `kicked` (§5.6), which reconnect layers must treat as
+  /// terminal instead of retrying.
+  ErrorMessage? get lastFatalError => _lastFatalError;
 
   /// Completes when the WebSocket to the host closes for any reason — host
   /// shutdown, a drop, or a local [close]. Completes exactly once and never
@@ -237,6 +267,8 @@ class JamGuestClient {
         _sessionName = reply.sessionName;
         _snapshot = reply.snapshot;
         _playlist = reply.playlist;
+        final permissions = reply.permissions;
+        if (permissions != null) _permissions = permissions;
         for (final peer in reply.peers) {
           _peers[peer.peerId] = peer;
         }
@@ -305,8 +337,21 @@ class JamGuestClient {
         if (!_peerEvents.isClosed) {
           _peerEvents.add(JamPeerEvent._(JamPeerEventKind.left, peerId));
         }
+      case PermissionsMessage(:final permissions):
+        // §5.6: keep the highest rev (broadcasts can race a resume welcome).
+        if (permissions.rev >= _permissions.rev) {
+          _permissions = permissions;
+          if (!_permissionUpdates.isClosed) {
+            _permissionUpdates.add(permissions);
+          }
+        }
+      case ErrorMessage():
+        // §8: fatal errors are followed by a host-side close; remember the
+        // reason so reconnect layers can tell a kick from a plain drop.
+        if (message.fatal) _lastFatalError = message;
+        if (!_errors.isClosed) _errors.add(message);
       default:
-        break; // error/unknown: ignored (§2, §8).
+        break; // unknown: ignored (§2).
     }
   }
 
@@ -338,6 +383,30 @@ class JamGuestClient {
   /// Asks the host to select [mediaId] (§5.2).
   Future<void> requestSetMedia(String mediaId) async =>
       _send(RequestMessage(action: RequestAction.setMedia, mediaId: mediaId));
+
+  /// Asks the host to skip to the next queue item (§5.2).
+  Future<void> requestNext() async =>
+      _send(const RequestMessage(action: RequestAction.next));
+
+  /// Asks the host to skip to the previous queue item (§5.2).
+  Future<void> requestPrevious() async =>
+      _send(const RequestMessage(action: RequestAction.previous));
+
+  /// Asks the host to move [mediaId] to queue position [toIndex] (§5.6).
+  Future<void> requestQueueMove(String mediaId, int toIndex) async => _send(
+        RequestMessage(
+          action: RequestAction.queueMove,
+          mediaId: mediaId,
+          toIndex: toIndex,
+        ),
+      );
+
+  /// Asks the host to remove [mediaId] from the queue (§5.6). Removing your
+  /// own contribution is always allowed; others' need
+  /// [JamCapability.editQueue].
+  Future<void> requestQueueRemove(String mediaId) async => _send(
+        RequestMessage(action: RequestAction.queueRemove, mediaId: mediaId),
+      );
 
   // --- Media plane (§6.2, §6.3) ----------------------------------------------------
 
@@ -595,6 +664,8 @@ class JamGuestClient {
     await _states.close();
     await _playlists.close();
     await _peerEvents.close();
+    await _permissionUpdates.close();
+    await _errors.close();
   }
 
   // --- Wire helper -----------------------------------------------------------------

@@ -89,7 +89,8 @@ Future<void> waitFor(
 
 void main() {
   test(
-    'kickPeer with resume: session reconnects and regains the same peerId',
+    'kickPeer(allowResume: true) is a plain drop: session reconnects and '
+    'regains the same peerId',
     () async {
       final host = await startHost();
       final file = await writeTempMedia(makeMediaBytes(1024));
@@ -117,7 +118,7 @@ void main() {
           .firstWhere((s) => s.status == PlaybackStatus.playing)
           .timeout(const Duration(seconds: 5));
 
-      host.kickPeer(oldId);
+      host.kickPeer(oldId, allowResume: true);
       await waitFor(
         () =>
             session.connectionState == JamConnectionState.connected &&
@@ -148,22 +149,32 @@ void main() {
   );
 
   test(
-    'kickPeer(allowResume: false): session recovers with a NEW peerId',
+    'a real kick is terminal (§5.6): fatal kicked error, failed state, no '
+    'auto-rejoin, role forgotten',
     () async {
       final host = await startHost();
       final session = await connectSession(host);
       final oldId = session.selfPeerId;
+      host.promotePeer(oldId);
+      expect(host.permissions.roleOf(oldId), JamRole.cohost);
 
-      host.kickPeer(oldId, allowResume: false);
+      final errors = <ErrorMessage>[];
+      session.errors.listen(errors.add);
+
+      host.kickPeer(oldId);
       await waitFor(
-        () =>
-            session.connectionState == JamConnectionState.connected &&
-            session.selfPeerId != oldId,
-        reason: 'fresh join with a new peerId',
+        () => session.connectionState == JamConnectionState.failed,
+        reason: 'session to land in failed after the kick',
       );
-      expect(session.selfPeerId, isNot(oldId));
-      expect(session.selfPeerId, startsWith('p_'));
-      expect(host.peers.map((p) => p.peerId), contains(session.selfPeerId));
+      expect(session.lastFatalError?.code, ErrorCode.kicked);
+      expect(errors.map((e) => e.code), contains(ErrorCode.kicked));
+      // The peer's role went with it.
+      expect(host.permissions.roleOf(oldId), JamRole.guest);
+
+      // No rejoin happens on its own.
+      await Future<void>.delayed(const Duration(milliseconds: 300));
+      expect(session.connectionState, JamConnectionState.failed);
+      expect(host.peers, isEmpty);
     },
   );
 

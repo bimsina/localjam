@@ -111,6 +111,10 @@ enum JamSessionEndReason {
   /// after a host restart, or `full`/`version`. Immediate and final.
   rejected,
 
+  /// The host removed this guest from the session (§5.6, fatal `kicked`
+  /// error). Immediate and final; the engine never auto-rejoins.
+  kicked,
+
   /// [JamGuestEngine.close] was called locally.
   closedLocally,
 }
@@ -292,6 +296,7 @@ class JamGuestEngine extends JamEngine {
   String get sessionId => _session.sessionId;
 
   /// This guest's peer id (§3.1); stable across resumed reconnects (§3.3).
+  @override
   String get selfPeerId => _session.selfPeerId;
 
   @override
@@ -311,6 +316,16 @@ class JamGuestEngine extends JamEngine {
 
   /// Presence changes (§3.2).
   Stream<JamPeerEvent> get peerEvents => _session.peerEvents;
+
+  @override
+  JamPermissions get permissions => _session.permissions;
+
+  @override
+  Stream<JamPermissions> get permissionUpdates => _session.permissionUpdates;
+
+  /// Host error reports (§8): transient denials (`not_allowed`) a UI can
+  /// snackbar, and fatal ones ([sessionEnded] is the terminal signal).
+  Stream<ErrorMessage> get errors => _session.errors;
 
   /// The current connection state (§3.3 reconnects included).
   JamConnectionState get connectionState => _session.connectionState;
@@ -343,6 +358,22 @@ class JamGuestEngine extends JamEngine {
   /// Asks the host to select [mediaId] (§5.2).
   Future<void> requestSetMedia(String mediaId) =>
       _session.requestSetMedia(mediaId);
+
+  /// Asks the host to skip to the next queue item (§5.2).
+  Future<void> requestNext() => _session.requestNext();
+
+  /// Asks the host to skip to the previous queue item (§5.2).
+  Future<void> requestPrevious() => _session.requestPrevious();
+
+  /// Asks the host to move [mediaId] to queue position [toIndex] (§5.6).
+  Future<void> requestQueueMove(String mediaId, int toIndex) =>
+      _session.requestQueueMove(mediaId, toIndex);
+
+  /// Asks the host to remove [mediaId] from the queue (§5.6). Your own
+  /// contributions are always removable; others' need
+  /// [JamCapability.editQueue].
+  Future<void> requestQueueRemove(String mediaId) =>
+      _session.requestQueueRemove(mediaId);
 
   // --- Guest uploads (§6.4) --------------------------------------------------
 
@@ -521,9 +552,14 @@ class JamGuestEngine extends JamEngine {
       case JamConnectionState.reconnecting:
         _hostGoneTimer ??= Timer(hostGoneTimeout, _onHostGoneTimeout);
       case JamConnectionState.failed:
-        // §3.1: a reject is authoritative and immediate — the session is
-        // gone (bad_token after a host restart, full, version).
-        _end(JamSessionEndReason.rejected);
+        // §3.1/§5.6: terminal — either the host rejected a (re)join
+        // (bad_token, full, version) or it kicked this guest (fatal error
+        // before the close).
+        _end(
+          _session.lastFatalError?.code == ErrorCode.kicked
+              ? JamSessionEndReason.kicked
+              : JamSessionEndReason.rejected,
+        );
       case JamConnectionState.closed:
         // Only reachable via a local close (ours or _end's); the reason has
         // already been published by whoever initiated it.

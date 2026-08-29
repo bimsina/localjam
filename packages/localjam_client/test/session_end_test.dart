@@ -89,7 +89,8 @@ void main() {
 
     // Kick without closing the host: the drop starts the countdown, the
     // near-immediate resume (fast backoff) must cancel it.
-    host.kickPeer(engine.selfPeerId);
+    // A resumable forced drop (not a real kick — that would be terminal).
+    host.kickPeer(engine.selfPeerId, allowResume: true);
     await waitFor(
       () => seen.contains(JamConnectionState.reconnecting),
       reason: 'drop observed',

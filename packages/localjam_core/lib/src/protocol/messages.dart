@@ -1,5 +1,6 @@
 import 'package:meta/meta.dart';
 
+import '../session/permissions.dart';
 import '../session/playback_state.dart';
 
 /// Wire message types for the LocalJam control plane (PROTOCOL.md).
@@ -39,6 +40,14 @@ enum ErrorCode {
   versionUnsupported('version_unsupported'),
   sessionFull('session_full'),
   mediaGone('media_gone'),
+
+  /// The requesting peer lacks the capability for that action (§5.6).
+  /// Never fatal: the connection stays up.
+  notAllowed('not_allowed'),
+
+  /// The peer was removed from the session by the host (§5.6). Always
+  /// fatal; the close follows and clients must not auto-rejoin.
+  kicked('kicked'),
   internal('internal');
 
   const ErrorCode(this.wire);
@@ -92,7 +101,20 @@ enum RequestAction {
   play('play'),
   pause('pause'),
   seek('seek'),
-  setMedia('set_media');
+  setMedia('set_media'),
+
+  /// Skip to the next queue item (wrapping). Unambiguous under races, unlike
+  /// a guest-computed set_media.
+  next('next'),
+
+  /// Skip to the previous queue item (wrapping).
+  previous('previous'),
+
+  /// Move [RequestMessage.mediaId] to [RequestMessage.toIndex] (§5.6).
+  queueMove('queue_move'),
+
+  /// Remove [RequestMessage.mediaId] from the queue (§5.6).
+  queueRemove('queue_remove');
 
   const RequestAction(this.wire);
 
@@ -159,6 +181,7 @@ class MediaItem {
     this.artist,
     this.album,
     this.artworkId,
+    this.addedBy,
   });
 
   final String mediaId;
@@ -185,6 +208,10 @@ class MediaItem {
   /// sharing artwork bytes (an album) share one artworkId.
   final String? artworkId;
 
+  /// Who contributed the item (§5.6 attribution): a peerId, the reserved
+  /// [JamPermissions.hostPeerId], or null for legacy items.
+  final String? addedBy;
+
   /// The best display title: [title] when tagged, else [name].
   String get displayTitle => (title?.isNotEmpty ?? false) ? title! : name;
 
@@ -200,6 +227,7 @@ class MediaItem {
         if (artist != null) 'artist': artist,
         if (album != null) 'album': album,
         if (artworkId != null) 'artworkId': artworkId,
+        if (addedBy != null) 'addedBy': addedBy,
       };
 
   factory MediaItem.fromJson(Map<String, Object?> json) => MediaItem(
@@ -214,6 +242,7 @@ class MediaItem {
         artist: json['artist'] as String?,
         album: json['album'] as String?,
         artworkId: json['artworkId'] as String?,
+        addedBy: json['addedBy'] as String?,
       );
 
   @override
@@ -229,11 +258,12 @@ class MediaItem {
       other.title == title &&
       other.artist == artist &&
       other.album == album &&
-      other.artworkId == artworkId;
+      other.artworkId == artworkId &&
+      other.addedBy == addedBy;
 
   @override
   int get hashCode => Object.hash(mediaId, kind, name, mime, sizeBytes,
-      durationUs, sha256, title, artist, album, artworkId);
+      durationUs, sha256, title, artist, album, artworkId, addedBy);
 }
 
 // ---------------------------------------------------------------------------
@@ -314,6 +344,7 @@ class WelcomeMessage extends Message {
     this.peers = const [],
     required this.snapshot,
     this.playlist = const [],
+    this.permissions,
   });
 
   static const wireType = 'welcome';
@@ -331,6 +362,10 @@ class WelcomeMessage extends Message {
 
   final List<MediaItem> playlist;
 
+  /// The room permission document (§5.6). Null only from a pre-v0.2 host;
+  /// clients then assume listen-only until a broadcast arrives.
+  final JamPermissions? permissions;
+
   @override
   String get type => wireType;
 
@@ -342,10 +377,12 @@ class WelcomeMessage extends Message {
         'peers': [for (final p in peers) p.toJson()],
         'snapshot': snapshot.toJson(),
         'playlist': [for (final i in playlist) i.toJson()],
+        if (permissions != null) 'permissions': permissions!.toJson(),
       };
 
   factory WelcomeMessage.fromPayload(Map<String, Object?> json) {
     final you = json['you'] as Map<String, Object?>? ?? const {};
+    final rawPermissions = json['permissions'];
     return WelcomeMessage(
       sessionId: json['sessionId'] as String,
       sessionName: (json['sessionName'] as String?) ?? '',
@@ -359,6 +396,9 @@ class WelcomeMessage extends Message {
       playlist: [
         for (final i in _mapList(json['playlist'])) MediaItem.fromJson(i),
       ],
+      permissions: rawPermissions is Map
+          ? JamPermissions.fromJson(rawPermissions.cast<String, Object?>())
+          : null,
     );
   }
 }
@@ -476,6 +516,7 @@ class RequestMessage extends Message {
     required this.action,
     this.mediaId,
     this.positionUs,
+    this.toIndex,
   });
 
   static const wireType = 'request';
@@ -483,6 +524,9 @@ class RequestMessage extends Message {
   final RequestAction action;
   final String? mediaId;
   final int? positionUs;
+
+  /// Target queue index for [RequestAction.queueMove] (§5.6).
+  final int? toIndex;
 
   @override
   String get type => wireType;
@@ -492,6 +536,7 @@ class RequestMessage extends Message {
         'action': action.wire,
         if (mediaId != null) 'mediaId': mediaId,
         if (positionUs != null) 'positionUs': positionUs,
+        if (toIndex != null) 'toIndex': toIndex,
       };
 
   factory RequestMessage.fromPayload(Map<String, Object?> json) =>
@@ -499,6 +544,7 @@ class RequestMessage extends Message {
         action: RequestAction.fromWire(json['action'] as String),
         mediaId: json['mediaId'] as String?,
         positionUs: json['positionUs'] as int?,
+        toIndex: json['toIndex'] as int?,
       );
 }
 
@@ -549,6 +595,26 @@ class PlaylistMessage extends Message {
           for (final i in _mapList(json['items'])) MediaItem.fromJson(i),
         ],
       );
+}
+
+/// H→* room permission document broadcast (PROTOCOL.md §5.6). The payload
+/// is exactly a [JamPermissions] (rev included), mirroring how `state`
+/// carries a snapshot.
+class PermissionsMessage extends Message {
+  const PermissionsMessage({required this.permissions});
+
+  static const wireType = 'permissions';
+
+  final JamPermissions permissions;
+
+  @override
+  String get type => wireType;
+
+  @override
+  Map<String, Object?> payloadToJson() => permissions.toJson();
+
+  factory PermissionsMessage.fromPayload(Map<String, Object?> json) =>
+      PermissionsMessage(permissions: JamPermissions.fromJson(json));
 }
 
 /// G→H media readiness report (PROTOCOL.md §6.3, §7).

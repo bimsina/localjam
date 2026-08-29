@@ -35,6 +35,9 @@ Future<JamHostServer> startHost({
   String sessionName = 'TestJam',
   int leadTimeUs = 750_000,
   JamEndPolicy endPolicy = JamEndPolicy.pause,
+  // Tests that are NOT about permissions run wide open; enforcement has its
+  // own §5.6 group passing stricter policies explicitly.
+  JamPolicy policy = JamPolicy.open,
   Duration silenceTimeout = const Duration(seconds: 10),
   Duration reconnectGrace = const Duration(seconds: 30),
   Duration livenessCheckInterval = const Duration(seconds: 1),
@@ -44,6 +47,7 @@ Future<JamHostServer> startHost({
     sessionName: sessionName,
     leadTimeUs: leadTimeUs,
     endPolicy: endPolicy,
+    policy: policy,
     silenceTimeout: silenceTimeout,
     reconnectGrace: reconnectGrace,
     livenessCheckInterval: livenessCheckInterval,
@@ -505,6 +509,221 @@ void main() {
       expect(res.statusCode, 400);
       await res.drain<void>();
       expect(host.playlist, isEmpty);
+    });
+  });
+
+  group('permissions + queue (§5.6)', () {
+    Future<MediaItem> addTrack(
+      JamHostServer host, {
+      int seed = 1,
+      String? addedBy,
+    }) async {
+      final file = await writeTempMedia(makeMediaBytes(2048, seed: seed));
+      final item = await JamHostServer.describeFile(
+        file,
+        kind: MediaKind.audio,
+        mime: 'audio/mpeg',
+        durationUs: 60_000_000,
+        addedBy: addedBy,
+      );
+      host.addMedia(item, file);
+      return item;
+    }
+
+    test('welcome carries the document; guests derive their own caps',
+        () async {
+      final host = await startHost(policy: JamPolicy.jam);
+      final guest = await joinGuest(host);
+      expect(guest.permissions.rev, 0);
+      expect(guest.permissions.policy, JamPolicy.jam);
+      expect(guest.myCapabilities, {
+        JamCapability.addTracks,
+        JamCapability.editQueue,
+      });
+    });
+
+    test('playback request without controlPlayback: not_allowed error, '
+        'requestDenied event, state untouched', () async {
+      final host = await startHost(policy: JamPolicy.jam);
+      await addTrack(host);
+      host.setMedia(host.playlist.single.mediaId);
+      final revBefore = host.snapshot.rev;
+
+      final guest = await joinGuest(host);
+      final errors = <ErrorMessage>[];
+      guest.errors.listen(errors.add);
+      final denied = <JamHostEvent>[];
+      host.events.listen((e) {
+        if (e.kind == JamHostEventKind.requestDenied) denied.add(e);
+      });
+
+      await guest.requestPlay();
+      await waitFor(() => errors.isNotEmpty, reason: 'not_allowed error');
+      expect(errors.single.code, ErrorCode.notAllowed);
+      expect(errors.single.fatal, isFalse);
+      expect(host.snapshot.rev, revBefore);
+      expect(denied.single.peerId, guest.selfPeerId);
+      expect(denied.single.deniedAction, RequestAction.play);
+    });
+
+    test('promote → cohost controls playback; demote revokes it; broadcasts '
+        'reach guests in rev order', () async {
+      final host = await startHost(policy: JamPolicy.listenOnly);
+      await addTrack(host);
+      host.setMedia(host.playlist.single.mediaId);
+
+      final guest = await joinGuest(host);
+      final docs = <JamPermissions>[];
+      guest.permissionUpdates.listen(docs.add);
+      final errors = <ErrorMessage>[];
+      guest.errors.listen(errors.add);
+
+      host.promotePeer(guest.selfPeerId);
+      await waitFor(() => docs.isNotEmpty, reason: 'permissions broadcast');
+      expect(docs.last.rev, 1);
+      expect(guest.myCapabilities, JamPermissions.cohostCapabilities);
+
+      await guest.requestPlay();
+      await waitFor(
+        () => guest.snapshot.status == PlaybackStatus.playing,
+        reason: 'cohost play to apply',
+      );
+      expect(errors, isEmpty);
+
+      host.demotePeer(guest.selfPeerId);
+      await waitFor(() => docs.length >= 2, reason: 'demote broadcast');
+      expect(guest.myCapabilities, isEmpty);
+      await guest.requestPause();
+      await waitFor(() => errors.isNotEmpty, reason: 'denied after demote');
+      expect(errors.single.code, ErrorCode.notAllowed);
+      expect(guest.snapshot.status, PlaybackStatus.playing);
+    });
+
+    test('upload gate (§6.4): listen-only guests get 403; overrides revoke '
+        'one peer under an open policy', () async {
+      final locked = await startHost(policy: JamPolicy.listenOnly);
+      final guest = await joinGuest(locked);
+      final file = await writeTempMedia(makeMediaBytes(512, seed: 3));
+      await expectLater(
+        guest.uploadMedia(file, kind: MediaKind.audio),
+        throwsA(
+          isA<HttpException>().having(
+            (e) => e.message,
+            'message',
+            contains('403'),
+          ),
+        ),
+      );
+      expect(locked.playlist, isEmpty);
+
+      final open = await startHost();
+      final restricted = await joinGuest(open, clientName: 'restricted');
+      final free = await joinGuest(open, clientName: 'free');
+      open.setCapabilityOverride(
+        restricted.selfPeerId,
+        JamCapability.addTracks,
+        allowed: false,
+      );
+      await expectLater(
+        restricted.uploadMedia(file, kind: MediaKind.audio),
+        throwsA(isA<HttpException>()),
+      );
+      final item = await free.uploadMedia(file, kind: MediaKind.audio);
+      expect(item.addedBy, free.selfPeerId);
+      expect(open.playlist.single.addedBy, free.selfPeerId);
+    });
+
+    test('queue ops: move reorders, remove drops, removing the current item '
+        'advances and keeps playing', () async {
+      final host = await startHost();
+      final a = await addTrack(host, seed: 1);
+      final b = await addTrack(host, seed: 2);
+      final c = await addTrack(host, seed: 3);
+
+      final guest = await joinGuest(host);
+      await guest.requestQueueMove(c.mediaId, 0);
+      await waitFor(
+        () => guest.playlist.isNotEmpty && guest.playlist.first == c,
+        reason: 'reordered playlist to reach the guest',
+      );
+      expect(host.playlist.map((i) => i.mediaId), [
+        c.mediaId,
+        a.mediaId,
+        b.mediaId,
+      ]);
+
+      host.setMedia(a.mediaId);
+      host.play();
+      expect(host.snapshot.status, PlaybackStatus.playing);
+      host.removeMediaItem(a.mediaId);
+      // The item that slid into a's slot is next: b. Still playing.
+      expect(host.snapshot.mediaId, b.mediaId);
+      expect(host.snapshot.status, PlaybackStatus.playing);
+      expect(host.playlist.map((i) => i.mediaId), [c.mediaId, b.mediaId]);
+
+      // Removing the last remaining current item stops playback.
+      host.removeMediaItem(b.mediaId);
+      expect(host.snapshot.mediaId, c.mediaId);
+      host.removeMediaItem(c.mediaId);
+      expect(host.snapshot.status, PlaybackStatus.idle);
+      expect(host.snapshot.mediaId, isNull);
+    });
+
+    test('queueRemove of your OWN track is allowed without editQueue; '
+        'others\' tracks are refused', () async {
+      final host = await startHost(policy: JamPolicy.listenOnly);
+      final hostItem = await addTrack(host, seed: 9, addedBy: 'host');
+      final guest = await joinGuest(host);
+
+      // Simulate the guest's own earlier contribution.
+      final own = await addTrack(host, seed: 10, addedBy: guest.selfPeerId);
+      final errors = <ErrorMessage>[];
+      guest.errors.listen(errors.add);
+
+      await guest.requestQueueRemove(own.mediaId);
+      await waitFor(
+        () => host.playlist.every((i) => i.mediaId != own.mediaId),
+        reason: 'own track removal to apply',
+      );
+      expect(errors, isEmpty);
+
+      await guest.requestQueueRemove(hostItem.mediaId);
+      await waitFor(() => errors.isNotEmpty, reason: 'denied removal');
+      expect(errors.single.code, ErrorCode.notAllowed);
+      expect(host.playlist.map((i) => i.mediaId), [hostItem.mediaId]);
+    });
+
+    test('next/previous requests skip under controlPlayback', () async {
+      final host = await startHost();
+      final a = await addTrack(host, seed: 1);
+      final b = await addTrack(host, seed: 2);
+      host.setMedia(a.mediaId);
+
+      final guest = await joinGuest(host);
+      await guest.requestNext();
+      await waitFor(
+        () => guest.snapshot.mediaId == b.mediaId,
+        reason: 'next to apply',
+      );
+      await guest.requestPrevious();
+      await waitFor(
+        () => guest.snapshot.mediaId == a.mediaId,
+        reason: 'previous to apply',
+      );
+      expect(host.snapshot.mediaId, a.mediaId);
+    });
+
+    test('a kicked peer\'s role is forgotten but a resumable drop keeps it',
+        () async {
+      final host = await startHost();
+      final guest = await joinGuest(host);
+      host.promotePeer(guest.selfPeerId);
+      final revAfterPromote = host.permissions.rev;
+
+      // A resumable drop (grace kept) leaves the role in place.
+      host.kickPeer(guest.selfPeerId, allowResume: true);
+      expect(host.permissions.cohosts, contains(guest.selfPeerId));
+      expect(host.permissions.rev, revAfterPromote);
     });
   });
 

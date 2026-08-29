@@ -41,6 +41,41 @@ abstract class JamEngine {
   /// own registry; guests fetch once and cache. Never throws.
   Future<Uint8List?> artworkFor(MediaItem item);
 
+  /// This side's peer id: the guest's assigned id, or the reserved
+  /// [JamPermissions.hostPeerId] on a host.
+  String get selfPeerId;
+
+  /// The room's permission document (§5.6).
+  JamPermissions get permissions;
+
+  /// Permission-document changes (§5.6).
+  Stream<JamPermissions> get permissionUpdates;
+
+  /// This side's effective capabilities — what UI controls should enable.
+  /// Always everything on a host.
+  Set<JamCapability> get myCapabilities =>
+      permissions.capabilitiesOf(selfPeerId);
+
+  /// Whether this side may exercise [capability] right now (§5.6). The host
+  /// re-validates guest requests regardless — this is for enabling UI.
+  bool can(JamCapability capability) => myCapabilities.contains(capability);
+
+  /// A short display label for the peer who added [item], for "added by"
+  /// bylines: "You", "Host", a peer's clientName, or null when unattributed.
+  /// [peers] is the caller's current peer list (engines expose their own).
+  String? addedByLabel(MediaItem item, List<PeerInfo> peers) {
+    final addedBy = item.addedBy;
+    if (addedBy == null) return null;
+    if (addedBy == selfPeerId) return 'You';
+    if (addedBy == JamPermissions.hostPeerId) return 'Host';
+    for (final peer in peers) {
+      if (peer.peerId == addedBy) {
+        return peer.clientName.isEmpty ? peer.peerId : peer.clientName;
+      }
+    }
+    return null; // The contributor already left.
+  }
+
   /// The playlist entry for [snapshot]'s current media, if any.
   MediaItem? get currentItem {
     final mediaId = snapshot.mediaId;

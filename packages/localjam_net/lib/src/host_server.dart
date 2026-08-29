@@ -53,6 +53,15 @@ enum JamHostEventKind {
   /// A new playlist was broadcast ([JamHostEvent.playlist] set).
   playlistBroadcast,
 
+  /// A new permission document was broadcast (§5.6;
+  /// [JamHostEvent.permissions] set).
+  permissionsBroadcast,
+
+  /// A guest's request was refused for lack of a capability (§5.6;
+  /// [JamHostEvent.peerId] and [JamHostEvent.deniedAction] set). The guest
+  /// got a non-fatal `not_allowed` error.
+  requestDenied,
+
   /// A guest uploaded a new media item over the media plane (§6.4;
   /// [JamHostEvent.mediaId] set, [JamHostEvent.peerId] set when the upload
   /// carried `X-LocalJam-Peer-Id`). Emitted before the playlist broadcast the
@@ -78,6 +87,8 @@ class JamHostEvent {
     this.progress,
     this.snapshot,
     this.playlist,
+    this.permissions,
+    this.deniedAction,
   });
 
   final JamHostEventKind kind;
@@ -92,6 +103,12 @@ class JamHostEvent {
 
   final PlaybackSnapshot? snapshot;
   final List<MediaItem>? playlist;
+
+  /// Set for [JamHostEventKind.permissionsBroadcast].
+  final JamPermissions? permissions;
+
+  /// Set for [JamHostEventKind.requestDenied].
+  final RequestAction? deniedAction;
 
   @override
   String toString() =>
@@ -142,6 +159,7 @@ class JamHostServer {
     String? token,
     int leadTimeUs = 750_000,
     this.endPolicy = JamEndPolicy.pause,
+    JamPolicy policy = JamPolicy.jam,
     this.silenceTimeout = const Duration(seconds: 10),
     this.reconnectGrace = const Duration(seconds: 30),
     this.livenessCheckInterval = const Duration(seconds: 1),
@@ -149,6 +167,7 @@ class JamHostServer {
     this.maxUploadBytes = 512 * 1024 * 1024,
   }) : token = token ?? _randomHex(16),
        sessionId = 's_${_randomHex(4)}',
+       _permissions = JamPermissions.initial(policy: policy),
        _session = HostSession(leadTimeUs: leadTimeUs);
 
   /// Human-readable session name, shared in the join URI and `welcome`.
@@ -184,6 +203,7 @@ class JamHostServer {
   final int maxUploadBytes;
 
   final HostSession _session;
+  JamPermissions _permissions;
   static const MessageCodec _codec = MessageCodec();
 
   HttpServer? _server;
@@ -236,6 +256,9 @@ class JamHostServer {
 
   /// The current playlist (§6.1).
   List<MediaItem> get playlist => List.unmodifiable(_playlist);
+
+  /// The room's authoritative permission document (§5.6).
+  JamPermissions get permissions => _permissions;
 
   /// Currently joined peers.
   List<PeerInfo> get peers =>
@@ -533,6 +556,18 @@ class JamHostServer {
     );
     final peerId = req.headers.value('X-LocalJam-Peer-Id');
 
+    // §5.6: uploads need addTracks. Attribution rides the peer-id header —
+    // spoofable within the session, which §9's honest-guest model accepts;
+    // an absent header is judged as a plain guest under the room policy.
+    if (!_permissions.allows(
+      peerId ?? '_anonymous',
+      JamCapability.addTracks,
+    )) {
+      res.statusCode = HttpStatus.forbidden;
+      await res.close();
+      return;
+    }
+
     // §6.4: a declared over-limit size is rejected without reading the body.
     if (req.contentLength > maxUploadBytes) {
       res.persistentConnection = false;
@@ -619,6 +654,7 @@ class JamHostServer {
       artist: tags.artist,
       album: tags.album,
       artworkId: artworkId,
+      addedBy: peerId,
     );
     // §6.4: the upload event first, then addMedia's playlist broadcast
     // (which also threads durationUs into the session per §5.5).
@@ -733,7 +769,8 @@ class JamHostServer {
     _peers[peerId] = conn;
     _session.upsertPeer(peerId);
 
-    // §3.1: welcome carries the full snapshot + playlist + existing peers.
+    // §3.1: welcome carries the full snapshot + playlist + permissions +
+    // existing peers.
     _sendTo(
       conn.ws,
       WelcomeMessage(
@@ -746,6 +783,7 @@ class JamHostServer {
         ],
         snapshot: _session.snapshot,
         playlist: playlist,
+        permissions: _permissions,
       ),
     );
     // §3.2: announce to everyone else.
@@ -754,7 +792,25 @@ class JamHostServer {
   }
 
   void _onRequest(_GuestConn conn, RequestMessage request) {
-    // §5.2: guests never mutate state; the host applies their requests.
+    // §5.2/§5.6: guests never mutate state; the host validates each request
+    // against the peer's effective capabilities and applies or refuses it.
+    if (!_requestAllowed(conn.peerId!, request)) {
+      _sendTo(
+        conn.ws,
+        ErrorMessage(
+          code: ErrorCode.notAllowed,
+          message: 'not allowed: ${request.action.wire}',
+        ),
+      );
+      _emit(
+        JamHostEvent._(
+          JamHostEventKind.requestDenied,
+          peerId: conn.peerId,
+          deniedAction: request.action,
+        ),
+      );
+      return;
+    }
     try {
       switch (request.action) {
         case RequestAction.play:
@@ -767,6 +823,19 @@ class JamHostServer {
         case RequestAction.setMedia:
           final mediaId = request.mediaId;
           if (mediaId != null) setMedia(mediaId);
+        case RequestAction.next:
+          next();
+        case RequestAction.previous:
+          previous();
+        case RequestAction.queueMove:
+          final mediaId = request.mediaId;
+          final toIndex = request.toIndex;
+          if (mediaId != null && toIndex != null) {
+            moveMediaItem(mediaId, toIndex);
+          }
+        case RequestAction.queueRemove:
+          final mediaId = request.mediaId;
+          if (mediaId != null) removeMediaItem(mediaId);
       }
     } on StateError catch (e) {
       _sendTo(
@@ -778,6 +847,30 @@ class JamHostServer {
         conn.ws,
         ErrorMessage(code: ErrorCode.mediaGone, message: '${e.message}'),
       );
+    }
+  }
+
+  /// §5.6 validation: playback actions need [JamCapability.controlPlayback];
+  /// queue reorder needs [JamCapability.editQueue]; queue removal needs
+  /// editQueue OR ownership (removing your own contribution is always
+  /// allowed).
+  bool _requestAllowed(String peerId, RequestMessage request) {
+    switch (request.action) {
+      case RequestAction.play:
+      case RequestAction.pause:
+      case RequestAction.seek:
+      case RequestAction.setMedia:
+      case RequestAction.next:
+      case RequestAction.previous:
+        return _permissions.allows(peerId, JamCapability.controlPlayback);
+      case RequestAction.queueMove:
+        return _permissions.allows(peerId, JamCapability.editQueue);
+      case RequestAction.queueRemove:
+        if (_permissions.allows(peerId, JamCapability.editQueue)) return true;
+        final mediaId = request.mediaId;
+        if (mediaId == null) return true; // No-op either way; let it through.
+        final index = _playlist.indexWhere((i) => i.mediaId == mediaId);
+        return index >= 0 && _playlist[index].addedBy == peerId;
     }
   }
 
@@ -835,6 +928,22 @@ class JamHostServer {
   /// Stops playback: back to idle with no media selected (§5.5).
   void stop() => _apply((now) => _session.stop(nowUs: now));
 
+  /// Selects the next playlist item (wrapping); no-op on an empty playlist.
+  void next() => _skipTo(1);
+
+  /// Selects the previous playlist item (wrapping); no-op on an empty
+  /// playlist.
+  void previous() => _skipTo(-1);
+
+  void _skipTo(int delta) {
+    if (_playlist.isEmpty) return;
+    final index = _playlist.indexWhere(
+      (i) => i.mediaId == _session.snapshot.mediaId,
+    );
+    final target = (index + delta) % _playlist.length;
+    setMedia(_playlist[target < 0 ? target + _playlist.length : target].mediaId);
+  }
+
   void _apply(PlaybackSnapshot Function(int nowUs) mutate) {
     final before = _session.snapshot.rev;
     final after = mutate(_nowUs());
@@ -856,10 +965,90 @@ class JamHostServer {
     } else {
       _playlist.add(item);
     }
+    _broadcastPlaylist();
+  }
+
+  /// Moves the playlist item [mediaId] to [toIndex] (clamped) and broadcasts
+  /// the reordered playlist (§5.6). Throws [ArgumentError] for an unknown id.
+  void moveMediaItem(String mediaId, int toIndex) {
+    final from = _playlist.indexWhere((i) => i.mediaId == mediaId);
+    if (from < 0) {
+      throw ArgumentError.value(mediaId, 'mediaId', 'unknown media id');
+    }
+    final to = toIndex.clamp(0, _playlist.length - 1);
+    if (to == from) return;
+    final item = _playlist.removeAt(from);
+    _playlist.insert(to, item);
+    _broadcastPlaylist();
+  }
+
+  /// Removes [mediaId] from the playlist and broadcasts (§5.6). The media
+  /// registry keeps serving its bytes (guests may be mid-fetch; re-adding is
+  /// instant). Removing the CURRENT item advances to the next remaining item
+  /// — resuming playback if it was playing — or stops when the playlist
+  /// empties. Throws [ArgumentError] for an id not in the playlist.
+  void removeMediaItem(String mediaId) {
+    final index = _playlist.indexWhere((i) => i.mediaId == mediaId);
+    if (index < 0) {
+      throw ArgumentError.value(mediaId, 'mediaId', 'not in the playlist');
+    }
+    final wasCurrent = _session.snapshot.mediaId == mediaId;
+    final wasPlaying = _session.snapshot.status == PlaybackStatus.playing;
+    _playlist.removeAt(index);
+    _broadcastPlaylist();
+    if (!wasCurrent) return;
+    if (_playlist.isEmpty) {
+      stop();
+      return;
+    }
+    // The item that slid into the removed slot (wrapping at the end) is the
+    // natural "next".
+    setMedia(_playlist[index % _playlist.length].mediaId);
+    if (wasPlaying) play();
+  }
+
+  void _broadcastPlaylist() {
     _playlistRev++;
     _broadcast(PlaylistMessage(rev: _playlistRev, items: playlist));
     _emit(
       JamHostEvent._(JamHostEventKind.playlistBroadcast, playlist: playlist),
+    );
+  }
+
+  // --- Permissions & moderation (§5.6) --------------------------------------
+
+  /// Replaces the guest-role policy and broadcasts the new document.
+  void setPolicy(JamPolicy policy) =>
+      _setPermissions(_permissions.withPolicy(policy));
+
+  /// Promotes [peerId] to co-host and broadcasts. No-op if already one.
+  void promotePeer(String peerId) =>
+      _setPermissions(_permissions.promote(peerId));
+
+  /// Demotes [peerId] back to guest and broadcasts. No-op if not a co-host.
+  void demotePeer(String peerId) =>
+      _setPermissions(_permissions.demote(peerId));
+
+  /// Sets (or clears, with `allowed: null`) one per-peer capability override
+  /// and broadcasts.
+  void setCapabilityOverride(
+    String peerId,
+    JamCapability capability, {
+    required bool? allowed,
+  }) =>
+      _setPermissions(
+        _permissions.withOverride(peerId, capability, allowed: allowed),
+      );
+
+  void _setPermissions(JamPermissions next) {
+    if (identical(next, _permissions)) return; // No-op mutation.
+    _permissions = next;
+    _broadcast(PermissionsMessage(permissions: next));
+    _emit(
+      JamHostEvent._(
+        JamHostEventKind.permissionsBroadcast,
+        permissions: next,
+      ),
     );
   }
 
@@ -883,6 +1072,7 @@ class JamHostServer {
     String? artist,
     String? album,
     String? artworkId,
+    String? addedBy,
   }) async {
     final size = await file.length();
     final digest = (await sha256.bind(file.openRead()).first).toString();
@@ -898,6 +1088,7 @@ class JamHostServer {
       artist: artist,
       album: album,
       artworkId: artworkId,
+      addedBy: addedBy,
     );
   }
 
@@ -909,7 +1100,16 @@ class JamHostServer {
     for (final conn in List.of(_conns)) {
       if (now - conn.lastFrameUs > silenceUs) _dropConn(conn);
     }
-    _graceUntilUs.removeWhere((_, expiry) => expiry < now);
+    // A peer whose grace slot expires is gone for good: forget its role and
+    // overrides (§5.6) — a later fresh join gets a new peerId anyway.
+    final expired = [
+      for (final entry in _graceUntilUs.entries)
+        if (entry.value < now) entry.key,
+    ];
+    for (final peerId in expired) {
+      _graceUntilUs.remove(peerId);
+      _setPermissions(_permissions.forgetPeer(peerId));
+    }
     _checkEndOfMedia(now);
   }
 
@@ -956,21 +1156,36 @@ class JamHostServer {
     return _playlist[(index + 1) % _playlist.length].mediaId;
   }
 
-  /// Disconnects [peerId] (host moderation): closes its socket with
-  /// `goingAway` and broadcasts `peer_left` (§3.2).
+  /// Disconnects [peerId] (host moderation, §5.6).
   ///
-  /// With [allowResume] (the default) the peer keeps a §3.3 grace slot
-  /// exactly like a silence drop, so a reconnecting guest reclaims the same
-  /// peerId. With `allowResume: false` no grace slot is kept: a reconnect
-  /// carrying the old `resumePeerId` silently falls back to a fresh join.
+  /// By default this is a real kick: the guest first gets a fatal
+  /// `error {code: kicked}` — so it knows the removal was deliberate and
+  /// must not auto-rejoin — then its socket closes with `goingAway`,
+  /// `peer_left` is broadcast (§3.2), no §3.3 grace slot is kept, and the
+  /// peer's role and overrides are forgotten.
+  ///
+  /// With `allowResume: true` this is instead a plain forced disconnect —
+  /// exactly like a silence drop: no error is sent, the grace slot is kept,
+  /// and a reconnecting guest reclaims the same peerId (and role).
   ///
   /// Throws [ArgumentError] if [peerId] is not a currently joined peer.
-  void kickPeer(String peerId, {bool allowResume = true}) {
+  void kickPeer(String peerId, {bool allowResume = false}) {
     final conn = _peers[peerId];
     if (conn == null) {
       throw ArgumentError.value(peerId, 'peerId', 'not a joined peer');
     }
+    if (!allowResume) {
+      _sendTo(
+        conn.ws,
+        const ErrorMessage(
+          code: ErrorCode.kicked,
+          message: 'removed from the session by the host',
+          fatal: true,
+        ),
+      );
+    }
     _dropConn(conn, allowResume: allowResume);
+    if (!allowResume) _setPermissions(_permissions.forgetPeer(peerId));
   }
 
   void _dropConn(_GuestConn conn, {bool allowResume = true}) {

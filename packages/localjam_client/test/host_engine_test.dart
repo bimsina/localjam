@@ -129,6 +129,58 @@ void main() {
     },
   );
 
+  test('host-side §5.6 surface: attribution, queue ops, policy/moderation',
+      () async {
+    mockAudioChannel();
+    final engine = await startEngine();
+
+    // The host holds every capability; its items carry host attribution.
+    expect(engine.selfPeerId, JamPermissions.hostPeerId);
+    expect(engine.can(JamCapability.manageMembers), isTrue);
+    final a = await engine.addMediaFile(
+      await writeTempMedia(makeMediaBytes(2048, seed: 1)),
+      name: 'A.mp3',
+    );
+    final b = await engine.addMediaFile(
+      await writeTempMedia(makeMediaBytes(2048, seed: 2)),
+      name: 'B.mp3',
+    );
+    expect(a.addedBy, JamPermissions.hostPeerId);
+    expect(engine.addedByLabel(a, engine.peers), 'You');
+
+    // Queue ops mirror to a real guest.
+    final guest = await JamGuestClient.connect(
+      engine.joinUriFor(InternetAddress.loopbackIPv4),
+    );
+    addTearDown(guest.close);
+    engine.moveMediaItem(b.mediaId, 0);
+    await waitFor(
+      () => guest.playlist.isNotEmpty && guest.playlist.first.mediaId == b.mediaId,
+      reason: 'reorder to reach the guest',
+    );
+    engine.removeMediaItem(b.mediaId);
+    await waitFor(
+      () => guest.playlist.length == 1,
+      reason: 'removal to reach the guest',
+    );
+
+    // Policy + promotion broadcasts reach the guest's document.
+    engine.setPolicy(JamPolicy.open);
+    engine.promotePeer(guest.selfPeerId);
+    await waitFor(
+      () => guest.permissions.cohosts.contains(guest.selfPeerId),
+      reason: 'promotion to reach the guest',
+    );
+    expect(guest.permissions.policy, JamPolicy.open);
+    expect(engine.permissions.rev, greaterThanOrEqualTo(2));
+
+    // Kick drops the guest terminally.
+    engine.kickPeer(guest.selfPeerId);
+    await guest.done.timeout(const Duration(seconds: 5));
+    expect(guest.lastFatalError?.code, ErrorCode.kicked);
+    expect(engine.peers, isEmpty);
+  });
+
   test(
     'next/previous wrap the playlist; transport mirrors the server',
     () async {

@@ -165,6 +165,10 @@ class JamGuestSession {
       StreamController<List<MediaItem>>.broadcast();
   final StreamController<JamPeerEvent> _peerEvents =
       StreamController<JamPeerEvent>.broadcast();
+  final StreamController<JamPermissions> _permissionUpdates =
+      StreamController<JamPermissions>.broadcast();
+  final StreamController<ErrorMessage> _errors =
+      StreamController<ErrorMessage>.broadcast();
 
   // --- Connection state ------------------------------------------------------
 
@@ -211,6 +215,23 @@ class JamGuestSession {
   /// Presence changes (§3.2), continuous across reconnects.
   Stream<JamPeerEvent> get peerEvents => _peerEvents.stream;
 
+  /// The room's permission document (§5.6; last known while reconnecting).
+  JamPermissions get permissions => _client.permissions;
+
+  /// Permission-document broadcasts (§5.6), continuous across reconnects.
+  /// After a resume the fresh `welcome` document is re-emitted.
+  Stream<JamPermissions> get permissionUpdates => _permissionUpdates.stream;
+
+  /// This guest's own effective capabilities (§5.6).
+  Set<JamCapability> get myCapabilities => _client.myCapabilities;
+
+  /// Host error reports (§8), continuous across reconnects.
+  Stream<ErrorMessage> get errors => _errors.stream;
+
+  /// The fatal error that ended the session, if any (§5.6/§8) — set when the
+  /// session lands in [JamConnectionState.failed] because of one (a kick).
+  ErrorMessage? get lastFatalError => _client.lastFatalError;
+
   /// The CURRENT client's clock-offset estimator (§4). Replaced on every
   /// reconnect (a new connection re-runs the join burst).
   ClockSync get clock => _client.clock;
@@ -248,6 +269,34 @@ class JamGuestSession {
   Future<void> requestSetMedia(String mediaId) {
     _ensureConnected();
     return _client.requestSetMedia(mediaId);
+  }
+
+  /// Asks the host to skip to the next queue item (§5.2). Throws
+  /// [StateError] unless connected.
+  Future<void> requestNext() {
+    _ensureConnected();
+    return _client.requestNext();
+  }
+
+  /// Asks the host to skip to the previous queue item (§5.2). Throws
+  /// [StateError] unless connected.
+  Future<void> requestPrevious() {
+    _ensureConnected();
+    return _client.requestPrevious();
+  }
+
+  /// Asks the host to move [mediaId] to queue position [toIndex] (§5.6).
+  /// Throws [StateError] unless connected.
+  Future<void> requestQueueMove(String mediaId, int toIndex) {
+    _ensureConnected();
+    return _client.requestQueueMove(mediaId, toIndex);
+  }
+
+  /// Asks the host to remove [mediaId] from the queue (§5.6). Throws
+  /// [StateError] unless connected.
+  Future<void> requestQueueRemove(String mediaId) {
+    _ensureConnected();
+    return _client.requestQueueRemove(mediaId);
   }
 
   /// Fetches media over the HTTP plane (§6.2) via the current client.
@@ -345,6 +394,8 @@ class JamGuestSession {
       client.states.listen(_states.add),
       client.playlistUpdates.listen(_playlists.add),
       client.peerEvents.listen(_peerEvents.add),
+      client.permissionUpdates.listen(_permissionUpdates.add),
+      client.errors.listen(_errors.add),
     ];
     unawaited(client.done.then((_) => _onClientDone(client)));
   }
@@ -352,6 +403,11 @@ class JamGuestSession {
   void _onClientDone(JamGuestClient client) {
     if (!identical(client, _client)) return; // A superseded connection.
     if (_state != JamConnectionState.connected) return; // Local close/failed.
+    if (client.lastFatalError?.code == ErrorCode.kicked) {
+      // §5.6: a kick is deliberate and terminal — never auto-rejoin.
+      _transition(JamConnectionState.failed);
+      return;
+    }
     _transition(JamConnectionState.reconnecting);
     unawaited(_reconnectLoop());
   }
@@ -393,10 +449,13 @@ class JamGuestSession {
       }
       _adopt(next);
       _transition(JamConnectionState.connected);
-      // Re-emit the fresh welcome snapshot and playlist so stream consumers
-      // converge without re-reading the getters.
+      // Re-emit the fresh welcome snapshot, playlist, and permissions so
+      // stream consumers converge without re-reading the getters.
       if (!_states.isClosed) _states.add(next.snapshot);
       if (!_playlists.isClosed) _playlists.add(next.playlist);
+      if (!_permissionUpdates.isClosed) {
+        _permissionUpdates.add(next.permissions);
+      }
       return;
     }
   }
@@ -436,5 +495,7 @@ class JamGuestSession {
     await _states.close();
     await _playlists.close();
     await _peerEvents.close();
+    await _permissionUpdates.close();
+    await _errors.close();
   }
 }
