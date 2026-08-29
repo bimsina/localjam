@@ -26,6 +26,10 @@
 	<string>$(PRODUCT_COPYRIGHT)</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>LocalJam connects to other devices on your Wi-Fi to host and join synchronized listening sessions.</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_localjam._tcp</string>
+	</array>
 	<key>NSMainNibFile</key>
 	<string>MainMenu</string>
 	<key>NSPrincipalClass</key>

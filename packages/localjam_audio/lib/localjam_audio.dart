@@ -13,8 +13,10 @@
 library;
 
 import 'dart:async';
+import 'dart:io';
 
-import 'package:flutter/foundation.dart' show visibleForTesting;
+import 'package:flutter/foundation.dart'
+    show defaultTargetPlatform, kIsWeb, TargetPlatform, visibleForTesting;
 import 'package:flutter/services.dart';
 
 /// Offset between Dart's monotonic clock and the native audio clock:
@@ -193,6 +195,128 @@ class LocaljamAudio {
 
   /// Releases the native engine.
   Future<void> dispose() => _ch.invokeMethod<void>('dispose');
+}
+
+// ---------------------------------------------------------------------------
+// Device music library (Android MediaStore; other platforms use pickers)
+// ---------------------------------------------------------------------------
+
+/// One track from the device's music library.
+class JamLibraryTrack {
+  const JamLibraryTrack({
+    required this.id,
+    required this.title,
+    this.artist,
+    this.album,
+    this.durationMs,
+    required this.sizeBytes,
+    required this.contentUri,
+    this.path,
+  });
+
+  /// Platform-stable id (Android: MediaStore id).
+  final int id;
+
+  final String title;
+  final String? artist;
+  final String? album;
+  final int? durationMs;
+  final int sizeBytes;
+
+  /// Platform content identifier ([resolve] turns it into a readable file).
+  final String contentUri;
+
+  /// Direct filesystem path, when the platform exposed a readable one.
+  final String? path;
+
+  static JamLibraryTrack? _fromMap(Object? raw) {
+    if (raw is! Map) return null;
+    final id = raw['id'];
+    final contentUri = raw['contentUri'];
+    if (id is! int || contentUri is! String) return null;
+    return JamLibraryTrack(
+      id: id,
+      title: (raw['title'] as String?) ?? 'Unknown',
+      artist: raw['artist'] as String?,
+      album: raw['album'] as String?,
+      durationMs: raw['durationMs'] as int?,
+      sizeBytes: (raw['sizeBytes'] as int?) ?? 0,
+      contentUri: contentUri,
+      path: raw['path'] as String?,
+    );
+  }
+}
+
+/// Thrown by [JamMediaLibrary] when the OS audio-library permission has not
+/// been granted (Android: `READ_MEDIA_AUDIO` / `READ_EXTERNAL_STORAGE`).
+/// The app owns requesting it (e.g. via permission_handler) before querying.
+class JamLibraryPermissionException implements Exception {
+  const JamLibraryPermissionException();
+
+  @override
+  String toString() =>
+      'JamLibraryPermissionException: audio library permission not granted';
+}
+
+/// The device music library (channel `localjam_audio/library`).
+///
+/// Implemented on Android (MediaStore). On platforms without an
+/// implementation (iOS — where most libraries are DRM'd Apple Music
+/// content — and desktop, where folder pickers fit better), [isSupported]
+/// is false and [queryAudio] returns an empty list.
+class JamMediaLibrary {
+  JamMediaLibrary._();
+
+  static const MethodChannel channel =
+      MethodChannel('localjam_audio/library');
+
+  /// Whether this platform implements library queries.
+  static bool get isSupported =>
+      !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
+
+  /// Every music track the OS indexes, sorted by title. Empty on
+  /// unsupported platforms. Throws [JamLibraryPermissionException] when the
+  /// permission is missing.
+  static Future<List<JamLibraryTrack>> queryAudio() async {
+    if (!isSupported) return const [];
+    try {
+      final raw = await channel.invokeMethod<List<Object?>>('queryAudio');
+      return [
+        for (final entry in raw ?? const <Object?>[])
+          if (JamLibraryTrack._fromMap(entry) case final track?) track,
+      ];
+    } on MissingPluginException {
+      return const [];
+    } on PlatformException catch (e) {
+      if (e.code == 'permission_denied') {
+        throw const JamLibraryPermissionException();
+      }
+      rethrow;
+    }
+  }
+
+  /// A readable filesystem path for [track] — the direct path when the OS
+  /// exposes one, else a cached copy — or null when the content is gone.
+  /// LocalJam hosts serve raw files, so this is the bridge from a library
+  /// pick to `addMediaFile`.
+  static Future<String?> resolve(JamLibraryTrack track) async {
+    final direct = track.path;
+    if (direct != null && File(direct).existsSync()) return direct;
+    if (!isSupported) return null;
+    try {
+      return await channel.invokeMethod<String>('resolveToPath', {
+        'contentUri': track.contentUri,
+        'id': track.id,
+      });
+    } on MissingPluginException {
+      return null;
+    } on PlatformException catch (e) {
+      if (e.code == 'permission_denied') {
+        throw const JamLibraryPermissionException();
+      }
+      rethrow;
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------

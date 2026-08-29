@@ -13,6 +13,7 @@ import 'package:localjam_audio/localjam_audio.dart';
 import 'package:localjam_net/localjam_net.dart';
 
 import 'audio_sync_controller.dart';
+import 'jam_discovery.dart';
 import 'jam_engine.dart';
 import 'media_mime.dart';
 
@@ -40,10 +41,17 @@ class JamHostEngine extends JamEngine {
   /// device sits on can reach it) on [port] (default: ephemeral). [endPolicy]
   /// is applied when the current item reaches its end (§5.5); the engine
   /// defaults to advancing through the playlist.
+  ///
+  /// With [discoverable] (the default) the room is advertised over mDNS so
+  /// nearby devices list it for one-tap join — which means ANYONE on the
+  /// network can join without the QR (the advertisement carries the token,
+  /// §1/§9). Pass false for invite-only rooms. Best-effort: platforms
+  /// without mDNS just stay QR-only.
   static Future<JamHostEngine> start({
     required String sessionName,
     JamEndPolicy endPolicy = JamEndPolicy.advance,
     JamPolicy policy = JamPolicy.jam,
+    bool discoverable = true,
     int port = 0,
     InternetAddress? address,
   }) async {
@@ -61,6 +69,13 @@ class JamHostEngine extends JamEngine {
       final engine = JamHostEngine._(server, joinUri);
       await engine.restorePersistedNudge();
       await engine.startSessionGuards();
+      if (discoverable) {
+        engine._advertiser = await JamRoomAdvertiser.start(
+          sessionName: sessionName,
+          port: server.port,
+          token: server.token,
+        );
+      }
       // Preload whatever the (idle) snapshot says — a no-op until setMedia.
       unawaited(engine.sync.onSnapshot(server.snapshot));
       return engine;
@@ -110,7 +125,11 @@ class JamHostEngine extends JamEngine {
   late final AudioSyncController sync;
 
   StreamSubscription<JamHostEvent>? _eventsSub;
+  JamRoomAdvertiser? _advertiser;
   bool _closed = false;
+
+  /// Whether the room is currently advertised over mDNS (§1).
+  bool get discoverable => _advertiser != null;
 
   /// mediaId → absolute local path, for the controller's media resolver.
   final Map<String, String> _mediaPaths = {};
@@ -408,6 +427,8 @@ class JamHostEngine extends JamEngine {
   Future<void> close() async {
     if (_closed) return;
     _closed = true;
+    await _advertiser?.stop();
+    _advertiser = null;
     await stopSessionGuards();
     await _eventsSub?.cancel();
     _eventsSub = null;

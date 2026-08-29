@@ -14,6 +14,7 @@ import 'package:path_provider/path_provider.dart';
 
 import 'audio_sync_controller.dart';
 import 'jam_engine.dart';
+import 'jam_identity.dart';
 import 'media_cache.dart';
 import 'media_mime.dart';
 
@@ -183,7 +184,9 @@ class JamGuestEngine extends JamEngine {
   /// [SocketException] if no host candidate is reachable.
   static Future<JamGuestEngine> join(
     Uri joinUri, {
-    String clientName = 'guest',
+    /// Display name announced to the room (§3.1). Defaults to the device's
+    /// persistent quirky [JamIdentity.displayName] ("Neon Walrus").
+    String? clientName,
     String clientKind = 'flutter',
     Directory? mediaCacheDir,
     JamPrefetchPolicy prefetchPolicy = const JamPrefetchPolicy(),
@@ -193,7 +196,7 @@ class JamGuestEngine extends JamEngine {
   }) async {
     final session = await JamGuestSession.connect(
       joinUri,
-      clientName: clientName,
+      clientName: clientName ?? await JamIdentity.displayName(),
       clientKind: clientKind,
       backoff: backoff,
     );

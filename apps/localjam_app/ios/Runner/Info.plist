@@ -28,6 +28,12 @@
 	<true/>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>LocalJam connects to other devices on your Wi-Fi to host and join synchronized listening sessions.</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_localjam._tcp</string>
+	</array>
+	<key>NSCameraUsageDescription</key>
+	<string>LocalJam uses the camera to scan a room&#39;s join QR code.</string>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>audio</string>

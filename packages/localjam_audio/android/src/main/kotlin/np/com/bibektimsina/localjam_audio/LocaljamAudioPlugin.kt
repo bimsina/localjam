@@ -358,6 +358,7 @@ class LocaljamAudioPlugin :
     private lateinit var eventChannel: EventChannel
     private var keepAliveChannel: MethodChannel? = null
     private var mediaSessionChannel: MethodChannel? = null
+    private var mediaLibrary: JamMediaLibrary? = null
     private var appContext: Context? = null
     private var audioManager: AudioManager? = null
 
@@ -399,6 +400,9 @@ class LocaljamAudioPlugin :
         handlerThread = thread
         bgHandler = Handler(thread.looper)
         registerRouteCallback()
+
+        // Device music library (JamMediaLibrary.kt).
+        mediaLibrary = JamMediaLibrary(binding.applicationContext, binding.binaryMessenger)
 
         // Session keep-alive + OS media session (JamSession.kt). The
         // keep-alive channel keeps the pre-existing `localjam/keepalive`
@@ -450,6 +454,8 @@ class LocaljamAudioPlugin :
         mediaSessionChannel?.setMethodCallHandler(null)
         mediaSessionChannel = null
         JamMediaSessionManager.dispose()
+        mediaLibrary?.dispose()
+        mediaLibrary = null
         synchronized(lock) {
             bumpGenerationLocked()
             releaseTrackLocked()

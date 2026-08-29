@@ -6,8 +6,10 @@ import 'package:flutter/material.dart';
 import 'package:localjam_client/localjam_client.dart';
 
 import '../util/format.dart';
+import '../util/permissions.dart';
 import '../widgets/artwork.dart';
 import '../widgets/nudge_slider.dart';
+import 'scan_screen.dart';
 import '../widgets/sync_telemetry_strip.dart';
 
 /// Guest flow: paste a `localjam://join?...` URI and hand everything else —
@@ -33,10 +35,26 @@ class _JoinScreenState extends State<JoinScreen> {
   final List<StreamSubscription<Object?>> _subs = [];
   Timer? _uiTicker;
 
+  /// Nearby-room discovery (§1): running while the connect form is shown.
+  final JamRoomBrowser _browser = JamRoomBrowser();
+
   bool get _joined => _engine != null;
 
   @override
+  void initState() {
+    super.initState();
+    _browser.rooms.addListener(_onNearbyRooms);
+    unawaited(_browser.start());
+  }
+
+  void _onNearbyRooms() {
+    if (mounted) setState(() {});
+  }
+
+  @override
   void dispose() {
+    _browser.rooms.removeListener(_onNearbyRooms);
+    unawaited(_browser.stop());
     _uiTicker?.cancel();
     for (final sub in _subs) {
       sub.cancel();
@@ -59,13 +77,16 @@ class _JoinScreenState extends State<JoinScreen> {
 
   // --- Connect -----------------------------------------------------------------
 
-  Future<void> _connect() async {
-    final raw = _uriController.text.trim();
+  Future<void> _connect({String? uriOverride}) async {
+    final raw = uriOverride ?? _uriController.text.trim();
     if (raw.isEmpty || _connecting) return;
+    if (uriOverride != null) _uriController.text = uriOverride;
     setState(() {
       _connecting = true;
       _connectError = null;
     });
+    // Android 17 gates LAN sockets behind a runtime permission.
+    await ensureLocalNetworkPermission();
 
     final Uri joinUri;
     try {
@@ -79,10 +100,8 @@ class _JoinScreenState extends State<JoinScreen> {
     }
 
     try {
-      final engine = await JamGuestEngine.join(
-        joinUri,
-        clientName: Platform.localHostname,
-      );
+      // clientName defaults to the device's persistent quirky JamIdentity.
+      final engine = await JamGuestEngine.join(joinUri);
       _engine = engine;
       void refresh(Object? _) {
         if (mounted) setState(() {});
@@ -184,13 +203,66 @@ class _JoinScreenState extends State<JoinScreen> {
     );
   }
 
+  Future<void> _scanQr() async {
+    final scanned = await Navigator.of(context).push<String>(
+      MaterialPageRoute(builder: (_) => const ScanScreen()),
+    );
+    if (scanned == null || !mounted) return;
+    await _connect(uriOverride: scanned);
+  }
+
   Widget _buildConnect(BuildContext context) {
     final theme = Theme.of(context);
+    final nearby = _browser.rooms.value;
     return ListView(
       padding: const EdgeInsets.all(24),
       children: [
+        // --- Nearby rooms (§1 mDNS discovery) -------------------------------
+        Text('Nearby jams', style: theme.textTheme.titleMedium),
+        const SizedBox(height: 8),
+        if (nearby.isEmpty)
+          Text(
+            'No rooms found on this network yet — scan the host\'s QR or '
+            'paste their join link below.',
+            style: theme.textTheme.bodyMedium?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+          )
+        else
+          Card(
+            child: Column(
+              children: [
+                for (final room in nearby)
+                  ListTile(
+                    leading: const Icon(Icons.speaker_group_outlined),
+                    title: Text(
+                      room.sessionName,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    subtitle: Text(
+                      room.joinUri.queryParameters['host'] ?? '',
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    trailing: const Icon(Icons.login),
+                    onTap: _connecting
+                        ? null
+                        : () => _connect(uriOverride: '${room.joinUri}'),
+                  ),
+              ],
+            ),
+          ),
+        const SizedBox(height: 16),
+        // mobile_scanner has no Windows/Linux implementation.
+        if (Platform.isAndroid || Platform.isIOS || Platform.isMacOS) ...[
+          OutlinedButton.icon(
+            icon: const Icon(Icons.qr_code_scanner),
+            label: const Text('Scan QR code'),
+            onPressed: _connecting ? null : _scanQr,
+          ),
+          const SizedBox(height: 24),
+        ],
         Text(
-          'Paste the join URI from the host\'s screen.',
+          'Or paste the join URI from the host\'s screen.',
           style: theme.textTheme.bodyMedium?.copyWith(
             color: theme.colorScheme.onSurfaceVariant,
           ),

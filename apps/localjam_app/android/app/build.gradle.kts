@@ -6,7 +6,8 @@ plugins {
 
 android {
     namespace = "np.com.bibektimsina.localjam_app"
-    compileSdk = flutter.compileSdkVersion
+    // permission_handler 13 (ACCESS_LOCAL_NETWORK support) needs API 37.
+    compileSdk = maxOf(flutter.compileSdkVersion, 37)
     ndkVersion = flutter.ndkVersion
 
     compileOptions {

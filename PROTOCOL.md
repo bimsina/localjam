@@ -54,9 +54,21 @@ localjam://join?v=1&host=192.168.1.7&port=44100&token=<sessionToken>&name=RoadTr
 (The host may listen on multiple interfaces and encode several `host` candidates,
 comma-separated; guests try them in order.)
 
-Secondary (later): mDNS advertisement `_localjam._tcp` with the same fields in
-TXT records, for in-app "nearby sessions" listing. QR is the v1 path — it works
-on hotspots and networks where mDNS is blocked.
+Secondary (v0.2): mDNS/Bonjour advertisement for in-app "nearby rooms"
+listing. Hosts that opt in ("discoverable") advertise `_localjam._tcp` with
+TXT records:
+
+```
+v=<protocolVersion>  name=<sessionName>  token=<sessionToken>
+```
+
+Joiners resolve the service (addresses + port come from mDNS itself) and
+build the same `localjam://join` URI. Including the token makes a
+discoverable room one-tap joinable by ANYONE on the network — presence on
+the LAN is the invitation (§9), which is why it is host-opt-in per session.
+QR/link remains the first-class path — mDNS is blocked on hotspots,
+guest-isolated Wi-Fi, and unlisted Bonjour types on Apple platforms
+(`NSBonjourServices` must contain `_localjam._tcp`).
 
 ---
 
@@ -444,7 +456,9 @@ Codes: `bad_token`, `version_unsupported`, `session_full`, `media_gone`,
 ## 9. Security model (v1 = honest-guest, hostile-network-lite)
 
 - The session token (128-bit random, in the QR) gates both planes. Possession
-  of the QR = invitation.
+  of the QR = invitation. A host that opts into mDNS discovery (§1)
+  broadcasts the token to its network segment — deliberately widening the
+  invitation to "everyone on this Wi-Fi" for that session.
 - Traffic is plaintext in v1 (it's your living room / car). TLS with a
   self-signed cert pinned via the QR is the upgrade path — required before any
   future web guest client (browser secure-context rules), optional until then.

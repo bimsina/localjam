@@ -9,6 +9,7 @@ import 'package:localjam_client/localjam_client.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
 import '../util/format.dart';
+import '../util/permissions.dart';
 import '../widgets/artwork.dart';
 import '../widgets/nudge_slider.dart';
 import '../widgets/sync_telemetry_strip.dart';
@@ -35,6 +36,13 @@ class _HostScreenState extends State<HostScreen> {
   /// [JamHostEngine.setPolicy].
   JamPolicy _policy = JamPolicy.jam;
 
+  /// Whether the room is advertised over mDNS for nearby one-tap join (§1).
+  bool _discoverable = true;
+
+  /// Library tracks picked (Android), resolved lazily at session start:
+  /// MediaStore id → track.
+  final Map<int, JamLibraryTrack> _pickedLibraryTracks = {};
+
   JamHostEngine? _engine;
   bool _starting = false;
   String? _setupError;
@@ -52,6 +60,18 @@ class _HostScreenState extends State<HostScreen> {
   void initState() {
     super.initState();
     _scanDocumentsDirectory();
+    _defaultSessionName();
+  }
+
+  /// Default the room name to the device's quirky identity ("Neon Walrus's
+  /// Jam") unless the user already typed something.
+  Future<void> _defaultSessionName() async {
+    final name = await JamIdentity.displayName();
+    if (!mounted) return;
+    final current = _nameController.text.trim();
+    if (current.isEmpty || current == 'LocalJam') {
+      _nameController.text = "$name's Jam";
+    }
   }
 
   @override
@@ -100,20 +120,82 @@ class _HostScreenState extends State<HostScreen> {
     }
   }
 
+  /// Android library picker: request permission, query, multi-select sheet.
+  Future<void> _pickFromLibrary() async {
+    if (!await ensureAudioLibraryPermission()) {
+      if (mounted) {
+        setState(() => _setupError = 'Music library permission was denied.');
+      }
+      return;
+    }
+    final List<JamLibraryTrack> tracks;
+    try {
+      tracks = await JamMediaLibrary.queryAudio();
+    } on JamLibraryPermissionException {
+      if (mounted) {
+        setState(() => _setupError = 'Music library permission was denied.');
+      }
+      return;
+    }
+    if (!mounted) return;
+    if (tracks.isEmpty) {
+      setState(() => _setupError = 'No music found in the device library.');
+      return;
+    }
+    final selected = Set<int>.of(_pickedLibraryTracks.keys);
+    final confirmed = await showModalBottomSheet<Set<int>>(
+      context: context,
+      isScrollControlled: true,
+      builder: (context) => _LibraryPickerSheet(
+        tracks: tracks,
+        initiallySelected: selected,
+      ),
+    );
+    if (confirmed == null || !mounted) return;
+    setState(() {
+      _setupError = null;
+      _pickedLibraryTracks
+        ..clear()
+        ..addEntries([
+          for (final track in tracks)
+            if (confirmed.contains(track.id)) MapEntry(track.id, track),
+        ]);
+    });
+  }
+
   Future<void> _startSession() async {
-    if (_pickedPaths.isEmpty || _starting) return;
+    if ((_pickedPaths.isEmpty && _pickedLibraryTracks.isEmpty) || _starting) {
+      return;
+    }
     setState(() {
       _starting = true;
       _setupError = null;
     });
+    // Android 17 gates LAN sockets behind a runtime permission.
+    await ensureLocalNetworkPermission();
     final name = _nameController.text.trim().isEmpty
         ? 'LocalJam'
         : _nameController.text.trim();
     JamHostEngine? engine;
     try {
-      engine = await JamHostEngine.start(sessionName: name, policy: _policy);
+      engine = await JamHostEngine.start(
+        sessionName: name,
+        policy: _policy,
+        discoverable: _discoverable,
+      );
       for (final path in _pickedPaths) {
         await engine.addMediaFile(File(path));
+      }
+      // Library picks resolve to readable paths (cache copies under scoped
+      // storage) as they are added.
+      for (final track in _pickedLibraryTracks.values) {
+        final path = await JamMediaLibrary.resolve(track);
+        if (path != null) {
+          await engine.addMediaFile(File(path), name: track.title);
+        }
+      }
+      if (engine.playlist.isEmpty) {
+        throw StateError('none of the selected tracks could be read');
       }
       engine.setMedia(engine.playlist.first.mediaId);
 
@@ -253,11 +335,28 @@ class _HostScreenState extends State<HostScreen> {
             color: theme.colorScheme.onSurfaceVariant,
           ),
         ),
-        const SizedBox(height: 24),
+        const SizedBox(height: 16),
+        SwitchListTile(
+          contentPadding: EdgeInsets.zero,
+          title: const Text('Discoverable on this network'),
+          subtitle: const Text(
+            'Nearby devices see the room and can join with one tap — no QR '
+            'needed. Anyone on the Wi-Fi counts as invited.',
+          ),
+          value: _discoverable,
+          onChanged: (v) => setState(() => _discoverable = v),
+        ),
+        const SizedBox(height: 8),
         Row(
           children: [
             Text('Playlist', style: theme.textTheme.titleMedium),
             const Spacer(),
+            if (JamMediaLibrary.isSupported)
+              TextButton.icon(
+                icon: const Icon(Icons.library_music_outlined),
+                label: const Text('Library'),
+                onPressed: _pickFromLibrary,
+              ),
             TextButton.icon(
               icon: const Icon(Icons.add),
               label: const Text('Add files'),
@@ -265,7 +364,32 @@ class _HostScreenState extends State<HostScreen> {
             ),
           ],
         ),
-        if (_pickedPaths.isEmpty)
+        if (_pickedLibraryTracks.isNotEmpty)
+          Card(
+            child: Column(
+              children: [
+                for (final track in _pickedLibraryTracks.values)
+                  ListTile(
+                    dense: true,
+                    leading: const Icon(Icons.library_music_outlined),
+                    title: Text(track.title, overflow: TextOverflow.ellipsis),
+                    subtitle: track.artist == null
+                        ? null
+                        : Text(
+                            track.artist!,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                    trailing: IconButton(
+                      icon: const Icon(Icons.close, size: 18),
+                      onPressed: () => setState(
+                        () => _pickedLibraryTracks.remove(track.id),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        if (_pickedPaths.isEmpty && _pickedLibraryTracks.isEmpty)
           Padding(
             padding: const EdgeInsets.symmetric(vertical: 24),
             child: Text(
@@ -319,7 +443,11 @@ class _HostScreenState extends State<HostScreen> {
                 )
               : const Icon(Icons.wifi_tethering),
           label: Text(_starting ? 'Starting…' : 'Start session'),
-          onPressed: _pickedPaths.isEmpty || _starting ? null : _startSession,
+          onPressed:
+              (_pickedPaths.isEmpty && _pickedLibraryTracks.isEmpty) ||
+                  _starting
+              ? null
+              : _startSession,
         ),
       ],
     );
@@ -708,6 +836,79 @@ class _HostScreenState extends State<HostScreen> {
             ],
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// Multi-select sheet over the device music library (Android). Pops with
+/// the selected MediaStore ids, or null when dismissed.
+class _LibraryPickerSheet extends StatefulWidget {
+  const _LibraryPickerSheet({
+    required this.tracks,
+    required this.initiallySelected,
+  });
+
+  final List<JamLibraryTrack> tracks;
+  final Set<int> initiallySelected;
+
+  @override
+  State<_LibraryPickerSheet> createState() => _LibraryPickerSheetState();
+}
+
+class _LibraryPickerSheetState extends State<_LibraryPickerSheet> {
+  late final Set<int> _selected = Set.of(widget.initiallySelected);
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return SafeArea(
+      child: SizedBox(
+        height: MediaQuery.of(context).size.height * 0.75,
+        child: Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(24, 16, 16, 8),
+              child: Row(
+                children: [
+                  Text('Your music', style: theme.textTheme.titleMedium),
+                  const Spacer(),
+                  TextButton(
+                    onPressed: () => Navigator.of(context).pop(_selected),
+                    child: Text('Add (${_selected.length})'),
+                  ),
+                ],
+              ),
+            ),
+            const Divider(height: 1),
+            Expanded(
+              child: ListView.builder(
+                itemCount: widget.tracks.length,
+                itemBuilder: (context, index) {
+                  final track = widget.tracks[index];
+                  return CheckboxListTile(
+                    dense: true,
+                    value: _selected.contains(track.id),
+                    title: Text(track.title, overflow: TextOverflow.ellipsis),
+                    subtitle: track.artist == null
+                        ? null
+                        : Text(
+                            track.artist!,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                    onChanged: (checked) => setState(() {
+                      if (checked ?? false) {
+                        _selected.add(track.id);
+                      } else {
+                        _selected.remove(track.id);
+                      }
+                    }),
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
