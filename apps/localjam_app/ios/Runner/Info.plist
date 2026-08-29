@@ -59,6 +59,20 @@
 			</array>
 		</dict>
 	</dict>
+	<!-- localjam://join?… links (QR, share sheet, Messages) open the app. -->
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>CFBundleURLName</key>
+			<string>np.com.bibektimsina.localjam</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>localjam</string>
+			</array>
+		</dict>
+	</array>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
 	<key>UILaunchStoryboardName</key>

@@ -3,6 +3,7 @@
 library;
 
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
 class ScanScreen extends StatefulWidget {
@@ -22,7 +23,7 @@ class _ScanScreenState extends State<ScanScreen> {
       if (value == null) continue;
       if (!value.trim().startsWith('localjam://')) continue;
       _done = true;
-      Navigator.of(context).pop(value.trim());
+      context.pop(value.trim());
       return;
     }
   }
@@ -39,7 +40,7 @@ class _ScanScreenState extends State<ScanScreen> {
             child: Padding(
               padding: const EdgeInsets.all(24),
               child: Text(
-                'Point at the host\'s QR code',
+                'Point at the host’s code',
                 style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                   color: Colors.white,
                   shadows: const [Shadow(blurRadius: 8)],

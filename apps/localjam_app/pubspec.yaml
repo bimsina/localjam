@@ -17,6 +17,14 @@ dependencies:
   localjam_client:
     path: ../../packages/localjam_client
 
+  # Declarative routing + a shell for the docked room bar, and OS-level
+  # localjam:// deep links (custom schemes need this on desktop too).
+  go_router: ^17.3.0
+  app_links: ^6.4.1
+
+  # Appearance preference (Light / Dark / System).
+  shared_preferences: ^2.5.5
+
   qr_flutter: ^4.1.0
   file_selector: ^1.0.3
   permission_handler: ^13.0.1

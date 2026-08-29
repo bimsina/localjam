@@ -1,12 +1,18 @@
-/// Past jams: every session leaves a record (queue + who added what + who
-/// was there); tracks still in the local cache can seed a new session
-/// ("Host it again").
+/// Past jams: every session leaves a record (queue + who added what + who was
+/// there); tracks still on this device can seed a new room in one tap.
 library;
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
 import 'package:localjam_client/localjam_client.dart';
 
-import 'host_screen.dart';
+import '../design/tokens.dart';
+import '../design/typography.dart';
+import '../router.dart';
+import '../widgets/peer_avatar.dart';
+import '../widgets/section.dart';
 
 class HistoryScreen extends StatefulWidget {
   const HistoryScreen({super.key});
@@ -22,7 +28,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
   @override
   void initState() {
     super.initState();
-    _load();
+    unawaited(_load());
   }
 
   Future<void> _load() async {
@@ -39,22 +45,18 @@ class _HistoryScreenState extends State<HistoryScreen> {
   }
 
   void _hostAgain(JamHistoryRecord record) {
-    Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => HostScreen(
-          initialPaths: [
-            for (final track in record.replayableTracks) track.localPath!,
-          ],
-          initialName: record.sessionName,
-        ),
+    context.push(
+      '/host',
+      extra: HostSetupArgs(
+        paths: [for (final track in record.replayableTracks) track.localPath!],
+        name: record.sessionName,
       ),
     );
   }
 
-  String _when(DateTime time) {
-    final now = DateTime.now();
-    final difference = now.difference(time);
-    if (difference.inMinutes < 1) return 'just now';
+  static String _when(DateTime time) {
+    final difference = DateTime.now().difference(time);
+    if (difference.inMinutes < 1) return 'Just now';
     if (difference.inHours < 1) return '${difference.inMinutes} min ago';
     if (difference.inDays < 1) return '${difference.inHours} h ago';
     if (difference.inDays < 30) return '${difference.inDays} d ago';
@@ -64,101 +66,171 @@ class _HistoryScreenState extends State<HistoryScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
     final records = _records;
     return Scaffold(
       appBar: AppBar(title: const Text('Past jams')),
-      body: records == null
-          ? const Center(child: CircularProgressIndicator())
-          : records.isEmpty
-          ? Center(
-              child: Padding(
-                padding: const EdgeInsets.all(32),
-                child: Text(
-                  'No jams yet — every session you host or join will show '
-                  'up here, queue and all.',
-                  textAlign: TextAlign.center,
-                  style: theme.textTheme.bodyMedium?.copyWith(
-                    color: theme.colorScheme.onSurfaceVariant,
-                  ),
-                ),
-              ),
-            )
-          : ListView(
-              padding: const EdgeInsets.all(12),
-              children: [
-                for (final record in records) _buildRecord(theme, record),
-              ],
-            ),
+      body: switch (records) {
+        null => const Center(child: CircularProgressIndicator()),
+        [] => const _NoHistory(),
+        _ => ListView.separated(
+          padding: const EdgeInsets.fromLTRB(
+            JamSpace.page,
+            JamSpace.sm,
+            JamSpace.page,
+            JamSpace.huge,
+          ),
+          itemCount: records.length,
+          separatorBuilder: (_, _) => const SizedBox(height: JamSpace.section),
+          itemBuilder: (context, index) => _RecordCard(
+            record: records[index],
+            onForget: () => unawaited(_delete(records[index])),
+            onHostAgain: () => _hostAgain(records[index]),
+          ),
+        ),
+      },
     );
   }
+}
 
-  Widget _buildRecord(ThemeData theme, JamHistoryRecord record) {
+class _RecordCard extends StatelessWidget {
+  const _RecordCard({
+    required this.record,
+    required this.onForget,
+    required this.onHostAgain,
+  });
+
+  final JamHistoryRecord record;
+  final VoidCallback onForget;
+  final VoidCallback onHostAgain;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.jamColors;
     final replayable = record.replayableTracks.length;
-    return Card(
-      child: ExpansionTile(
-        leading: Icon(record.wasHost ? Icons.wifi_tethering : Icons.headphones),
-        title: Text(record.sessionName, overflow: TextOverflow.ellipsis),
-        subtitle: Text(
-          [
-            _when(record.updatedAt),
-            '${record.tracks.length} track${record.tracks.length == 1 ? '' : 's'}',
-            if (record.peerNames.isNotEmpty)
-              'with ${record.peerNames.join(', ')}',
-          ].join(' · '),
-          maxLines: 2,
-          overflow: TextOverflow.ellipsis,
-        ),
+    final trackCount = record.tracks.length;
+
+    return JamSection(
+      title: record.sessionName,
+      trailing: Text(
+        _HistoryScreenState._when(record.updatedAt),
+        style: context.jamFootnote,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          for (final track in record.tracks)
+          Padding(
+            padding: const EdgeInsets.all(JamSpace.card),
+            child: Row(
+              children: [
+                Icon(
+                  record.wasHost
+                      ? Icons.wifi_tethering_rounded
+                      : Icons.headphones_rounded,
+                  size: 18,
+                  color: colors.textSecondary,
+                ),
+                const SizedBox(width: JamSpace.sm),
+                Expanded(
+                  child: Text(
+                    '${record.wasHost ? 'You hosted' : 'You joined'} · '
+                    '$trackCount ${trackCount == 1 ? 'track' : 'tracks'}',
+                    style: context.jamByline,
+                  ),
+                ),
+                if (record.peerNames.isNotEmpty)
+                  PeerAvatarRow(
+                    names: record.peerNames,
+                    size: 26,
+                    maxVisible: 4,
+                  ),
+              ],
+            ),
+          ),
+          Divider(height: 0.5, color: colors.separator),
+          for (final track in record.tracks.take(4))
             ListTile(
               dense: true,
-              leading: Icon(
-                track.existsLocally
-                    ? Icons.audio_file
-                    : Icons.audio_file_outlined,
-                color: track.existsLocally
-                    ? theme.colorScheme.primary
-                    : theme.colorScheme.onSurfaceVariant,
-              ),
               title: Text(
                 track.item.displayTitle,
+                maxLines: 1,
                 overflow: TextOverflow.ellipsis,
+                style: context.jamBody.copyWith(
+                  color: track.existsLocally
+                      ? colors.textPrimary
+                      : colors.textTertiary,
+                ),
               ),
               subtitle: Text(
                 [
-                  if (track.item.artist != null) track.item.artist!,
+                  ?track.item.artist,
                   if (track.addedByName != null)
                     'added by ${track.addedByName}',
-                  if (!track.existsLocally) 'no longer on this device',
+                  if (!track.existsLocally) 'gone from this device',
                 ].join(' · '),
+                maxLines: 1,
                 overflow: TextOverflow.ellipsis,
               ),
             ),
+          if (trackCount > 4)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(
+                JamSpace.page,
+                0,
+                JamSpace.page,
+                JamSpace.sm,
+              ),
+              child: Text(
+                '+ ${trackCount - 4} more',
+                style: context.jamFootnote,
+              ),
+            ),
+          Divider(height: 0.5, color: colors.separator),
           Padding(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+            padding: const EdgeInsets.all(JamSpace.md),
             child: Row(
-              mainAxisAlignment: MainAxisAlignment.end,
               children: [
-                TextButton.icon(
-                  icon: const Icon(Icons.delete_outline, size: 18),
-                  label: const Text('Forget'),
-                  onPressed: () => _delete(record),
-                ),
-                const SizedBox(width: 8),
-                FilledButton.tonalIcon(
-                  icon: const Icon(Icons.replay, size: 18),
-                  label: Text(
-                    replayable == record.tracks.length
+                TextButton(onPressed: onForget, child: const Text('Forget')),
+                const Spacer(),
+                FilledButton(
+                  onPressed: replayable == 0 ? null : onHostAgain,
+                  child: Text(
+                    replayable == trackCount
                         ? 'Host it again'
-                        : 'Host again ($replayable playable)',
+                        : 'Host $replayable again',
                   ),
-                  onPressed: replayable == 0 ? null : () => _hostAgain(record),
                 ),
               ],
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _NoHistory extends StatelessWidget {
+  const _NoHistory();
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.jamColors;
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(JamSpace.xxxl),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.history_rounded, size: 40, color: colors.textTertiary),
+            const SizedBox(height: JamSpace.lg),
+            Text('No jams yet', style: context.jamTitle),
+            const SizedBox(height: JamSpace.sm),
+            Text(
+              'Every room you host or join shows up here, queue and all.',
+              textAlign: TextAlign.center,
+              style: context.jamByline,
+            ),
+          ],
+        ),
       ),
     );
   }

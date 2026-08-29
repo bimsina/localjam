@@ -1,4 +1,8 @@
-/// Cover-art rendering for playlist items (PROTOCOL.md §6.5).
+/// Cover-art rendering (PROTOCOL.md §6.5).
+///
+/// Artwork is the only thing on screen with real colour, so it gets a hairline
+/// on light grounds — without one, a pale cover dissolves into a white page.
+/// On dark the lightness step is separation enough.
 library;
 
 import 'dart:typed_data';
@@ -6,16 +10,18 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:localjam_client/localjam_client.dart';
 
+import '../design/tokens.dart';
+
 /// The artwork for [item], loaded through [JamEngine.artworkFor] (hosts read
-/// their own registry, guests fetch-and-cache), with a placeholder [icon]
-/// while loading, on failure, or when the item has no artwork at all.
+/// their own registry, guests fetch-and-cache), with a placeholder while
+/// loading, on failure, or when the item has no artwork at all.
 class JamArtwork extends StatelessWidget {
   const JamArtwork({
     super.key,
     required this.engine,
     required this.item,
-    this.size = 40,
-    this.icon = Icons.audio_file_outlined,
+    this.size = JamArtworkSize.thumb,
+    this.icon = Icons.music_note_rounded,
   });
 
   final JamEngine engine;
@@ -25,20 +31,27 @@ class JamArtwork extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final colors = context.jamColors;
+    final isLight = Theme.of(context).brightness == Brightness.light;
+    final radius = BorderRadius.circular(JamRadius.artwork(size));
     final current = item;
-    Widget placeholder() => Container(
+
+    Widget frame(Widget child) => Container(
       width: size,
       height: size,
+      clipBehavior: Clip.antiAlias,
       decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surfaceContainerHighest,
-        borderRadius: BorderRadius.circular(size / 8),
+        color: colors.surfaceMuted,
+        borderRadius: radius,
+        border: isLight
+            ? Border.all(color: colors.separator, width: 0.5)
+            : null,
       ),
-      child: Icon(
-        icon,
-        size: size * 0.55,
-        color: Theme.of(context).colorScheme.onSurfaceVariant,
-      ),
+      child: child,
     );
+
+    Widget placeholder() =>
+        frame(Icon(icon, size: size * 0.4, color: colors.textTertiary));
 
     if (current?.artworkId == null) return placeholder();
     return FutureBuilder<Uint8List?>(
@@ -48,15 +61,15 @@ class JamArtwork extends StatelessWidget {
       builder: (context, snapshot) {
         final bytes = snapshot.data;
         if (bytes == null) return placeholder();
-        return ClipRRect(
-          borderRadius: BorderRadius.circular(size / 8),
-          child: Image.memory(
+        return frame(
+          Image.memory(
             bytes,
             width: size,
             height: size,
             fit: BoxFit.cover,
             gaplessPlayback: true,
-            errorBuilder: (_, _, _) => placeholder(),
+            errorBuilder: (_, _, _) =>
+                Icon(icon, size: size * 0.4, color: colors.textTertiary),
           ),
         );
       },
@@ -65,7 +78,7 @@ class JamArtwork extends StatelessWidget {
 }
 
 /// The one-line artist/album byline for [item], or null when untagged —
-/// callers show their own fallback (mime, fetch state, nothing).
+/// callers show their own fallback.
 String? artworkByline(MediaItem item) {
   final artist = item.artist;
   final album = item.album;

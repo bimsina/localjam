@@ -2,8 +2,34 @@
 /// CLI's mapping so mediaIds stay content-addressed the same way.
 library;
 
-/// Audio extensions the pickers and the Documents-directory scan accept.
-const supportedAudioExtensions = ['mp3', 'm4a', 'aac', 'wav'];
+import 'package:flutter/foundation.dart';
+
+/// Audio extensions the pickers and the Documents-directory scan accept, for
+/// the platform actually running.
+///
+/// One flat list got this wrong in both directions: it offered `m4a`/`aac`
+/// on Windows and Linux, where the shared miniaudio core rejects them with
+/// `unsupported_format`, and it hid `flac` and `ogg` everywhere — which is
+/// most of what an offline music collection is made of.
+///
+/// * Apple: AVAudioEngine plays the AAC family and FLAC, but has no native
+///   Ogg/Opus.
+/// * Android: MediaCodec covers everything here.
+/// * Windows/Linux: miniaudio + dr_libs — mp3/flac/wav/ogg only.
+List<String> get supportedAudioExtensions => switch (defaultTargetPlatform) {
+  TargetPlatform.iOS ||
+  TargetPlatform.macOS => const ['mp3', 'm4a', 'aac', 'wav', 'flac'],
+  TargetPlatform.android => const [
+    'mp3',
+    'm4a',
+    'aac',
+    'wav',
+    'flac',
+    'ogg',
+    'opus',
+  ],
+  _ => const ['mp3', 'wav', 'flac', 'ogg'],
+};
 
 String mimeForPath(String path) {
   final dot = path.lastIndexOf('.');
