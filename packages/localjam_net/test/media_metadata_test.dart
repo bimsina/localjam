@@ -7,31 +7,30 @@ import 'dart:typed_data';
 import 'package:localjam_net/localjam_net.dart';
 import 'package:test/test.dart';
 
-final _taggedFixture = File('../../test-media/track1_tagged.m4a');
-final _untaggedFixture = File('../../test-media/track1.m4a');
+import 'test_fixtures.dart';
 
 void main() {
-  test('reads title/artist/album, duration, and artwork from a tagged m4a',
+  test('reads title/artist/album, duration, and artwork from a tagged mp3',
       () async {
-    final tags = await readAudioTags(_taggedFixture);
+    final tags = await readAudioTags(await makeTaggedMp3());
     expect(tags.title, 'Night Drive');
     expect(tags.artist, 'The Localhosts');
     expect(tags.album, 'Loopback Sessions');
     expect(tags.durationUs, isNotNull);
     expect(tags.durationUs, greaterThan(0));
     expect(tags.hasArtwork, isTrue);
-    expect(tags.artworkBytes, isNotEmpty);
+    expect(tags.artworkBytes, equals(tinyPngBytes));
     expect(tags.artworkMime, 'image/png');
   });
 
-  test('an untagged file yields nulls but still a tag-declared duration',
+  test('an untagged file yields nulls but still a container duration',
       () async {
-    final tags = await readAudioTags(_untaggedFixture);
+    final tags = await readAudioTags(await makeUntaggedMp3());
     expect(tags.title, isNull);
     expect(tags.artist, isNull);
     expect(tags.album, isNull);
     expect(tags.hasArtwork, isFalse);
-    // The m4a container still declares its duration.
+    // The MPEG frames still yield a duration.
     expect(tags.durationUs, greaterThan(0));
   });
 

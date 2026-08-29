@@ -11,6 +11,8 @@ import 'package:crypto/crypto.dart';
 import 'package:localjam_net/localjam_net.dart';
 import 'package:test/test.dart';
 
+import 'test_fixtures.dart';
+
 const _codec = MessageCodec();
 
 /// Deterministic pseudo-random media payload.
@@ -507,18 +509,16 @@ void main() {
   });
 
   group('tag metadata + artwork (§6.1 v0.2, §6.5)', () {
-    final taggedFixture = File('../../test-media/track1_tagged.m4a');
-
     test('audio upload gets host-extracted tags, artwork, and tag duration '
         'when no duration header is sent', () async {
       final host = await startHost();
       final uploader = await joinGuest(host, clientName: 'uploader');
 
       final item = await uploader.uploadMedia(
-        taggedFixture,
+        await makeTaggedMp3(),
         kind: MediaKind.audio,
-        name: 'track1_tagged.m4a',
-        mime: 'audio/mp4',
+        name: 'tagged.mp3',
+        mime: 'audio/mpeg',
         // No durationUs: the host falls back to the tag-declared duration.
       );
       expect(item.title, 'Night Drive');
@@ -545,9 +545,9 @@ void main() {
       final host = await startHost();
       final uploader = await joinGuest(host);
       final item = await uploader.uploadMedia(
-        taggedFixture,
+        await makeTaggedMp3(),
         kind: MediaKind.audio,
-        mime: 'audio/mp4',
+        mime: 'audio/mpeg',
         durationUs: 1_234_567,
       );
       expect(item.durationUs, 1_234_567);

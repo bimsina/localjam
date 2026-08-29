@@ -102,14 +102,12 @@ void main() {
       mockAudioChannel(durationUs: 42_000_000);
       final engine = await startEngine();
 
-      final item = await engine.addMediaFile(
-        File('../../test-media/track1_tagged.m4a'),
-      );
+      final item = await engine.addMediaFile(await makeTaggedMp3());
       expect(item.title, 'Night Drive');
       expect(item.artist, 'The Localhosts');
       expect(item.album, 'Loopback Sessions');
       expect(item.displayTitle, 'Night Drive');
-      // The mocked native probe answered 42 s; the tag claims ~42.68 s. The
+      // The mocked native probe answered 42 s; the tag claims ~1 s. The
       // probe wins (§6.1: a decoder probe beats a tag claim).
       expect(item.durationUs, 42_000_000);
       expect(item.artworkId, startsWith('a_'));
