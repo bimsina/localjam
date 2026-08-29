@@ -155,6 +155,10 @@ class MediaItem {
     required this.sizeBytes,
     this.durationUs,
     required this.sha256,
+    this.title,
+    this.artist,
+    this.album,
+    this.artworkId,
   });
 
   final String mediaId;
@@ -169,6 +173,21 @@ class MediaItem {
   /// Lowercase hex digest of the file, for caching and verification.
   final String sha256;
 
+  /// Tag metadata (§6.1), extracted by the host; null when the file carried
+  /// no usable tags. [name] (the display filename) is the fallback.
+  final String? title;
+  final String? artist;
+  final String? album;
+
+  /// Content-derived id of the item's embedded artwork (`a_` + first 12 hex
+  /// chars of the artwork bytes' sha256), fetchable via
+  /// `GET /artwork/{artworkId}` (§6.5). Null when the item has none. Items
+  /// sharing artwork bytes (an album) share one artworkId.
+  final String? artworkId;
+
+  /// The best display title: [title] when tagged, else [name].
+  String get displayTitle => (title?.isNotEmpty ?? false) ? title! : name;
+
   Map<String, Object?> toJson() => {
         'mediaId': mediaId,
         'kind': kind.wire,
@@ -177,6 +196,10 @@ class MediaItem {
         'sizeBytes': sizeBytes,
         'durationUs': durationUs,
         'sha256': sha256,
+        if (title != null) 'title': title,
+        if (artist != null) 'artist': artist,
+        if (album != null) 'album': album,
+        if (artworkId != null) 'artworkId': artworkId,
       };
 
   factory MediaItem.fromJson(Map<String, Object?> json) => MediaItem(
@@ -187,6 +210,10 @@ class MediaItem {
         sizeBytes: (json['sizeBytes'] as int?) ?? 0,
         durationUs: json['durationUs'] as int?,
         sha256: (json['sha256'] as String?) ?? '',
+        title: json['title'] as String?,
+        artist: json['artist'] as String?,
+        album: json['album'] as String?,
+        artworkId: json['artworkId'] as String?,
       );
 
   @override
@@ -198,11 +225,15 @@ class MediaItem {
       other.mime == mime &&
       other.sizeBytes == sizeBytes &&
       other.durationUs == durationUs &&
-      other.sha256 == sha256;
+      other.sha256 == sha256 &&
+      other.title == title &&
+      other.artist == artist &&
+      other.album == album &&
+      other.artworkId == artworkId;
 
   @override
-  int get hashCode =>
-      Object.hash(mediaId, kind, name, mime, sizeBytes, durationUs, sha256);
+  int get hashCode => Object.hash(mediaId, kind, name, mime, sizeBytes,
+      durationUs, sha256, title, artist, album, artworkId);
 }
 
 // ---------------------------------------------------------------------------

@@ -276,6 +276,13 @@ class JamGuestSession {
     );
   }
 
+  /// Fetches artwork bytes (`GET /artwork/{artworkId}`, §6.5) via the
+  /// current client. Throws [StateError] unless connected.
+  Future<Uint8List> fetchArtwork(String artworkId) {
+    _ensureConnected();
+    return _client.fetchArtwork(artworkId);
+  }
+
   /// Uploads [file] to the host (`POST /media`, §6.4) via the current
   /// client, streaming it from disk. Throws [StateError] unless connected.
   Future<MediaItem> uploadMedia(

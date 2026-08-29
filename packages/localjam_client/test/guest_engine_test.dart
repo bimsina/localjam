@@ -144,6 +144,81 @@ void main() {
     },
   );
 
+  test('artworkFor fetches over HTTP, caches to disk, and survives a new '
+      'engine on the same cache (§6.5)', () async {
+    mockAudioChannel();
+    final host = await startHost();
+    final artworkBytes = makeMediaBytes(600, seed: 5);
+    final artworkId = await host.addArtwork(artworkBytes, mime: 'image/png');
+
+    final file = await writeTempMedia(makeMediaBytes(8192));
+    final item = await JamHostServer.describeFile(
+      file,
+      kind: MediaKind.audio,
+      mime: 'audio/mpeg',
+      durationUs: 60_000_000,
+      title: 'Night Drive',
+      artist: 'The Localhosts',
+      artworkId: artworkId,
+    );
+    host.addMedia(item, file);
+
+    final cacheDir = await makeTempDir();
+    final engine = await JamGuestEngine.join(
+      host.joinUriFor(InternetAddress.loopbackIPv4),
+      mediaCacheDir: cacheDir,
+    );
+    addTearDown(engine.close);
+    await waitFor(
+      () => engine.playlist.isNotEmpty,
+      reason: 'playlist to arrive',
+    );
+    final mirrored = engine.playlist.single;
+    expect(mirrored.title, 'Night Drive');
+    expect(mirrored.artist, 'The Localhosts');
+    expect(mirrored.artworkId, artworkId);
+
+    // First call fetches from the host; concurrent calls share one load.
+    final loads = await Future.wait([
+      engine.artworkFor(mirrored),
+      engine.artworkFor(mirrored),
+    ]);
+    expect(loads[0], equals(artworkBytes));
+    expect(loads[1], equals(artworkBytes));
+    // The bytes landed in the persistent cache under the artworkId.
+    expect(
+      await File('${cacheDir.path}/$artworkId').readAsBytes(),
+      equals(artworkBytes),
+    );
+
+    // A fresh engine on the same cache dir serves it from disk — even after
+    // the artwork disappears host-side.
+    await engine.close();
+    host.artworkFile(artworkId)!.deleteSync();
+    final engine2 = await JamGuestEngine.join(
+      host.joinUriFor(InternetAddress.loopbackIPv4),
+      mediaCacheDir: cacheDir,
+    );
+    addTearDown(engine2.close);
+    await waitFor(
+      () => engine2.playlist.isNotEmpty,
+      reason: 'playlist to arrive on rejoin',
+    );
+    expect(
+      await engine2.artworkFor(engine2.playlist.single),
+      equals(artworkBytes),
+    );
+
+    // An item without artwork resolves null.
+    final bare = await JamHostServer.describeFile(
+      file,
+      kind: MediaKind.audio,
+      mediaId: 'm_bare',
+      mime: 'audio/mpeg',
+    );
+    expect(await engine2.artworkFor(bare), isNull);
+  });
+
   test('request path works end to end (§5.2)', () async {
     mockAudioChannel();
     final host = await startHost();

@@ -9,6 +9,7 @@ environment:
   sdk: ^3.12.2
 
 dependencies:
+  audio_metadata_reader: ^1.7.1
   crypto: ^3.0.3
   localjam_core:
     path: ../localjam_core

@@ -96,6 +96,42 @@ void main() {
   );
 
   test(
+    'addMediaFile extracts tags + artwork (§6.1 v0.2, §6.5); the native '
+    'duration probe wins over the tag duration',
+    () async {
+      mockAudioChannel(durationUs: 42_000_000);
+      final engine = await startEngine();
+
+      final item = await engine.addMediaFile(
+        File('../../test-media/track1_tagged.m4a'),
+      );
+      expect(item.title, 'Night Drive');
+      expect(item.artist, 'The Localhosts');
+      expect(item.album, 'Loopback Sessions');
+      expect(item.displayTitle, 'Night Drive');
+      // The mocked native probe answered 42 s; the tag claims ~42.68 s. The
+      // probe wins (§6.1: a decoder probe beats a tag claim).
+      expect(item.durationUs, 42_000_000);
+      expect(item.artworkId, startsWith('a_'));
+
+      // The host reads artwork from its own registry, no HTTP.
+      final artwork = await engine.artworkFor(item);
+      expect(artwork, isNotNull);
+      expect(artwork, isNotEmpty);
+
+      // An untagged file yields an item with null tags and no artwork.
+      final untagged = await engine.addMediaFile(
+        await writeTempMedia(makeMediaBytes(4096)),
+        name: 'Untitled.mp3',
+      );
+      expect(untagged.title, isNull);
+      expect(untagged.artworkId, isNull);
+      expect(untagged.displayTitle, 'Untitled.mp3');
+      expect(await engine.artworkFor(untagged), isNull);
+    },
+  );
+
+  test(
     'next/previous wrap the playlist; transport mirrors the server',
     () async {
       mockAudioChannel();

@@ -1,4 +1,8 @@
-# LocalJam Protocol — v0.1 (draft)
+# LocalJam Protocol — v0.2 (draft)
+
+> v0.1 → v0.2 is purely additive: optional tag metadata on playlist items
+> (§6.1) and the artwork endpoint (§6.5). v0.1 clients interoperate unchanged
+> (unknown JSON fields are ignored per §2).
 
 Synchronized local-network media playback. One **host** owns the files and the
 authoritative session state; N **guests** join over LAN, fetch media, and play
@@ -235,8 +239,15 @@ the broadcast snapshot.
 
 ```
 H→*  playlist { rev, items: [ {mediaId, kind: "audio"|"video"|"image",
-                               name, mime, sizeBytes, durationUs, sha256} ] }
+                               name, mime, sizeBytes, durationUs, sha256,
+                               title?, artist?, album?, artworkId?} ] }
 ```
+
+`title`/`artist`/`album` are tag metadata, `artworkId` references embedded
+cover art servable via §6.5. All four are optional and **host-extracted**:
+the host parses tags itself for both its own files and guest uploads (§6.4),
+so guests never need a tag parser and every client sees identical metadata.
+`name` (the display filename) remains the fallback when tags are absent.
 
 ### 6.2 Transfer
 
@@ -286,7 +297,7 @@ re-encodes the file):
 | `X-LocalJam-Name`        | no       | Display filename, percent-encoded UTF-8          |
 | `X-LocalJam-Mime`        | no       | MIME type (default `application/octet-stream`)   |
 | `X-LocalJam-Kind`        | yes      | `audio` \| `video` \| `image`                    |
-| `X-LocalJam-Duration-Us` | no       | Duration in µs (SHOULD be set for audio, §5.5)   |
+| `X-LocalJam-Duration-Us` | no       | Duration in µs (SHOULD be set for audio, §5.5). When absent the host MAY fall back to the tag-declared duration it extracts (§6.1); a sender-probed value wins because a decoder probe beats a tag claim |
 | `X-LocalJam-Peer-Id`     | no       | Uploader's peerId — informational/diagnostics only |
 
 The host streams the body to disk while hashing incrementally, computes the
@@ -311,6 +322,28 @@ Responses:
 - `413 Content Too Large` — the body exceeds the host's upload size limit
   (host policy; default 512 MB). The host MAY reject from `Content-Length`
   alone without reading the body.
+
+### 6.5 Artwork
+
+Embedded cover art rides the media plane as its own small resource:
+
+```
+GET /artwork/{artworkId}
+Authorization: Bearer <sessionToken>
+```
+
+- `artworkId` = `a_` + first 12 hex chars of the sha256 of the artwork bytes —
+  content-derived like `mediaId`, so every track of an album referencing the
+  same cover bytes shares one artworkId (one transfer per album, and guests
+  can cache across sessions without verification).
+- Responses are full-body 200s with the artwork's `Content-Type` (no `Range`
+  support — covers are small). `401` for a bad/missing token, `404` for an
+  unknown id (including artwork of a playlist item that has since been
+  replaced — clients fall back to no-artwork rendering).
+- The host extracts artwork itself while registering media (§6.1); there is
+  no upload path for standalone artwork.
+- Artwork never gates readiness: `media_status` (§6.3) is about playable
+  bytes only. A guest that never fetches artwork is a fully-ready guest.
 
 ---
 

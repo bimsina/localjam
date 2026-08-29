@@ -420,6 +420,55 @@ class JamGuestEngine extends JamEngine {
     return durationUs;
   }
 
+  // --- Artwork (§6.5) --------------------------------------------------------
+
+  /// In-flight/completed artwork loads by artworkId, so concurrent UI
+  /// requests for the same cover share one fetch. Values are never removed —
+  /// artwork is small and deduped per album — but a failed load stores null
+  /// and is retried on the next call.
+  final Map<String, Future<Uint8List?>> _artworkLoads = {};
+
+  /// Artwork bytes for [item] (§6.5): from the persistent cache when
+  /// present (artwork ids are content-derived, so a disk hit needs no
+  /// verification), else fetched from the host and cached. Null when the
+  /// item has no artwork or the fetch fails (e.g. mid-reconnect) — a
+  /// failure is not sticky, the next call retries. Never throws.
+  @override
+  Future<Uint8List?> artworkFor(MediaItem item) {
+    final artworkId = item.artworkId;
+    if (artworkId == null) return Future.value(null);
+    final pending = _artworkLoads[artworkId];
+    if (pending != null) return pending;
+    final load = _loadArtwork(artworkId);
+    _artworkLoads[artworkId] = load;
+    return load;
+  }
+
+  Future<Uint8List?> _loadArtwork(String artworkId) async {
+    final file = File('${_cache.dir.path}/$artworkId');
+    try {
+      final bytes = await file.readAsBytes();
+      if (bytes.isNotEmpty) return bytes;
+    } catch (_) {
+      // Miss: fetch from the host.
+    }
+    try {
+      final bytes = await _session.fetchArtwork(artworkId);
+      try {
+        await _cache.dir.create(recursive: true);
+        final tmp = File('${file.path}.part');
+        await tmp.writeAsBytes(bytes, flush: true);
+        await tmp.rename(file.path);
+      } catch (_) {
+        // Cache write failure: the bytes are still usable this session.
+      }
+      return bytes;
+    } catch (_) {
+      _artworkLoads.remove(artworkId); // Not sticky: retry next call.
+      return null;
+    }
+  }
+
   // --- Snapshot plumbing ----------------------------------------------------
 
   void _onSnapshot(PlaybackSnapshot snapshot) {

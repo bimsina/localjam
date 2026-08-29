@@ -7,6 +7,7 @@ library;
 
 import 'dart:async';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:localjam_audio/localjam_audio.dart';
 import 'package:localjam_net/localjam_net.dart';
@@ -198,20 +199,54 @@ class JamHostEngine extends JamEngine {
   /// the same engine anyway.) Afterwards the controller's loaded-media cache
   /// is invalidated so the current track is reloaded — and re-scheduled from
   /// its authoritative anchor if it was playing. When the native side is
-  /// unavailable the item is registered without a duration; end of media is
-  /// then undetectable for it (§5.5).
+  /// unavailable the tag-declared duration is the fallback; without either,
+  /// end of media is undetectable for the item (§5.5).
+  ///
+  /// Tags and embedded artwork are extracted here (§6.1/§6.5) — same
+  /// best-effort path guest uploads go through on the server — so the
+  /// broadcast item carries title/artist/album/artworkId when the file has
+  /// them.
   Future<MediaItem> addMediaFile(File file, {String? name}) async {
     final durationUs = await _probeDurationUs(file.path);
+    final tags = await readAudioTags(file);
+    String? artworkId;
+    final artworkBytes = tags.artworkBytes;
+    if (tags.hasArtwork) {
+      artworkId = await _server.addArtwork(
+        artworkBytes!,
+        mime: tags.artworkMime!,
+      );
+    }
     final item = await JamHostServer.describeFile(
       file,
       kind: MediaKind.audio,
       name: name,
       mime: mimeForPath(file.path),
-      durationUs: durationUs,
+      durationUs: durationUs ?? tags.durationUs,
+      title: tags.title,
+      artist: tags.artist,
+      album: tags.album,
+      artworkId: artworkId,
     );
     _mediaPaths[item.mediaId] = file.path;
     _server.addMedia(item, file);
     return item;
+  }
+
+  /// Artwork bytes for [item], read straight from the server's registry
+  /// (§6.5) — the host never fetches over HTTP. Null when the item has no
+  /// artwork or the backing file went away.
+  @override
+  Future<Uint8List?> artworkFor(MediaItem item) async {
+    final artworkId = item.artworkId;
+    if (artworkId == null) return null;
+    final file = _server.artworkFile(artworkId);
+    if (file == null) return null;
+    try {
+      return await file.readAsBytes();
+    } catch (_) {
+      return null;
+    }
   }
 
   Future<int?> _probeDurationUs(String path) async {

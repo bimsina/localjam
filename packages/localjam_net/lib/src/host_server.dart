@@ -7,11 +7,13 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
+import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart';
 import 'package:localjam_core/localjam_core.dart';
 import 'package:meta/meta.dart';
 
+import 'media_metadata.dart';
 import 'monotonic.dart';
 
 /// What a [JamHostServer] does when the current item reaches its end
@@ -212,6 +214,10 @@ class JamHostServer {
   final Map<String, ({MediaItem item, File file})> _media = {};
   final List<MediaItem> _playlist = [];
 
+  /// Artwork registry (§6.5): artworkId → (mime, backing file). Artwork ids
+  /// are content-derived, so items sharing cover bytes share one entry.
+  final Map<String, ({String mime, File file})> _artwork = {};
+
   final StreamController<JamHostEvent> _events =
       StreamController<JamHostEvent>.broadcast();
 
@@ -332,6 +338,8 @@ class JamHostServer {
         await _handleUpload(req);
       } else if (path.startsWith('/media/')) {
         await _serveMedia(req);
+      } else if (path.startsWith('/artwork/')) {
+        await _serveArtwork(req);
       } else {
         req.response.statusCode = HttpStatus.notFound;
         await req.response.close();
@@ -419,6 +427,63 @@ class JamHostServer {
     res.contentLength = end - start + 1;
     await entry.file.openRead(start, end + 1).pipe(res);
   }
+
+  // --- Artwork plane (§6.5) ------------------------------------------------------
+
+  /// Serves `GET /artwork/{artworkId}` (§6.5): bearer-gated like the media
+  /// plane, full-body responses only (artwork is small; no Range support).
+  Future<void> _serveArtwork(HttpRequest req) async {
+    final res = req.response;
+    final auth = req.headers.value(HttpHeaders.authorizationHeader);
+    if (auth != 'Bearer $token') {
+      res.statusCode = HttpStatus.unauthorized;
+      await res.close();
+      return;
+    }
+    if (req.method != 'GET') {
+      res.statusCode = HttpStatus.methodNotAllowed;
+      await res.close();
+      return;
+    }
+    final artworkId = req.uri.path.substring('/artwork/'.length);
+    final entry = _artwork[artworkId];
+    if (entry == null) {
+      res.statusCode = HttpStatus.notFound;
+      await res.close();
+      return;
+    }
+    try {
+      res.headers.contentType = ContentType.parse(entry.mime);
+    } catch (_) {
+      res.headers.contentType = ContentType.binary;
+    }
+    res.contentLength = await entry.file.length();
+    await entry.file.openRead().pipe(res);
+  }
+
+  /// Registers [bytes] as servable artwork (§6.5) and returns its
+  /// content-derived artworkId (`a_` + first 12 hex chars of the sha256).
+  /// Idempotent: re-adding the same bytes (every track of an album) returns
+  /// the existing id without rewriting. The bytes are stored on disk next to
+  /// uploads, so the server must be started.
+  Future<String> addArtwork(Uint8List bytes, {required String mime}) async {
+    final dir = _uploadDir;
+    if (dir == null) throw StateError('JamHostServer is not started');
+    final digest = sha256.convert(bytes).toString();
+    final artworkId = 'a_${digest.substring(0, 12)}';
+    if (_artwork.containsKey(artworkId)) return artworkId;
+    final file = File('${dir.path}/$artworkId');
+    // Temp + rename so a crash never leaves a partial under the final name.
+    final tmp = File('${file.path}.part');
+    await tmp.writeAsBytes(bytes, flush: true);
+    await tmp.rename(file.path);
+    _artwork[artworkId] = (mime: mime, file: file);
+    return artworkId;
+  }
+
+  /// The backing file for [artworkId], or null if unknown — the host's own
+  /// UI reads artwork from here instead of fetching over HTTP.
+  File? artworkFile(String artworkId) => _artwork[artworkId]?.file;
 
   // --- Guest uploads (§6.4) ------------------------------------------------------
 
@@ -529,14 +594,31 @@ class JamHostServer {
     }
 
     final stored = await tmp.rename('${dir.path}/$mediaId');
+    // §6.1/§6.5: the host extracts tags + artwork itself — one implementation
+    // for uploads and host files, and guests never need a tag parser. The
+    // uploader's declared duration wins over the tag value (a decoder probe
+    // beats a tag claim); everything is best-effort.
+    var tags = const JamAudioTags();
+    String? artworkId;
+    if (kind == MediaKind.audio) {
+      tags = await readAudioTags(stored);
+      final artworkBytes = tags.artworkBytes;
+      if (tags.hasArtwork) {
+        artworkId = await addArtwork(artworkBytes!, mime: tags.artworkMime!);
+      }
+    }
     final item = MediaItem(
       mediaId: mediaId,
       kind: kind,
       name: name,
       mime: mime,
       sizeBytes: received,
-      durationUs: durationUs,
+      durationUs: durationUs ?? tags.durationUs,
       sha256: digest,
+      title: tags.title,
+      artist: tags.artist,
+      album: tags.album,
+      artworkId: artworkId,
     );
     // §6.4: the upload event first, then addMedia's playlist broadcast
     // (which also threads durationUs into the session per §5.5).
@@ -797,6 +879,10 @@ class JamHostServer {
     String? name,
     String mime = 'application/octet-stream',
     int? durationUs,
+    String? title,
+    String? artist,
+    String? album,
+    String? artworkId,
   }) async {
     final size = await file.length();
     final digest = (await sha256.bind(file.openRead()).first).toString();
@@ -808,6 +894,10 @@ class JamHostServer {
       sizeBytes: size,
       durationUs: durationUs,
       sha256: digest,
+      title: title,
+      artist: artist,
+      album: album,
+      artworkId: artworkId,
     );
   }
 

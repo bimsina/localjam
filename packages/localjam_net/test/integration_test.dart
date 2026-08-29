@@ -506,6 +506,124 @@ void main() {
     });
   });
 
+  group('tag metadata + artwork (§6.1 v0.2, §6.5)', () {
+    final taggedFixture = File('../../test-media/track1_tagged.m4a');
+
+    test('audio upload gets host-extracted tags, artwork, and tag duration '
+        'when no duration header is sent', () async {
+      final host = await startHost();
+      final uploader = await joinGuest(host, clientName: 'uploader');
+
+      final item = await uploader.uploadMedia(
+        taggedFixture,
+        kind: MediaKind.audio,
+        name: 'track1_tagged.m4a',
+        mime: 'audio/mp4',
+        // No durationUs: the host falls back to the tag-declared duration.
+      );
+      expect(item.title, 'Night Drive');
+      expect(item.artist, 'The Localhosts');
+      expect(item.album, 'Loopback Sessions');
+      expect(item.durationUs, isNotNull);
+      expect(item.durationUs, greaterThan(0));
+      expect(item.artworkId, startsWith('a_'));
+      expect(item.displayTitle, 'Night Drive');
+
+      // The broadcast playlist carries the same tagged item.
+      expect(host.playlist.single.title, 'Night Drive');
+      expect(host.playlist.single.artworkId, item.artworkId);
+
+      // A guest fetches the artwork bytes over the artwork plane.
+      final artwork = await uploader.fetchArtwork(item.artworkId!);
+      expect(artwork, isNotEmpty);
+      // artworkId is content-derived from those exact bytes.
+      final digest = sha256.convert(artwork).toString();
+      expect(item.artworkId, 'a_${digest.substring(0, 12)}');
+    });
+
+    test('a declared upload duration wins over the tag duration', () async {
+      final host = await startHost();
+      final uploader = await joinGuest(host);
+      final item = await uploader.uploadMedia(
+        taggedFixture,
+        kind: MediaKind.audio,
+        mime: 'audio/mp4',
+        durationUs: 1_234_567,
+      );
+      expect(item.durationUs, 1_234_567);
+    });
+
+    test('a non-audio upload skips tag extraction', () async {
+      final host = await startHost();
+      final uploader = await joinGuest(host);
+      final item = await uploader.uploadMedia(
+        await writeTempMedia(makeMediaBytes(256)),
+        kind: MediaKind.image,
+        mime: 'image/png',
+      );
+      expect(item.title, isNull);
+      expect(item.artworkId, isNull);
+    });
+
+    test('artwork endpoint: 401 without token, 404 for unknown id, no Range',
+        () async {
+      final host = await startHost();
+
+      final http = HttpClient();
+      addTearDown(() => http.close(force: true));
+      Future<int> status(String path, {String? token}) async {
+        final req = await http.getUrl(
+          Uri(
+            scheme: 'http',
+            host: InternetAddress.loopbackIPv4.address,
+            port: host.port,
+            path: path,
+          ),
+        );
+        if (token != null) {
+          req.headers.set(HttpHeaders.authorizationHeader, 'Bearer $token');
+        }
+        final res = await req.close();
+        await res.drain<void>();
+        return res.statusCode;
+      }
+
+      expect(await status('/artwork/a_0123456789ab'), 401);
+      expect(await status('/artwork/a_0123456789ab', token: 'wrong'), 401);
+      expect(await status('/artwork/a_0123456789ab', token: host.token), 404);
+    });
+
+    test('addArtwork is idempotent by content and serves the right bytes '
+        'with the right Content-Type', () async {
+      final host = await startHost();
+      final bytes = makeMediaBytes(512, seed: 99);
+      final id1 = await host.addArtwork(bytes, mime: 'image/jpeg');
+      final id2 = await host.addArtwork(bytes, mime: 'image/jpeg');
+      expect(id1, id2);
+      expect(host.artworkFile(id1), isNotNull);
+
+      final http = HttpClient();
+      addTearDown(() => http.close(force: true));
+      final req = await http.getUrl(
+        Uri(
+          scheme: 'http',
+          host: InternetAddress.loopbackIPv4.address,
+          port: host.port,
+          path: '/artwork/$id1',
+        ),
+      );
+      req.headers.set(HttpHeaders.authorizationHeader, 'Bearer ${host.token}');
+      final res = await req.close();
+      expect(res.statusCode, 200);
+      expect(res.headers.contentType?.mimeType, 'image/jpeg');
+      final body = <int>[];
+      await for (final chunk in res) {
+        body.addAll(chunk);
+      }
+      expect(body, equals(bytes));
+    });
+  });
+
   group('fetchMediaToFile', () {
     test('streams to disk, progress reaches 1.0, host sees ready', () async {
       final host = await startHost();

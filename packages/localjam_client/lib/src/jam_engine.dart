@@ -36,6 +36,11 @@ abstract class JamEngine {
   /// Playlist broadcasts (§6.1).
   Stream<List<MediaItem>> get playlistUpdates;
 
+  /// Artwork bytes for [item] (§6.5), or null when the item has none or the
+  /// bytes are unavailable (fetch failure, disconnected). Hosts read their
+  /// own registry; guests fetch once and cache. Never throws.
+  Future<Uint8List?> artworkFor(MediaItem item);
+
   /// The playlist entry for [snapshot]'s current media, if any.
   MediaItem? get currentItem {
     final mediaId = snapshot.mediaId;

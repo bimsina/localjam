@@ -11,4 +11,5 @@ export 'package:localjam_core/localjam_core.dart';
 export 'src/guest_client.dart';
 export 'src/guest_session.dart';
 export 'src/host_server.dart';
+export 'src/media_metadata.dart';
 export 'src/monotonic.dart';

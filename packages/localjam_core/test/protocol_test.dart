@@ -211,6 +211,56 @@ void main() {
       expect(m.items[1].durationUs, isNull);
     });
 
+    test('playlist item tag metadata round-trips (§6.1 v0.2)', () {
+      const tagged = MediaItem(
+        mediaId: 'm_3',
+        kind: MediaKind.audio,
+        name: 'c.m4a',
+        mime: 'audio/mp4',
+        sizeBytes: 30,
+        durationUs: 2000000,
+        sha256: '22222222',
+        title: 'Night Drive',
+        artist: 'The Localhosts',
+        album: 'Loopback Sessions',
+        artworkId: 'a_0123456789ab',
+      );
+      final m = roundTrip(const PlaylistMessage(rev: 6, items: [tagged]));
+      expect(m.items.single, tagged);
+      expect(m.items.single.displayTitle, 'Night Drive');
+    });
+
+    test('playlist item without tag fields decodes as null tags (v0.1 '
+        'compatibility) and omits them when encoding', () {
+      const untagged = MediaItem(
+        mediaId: 'm_1',
+        kind: MediaKind.audio,
+        name: 'a.mp3',
+        mime: 'audio/mpeg',
+        sizeBytes: 10,
+        sha256: '00000000',
+      );
+      // A v0.1 peer's JSON has no tag keys at all.
+      final decoded = MediaItem.fromJson({
+        'mediaId': 'm_1',
+        'kind': 'audio',
+        'name': 'a.mp3',
+        'mime': 'audio/mpeg',
+        'sizeBytes': 10,
+        'sha256': '00000000',
+      });
+      expect(decoded, untagged);
+      expect(decoded.title, isNull);
+      expect(decoded.artworkId, isNull);
+      expect(decoded.displayTitle, 'a.mp3');
+      // And an untagged item's JSON carries no null-valued tag keys.
+      final json = untagged.toJson();
+      expect(json.containsKey('title'), isFalse);
+      expect(json.containsKey('artist'), isFalse);
+      expect(json.containsKey('album'), isFalse);
+      expect(json.containsKey('artworkId'), isFalse);
+    });
+
     test('media_status', () {
       final m = roundTrip(const MediaStatusMessage(
         mediaId: 'm_1',

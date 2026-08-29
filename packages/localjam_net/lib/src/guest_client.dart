@@ -493,6 +493,34 @@ class JamGuestClient {
     }
   }
 
+  /// Fetches `GET /artwork/{artworkId}` with Bearer auth (§6.5) into memory.
+  /// Artwork is small (an embedded cover), so no streaming/progress plumbing.
+  ///
+  /// Throws [HttpException] on a non-200 response (404 for an unknown id).
+  Future<Uint8List> fetchArtwork(String artworkId) async {
+    final uri = Uri(
+      scheme: 'http',
+      host: _host,
+      port: _port,
+      path: '/artwork/$artworkId',
+    );
+    final request = await _http.getUrl(uri);
+    request.headers.set(HttpHeaders.authorizationHeader, 'Bearer $_token');
+    final response = await request.close();
+    if (response.statusCode != HttpStatus.ok) {
+      await response.drain<void>();
+      throw HttpException(
+        'GET $uri failed with ${response.statusCode}',
+        uri: uri,
+      );
+    }
+    final builder = BytesBuilder(copy: false);
+    await for (final chunk in response) {
+      builder.add(chunk);
+    }
+    return builder.takeBytes();
+  }
+
   /// Uploads [file] to the host over the media plane (`POST /media`, §6.4),
   /// streaming it from disk — the file is never read into memory whole.
   /// Metadata travels in `X-LocalJam-*` headers; the host computes the sha256

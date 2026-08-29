@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:localjam_client/localjam_client.dart';
 
 import '../util/format.dart';
+import '../widgets/artwork.dart';
 import '../widgets/nudge_slider.dart';
 import '../widgets/sync_telemetry_strip.dart';
 
@@ -319,12 +320,31 @@ class _JoinScreenState extends State<JoinScreen> {
             padding: const EdgeInsets.all(16),
             child: Column(
               children: [
+                JamArtwork(
+                  engine: engine,
+                  item: currentItem,
+                  size: 96,
+                  icon: Icons.music_note_outlined,
+                ),
+                const SizedBox(height: 12),
                 Text(
-                  currentItem?.name ?? 'Nothing playing',
+                  currentItem?.displayTitle ?? 'Nothing playing',
                   style: theme.textTheme.titleMedium,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
+                if (currentItem != null &&
+                    artworkByline(currentItem) != null) ...[
+                  const SizedBox(height: 2),
+                  Text(
+                    artworkByline(currentItem)!,
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ],
                 const SizedBox(height: 4),
                 Text(
                   engine.clockSynced
@@ -454,12 +474,14 @@ class _JoinScreenState extends State<JoinScreen> {
     return ListTile(
       dense: true,
       selected: item.mediaId == snapshot.mediaId,
-      leading: Icon(
-        item.mediaId == snapshot.mediaId
+      leading: JamArtwork(
+        engine: engine,
+        item: item,
+        icon: item.mediaId == snapshot.mediaId
             ? Icons.graphic_eq
             : Icons.audio_file_outlined,
       ),
-      title: Text(item.name, overflow: TextOverflow.ellipsis),
+      title: Text(item.displayTitle, overflow: TextOverflow.ellipsis),
       subtitle: switch (fetch?.phase) {
         null => const Text('waiting'),
         JamPrefetchPhase.ready => const Text('ready'),
