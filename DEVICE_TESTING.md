@@ -80,3 +80,28 @@ devices, iOS + Android).
   CoreAudio); plugin glue **build-unverified** — first task on a Windows
   machine is `flutter build windows`, then the mobile checks. Desktop v1 formats: mp3/flac/wav/ogg
   (m4a/AAC returns unsupported_format; OS-codec decode is a later add).
+
+## Simulator/emulator run — 2026-08-29 (pre-device baseline)
+
+Everything below ran live on two iOS simulators (iPhone 17 Pro + Pro Max)
+and a Pixel 9 Pro emulator (API 36). Numbers are from the in-app telemetry.
+
+| # | Check | Result |
+|---|-------|--------|
+| 1 | Sync quality | ✅ guest drift −0.2…−5.9 ms, "in sync", 0 slews, 0 resyncs (shared-machine clock, so a weak proxy for real Wi-Fi) |
+| 2 | Bluetooth latency | ⬜ needs hardware |
+| 3 | Route change | ⬜ needs hardware |
+| 4 | Interruption (call) | ⬜ needs hardware (no calls on simulator) |
+| 5 | Screen lock / background | ✅ both devices locked mid-playback: host kept serving, end-of-media ADVANCE fired twice while locked, resume re-verify landed −0.2 ms in sync |
+| 6 | Wi-Fi blip | ⬜ needs hardware (reconnect machinery covered by the automated suite) |
+| 7 | Host walks away | ✅ force-quit host → "Connection lost — reconnecting…" within seconds (cached playback continues) → "Session ended" terminal screen after the 90 s hostGone window |
+| 8 | Battery/thermal | ⬜ needs hardware |
+| 9 | Lock-screen media card | ✅ **Android**: full MediaStyle card (title, live progress, prev/pause/next; pause round-trips into the engine, app paused at the right position). ⚠️ **iOS**: MPNowPlayingInfo pushes run, but the simulator's lock screen / Control Center has no Now Playing module — verify visually on a real iPhone |
+| 10 | Headset/watch/car transport | ⬜ needs hardware |
+| 11 | iOS host paused + locked | ⬜ needs hardware (the simulator never suspends apps, so graceful-death can't reproduce there) |
+
+Also verified along the way: mDNS discovery (host appeared in the other
+simulator's "Nearby jams", one-tap join), per-device quirky identities
+("Silky Puffin" / "Golden Pangolin"), Android READ_MEDIA_AUDIO prompt +
+MediaStore library picker → scoped-storage resolve → hosted session, and
+jam history (session recorded with attribution, "Host it again" enabled).
