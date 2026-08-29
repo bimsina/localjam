@@ -43,6 +43,22 @@ devices, iOS + Android).
    "reconnecting…" then "Session ended" after ~90 s, never hang forever.
 8. **Battery/thermal spot-check** — 30 min of continuous playback; note
    battery drain on the host (it runs a server + audio).
+9. **Lock-screen media card** — while playing, check the lock screen /
+   notification shade on both phones: title/artist/album + artwork should
+   show, position should advance, and previous/play-pause/next (and the
+   iOS seekbar) should work. On a guest without playback control (Jam or
+   Listen preset) the card must appear WITHOUT transport controls — and
+   grow them live when the host promotes the guest or flips the policy.
+   Android: the media card IS the foreground-service notification (one
+   notification total). Android 13+: accept the notification permission
+   prompt, or the card won't show (playback still runs).
+10. **Headset / watch / car transport** — pause and skip from Bluetooth
+    headset buttons or a watch. Same §5.6 gating as the lock screen.
+11. **iOS host paused + locked** — pause the jam, lock the host, wait
+    ~5 min, unlock. Expect the OS suspended the app: guests show
+    "reconnecting…" then "Session ended" (~90 s). Reopening the host app
+    revives the room for guests who rejoin (their cache re-fetches
+    nothing). This is the documented graceful-death path, not a bug.
 
 ## Reading the telemetry
 

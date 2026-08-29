@@ -356,6 +356,8 @@ class LocaljamAudioPlugin :
 
     private lateinit var channel: MethodChannel
     private lateinit var eventChannel: EventChannel
+    private var keepAliveChannel: MethodChannel? = null
+    private var mediaSessionChannel: MethodChannel? = null
     private var appContext: Context? = null
     private var audioManager: AudioManager? = null
 
@@ -397,11 +399,57 @@ class LocaljamAudioPlugin :
         handlerThread = thread
         bgHandler = Handler(thread.looper)
         registerRouteCallback()
+
+        // Session keep-alive + OS media session (JamSession.kt). The
+        // keep-alive channel keeps the pre-existing `localjam/keepalive`
+        // contract of package:localjam_client's JamKeepAlive.
+        JamMediaSessionManager.attach(binding.applicationContext)
+        keepAliveChannel = MethodChannel(binding.binaryMessenger, "localjam/keepalive").apply {
+            setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "acquire" -> {
+                        JamMediaSessionManager.acquire()
+                        result.success(null)
+                    }
+                    "release" -> {
+                        JamMediaSessionManager.release()
+                        result.success(null)
+                    }
+                    else -> result.notImplemented()
+                }
+            }
+        }
+        mediaSessionChannel =
+            MethodChannel(binding.binaryMessenger, "localjam_audio/media_session").apply {
+                JamMediaSessionManager.channel = this
+                setMethodCallHandler { call, result ->
+                    when (call.method) {
+                        "update" -> {
+                            val args = call.arguments
+                            if (args is Map<*, *>) JamMediaSessionManager.update(args)
+                            result.success(null)
+                        }
+                        "clear" -> {
+                            JamMediaSessionManager.clear()
+                            result.success(null)
+                        }
+                        else -> result.notImplemented()
+                    }
+                }
+            }
     }
 
     override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         channel.setMethodCallHandler(null)
         eventChannel.setStreamHandler(null)
+        keepAliveChannel?.setMethodCallHandler(null)
+        keepAliveChannel = null
+        if (JamMediaSessionManager.channel === mediaSessionChannel) {
+            JamMediaSessionManager.channel = null
+        }
+        mediaSessionChannel?.setMethodCallHandler(null)
+        mediaSessionChannel = null
+        JamMediaSessionManager.dispose()
         synchronized(lock) {
             bumpGenerationLocked()
             releaseTrackLocked()

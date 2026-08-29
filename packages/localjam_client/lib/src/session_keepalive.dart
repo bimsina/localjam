@@ -5,10 +5,14 @@
 ///
 /// * **iOS**: the `audio` `UIBackgroundModes` entry in the app's Info.plist
 ///   keeps the process running while audio plays — nothing to do at runtime.
-/// * **Android**: the embedding app must run a foreground service (type
-///   `mediaPlayback`) and hold wake/Wi-Fi locks. The engines ask for that via
-///   the `localjam/keepalive` [MethodChannel]; the LocalJam app implements it
-///   with a tiny Kotlin service (see `KeepAliveService.kt`).
+///   (While PAUSED and backgrounded the OS can still suspend the app after a
+///   few minutes; there is no supported way around that — hosts should warn,
+///   guests auto-heal. See JamGuestEngine.joinUri.)
+/// * **Android**: a foreground service (type `mediaPlayback`) holding
+///   wake/Wi-Fi locks, implemented by the `localjam_audio` plugin
+///   (`JamSessionService`) behind the `localjam/keepalive` [MethodChannel] —
+///   its notification doubles as the OS media card (see
+///   `JamMediaSessionManager`). Nothing app-side to wire.
 /// * everywhere else (desktop, tests, CLI embeddings): a no-op.
 library;
 

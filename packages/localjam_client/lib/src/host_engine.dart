@@ -335,6 +335,23 @@ class JamHostEngine extends JamEngine {
   /// close, no resume, role forgotten. Throws [ArgumentError] if not joined.
   void kickPeer(String peerId) => _server.kickPeer(peerId);
 
+  // --- Transport intents (host = direct mutation) ---------------------------
+
+  @override
+  Future<void> transportPlay() async => play();
+
+  @override
+  Future<void> transportPause() async => pause();
+
+  @override
+  Future<void> transportNext() async => next();
+
+  @override
+  Future<void> transportPrevious() async => previous();
+
+  @override
+  Future<void> transportSeek(int positionUs) async => seek(positionUs);
+
   // --- Event plumbing --------------------------------------------------------
 
   void _onHostEvent(JamHostEvent event) {

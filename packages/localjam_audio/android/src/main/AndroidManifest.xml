@@ -1,3 +1,17 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
   package="np.com.bibektimsina.localjam_audio">
+  <!-- Session keep-alive (JamSessionService): foreground service holding
+       wake/Wi-Fi locks + the media notification while a jam is active.
+       Merged into every embedding app's manifest. -->
+  <uses-permission android:name="android.permission.ACCESS_WIFI_STATE"/>
+  <uses-permission android:name="android.permission.WAKE_LOCK"/>
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"/>
+  <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+  <application>
+    <service
+      android:name=".JamSessionService"
+      android:exported="false"
+      android:foregroundServiceType="mediaPlayback"/>
+  </application>
 </manifest>

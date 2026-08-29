@@ -1,8 +1,10 @@
 import AVFoundation
+import MediaPlayer
 #if os(iOS)
 import Flutter
 import UIKit
 #else
+import AppKit
 import FlutterMacOS
 #endif
 
@@ -66,7 +68,18 @@ public class LocaljamAudioPlugin: NSObject, FlutterPlugin, FlutterStreamHandler 
     let eventChannel = FlutterEventChannel(
       name: "localjam_audio/events", binaryMessenger: messenger)
     eventChannel.setStreamHandler(instance)
+
+    // OS media session (lock screen / Control Center / Now Playing):
+    // now-playing pushes in, remote transport commands out.
+    let mediaSessionChannel = FlutterMethodChannel(
+      name: "localjam_audio/media_session", binaryMessenger: messenger)
+    let mediaSession = JamMediaSessionHandler(channel: mediaSessionChannel)
+    instance.mediaSession = mediaSession  // Retain alongside the plugin.
+    mediaSessionChannel.setMethodCallHandler(mediaSession.handle)
   }
+
+  /// The media-session handler, retained for the plugin's lifetime.
+  private var mediaSession: JamMediaSessionHandler?
 
   // MARK: - Event channel
   //
@@ -546,5 +559,145 @@ public class LocaljamAudioPlugin: NSObject, FlutterPlugin, FlutterStreamHandler 
     #endif
     player?.stop()
     engine?.stop()
+  }
+}
+
+// MARK: - OS media session (channel `localjam_audio/media_session`)
+
+/// Publishes now-playing state to MPNowPlayingInfoCenter (lock screen,
+/// Control Center, macOS Now Playing menu) and routes MPRemoteCommandCenter
+/// transport commands (lock screen, headset buttons, watch, car) back to
+/// Dart as `remoteCommand {command, positionUs?}`.
+///
+/// Shared verbatim between the iOS and macOS targets, like the player above.
+final class JamMediaSessionHandler {
+  private let channel: FlutterMethodChannel
+  private var commandTargetsInstalled = false
+
+  init(channel: FlutterMethodChannel) {
+    self.channel = channel
+  }
+
+  func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
+    switch call.method {
+    case "update":
+      guard let args = call.arguments as? [String: Any] else {
+        result(FlutterError(code: "bad_args", message: "update needs a map", details: nil))
+        return
+      }
+      update(args)
+      result(nil)
+    case "clear":
+      clear()
+      result(nil)
+    default:
+      result(FlutterMethodNotImplemented)
+    }
+  }
+
+  private func update(_ args: [String: Any]) {
+    installCommandTargetsIfNeeded()
+
+    var info: [String: Any] = [:]
+    info[MPMediaItemPropertyTitle] = (args["title"] as? String) ?? "LocalJam"
+    if let artist = args["artist"] as? String { info[MPMediaItemPropertyArtist] = artist }
+    if let album = args["album"] as? String { info[MPMediaItemPropertyAlbumTitle] = album }
+    if let durationUs = (args["durationUs"] as? NSNumber)?.doubleValue {
+      info[MPMediaItemPropertyPlaybackDuration] = durationUs / 1_000_000.0
+    }
+    let positionUs = (args["positionUs"] as? NSNumber)?.doubleValue ?? 0
+    info[MPNowPlayingInfoPropertyElapsedPlaybackTime] = positionUs / 1_000_000.0
+    let playing = (args["playing"] as? Bool) ?? false
+    let rate = (args["rate"] as? NSNumber)?.doubleValue ?? 1.0
+    info[MPNowPlayingInfoPropertyPlaybackRate] = playing ? rate : 0.0
+
+    if let artworkData = (args["artworkBytes"] as? FlutterStandardTypedData)?.data {
+      #if os(iOS)
+      if let image = UIImage(data: artworkData) {
+        info[MPMediaItemPropertyArtwork] = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
+      }
+      #else
+      if let image = NSImage(data: artworkData) {
+        info[MPMediaItemPropertyArtwork] = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
+      }
+      #endif
+    }
+
+    let center = MPRemoteCommandCenter.shared()
+    let canPlayPause = (args["canPlayPause"] as? Bool) ?? false
+    center.playCommand.isEnabled = canPlayPause
+    center.pauseCommand.isEnabled = canPlayPause
+    center.togglePlayPauseCommand.isEnabled = canPlayPause
+    center.nextTrackCommand.isEnabled = (args["canNext"] as? Bool) ?? false
+    center.previousTrackCommand.isEnabled = (args["canPrevious"] as? Bool) ?? false
+    center.changePlaybackPositionCommand.isEnabled = (args["canSeek"] as? Bool) ?? false
+
+    let nowPlaying = MPNowPlayingInfoCenter.default()
+    nowPlaying.nowPlayingInfo = info
+    #if os(macOS)
+    nowPlaying.playbackState = playing ? .playing : .paused
+    #endif
+    lastKnownPlaying = playing
+  }
+
+  private func clear() {
+    let nowPlaying = MPNowPlayingInfoCenter.default()
+    nowPlaying.nowPlayingInfo = nil
+    #if os(macOS)
+    nowPlaying.playbackState = .stopped
+    #endif
+    let center = MPRemoteCommandCenter.shared()
+    center.playCommand.isEnabled = false
+    center.pauseCommand.isEnabled = false
+    center.togglePlayPauseCommand.isEnabled = false
+    center.nextTrackCommand.isEnabled = false
+    center.previousTrackCommand.isEnabled = false
+    center.changePlaybackPositionCommand.isEnabled = false
+  }
+
+  /// Last `playing` pushed from Dart, so togglePlayPause maps to the right
+  /// concrete command.
+  private var lastKnownPlaying = false
+
+  private func installCommandTargetsIfNeeded() {
+    guard !commandTargetsInstalled else { return }
+    commandTargetsInstalled = true
+    let center = MPRemoteCommandCenter.shared()
+    center.playCommand.addTarget { [weak self] _ in
+      self?.send("play")
+      return .success
+    }
+    center.pauseCommand.addTarget { [weak self] _ in
+      self?.send("pause")
+      return .success
+    }
+    center.togglePlayPauseCommand.addTarget { [weak self] _ in
+      guard let self else { return .commandFailed }
+      self.send(self.lastKnownPlaying ? "pause" : "play")
+      return .success
+    }
+    center.nextTrackCommand.addTarget { [weak self] _ in
+      self?.send("next")
+      return .success
+    }
+    center.previousTrackCommand.addTarget { [weak self] _ in
+      self?.send("previous")
+      return .success
+    }
+    center.changePlaybackPositionCommand.addTarget { [weak self] event in
+      guard let event = event as? MPChangePlaybackPositionCommandEvent else {
+        return .commandFailed
+      }
+      self?.send("seek", positionUs: Int64(event.positionTime * 1_000_000.0))
+      return .success
+    }
+  }
+
+  private func send(_ command: String, positionUs: Int64? = nil) {
+    DispatchQueue.main.async { [channel] in
+      var args: [String: Any] = ["command": command]
+      if let positionUs { args["positionUs"] = positionUs }
+      channel.invokeMethod("remoteCommand", arguments: args)
+    }
   }
 }

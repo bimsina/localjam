@@ -194,3 +194,158 @@ class LocaljamAudio {
   /// Releases the native engine.
   Future<void> dispose() => _ch.invokeMethod<void>('dispose');
 }
+
+// ---------------------------------------------------------------------------
+// System media session (lock screen / notification / now playing)
+// ---------------------------------------------------------------------------
+
+/// A transport command delivered by the OS media session (lock screen,
+/// media notification, headset buttons, watch, car).
+enum JamRemoteCommand {
+  play('play'),
+  pause('pause'),
+  next('next'),
+  previous('previous'),
+
+  /// Carries [JamRemoteCommandEvent.positionUs] (lock-screen seekbar).
+  seek('seek');
+
+  const JamRemoteCommand(this.wire);
+
+  final String wire;
+
+  static JamRemoteCommand? fromWire(String? wire) {
+    for (final command in values) {
+      if (command.wire == wire) return command;
+    }
+    return null; // Unknown commands from a newer native side are ignored.
+  }
+}
+
+/// One OS media-session command event.
+class JamRemoteCommandEvent {
+  const JamRemoteCommandEvent(this.command, {this.positionUs});
+
+  final JamRemoteCommand command;
+
+  /// Target position for [JamRemoteCommand.seek].
+  final int? positionUs;
+
+  @override
+  String toString() =>
+      'JamRemoteCommandEvent(${command.wire}'
+      '${positionUs == null ? '' : ', positionUs: $positionUs'})';
+}
+
+/// What the OS media session should display and allow right now.
+class JamNowPlaying {
+  const JamNowPlaying({
+    required this.title,
+    this.artist,
+    this.album,
+    this.artworkBytes,
+    this.durationUs,
+    required this.positionUs,
+    this.rate = 1.0,
+    required this.playing,
+    this.canPlayPause = true,
+    this.canNext = true,
+    this.canPrevious = true,
+    this.canSeek = true,
+  });
+
+  final String title;
+  final String? artist;
+  final String? album;
+
+  /// Encoded image bytes (any format the platform decodes); null = no art.
+  final Uint8List? artworkBytes;
+
+  final int? durationUs;
+
+  /// Position at the moment of this update; the OS interpolates from it
+  /// using [rate] while [playing].
+  final int positionUs;
+  final double rate;
+  final bool playing;
+
+  /// Which transport controls to enable — mirrors the sender's §5.6
+  /// capabilities so a guest who cannot control playback gets a read-only
+  /// media card.
+  final bool canPlayPause;
+  final bool canNext;
+  final bool canPrevious;
+  final bool canSeek;
+
+  Map<String, Object?> toMap() => {
+        'title': title,
+        'artist': artist,
+        'album': album,
+        'artworkBytes': artworkBytes,
+        'durationUs': durationUs,
+        'positionUs': positionUs,
+        'rate': rate,
+        'playing': playing,
+        'canPlayPause': canPlayPause,
+        'canNext': canNext,
+        'canPrevious': canPrevious,
+        'canSeek': canSeek,
+      };
+}
+
+/// The OS media-session integration: publishes now-playing state (lock
+/// screen, media notification, control center) and receives transport
+/// commands from the system.
+///
+/// Implemented natively on Android (MediaSession + media-style notification
+/// hosted by the plugin's session foreground service), iOS, and macOS
+/// (MPNowPlayingInfoCenter + MPRemoteCommandCenter). Every call is
+/// best-effort and never throws: on platforms without an implementation
+/// (Linux/Windows for now, tests, CLI embeddings) it is a no-op.
+class JamMediaSession {
+  JamMediaSession._();
+
+  /// The bidirectional channel: Dart sends `update`/`clear`; the native side
+  /// sends `remoteCommand {command, positionUs?}`.
+  static const MethodChannel channel =
+      MethodChannel('localjam_audio/media_session');
+
+  /// Receives OS transport commands. Setting this installs the channel
+  /// handler; set null to stop listening.
+  static void Function(JamRemoteCommandEvent event)? get onCommand =>
+      _onCommand;
+  static void Function(JamRemoteCommandEvent event)? _onCommand;
+  static set onCommand(void Function(JamRemoteCommandEvent event)? handler) {
+    _onCommand = handler;
+    channel.setMethodCallHandler(handler == null ? null : _handleCall);
+  }
+
+  static Future<Object?> _handleCall(MethodCall call) async {
+    if (call.method != 'remoteCommand') return null;
+    final args = call.arguments;
+    if (args is! Map) return null;
+    final command = JamRemoteCommand.fromWire(args['command'] as String?);
+    if (command == null) return null;
+    _onCommand?.call(
+      JamRemoteCommandEvent(command, positionUs: args['positionUs'] as int?),
+    );
+    return null;
+  }
+
+  /// Publishes [nowPlaying] to the OS media session.
+  static Future<void> update(JamNowPlaying nowPlaying) =>
+      _invoke('update', nowPlaying.toMap());
+
+  /// Clears the media session (session over / nothing selected).
+  static Future<void> clear() => _invoke('clear', null);
+
+  static Future<void> _invoke(String method, Object? args) async {
+    try {
+      await channel.invokeMethod<void>(method, args);
+    } on MissingPluginException {
+      // No native implementation on this platform: nothing to show.
+    } on PlatformException {
+      // Best effort: a broken media card must never break playback.
+    }
+  }
+}

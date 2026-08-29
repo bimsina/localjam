@@ -12,6 +12,7 @@ import 'package:localjam_net/localjam_net.dart';
 
 import 'audio_sync_controller.dart';
 import 'latency_prefs.dart';
+import 'media_session_controller.dart';
 import 'session_keepalive.dart';
 
 /// Common playback surface of a LocalJam engine (host or guest): the shared
@@ -59,6 +60,28 @@ abstract class JamEngine {
   /// Whether this side may exercise [capability] right now (§5.6). The host
   /// re-validates guest requests regardless — this is for enabling UI.
   bool can(JamCapability capability) => myCapabilities.contains(capability);
+
+  // --- Transport intents ----------------------------------------------------
+  //
+  // The side-appropriate route for "the user hit play": hosts mutate the
+  // authoritative state directly, guests send §5.2 requests the host
+  // validates. Written against [JamEngine] so shared surfaces (the OS media
+  // session, shared player widgets) drive either side identically.
+
+  /// Starts (or resumes) playback.
+  Future<void> transportPlay();
+
+  /// Pauses playback.
+  Future<void> transportPause();
+
+  /// Skips to the next queue item (wrapping).
+  Future<void> transportNext();
+
+  /// Skips to the previous queue item (wrapping).
+  Future<void> transportPrevious();
+
+  /// Seeks to [positionUs].
+  Future<void> transportSeek(int positionUs);
 
   /// A short display label for the peer who added [item], for "added by"
   /// bylines: "You", "Host", a peer's clientName, or null when unattributed.
@@ -139,6 +162,12 @@ abstract class JamEngine {
 
   _EngineLifecycleObserver? _lifecycleObserver;
   bool _keepAliveHeld = false;
+  JamMediaSessionController? _mediaSessionController;
+
+  /// The live OS media-session controller, while the session guards are up.
+  @visibleForTesting
+  JamMediaSessionController? get mediaSessionController =>
+      _mediaSessionController;
 
   /// Whether the engine's app-lifecycle observer is currently registered.
   @visibleForTesting
@@ -175,6 +204,8 @@ abstract class JamEngine {
       _keepAliveHeld = true;
       await JamKeepAlive.acquire();
     }
+    // OS media session: lock-screen/notification metadata + transport.
+    _mediaSessionController ??= JamMediaSessionController(this)..start();
   }
 
   /// Removes the lifecycle observer and releases the platform keep-alive.
@@ -194,6 +225,9 @@ abstract class JamEngine {
       _keepAliveHeld = false;
       await JamKeepAlive.release();
     }
+    final mediaSession = _mediaSessionController;
+    _mediaSessionController = null;
+    await mediaSession?.dispose();
   }
 
   /// Handles one app-lifecycle transition; the engine's own observer feeds
@@ -209,10 +243,15 @@ abstract class JamEngine {
   }
 
   /// Called when the app returns to the foreground. The base implementation
-  /// re-verifies sync; subclasses may extend it (and must call super).
+  /// re-verifies sync and re-pushes the OS media card (the OS may have
+  /// dropped it during a long background stay); subclasses may extend it
+  /// (and must call super).
   @protected
   @mustCallSuper
-  Future<void> onAppResumed() => sync.reverifySync();
+  Future<void> onAppResumed() async {
+    await sync.reverifySync();
+    _mediaSessionController?.refresh();
+  }
 
   /// The current session-clock time (µs), or null while it is unknown (a
   /// guest whose clock has not synchronized yet). Identity on the host.

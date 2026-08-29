@@ -18,8 +18,11 @@ packages/
                        planes), JamGuestClient, JamGuestSession (auto-
                        reconnect), end-of-media policies
   localjam_audio       Flutter plugin: sample-accurate scheduled playback on
-                       the native clock (AVAudioEngine on iOS/macOS; Android
-                       stub pending), interruption/route events
+                       the native clock (AVAudioEngine on iOS/macOS, Android,
+                       miniaudio on Windows/Linux), interruption/route
+                       events, plus the OS media session — lock-screen /
+                       notification metadata + transport controls, and the
+                       Android foreground-service keep-alive
   localjam_client      the embeddable engine: JamHostEngine + JamGuestEngine —
                        transport + prefetch + clock calibration + drift
                        correction behind one API. UI apps depend on this only.

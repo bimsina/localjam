@@ -215,7 +215,7 @@ class JamGuestEngine extends JamEngine {
       JamMediaCache(cacheDir, maxBytes: cacheMaxBytes),
       prefetchPolicy: prefetchPolicy,
       hostGoneTimeout: hostGoneTimeout,
-    );
+    )..joinUri = joinUri;
     await engine.restorePersistedNudge();
     await engine.startSessionGuards();
     return engine;
@@ -223,6 +223,12 @@ class JamGuestEngine extends JamEngine {
 
   final JamGuestSession _session;
   final JamMediaCache _cache;
+
+  /// The `localjam://join?...` URI this engine joined with — kept so a UI
+  /// can offer "rejoin" after a terminal end (host suspension, §10 host
+  /// death) by calling [join] again with it; the sha-keyed cache makes the
+  /// rejoin re-fetch nothing.
+  late final Uri joinUri;
 
   /// What this guest prefetches, and in what order (§6.2).
   final JamPrefetchPolicy prefetchPolicy;
@@ -374,6 +380,23 @@ class JamGuestEngine extends JamEngine {
   /// [JamCapability.editQueue].
   Future<void> requestQueueRemove(String mediaId) =>
       _session.requestQueueRemove(mediaId);
+
+  // --- Transport intents (guest = §5.2 requests) ----------------------------
+
+  @override
+  Future<void> transportPlay() => requestPlay();
+
+  @override
+  Future<void> transportPause() => requestPause();
+
+  @override
+  Future<void> transportNext() => requestNext();
+
+  @override
+  Future<void> transportPrevious() => requestPrevious();
+
+  @override
+  Future<void> transportSeek(int positionUs) => requestSeek(positionUs);
 
   // --- Guest uploads (§6.4) --------------------------------------------------
 

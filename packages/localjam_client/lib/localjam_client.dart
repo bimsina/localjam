@@ -21,5 +21,6 @@ export 'src/jam_engine.dart';
 export 'src/latency_prefs.dart';
 export 'src/media_cache.dart';
 export 'src/media_mime.dart';
+export 'src/media_session_controller.dart';
 export 'src/media_scan.dart';
 export 'src/session_keepalive.dart';
