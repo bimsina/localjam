@@ -197,6 +197,16 @@ Win32Window::MessageHandler(HWND hwnd,
 
       return 0;
     }
+    case WM_GETMINMAXINFO: {
+      // Floor for the responsive layout, DPI-scaled: below this the sidebar
+      // has nowhere to go and the compact chrome renders anyway.
+      auto* info = reinterpret_cast<MINMAXINFO*>(lparam);
+      const double scale_factor = GetDpiForWindow(hwnd) / 96.0;
+      info->ptMinTrackSize.x = static_cast<LONG>(420 * scale_factor);
+      info->ptMinTrackSize.y = static_cast<LONG>(560 * scale_factor);
+      return 0;
+    }
+
     case WM_SIZE: {
       RECT rect = GetClientArea();
       if (child_content_ != nullptr) {

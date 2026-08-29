@@ -5,6 +5,11 @@ library;
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
+import 'dart:async';
+
+import 'package:localjam_client/localjam_client.dart';
+
+import 'design/breakpoints.dart';
 import 'design/tokens.dart';
 import 'screens/history_screen.dart';
 import 'screens/home_screen.dart';
@@ -13,6 +18,8 @@ import 'screens/room_screen.dart';
 import 'screens/scan_screen.dart';
 import 'screens/settings_screen.dart';
 import 'state/session_controller.dart';
+import 'widgets/app_sidebar.dart';
+import 'widgets/rename_dialog.dart';
 import 'widgets/room_bar.dart';
 
 /// Arguments for re-hosting a past jam ("Host it again").
@@ -107,26 +114,67 @@ GoRouter buildRouter(JamSessionController session) => GoRouter(
   ],
 );
 
-/// Docks the room bar beneath whichever shell screen is showing.
+/// Navigation chrome, per breakpoint.
 ///
-/// The bar owns the bottom inset while it is visible, so the screen above it
-/// must not also pad for the home indicator.
-class _RoomBarShell extends StatelessWidget {
+/// Wide windows get a sidebar holding identity, destinations and the live
+/// jam; compact ones keep the docked room bar along the bottom. Both are the
+/// same information — a 1400px window just has somewhere better to put it.
+class _RoomBarShell extends StatefulWidget {
   const _RoomBarShell({required this.child});
 
   final Widget child;
 
   @override
+  State<_RoomBarShell> createState() => _RoomBarShellState();
+}
+
+class _RoomBarShellState extends State<_RoomBarShell> {
+  String _identity = '';
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_load());
+  }
+
+  Future<void> _load() async {
+    final name = await JamIdentity.displayName();
+    if (mounted) setState(() => _identity = name);
+  }
+
+  Future<void> _rename() async {
+    final name = await promptForName(context, current: _identity);
+    if (name == null) return;
+    await JamIdentity.setDisplayName(name);
+    if (mounted) setState(() => _identity = name);
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final live = JamSession.of(context).isLive;
-    if (!live) return child;
+    if (context.jamBreakpoint.hasSidebar) {
+      return Scaffold(
+        body: Row(
+          children: [
+            AppSidebar(
+              identity: _identity,
+              onRename: () => unawaited(_rename()),
+            ),
+            Expanded(child: widget.child),
+          ],
+        ),
+      );
+    }
+
+    if (!JamSession.of(context).isLive) return widget.child;
+    // The bar owns the bottom inset while it is visible, so the screen above
+    // it must not also pad for the home indicator.
     return Column(
       children: [
         Expanded(
           child: MediaQuery.removePadding(
             context: context,
             removeBottom: true,
-            child: child,
+            child: widget.child,
           ),
         ),
         const RoomBar(),

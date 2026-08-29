@@ -120,7 +120,7 @@ ThemeData _build(JamColors c, Brightness brightness) {
         disabledForegroundColor: c.textTertiary,
         textStyle: text.labelLarge,
         minimumSize: const Size(0, 50),
-        padding: const EdgeInsets.symmetric(horizontal: JamSpace.xxl),
+        padding: const EdgeInsets.symmetric(horizontal: JamSpace.lg),
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(JamRadius.md),
         ),
@@ -132,7 +132,7 @@ ThemeData _build(JamColors c, Brightness brightness) {
         foregroundColor: c.textPrimary,
         textStyle: text.labelLarge,
         minimumSize: const Size(0, 50),
-        padding: const EdgeInsets.symmetric(horizontal: JamSpace.xxl),
+        padding: const EdgeInsets.symmetric(horizontal: JamSpace.lg),
         side: BorderSide(color: c.separator),
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(JamRadius.md),

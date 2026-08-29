@@ -28,22 +28,31 @@ Future<void> showRoomSheet(
   return showModalBottomSheet<void>(
     context: context,
     isScrollControlled: true,
-    builder: (_) => RoomSheet(
-      engine: engine,
-      selfName: selfName,
-      network: network,
-      joinUri: joinUri,
+    builder: (_) => DraggableScrollableSheet(
+      expand: false,
+      initialChildSize: 0.75,
+      maxChildSize: 0.95,
+      builder: (context, scrollController) => RoomPanel(
+        engine: engine,
+        selfName: selfName,
+        network: network,
+        joinUri: joinUri,
+        scrollController: scrollController,
+      ),
     ),
   );
 }
 
-class RoomSheet extends StatefulWidget {
-  const RoomSheet({
+/// Who is here, the join code, and what guests may do — as a sheet body on
+/// phones and a docked panel on desktop.
+class RoomPanel extends StatefulWidget {
+  const RoomPanel({
     super.key,
     required this.engine,
     required this.selfName,
     required this.network,
     this.joinUri,
+    this.scrollController,
   });
 
   final JamEngine engine;
@@ -56,11 +65,14 @@ class RoomSheet extends StatefulWidget {
   /// Host only: the room's join URI.
   final Uri? joinUri;
 
+  /// Supplied by a DraggableScrollableSheet; null when docked.
+  final ScrollController? scrollController;
+
   @override
-  State<RoomSheet> createState() => _RoomSheetState();
+  State<RoomPanel> createState() => _RoomPanelState();
 }
 
-class _RoomSheetState extends State<RoomSheet> {
+class _RoomPanelState extends State<RoomPanel> {
   final List<StreamSubscription<Object?>> _subs = [];
 
   JamEngine get _engine => widget.engine;
@@ -112,90 +124,83 @@ class _RoomSheetState extends State<RoomSheet> {
     final isHost = host != null;
     final joinUri = widget.joinUri;
 
-    return DraggableScrollableSheet(
-      expand: false,
-      initialChildSize: 0.75,
-      maxChildSize: 0.95,
-      builder: (context, scrollController) => SafeArea(
-        top: false,
-        child: ListView(
-          controller: scrollController,
-          padding: const EdgeInsets.only(bottom: JamSpace.xl),
-          children: [
+    return SafeArea(
+      top: false,
+      child: ListView(
+        controller: widget.scrollController,
+        padding: const EdgeInsets.only(bottom: JamSpace.xl),
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(
+              JamSpace.page,
+              JamSpace.sm,
+              JamSpace.page,
+              JamSpace.md,
+            ),
+            child: Text(
+              '${peers.length + 1} in the room',
+              style: context.jamTitle,
+            ),
+          ),
+
+          // This device first, so you can see your own standing.
+          _PersonRow(
+            name: widget.selfName,
+            isHost: isHost,
+            detail: isHost ? 'You · host' : 'You',
+          ),
+          for (final peer in peers)
+            _PeerRow(
+              engine: _engine,
+              peer: peer,
+              isCohost: permissions.roleOf(peer.peerId) == JamRole.cohost,
+              onAction: isHost
+                  ? (action) => _guarded(() => _apply(host, peer, action))
+                  : null,
+            ),
+
+          if (joinUri != null) ...[
+            const SizedBox(height: JamSpace.section),
+            _Invite(joinUri: joinUri, network: widget.network),
+          ],
+
+          if (isHost) ...[
+            const SizedBox(height: JamSpace.section),
             Padding(
               padding: const EdgeInsets.fromLTRB(
                 JamSpace.page,
-                JamSpace.sm,
+                0,
                 JamSpace.page,
-                JamSpace.md,
+                JamSpace.sm,
               ),
-              child: Text(
-                '${peers.length + 1} in the room',
-                style: context.jamTitle,
+              child: Text('Everyone can', style: context.jamTitle),
+            ),
+            Divider(height: 0.5, color: colors.separator),
+            _PolicySwitch(
+              label: 'Add music',
+              value: permissions.policy.addTracks,
+              onChanged: (v) => _guarded(
+                () => host.setPolicy(permissions.policy.copyWith(addTracks: v)),
               ),
             ),
-
-            // This device first, so you can see your own standing.
-            _PersonRow(
-              name: widget.selfName,
-              isHost: isHost,
-              detail: isHost ? 'You · host' : 'You',
+            _PolicySwitch(
+              label: 'Play, pause, and skip',
+              value: permissions.policy.controlPlayback,
+              onChanged: (v) => _guarded(
+                () => host.setPolicy(
+                  permissions.policy.copyWith(controlPlayback: v),
+                ),
+              ),
             ),
-            for (final peer in peers)
-              _PeerRow(
-                engine: _engine,
-                peer: peer,
-                isCohost: permissions.roleOf(peer.peerId) == JamRole.cohost,
-                onAction: isHost
-                    ? (action) => _guarded(() => _apply(host, peer, action))
-                    : null,
+            _PolicySwitch(
+              label: 'Reorder the queue',
+              value: permissions.policy.editQueue,
+              onChanged: (v) => _guarded(
+                () => host.setPolicy(permissions.policy.copyWith(editQueue: v)),
               ),
-
-            if (joinUri != null) ...[
-              const SizedBox(height: JamSpace.section),
-              _Invite(joinUri: joinUri, network: widget.network),
-            ],
-
-            if (isHost) ...[
-              const SizedBox(height: JamSpace.section),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(
-                  JamSpace.page,
-                  0,
-                  JamSpace.page,
-                  JamSpace.sm,
-                ),
-                child: Text('Everyone can', style: context.jamTitle),
-              ),
-              Divider(height: 0.5, color: colors.separator),
-              _PolicySwitch(
-                label: 'Add music',
-                value: permissions.policy.addTracks,
-                onChanged: (v) => _guarded(
-                  () =>
-                      host.setPolicy(permissions.policy.copyWith(addTracks: v)),
-                ),
-              ),
-              _PolicySwitch(
-                label: 'Play, pause, and skip',
-                value: permissions.policy.controlPlayback,
-                onChanged: (v) => _guarded(
-                  () => host.setPolicy(
-                    permissions.policy.copyWith(controlPlayback: v),
-                  ),
-                ),
-              ),
-              _PolicySwitch(
-                label: 'Reorder the queue',
-                value: permissions.policy.editQueue,
-                onChanged: (v) => _guarded(
-                  () =>
-                      host.setPolicy(permissions.policy.copyWith(editQueue: v)),
-                ),
-              ),
-            ],
+            ),
           ],
-        ),
+        ],
       ),
     );
   }

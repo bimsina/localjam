@@ -18,12 +18,14 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:localjam_client/localjam_client.dart';
 
+import '../design/breakpoints.dart';
 import '../design/tokens.dart';
 import '../design/typography.dart';
 import '../state/session_controller.dart';
 import '../util/capabilities.dart';
 import '../util/network.dart';
 import '../widgets/peer_avatar.dart';
+import '../widgets/rename_dialog.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -72,31 +74,8 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _rename() async {
-    final controller = TextEditingController(text: _identity);
-    final name = await showDialog<String>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Your name in the room'),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          textCapitalization: TextCapitalization.words,
-          onSubmitted: (value) => Navigator.of(context).pop(value.trim()),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(context).pop(controller.text.trim()),
-            child: const Text('Save'),
-          ),
-        ],
-      ),
-    );
-    controller.dispose();
-    if (name == null || name.isEmpty) return;
+    final name = await promptForName(context, current: _identity);
+    if (name == null) return;
     await JamIdentity.setDisplayName(name);
     if (mounted) setState(() => _identity = name);
   }
@@ -123,71 +102,99 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget build(BuildContext context) {
     final colors = context.jamColors;
     final session = JamSession.of(context);
+    // On a wide window the sidebar already carries identity and the
+    // destinations, so repeating them in an app bar is noise.
+    final wide = context.jamBreakpoint.hasSidebar;
 
     return Scaffold(
-      appBar: AppBar(
-        titleSpacing: JamSpace.page,
-        title: _IdentityButton(name: _identity, onTap: _rename),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.history_rounded),
-            tooltip: 'Past jams',
-            onPressed: () => context.push('/history'),
-          ),
-          IconButton(
-            icon: const Icon(Icons.settings_outlined),
-            tooltip: 'Settings',
-            onPressed: () => context.push('/settings'),
-          ),
-          const SizedBox(width: JamSpace.sm),
-        ],
-      ),
+      appBar: wide
+          ? null
+          : AppBar(
+              titleSpacing: JamSpace.page,
+              title: _IdentityButton(name: _identity, onTap: _rename),
+              actions: [
+                IconButton(
+                  icon: const Icon(Icons.history_rounded),
+                  tooltip: 'Past jams',
+                  onPressed: () => context.push('/history'),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.settings_outlined),
+                  tooltip: 'Settings',
+                  onPressed: () => context.push('/settings'),
+                ),
+                const SizedBox(width: JamSpace.sm),
+              ],
+            ),
       body: SafeArea(
         top: false,
-        child: ValueListenableBuilder<List<JamNearbyRoom>>(
-          valueListenable: session.nearbyRooms,
-          builder: (context, rooms, _) => CustomScrollView(
-            slivers: [
-              SliverPadding(
-                padding: const EdgeInsets.fromLTRB(
-                  JamSpace.page,
-                  JamSpace.sm,
-                  JamSpace.page,
-                  JamSpace.lg,
-                ),
-                sliver: SliverToBoxAdapter(
-                  child: Text('Nearby', style: context.jamLargeTitle),
-                ),
+        // Rows stretched across a 1300px window are unreadable; hold the
+        // content to a column and centre it in the detail pane.
+        child: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(
+              maxWidth: JamContentWidth.reading,
+            ),
+            child: ValueListenableBuilder<List<JamNearbyRoom>>(
+              valueListenable: session.nearbyRooms,
+              builder: (context, rooms, _) => CustomScrollView(
+                slivers: [
+                  SliverPadding(
+                    padding: const EdgeInsets.fromLTRB(
+                      JamSpace.page,
+                      JamSpace.sm,
+                      JamSpace.page,
+                      JamSpace.lg,
+                    ),
+                    sliver: SliverToBoxAdapter(
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: Text('Nearby', style: context.jamLargeTitle),
+                          ),
+                          // Wide layouts have no bottom bar, so the two ways in
+                          // sit beside the title instead.
+                          if (wide)
+                            _HomeActions(
+                              onScan: () => unawaited(_scan()),
+                              onHost: () => context.push('/host'),
+                              inline: true,
+                            ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  if (rooms.isEmpty)
+                    SliverFillRemaining(
+                      hasScrollBody: false,
+                      child: _EmptyNearby(
+                        network: _network,
+                        onScan: () => unawaited(_scan()),
+                      ),
+                    )
+                  else
+                    SliverList.separated(
+                      itemCount: rooms.length,
+                      separatorBuilder: (_, _) => Divider(
+                        height: 0.5,
+                        indent: JamSpace.page,
+                        color: colors.separator,
+                      ),
+                      itemBuilder: (context, index) => _RoomRow(
+                        room: rooms[index],
+                        onTap: () => unawaited(_join(rooms[index])),
+                      ),
+                    ),
+                ],
               ),
-              if (rooms.isEmpty)
-                SliverFillRemaining(
-                  hasScrollBody: false,
-                  child: _EmptyNearby(
-                    network: _network,
-                    onScan: () => unawaited(_scan()),
-                  ),
-                )
-              else
-                SliverList.separated(
-                  itemCount: rooms.length,
-                  separatorBuilder: (_, _) => Divider(
-                    height: 0.5,
-                    indent: JamSpace.page,
-                    color: colors.separator,
-                  ),
-                  itemBuilder: (context, index) => _RoomRow(
-                    room: rooms[index],
-                    onTap: () => unawaited(_join(rooms[index])),
-                  ),
-                ),
-            ],
+            ),
           ),
         ),
       ),
       // While a jam is live the docked room bar takes this slot — and both
       // of these actions would be no-ops, since a session can only start
       // from idle.
-      bottomNavigationBar: session.isLive
+      bottomNavigationBar: session.isLive || wide
           ? null
           : _HomeActions(
               onScan: () => unawaited(_scan()),
@@ -234,7 +241,17 @@ class _IdentityButton extends StatelessWidget {
           children: [
             PeerAvatar(name: name, size: 28),
             const SizedBox(width: JamSpace.sm),
-            Text(name, style: context.jamRowTitle),
+            // Flexible, not fixed: the app bar's title slot is narrow once
+            // the two action icons take their share, and a long identity
+            // should truncate rather than overflow.
+            Flexible(
+              child: Text(
+                name,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: context.jamRowTitle,
+              ),
+            ),
           ],
         ),
       ),
@@ -326,14 +343,43 @@ class _EmptyNearby extends StatelessWidget {
 
 /// The two ways into music, always reachable.
 class _HomeActions extends StatelessWidget {
-  const _HomeActions({required this.onScan, required this.onHost});
+  const _HomeActions({
+    required this.onScan,
+    required this.onHost,
+    this.inline = false,
+  });
 
   final VoidCallback onScan;
   final VoidCallback onHost;
 
+  /// True when the actions sit beside the page title (wide layouts) rather
+  /// than in a bar pinned to the bottom of the window, where they would look
+  /// stranded.
+  final bool inline;
+
   @override
   Widget build(BuildContext context) {
     final colors = context.jamColors;
+    if (inline) {
+      return Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (canScanQrCodes) ...[
+            OutlinedButton.icon(
+              onPressed: onScan,
+              icon: const Icon(Icons.qr_code_scanner_rounded, size: 20),
+              label: const Text('Scan code'),
+            ),
+            const SizedBox(width: JamSpace.md),
+          ],
+          FilledButton.icon(
+            onPressed: onHost,
+            icon: const Icon(Icons.graphic_eq_rounded, size: 20),
+            label: const Text('Start a jam'),
+          ),
+        ],
+      );
+    }
     return Container(
       decoration: BoxDecoration(
         color: colors.canvas,

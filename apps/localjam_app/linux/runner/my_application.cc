@@ -54,6 +54,14 @@ static void my_application_activate(GApplication* application) {
 
   gtk_window_set_default_size(window, 1280, 720);
 
+  // Floor for the responsive layout: below this the sidebar has nowhere to
+  // go, and the compact chrome is what renders anyway.
+  GdkGeometry geometry;
+  geometry.min_width = 420;
+  geometry.min_height = 560;
+  gtk_window_set_geometry_hints(window, nullptr, &geometry,
+                                static_cast<GdkWindowHints>(GDK_HINT_MIN_SIZE));
+
   g_autoptr(FlDartProject) project = fl_dart_project_new();
   fl_dart_project_set_dart_entrypoint_arguments(
       project, self->dart_entrypoint_arguments);

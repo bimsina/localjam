@@ -20,25 +20,37 @@ import '../state/queue_actions.dart';
 import '../util/format.dart';
 import 'artwork.dart';
 
-/// Opens the queue as a modal sheet.
+/// Opens the queue as a modal sheet. Compact layouts only — wide ones keep
+/// [QueuePanel] open beside the player instead.
 Future<void> showQueueSheet(BuildContext context, JamEngine engine) {
   return showModalBottomSheet<void>(
     context: context,
     isScrollControlled: true,
-    builder: (_) => QueueSheet(engine: engine),
+    builder: (_) => DraggableScrollableSheet(
+      expand: false,
+      initialChildSize: 0.8,
+      maxChildSize: 0.95,
+      builder: (context, scrollController) =>
+          QueuePanel(engine: engine, scrollController: scrollController),
+    ),
   );
 }
 
-class QueueSheet extends StatefulWidget {
-  const QueueSheet({super.key, required this.engine});
+/// The queue itself, laid out as a column so it works as both a sheet body
+/// and a docked desktop panel.
+class QueuePanel extends StatefulWidget {
+  const QueuePanel({super.key, required this.engine, this.scrollController});
 
   final JamEngine engine;
 
+  /// Supplied by a DraggableScrollableSheet; null when docked.
+  final ScrollController? scrollController;
+
   @override
-  State<QueueSheet> createState() => _QueueSheetState();
+  State<QueuePanel> createState() => _QueuePanelState();
 }
 
-class _QueueSheetState extends State<QueueSheet> {
+class _QueuePanelState extends State<QueuePanel> {
   final List<StreamSubscription<Object?>> _subs = [];
   bool _adding = false;
 
@@ -118,110 +130,98 @@ class _QueueSheetState extends State<QueueSheet> {
     final canControl = _engine.can(JamCapability.controlPlayback);
     final currentId = _engine.snapshot.mediaId;
 
-    return DraggableScrollableSheet(
-      expand: false,
-      initialChildSize: 0.8,
-      maxChildSize: 0.95,
-      builder: (context, scrollController) => Column(
-        children: [
-          Padding(
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(
+            JamSpace.page,
+            JamSpace.sm,
+            JamSpace.md,
+            JamSpace.md,
+          ),
+          child: Row(
+            children: [
+              Expanded(child: Text('Queue', style: context.jamTitle)),
+              if (canAdd)
+                _adding
+                    ? const Padding(
+                        padding: EdgeInsets.symmetric(horizontal: JamSpace.lg),
+                        child: SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        ),
+                      )
+                    : TextButton.icon(
+                        onPressed: () => unawaited(_add()),
+                        icon: const Icon(Icons.add_rounded, size: 20),
+                        label: const Text('Add'),
+                      ),
+            ],
+          ),
+        ),
+        if (_engine case final JamGuestEngine guest)
+          ValueListenableBuilder<double?>(
+            valueListenable: guest.uploadProgress,
+            builder: (context, progress, _) => progress == null
+                ? const SizedBox.shrink()
+                : LinearProgressIndicator(value: progress),
+          ),
+        Expanded(
+          child: playlist.isEmpty
+              ? _EmptyQueue(canAdd: canAdd, onAdd: () => unawaited(_add()))
+              : ReorderableListView.builder(
+                  scrollController: widget.scrollController,
+                  padding: const EdgeInsets.only(bottom: JamSpace.huge),
+                  buildDefaultDragHandles: canEdit,
+                  itemCount: playlist.length,
+                  // onReorderItem (unlike the deprecated onReorder) hands
+                  // back an index already adjusted for the removed row.
+                  onReorderItem: (oldIndex, newIndex) => unawaited(
+                    jamMoveItem(_engine, playlist[oldIndex].mediaId, newIndex),
+                  ),
+                  itemBuilder: (context, index) {
+                    final item = playlist[index];
+                    return _QueueRow(
+                      key: ValueKey(item.mediaId),
+                      engine: _engine,
+                      item: item,
+                      peers: peers,
+                      isCurrent: item.mediaId == currentId,
+                      canRemove: jamCanRemove(_engine, item),
+                      onTap: canControl
+                          ? () => unawaited(jamSetMedia(_engine, item.mediaId))
+                          : null,
+                      onRemove: () =>
+                          unawaited(jamRemoveItem(_engine, item.mediaId)),
+                    );
+                  },
+                ),
+        ),
+        if (playlist.isNotEmpty)
+          Container(
+            width: double.infinity,
             padding: const EdgeInsets.fromLTRB(
               JamSpace.page,
               JamSpace.sm,
-              JamSpace.md,
+              JamSpace.page,
               JamSpace.md,
             ),
-            child: Row(
-              children: [
-                Expanded(child: Text('Queue', style: context.jamTitle)),
-                if (canAdd)
-                  _adding
-                      ? const Padding(
-                          padding: EdgeInsets.symmetric(
-                            horizontal: JamSpace.lg,
-                          ),
-                          child: SizedBox(
-                            width: 20,
-                            height: 20,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          ),
-                        )
-                      : TextButton.icon(
-                          onPressed: () => unawaited(_add()),
-                          icon: const Icon(Icons.add_rounded, size: 20),
-                          label: const Text('Add'),
-                        ),
-              ],
+            decoration: BoxDecoration(
+              border: Border(
+                top: BorderSide(color: colors.separator, width: 0.5),
+              ),
+            ),
+            child: SafeArea(
+              top: false,
+              child: Text(
+                '${playlist.length} '
+                '${playlist.length == 1 ? 'track' : 'tracks'}',
+                style: context.jamFootnote,
+              ),
             ),
           ),
-          if (_engine case final JamGuestEngine guest)
-            ValueListenableBuilder<double?>(
-              valueListenable: guest.uploadProgress,
-              builder: (context, progress, _) => progress == null
-                  ? const SizedBox.shrink()
-                  : LinearProgressIndicator(value: progress),
-            ),
-          Expanded(
-            child: playlist.isEmpty
-                ? _EmptyQueue(canAdd: canAdd, onAdd: () => unawaited(_add()))
-                : ReorderableListView.builder(
-                    scrollController: scrollController,
-                    padding: const EdgeInsets.only(bottom: JamSpace.huge),
-                    buildDefaultDragHandles: canEdit,
-                    itemCount: playlist.length,
-                    // onReorderItem (unlike the deprecated onReorder) hands
-                    // back an index already adjusted for the removed row.
-                    onReorderItem: (oldIndex, newIndex) => unawaited(
-                      jamMoveItem(
-                        _engine,
-                        playlist[oldIndex].mediaId,
-                        newIndex,
-                      ),
-                    ),
-                    itemBuilder: (context, index) {
-                      final item = playlist[index];
-                      return _QueueRow(
-                        key: ValueKey(item.mediaId),
-                        engine: _engine,
-                        item: item,
-                        peers: peers,
-                        isCurrent: item.mediaId == currentId,
-                        canRemove: jamCanRemove(_engine, item),
-                        onTap: canControl
-                            ? () =>
-                                  unawaited(jamSetMedia(_engine, item.mediaId))
-                            : null,
-                        onRemove: () =>
-                            unawaited(jamRemoveItem(_engine, item.mediaId)),
-                      );
-                    },
-                  ),
-          ),
-          if (playlist.isNotEmpty)
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.fromLTRB(
-                JamSpace.page,
-                JamSpace.sm,
-                JamSpace.page,
-                JamSpace.md,
-              ),
-              decoration: BoxDecoration(
-                border: Border(
-                  top: BorderSide(color: colors.separator, width: 0.5),
-                ),
-              ),
-              child: SafeArea(
-                top: false,
-                child: Text(
-                  '${playlist.length} '
-                  '${playlist.length == 1 ? 'track' : 'tracks'}',
-                  style: context.jamFootnote,
-                ),
-              ),
-            ),
-        ],
-      ),
+      ],
     );
   }
 }

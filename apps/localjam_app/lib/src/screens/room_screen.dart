@@ -20,6 +20,7 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:localjam_client/localjam_client.dart';
 
+import '../design/breakpoints.dart';
 import '../design/tokens.dart';
 import '../design/typography.dart';
 import '../state/session_controller.dart';
@@ -177,7 +178,12 @@ class _RoomScreenState extends State<RoomScreen> {
       ),
     );
 
+    final wide = context.jamBreakpoint.hasSidePanel;
+
     return DragToDismiss(
+      // A desktop window has no dismiss gesture — the room is a destination
+      // beside the sidebar, not a sheet over a phone screen.
+      enabled: !wide,
       onDismiss: minimise,
       child: Scaffold(
         appBar: AppBar(
@@ -248,71 +254,85 @@ class _RoomScreenState extends State<RoomScreen> {
               if (session.connection != JamConnectionState.connected)
                 _ReconnectBanner(connection: session.connection),
               Expanded(
-                child: LayoutBuilder(
-                  builder: (context, constraints) {
-                    // Whichever bounds first: the page width, a share of the
-                    // height, or the hero cap (so tablets and desktop do not
-                    // blow the cover up absurdly).
-                    final artSize = [
-                      constraints.maxWidth - JamSpace.xxxl * 2,
-                      constraints.maxHeight * 0.46,
-                      JamArtworkSize.hero,
-                    ].reduce((a, b) => a < b ? a : b);
-                    return Padding(
-                      padding: const EdgeInsets.fromLTRB(
-                        JamSpace.xxxl,
-                        JamSpace.sm,
-                        JamSpace.xxxl,
-                        JamSpace.lg,
-                      ),
-                      child: Column(
-                        children: [
-                          // Weighted, not even: the cover belongs in the upper
-                          // half with the controls gathered below it.
-                          const Spacer(),
-                          JamArtwork(
-                            engine: engine,
-                            item: engine.currentItem,
-                            size: artSize,
-                          ),
-                          const Spacer(flex: 2),
-                          SizedBox(
-                            width: double.infinity,
-                            child: NowPlayingTitle(
-                              engine: engine,
-                              item: engine.currentItem,
-                              peers: peers,
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: LayoutBuilder(
+                        builder: (context, constraints) {
+                          // Whichever bounds first: the page width, a share of the
+                          // height, or the hero cap (so tablets and desktop do not
+                          // blow the cover up absurdly).
+                          final artSize = [
+                            constraints.maxWidth - JamSpace.xxxl * 2,
+                            constraints.maxHeight * 0.46,
+                            JamArtworkSize.hero,
+                          ].reduce((a, b) => a < b ? a : b);
+                          return Padding(
+                            padding: const EdgeInsets.fromLTRB(
+                              JamSpace.xxxl,
+                              JamSpace.sm,
+                              JamSpace.xxxl,
+                              JamSpace.lg,
                             ),
-                          ),
-                          const SizedBox(height: JamSpace.xl),
-                          if (session.position case final ticker?)
-                            PlaybackTimeline(
-                              engine: engine,
-                              position: ticker,
-                              canControl: canControl,
+                            child: Column(
+                              children: [
+                                // Weighted, not even: the cover belongs in the upper
+                                // half with the controls gathered below it.
+                                const Spacer(),
+                                JamArtwork(
+                                  engine: engine,
+                                  item: engine.currentItem,
+                                  size: artSize,
+                                ),
+                                const Spacer(flex: 2),
+                                SizedBox(
+                                  width: double.infinity,
+                                  child: NowPlayingTitle(
+                                    engine: engine,
+                                    item: engine.currentItem,
+                                    peers: peers,
+                                  ),
+                                ),
+                                const SizedBox(height: JamSpace.xl),
+                                if (session.position case final ticker?)
+                                  PlaybackTimeline(
+                                    engine: engine,
+                                    position: ticker,
+                                    canControl: canControl,
+                                  ),
+                                const SizedBox(height: JamSpace.sm),
+                                TransportBar(
+                                  engine: engine,
+                                  canControl: canControl,
+                                  hasQueue: playlist.isNotEmpty,
+                                ),
+                                const SizedBox(height: JamSpace.lg),
+                                _ReadinessNote(engine: engine),
+                                const SizedBox(height: JamSpace.lg),
+                                _UtilityRow(
+                                  roster: roster,
+                                  isHost: session.isHost,
+                                  selfName: _identity,
+                                  queueCount: playlist.length,
+                                  onPeople: openRoom,
+                                  onQueue: () => unawaited(
+                                    showQueueSheet(context, engine),
+                                  ),
+                                ),
+                              ],
                             ),
-                          const SizedBox(height: JamSpace.sm),
-                          TransportBar(
-                            engine: engine,
-                            canControl: canControl,
-                            hasQueue: playlist.isNotEmpty,
-                          ),
-                          const SizedBox(height: JamSpace.lg),
-                          _ReadinessNote(engine: engine),
-                          const SizedBox(height: JamSpace.lg),
-                          _UtilityRow(
-                            roster: roster,
-                            isHost: session.isHost,
-                            selfName: _identity,
-                            queueCount: playlist.length,
-                            onPeople: openRoom,
-                            onQueue: () =>
-                                unawaited(showQueueSheet(context, engine)),
-                          ),
-                        ],
+                          );
+                        },
                       ),
-                    );
-                  },
+                    ),
+                    if (wide)
+                      _SidePanel(
+                        engine: engine,
+                        selfName: _identity,
+                        network: _network,
+                        joinUri: session.joinUri,
+                      ),
+                  ],
                 ),
               ),
             ],
@@ -521,6 +541,75 @@ class _SessionEnded extends StatelessWidget {
             ),
           ),
         ),
+      ),
+    );
+  }
+}
+
+/// Queue and room, docked beside the player on wide windows.
+///
+/// The same [QueuePanel] and [RoomPanel] a phone opens as modal sheets. A
+/// desktop window has the room to leave them open, and hiding them behind a
+/// tap there is pure cost.
+class _SidePanel extends StatefulWidget {
+  const _SidePanel({
+    required this.engine,
+    required this.selfName,
+    required this.network,
+    required this.joinUri,
+  });
+
+  final JamEngine engine;
+  final String selfName;
+  final JamNetworkStatus network;
+  final Uri? joinUri;
+
+  @override
+  State<_SidePanel> createState() => _SidePanelState();
+}
+
+enum _PanelTab { queue, room }
+
+class _SidePanelState extends State<_SidePanel> {
+  _PanelTab _tab = _PanelTab.queue;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.jamColors;
+    return Container(
+      width: JamContentWidth.panel,
+      decoration: BoxDecoration(
+        color: colors.surface,
+        border: Border(left: BorderSide(color: colors.separator, width: 0.5)),
+      ),
+      child: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.all(JamSpace.md),
+            child: SegmentedButton<_PanelTab>(
+              segments: const [
+                ButtonSegment(value: _PanelTab.queue, label: Text('Queue')),
+                ButtonSegment(value: _PanelTab.room, label: Text('Room')),
+              ],
+              selected: {_tab},
+              showSelectedIcon: false,
+              onSelectionChanged: (selection) =>
+                  setState(() => _tab = selection.first),
+            ),
+          ),
+          Divider(height: 0.5, color: colors.separator),
+          Expanded(
+            child: switch (_tab) {
+              _PanelTab.queue => QueuePanel(engine: widget.engine),
+              _PanelTab.room => RoomPanel(
+                engine: widget.engine,
+                selfName: widget.selfName,
+                network: widget.network,
+                joinUri: widget.joinUri,
+              ),
+            },
+          ),
+        ],
       ),
     );
   }
