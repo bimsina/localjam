@@ -71,6 +71,12 @@ GoRouter buildRouter(JamSessionController session) => GoRouter(
       pageBuilder: (context, state) => CustomTransitionPage<void>(
         key: state.pageKey,
         child: const RoomScreen(),
+        // Not opaque: Flutter stops building the routes behind an opaque
+        // route once its entrance transition finishes, so dragging the
+        // player down revealed bare black instead of home. The cost is that
+        // home keeps rendering underneath — cheap, and required for both the
+        // slide and the dismiss gesture to show anything.
+        opaque: false,
         transitionDuration: JamDuration.slow,
         reverseTransitionDuration: JamDuration.base,
         transitionsBuilder: (context, animation, secondary, child) =>

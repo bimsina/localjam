@@ -18,7 +18,8 @@ void main() {
     router.go('/room');
     await tester.pumpAndSettle();
 
-    expect(find.text('Van Jam'), findsOneWidget);
+    expect(find.byType(DragToDismiss), findsOneWidget);
+    expect(find.text('Van Jam'), findsWidgets);
     // An empty room says what to do rather than showing a dead player.
     expect(find.text('Nothing queued'), findsOneWidget);
     expect(find.text('Add something to get the room going'), findsOneWidget);
@@ -36,9 +37,9 @@ void main() {
     final router = await pumpApp(tester, session);
     await startTestHost(tester, session, 'Trek Jam');
 
-    router.go('/room');
+    router.push('/room');
     await tester.pumpAndSettle();
-    expect(find.text('Trek Jam'), findsOneWidget);
+    expect(find.byType(DragToDismiss), findsOneWidget);
 
     router.go('/');
     await tester.pumpAndSettle();
@@ -109,7 +110,7 @@ void main() {
     }
 
     await tester.pumpAndSettle();
-    expect(find.text('Slide Jam'), findsOneWidget);
+    expect(find.byType(DragToDismiss), findsOneWidget);
 
     await tester.tap(find.byIcon(Icons.keyboard_arrow_down_rounded));
     await tester.pump();
@@ -132,6 +133,26 @@ void main() {
     await leaveTestSession(tester, session);
   });
 
+  testWidgets('home keeps rendering behind the player', (tester) async {
+    // Flutter stops building routes behind an OPAQUE route once its entrance
+    // transition completes — which made dragging the player down reveal bare
+    // black rather than the app. The room page must stay non-opaque.
+    final session = testSession();
+    final router = await pumpApp(tester, session);
+    await startTestHost(tester, session, 'Behind Jam');
+    router.push('/room');
+    await tester.pumpAndSettle();
+
+    expect(find.byType(DragToDismiss), findsOneWidget);
+    expect(
+      find.text('Nearby'),
+      findsOneWidget,
+      reason: 'home must still be built underneath, or a drag reveals void',
+    );
+
+    await leaveTestSession(tester, session);
+  });
+
   testWidgets('dragging the player down dismisses it', (tester) async {
     final session = testSession();
     final router = await pumpApp(tester, session);
@@ -142,11 +163,12 @@ void main() {
     // A short drag is not a dismissal — it springs back.
     await tester.drag(find.byType(DragToDismiss), const Offset(0, 40));
     await tester.pumpAndSettle();
-    expect(find.text('Drag Jam'), findsOneWidget);
+    expect(find.byType(DragToDismiss), findsOneWidget);
 
     // A long one puts the player away without ending the jam.
     await tester.drag(find.byType(DragToDismiss), const Offset(0, 400));
     await tester.pumpAndSettle();
+    expect(find.byType(DragToDismiss), findsNothing);
     expect(find.text('Nearby'), findsOneWidget);
     expect(session.isLive, isTrue);
 
@@ -178,7 +200,7 @@ void main() {
         .transform
         .getTranslation();
     expect(translate.y, 0, reason: 'upward drags are clamped away');
-    expect(find.text('Up Jam'), findsOneWidget);
+    expect(find.byType(DragToDismiss), findsOneWidget);
 
     await leaveTestSession(tester, session);
   });

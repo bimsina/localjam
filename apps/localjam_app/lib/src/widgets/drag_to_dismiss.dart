@@ -100,6 +100,21 @@ class _DragToDismissState extends State<DragToDismiss>
   @override
   Widget build(BuildContext context) {
     if (!widget.enabled) return widget.child;
+    // Corners round as the page peels away, so it reads as a sheet being put
+    // down rather than a screen sliding off. Only clip while dragging — a
+    // zero-radius ClipRRect still costs a layer every frame.
+    final height = MediaQuery.sizeOf(context).height;
+    final progress = height == 0
+        ? 0.0
+        : (_offset / (height * _distanceThreshold)).clamp(0.0, 1.0);
+    final page = _offset <= 0
+        ? widget.child
+        : ClipRRect(
+            borderRadius: BorderRadius.vertical(
+              top: Radius.circular(JamRadius.xl * progress),
+            ),
+            child: widget.child,
+          );
     return GestureDetector(
       // Vertical only, so the scrubber's horizontal drag still wins the arena.
       onVerticalDragUpdate: _onUpdate,
@@ -110,10 +125,7 @@ class _DragToDismissState extends State<DragToDismiss>
           ..reset()
           ..forward();
       },
-      child: Transform.translate(
-        offset: Offset(0, _offset),
-        child: widget.child,
-      ),
+      child: Transform.translate(offset: Offset(0, _offset), child: page),
     );
   }
 }
