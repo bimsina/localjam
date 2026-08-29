@@ -530,17 +530,19 @@ void main() {
       return item;
     }
 
-    test('welcome carries the document; guests derive their own caps',
-        () async {
-      final host = await startHost(policy: JamPolicy.jam);
-      final guest = await joinGuest(host);
-      expect(guest.permissions.rev, 0);
-      expect(guest.permissions.policy, JamPolicy.jam);
-      expect(guest.myCapabilities, {
-        JamCapability.addTracks,
-        JamCapability.editQueue,
-      });
-    });
+    test(
+      'welcome carries the document; guests derive their own caps',
+      () async {
+        final host = await startHost(policy: JamPolicy.jam);
+        final guest = await joinGuest(host);
+        expect(guest.permissions.rev, 0);
+        expect(guest.permissions.policy, JamPolicy.jam);
+        expect(guest.myCapabilities, {
+          JamCapability.addTracks,
+          JamCapability.editQueue,
+        });
+      },
+    );
 
     test('playback request without controlPlayback: not_allowed error, '
         'requestDenied event, state untouched', () async {
@@ -713,18 +715,20 @@ void main() {
       expect(host.snapshot.mediaId, a.mediaId);
     });
 
-    test('a kicked peer\'s role is forgotten but a resumable drop keeps it',
-        () async {
-      final host = await startHost();
-      final guest = await joinGuest(host);
-      host.promotePeer(guest.selfPeerId);
-      final revAfterPromote = host.permissions.rev;
+    test(
+      'a kicked peer\'s role is forgotten but a resumable drop keeps it',
+      () async {
+        final host = await startHost();
+        final guest = await joinGuest(host);
+        host.promotePeer(guest.selfPeerId);
+        final revAfterPromote = host.permissions.rev;
 
-      // A resumable drop (grace kept) leaves the role in place.
-      host.kickPeer(guest.selfPeerId, allowResume: true);
-      expect(host.permissions.cohosts, contains(guest.selfPeerId));
-      expect(host.permissions.rev, revAfterPromote);
-    });
+        // A resumable drop (grace kept) leaves the role in place.
+        host.kickPeer(guest.selfPeerId, allowResume: true);
+        expect(host.permissions.cohosts, contains(guest.selfPeerId));
+        expect(host.permissions.rev, revAfterPromote);
+      },
+    );
   });
 
   group('tag metadata + artwork (§6.1 v0.2, §6.5)', () {
@@ -784,33 +788,35 @@ void main() {
       expect(item.artworkId, isNull);
     });
 
-    test('artwork endpoint: 401 without token, 404 for unknown id, no Range',
-        () async {
-      final host = await startHost();
+    test(
+      'artwork endpoint: 401 without token, 404 for unknown id, no Range',
+      () async {
+        final host = await startHost();
 
-      final http = HttpClient();
-      addTearDown(() => http.close(force: true));
-      Future<int> status(String path, {String? token}) async {
-        final req = await http.getUrl(
-          Uri(
-            scheme: 'http',
-            host: InternetAddress.loopbackIPv4.address,
-            port: host.port,
-            path: path,
-          ),
-        );
-        if (token != null) {
-          req.headers.set(HttpHeaders.authorizationHeader, 'Bearer $token');
+        final http = HttpClient();
+        addTearDown(() => http.close(force: true));
+        Future<int> status(String path, {String? token}) async {
+          final req = await http.getUrl(
+            Uri(
+              scheme: 'http',
+              host: InternetAddress.loopbackIPv4.address,
+              port: host.port,
+              path: path,
+            ),
+          );
+          if (token != null) {
+            req.headers.set(HttpHeaders.authorizationHeader, 'Bearer $token');
+          }
+          final res = await req.close();
+          await res.drain<void>();
+          return res.statusCode;
         }
-        final res = await req.close();
-        await res.drain<void>();
-        return res.statusCode;
-      }
 
-      expect(await status('/artwork/a_0123456789ab'), 401);
-      expect(await status('/artwork/a_0123456789ab', token: 'wrong'), 401);
-      expect(await status('/artwork/a_0123456789ab', token: host.token), 404);
-    });
+        expect(await status('/artwork/a_0123456789ab'), 401);
+        expect(await status('/artwork/a_0123456789ab', token: 'wrong'), 401);
+        expect(await status('/artwork/a_0123456789ab', token: host.token), 404);
+      },
+    );
 
     test('addArtwork is idempotent by content and serves the right bytes '
         'with the right Content-Type', () async {

@@ -28,10 +28,9 @@ enum RejectReason {
   final String wire;
 
   static RejectReason fromWire(String wire) => values.firstWhere(
-        (r) => r.wire == wire,
-        orElse: () =>
-            throw FormatException('Unknown reject reason: "$wire"'),
-      );
+    (r) => r.wire == wire,
+    orElse: () => throw FormatException('Unknown reject reason: "$wire"'),
+  );
 }
 
 /// Error codes carried by the `error` message (PROTOCOL.md §8).
@@ -56,9 +55,9 @@ enum ErrorCode {
   final String wire;
 
   static ErrorCode fromWire(String wire) => values.firstWhere(
-        (c) => c.wire == wire,
-        orElse: () => throw FormatException('Unknown error code: "$wire"'),
-      );
+    (c) => c.wire == wire,
+    orElse: () => throw FormatException('Unknown error code: "$wire"'),
+  );
 }
 
 /// Kind of a playlist item (PROTOCOL.md §6.1).
@@ -73,9 +72,9 @@ enum MediaKind {
   final String wire;
 
   static MediaKind fromWire(String wire) => values.firstWhere(
-        (k) => k.wire == wire,
-        orElse: () => throw FormatException('Unknown media kind: "$wire"'),
-      );
+    (k) => k.wire == wire,
+    orElse: () => throw FormatException('Unknown media kind: "$wire"'),
+  );
 }
 
 /// A guest's local fetch state for one media item (PROTOCOL.md §6.3).
@@ -90,10 +89,9 @@ enum MediaFetchState {
   final String wire;
 
   static MediaFetchState fromWire(String wire) => values.firstWhere(
-        (s) => s.wire == wire,
-        orElse: () =>
-            throw FormatException('Unknown media fetch state: "$wire"'),
-      );
+    (s) => s.wire == wire,
+    orElse: () => throw FormatException('Unknown media fetch state: "$wire"'),
+  );
 }
 
 /// Action a guest asks the host to apply (PROTOCOL.md §5.2).
@@ -122,10 +120,9 @@ enum RequestAction {
   final String wire;
 
   static RequestAction fromWire(String wire) => values.firstWhere(
-        (a) => a.wire == wire,
-        orElse: () =>
-            throw FormatException('Unknown request action: "$wire"'),
-      );
+    (a) => a.wire == wire,
+    orElse: () => throw FormatException('Unknown request action: "$wire"'),
+  );
 }
 
 /// A peer as announced by the host (PROTOCOL.md §3.1/§3.2).
@@ -144,16 +141,16 @@ class PeerInfo {
   final String clientKind;
 
   Map<String, Object?> toJson() => {
-        'peerId': peerId,
-        'clientName': clientName,
-        'clientKind': clientKind,
-      };
+    'peerId': peerId,
+    'clientName': clientName,
+    'clientKind': clientKind,
+  };
 
   factory PeerInfo.fromJson(Map<String, Object?> json) => PeerInfo(
-        peerId: json['peerId'] as String,
-        clientName: (json['clientName'] as String?) ?? '',
-        clientKind: (json['clientKind'] as String?) ?? '',
-      );
+    peerId: json['peerId'] as String,
+    clientName: (json['clientName'] as String?) ?? '',
+    clientKind: (json['clientKind'] as String?) ?? '',
+  );
 
   @override
   bool operator ==(Object other) =>
@@ -216,34 +213,34 @@ class MediaItem {
   String get displayTitle => (title?.isNotEmpty ?? false) ? title! : name;
 
   Map<String, Object?> toJson() => {
-        'mediaId': mediaId,
-        'kind': kind.wire,
-        'name': name,
-        'mime': mime,
-        'sizeBytes': sizeBytes,
-        'durationUs': durationUs,
-        'sha256': sha256,
-        if (title != null) 'title': title,
-        if (artist != null) 'artist': artist,
-        if (album != null) 'album': album,
-        if (artworkId != null) 'artworkId': artworkId,
-        if (addedBy != null) 'addedBy': addedBy,
-      };
+    'mediaId': mediaId,
+    'kind': kind.wire,
+    'name': name,
+    'mime': mime,
+    'sizeBytes': sizeBytes,
+    'durationUs': durationUs,
+    'sha256': sha256,
+    if (title != null) 'title': title,
+    if (artist != null) 'artist': artist,
+    if (album != null) 'album': album,
+    if (artworkId != null) 'artworkId': artworkId,
+    if (addedBy != null) 'addedBy': addedBy,
+  };
 
   factory MediaItem.fromJson(Map<String, Object?> json) => MediaItem(
-        mediaId: json['mediaId'] as String,
-        kind: MediaKind.fromWire(json['kind'] as String),
-        name: (json['name'] as String?) ?? '',
-        mime: (json['mime'] as String?) ?? '',
-        sizeBytes: (json['sizeBytes'] as int?) ?? 0,
-        durationUs: json['durationUs'] as int?,
-        sha256: (json['sha256'] as String?) ?? '',
-        title: json['title'] as String?,
-        artist: json['artist'] as String?,
-        album: json['album'] as String?,
-        artworkId: json['artworkId'] as String?,
-        addedBy: json['addedBy'] as String?,
-      );
+    mediaId: json['mediaId'] as String,
+    kind: MediaKind.fromWire(json['kind'] as String),
+    name: (json['name'] as String?) ?? '',
+    mime: (json['mime'] as String?) ?? '',
+    sizeBytes: (json['sizeBytes'] as int?) ?? 0,
+    durationUs: json['durationUs'] as int?,
+    sha256: (json['sha256'] as String?) ?? '',
+    title: json['title'] as String?,
+    artist: json['artist'] as String?,
+    album: json['album'] as String?,
+    artworkId: json['artworkId'] as String?,
+    addedBy: json['addedBy'] as String?,
+  );
 
   @override
   bool operator ==(Object other) =>
@@ -262,8 +259,20 @@ class MediaItem {
       other.addedBy == addedBy;
 
   @override
-  int get hashCode => Object.hash(mediaId, kind, name, mime, sizeBytes,
-      durationUs, sha256, title, artist, album, artworkId, addedBy);
+  int get hashCode => Object.hash(
+    mediaId,
+    kind,
+    name,
+    mime,
+    sizeBytes,
+    durationUs,
+    sha256,
+    title,
+    artist,
+    album,
+    artworkId,
+    addedBy,
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -317,22 +326,22 @@ class HelloMessage extends Message {
 
   @override
   Map<String, Object?> payloadToJson() => {
-        'token': token,
-        'clientName': clientName,
-        'clientKind': clientKind,
-        'caps': caps,
-        'encodings': encodings,
-        if (resumePeerId != null) 'resumePeerId': resumePeerId,
-      };
+    'token': token,
+    'clientName': clientName,
+    'clientKind': clientKind,
+    'caps': caps,
+    'encodings': encodings,
+    if (resumePeerId != null) 'resumePeerId': resumePeerId,
+  };
 
   factory HelloMessage.fromPayload(Map<String, Object?> json) => HelloMessage(
-        token: json['token'] as String,
-        clientName: (json['clientName'] as String?) ?? '',
-        clientKind: (json['clientKind'] as String?) ?? '',
-        caps: _stringList(json['caps']),
-        encodings: _stringList(json['encodings'], fallback: const ['json']),
-        resumePeerId: json['resumePeerId'] as String?,
-      );
+    token: json['token'] as String,
+    clientName: (json['clientName'] as String?) ?? '',
+    clientKind: (json['clientKind'] as String?) ?? '',
+    caps: _stringList(json['caps']),
+    encodings: _stringList(json['encodings'], fallback: const ['json']),
+    resumePeerId: json['resumePeerId'] as String?,
+  );
 }
 
 /// H→G successful join response (PROTOCOL.md §3.1).
@@ -371,14 +380,14 @@ class WelcomeMessage extends Message {
 
   @override
   Map<String, Object?> payloadToJson() => {
-        'sessionId': sessionId,
-        'sessionName': sessionName,
-        'you': {'peerId': selfPeerId},
-        'peers': [for (final p in peers) p.toJson()],
-        'snapshot': snapshot.toJson(),
-        'playlist': [for (final i in playlist) i.toJson()],
-        if (permissions != null) 'permissions': permissions!.toJson(),
-      };
+    'sessionId': sessionId,
+    'sessionName': sessionName,
+    'you': {'peerId': selfPeerId},
+    'peers': [for (final p in peers) p.toJson()],
+    'snapshot': snapshot.toJson(),
+    'playlist': [for (final i in playlist) i.toJson()],
+    if (permissions != null) 'permissions': permissions!.toJson(),
+  };
 
   factory WelcomeMessage.fromPayload(Map<String, Object?> json) {
     final you = json['you'] as Map<String, Object?>? ?? const {};
@@ -387,9 +396,7 @@ class WelcomeMessage extends Message {
       sessionId: json['sessionId'] as String,
       sessionName: (json['sessionName'] as String?) ?? '',
       selfPeerId: you['peerId'] as String,
-      peers: [
-        for (final p in _mapList(json['peers'])) PeerInfo.fromJson(p),
-      ],
+      peers: [for (final p in _mapList(json['peers'])) PeerInfo.fromJson(p)],
       snapshot: PlaybackSnapshot.fromJson(
         json['snapshot'] as Map<String, Object?>,
       ),
@@ -480,7 +487,11 @@ class ClockPingMessage extends Message {
 
 /// H→G clock sync pong (PROTOCOL.md §4).
 class ClockPongMessage extends Message {
-  const ClockPongMessage({required this.t0, required this.t1, required this.t2});
+  const ClockPongMessage({
+    required this.t0,
+    required this.t1,
+    required this.t2,
+  });
 
   static const wireType = 'clock_pong';
 
@@ -533,11 +544,11 @@ class RequestMessage extends Message {
 
   @override
   Map<String, Object?> payloadToJson() => {
-        'action': action.wire,
-        if (mediaId != null) 'mediaId': mediaId,
-        if (positionUs != null) 'positionUs': positionUs,
-        if (toIndex != null) 'toIndex': toIndex,
-      };
+    'action': action.wire,
+    if (mediaId != null) 'mediaId': mediaId,
+    if (positionUs != null) 'positionUs': positionUs,
+    if (toIndex != null) 'toIndex': toIndex,
+  };
 
   factory RequestMessage.fromPayload(Map<String, Object?> json) =>
       RequestMessage(
@@ -584,16 +595,14 @@ class PlaylistMessage extends Message {
 
   @override
   Map<String, Object?> payloadToJson() => {
-        'rev': rev,
-        'items': [for (final i in items) i.toJson()],
-      };
+    'rev': rev,
+    'items': [for (final i in items) i.toJson()],
+  };
 
   factory PlaylistMessage.fromPayload(Map<String, Object?> json) =>
       PlaylistMessage(
         rev: json['rev'] as int,
-        items: [
-          for (final i in _mapList(json['items'])) MediaItem.fromJson(i),
-        ],
+        items: [for (final i in _mapList(json['items'])) MediaItem.fromJson(i)],
       );
 }
 
@@ -642,11 +651,11 @@ class MediaStatusMessage extends Message {
 
   @override
   Map<String, Object?> payloadToJson() => {
-        'mediaId': mediaId,
-        'state': state.wire,
-        if (progress != null) 'progress': progress,
-        if (reportedLatencyUs != null) 'reportedLatencyUs': reportedLatencyUs,
-      };
+    'mediaId': mediaId,
+    'state': state.wire,
+    if (progress != null) 'progress': progress,
+    if (reportedLatencyUs != null) 'reportedLatencyUs': reportedLatencyUs,
+  };
 
   factory MediaStatusMessage.fromPayload(Map<String, Object?> json) =>
       MediaStatusMessage(
@@ -676,16 +685,16 @@ class ErrorMessage extends Message {
 
   @override
   Map<String, Object?> payloadToJson() => {
-        'code': code.wire,
-        'message': message,
-        'fatal': fatal,
-      };
+    'code': code.wire,
+    'message': message,
+    'fatal': fatal,
+  };
 
   factory ErrorMessage.fromPayload(Map<String, Object?> json) => ErrorMessage(
-        code: ErrorCode.fromWire(json['code'] as String),
-        message: (json['message'] as String?) ?? '',
-        fatal: (json['fatal'] as bool?) ?? false,
-      );
+    code: ErrorCode.fromWire(json['code'] as String),
+    message: (json['message'] as String?) ?? '',
+    fatal: (json['fatal'] as bool?) ?? false,
+  );
 }
 
 /// A message whose `type` this client does not know.

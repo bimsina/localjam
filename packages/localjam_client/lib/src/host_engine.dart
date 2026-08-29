@@ -353,8 +353,7 @@ class JamHostEngine extends JamEngine {
     String peerId,
     JamCapability capability, {
     required bool? allowed,
-  }) =>
-      _server.setCapabilityOverride(peerId, capability, allowed: allowed);
+  }) => _server.setCapabilityOverride(peerId, capability, allowed: allowed);
 
   /// Kicks [peerId] from the session (§5.6): fatal `kicked` error, socket
   /// close, no resume, role forgotten. Throws [ArgumentError] if not joined.

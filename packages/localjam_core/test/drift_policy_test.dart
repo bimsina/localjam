@@ -4,8 +4,10 @@ import 'package:test/test.dart';
 void main() {
   const policy = DriftPolicy(); // 15 ms / 50 ms / 0.5 %
 
-  DriftAction decide(int errorUs) =>
-      policy.decide(expectedPositionUs: 10_000_000, actualPositionUs: 10_000_000 + errorUs);
+  DriftAction decide(int errorUs) => policy.decide(
+    expectedPositionUs: 10_000_000,
+    actualPositionUs: 10_000_000 + errorUs,
+  );
 
   group('DriftPolicy boundaries', () {
     test('zero error -> DriftNone', () {
@@ -75,7 +77,8 @@ void main() {
     test('slewing for durationUs at the multiplier closes the gap', () {
       final action = decide(40_000) as DriftSlew;
       // Position gained relative to nominal over the slew window:
-      final closedUs = (action.durationUs * (action.rateMultiplier - 1)).round();
+      final closedUs = (action.durationUs * (action.rateMultiplier - 1))
+          .round();
       expect(closedUs, -40_000); // exactly cancels a +40 ms (ahead) error
     });
   });

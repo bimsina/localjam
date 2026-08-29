@@ -78,13 +78,14 @@ class LocaljamAudio {
   LocaljamAudio({
     @visibleForTesting MethodChannel? channel,
     @visibleForTesting Stream<Object?>? rawEvents,
-  })  : _ch = channel ?? const MethodChannel('localjam_audio'),
-        _injectedRawEvents = rawEvents;
+  }) : _ch = channel ?? const MethodChannel('localjam_audio'),
+       _injectedRawEvents = rawEvents;
 
   final MethodChannel _ch;
 
-  static const EventChannel _eventChannel =
-      EventChannel('localjam_audio/events');
+  static const EventChannel _eventChannel = EventChannel(
+    'localjam_audio/events',
+  );
 
   /// Test injection point for the raw (undecoded) native event stream.
   final Stream<Object?>? _injectedRawEvents;
@@ -98,8 +99,8 @@ class LocaljamAudio {
   /// Broadcast; the native side is subscribed lazily on first listen.
   /// Unknown event types are ignored, so old Dart keeps working against a
   /// newer native side.
-  Stream<LocaljamAudioEvent> get events => _events ??=
-      (_injectedRawEvents ?? _eventChannel.receiveBroadcastStream())
+  Stream<LocaljamAudioEvent> get events =>
+      _events ??= (_injectedRawEvents ?? _eventChannel.receiveBroadcastStream())
           .map(_decodeEvent)
           .where((event) => event != null)
           .cast<LocaljamAudioEvent>();
@@ -165,12 +166,11 @@ class LocaljamAudio {
     required int nativeTimeUs,
     required int positionUs,
     double rate = 1.0,
-  }) =>
-      _ch.invokeMethod<void>('playAt', {
-        'nativeTimeUs': nativeTimeUs,
-        'positionUs': positionUs,
-        'rate': rate,
-      });
+  }) => _ch.invokeMethod<void>('playAt', {
+    'nativeTimeUs': nativeTimeUs,
+    'positionUs': positionUs,
+    'rate': rate,
+  });
 
   /// Pauses playback, keeping the loaded file.
   Future<void> pause() => _ch.invokeMethod<void>('pause');
@@ -267,8 +267,7 @@ class JamLibraryPermissionException implements Exception {
 class JamMediaLibrary {
   JamMediaLibrary._();
 
-  static const MethodChannel channel =
-      MethodChannel('localjam_audio/library');
+  static const MethodChannel channel = MethodChannel('localjam_audio/library');
 
   /// Whether this platform implements library queries.
   static bool get isSupported =>
@@ -402,19 +401,19 @@ class JamNowPlaying {
   final bool canSeek;
 
   Map<String, Object?> toMap() => {
-        'title': title,
-        'artist': artist,
-        'album': album,
-        'artworkBytes': artworkBytes,
-        'durationUs': durationUs,
-        'positionUs': positionUs,
-        'rate': rate,
-        'playing': playing,
-        'canPlayPause': canPlayPause,
-        'canNext': canNext,
-        'canPrevious': canPrevious,
-        'canSeek': canSeek,
-      };
+    'title': title,
+    'artist': artist,
+    'album': album,
+    'artworkBytes': artworkBytes,
+    'durationUs': durationUs,
+    'positionUs': positionUs,
+    'rate': rate,
+    'playing': playing,
+    'canPlayPause': canPlayPause,
+    'canNext': canNext,
+    'canPrevious': canPrevious,
+    'canSeek': canSeek,
+  };
 }
 
 /// The OS media-session integration: publishes now-playing state (lock
@@ -431,8 +430,9 @@ class JamMediaSession {
 
   /// The bidirectional channel: Dart sends `update`/`clear`; the native side
   /// sends `remoteCommand {command, positionUs?}`.
-  static const MethodChannel channel =
-      MethodChannel('localjam_audio/media_session');
+  static const MethodChannel channel = MethodChannel(
+    'localjam_audio/media_session',
+  );
 
   /// Receives OS transport commands. Setting this installs the channel
   /// handler; set null to stop listening.

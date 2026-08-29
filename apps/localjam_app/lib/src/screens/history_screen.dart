@@ -27,7 +27,9 @@ class _HistoryScreenState extends State<HistoryScreen> {
 
   Future<void> _load() async {
     final store = _store ??= await JamHistoryStore.open();
-    final records = store == null ? const <JamHistoryRecord>[] : await store.list();
+    final records = store == null
+        ? const <JamHistoryRecord>[]
+        : await store.list();
     if (mounted) setState(() => _records = records);
   }
 
@@ -95,9 +97,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
     final replayable = record.replayableTracks.length;
     return Card(
       child: ExpansionTile(
-        leading: Icon(
-          record.wasHost ? Icons.wifi_tethering : Icons.headphones,
-        ),
+        leading: Icon(record.wasHost ? Icons.wifi_tethering : Icons.headphones),
         title: Text(record.sessionName, overflow: TextOverflow.ellipsis),
         subtitle: Text(
           [

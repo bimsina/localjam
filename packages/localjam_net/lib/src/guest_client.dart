@@ -152,8 +152,9 @@ class JamGuestClient {
   final Map<String, PeerInfo> _peers = {};
 
   /// Until a v0.2 host says otherwise, assume nothing is allowed (§5.6).
-  JamPermissions _permissions =
-      const JamPermissions.initial(policy: JamPolicy.listenOnly);
+  JamPermissions _permissions = const JamPermissions.initial(
+    policy: JamPolicy.listenOnly,
+  );
   ErrorMessage? _lastFatalError;
 
   final StreamController<PlaybackSnapshot> _states =
@@ -394,19 +395,19 @@ class JamGuestClient {
 
   /// Asks the host to move [mediaId] to queue position [toIndex] (§5.6).
   Future<void> requestQueueMove(String mediaId, int toIndex) async => _send(
-        RequestMessage(
-          action: RequestAction.queueMove,
-          mediaId: mediaId,
-          toIndex: toIndex,
-        ),
-      );
+    RequestMessage(
+      action: RequestAction.queueMove,
+      mediaId: mediaId,
+      toIndex: toIndex,
+    ),
+  );
 
   /// Asks the host to remove [mediaId] from the queue (§5.6). Removing your
   /// own contribution is always allowed; others' need
   /// [JamCapability.editQueue].
   Future<void> requestQueueRemove(String mediaId) async => _send(
-        RequestMessage(action: RequestAction.queueRemove, mediaId: mediaId),
-      );
+    RequestMessage(action: RequestAction.queueRemove, mediaId: mediaId),
+  );
 
   // --- Media plane (§6.2, §6.3) ----------------------------------------------------
 

@@ -28,11 +28,7 @@ import 'jam_engine.dart';
 /// One queue entry of a recorded session.
 @immutable
 class JamHistoryTrack {
-  const JamHistoryTrack({
-    required this.item,
-    this.addedByName,
-    this.localPath,
-  });
+  const JamHistoryTrack({required this.item, this.addedByName, this.localPath});
 
   /// The full playlist item (title/artist/album/artwork id/sha256/...).
   final MediaItem item;
@@ -57,10 +53,10 @@ class JamHistoryTrack {
   }
 
   Map<String, Object?> toJson() => {
-        'item': item.toJson(),
-        if (addedByName != null) 'addedByName': addedByName,
-        if (localPath != null) 'localPath': localPath,
-      };
+    'item': item.toJson(),
+    if (addedByName != null) 'addedByName': addedByName,
+    if (localPath != null) 'localPath': localPath,
+  };
 
   static JamHistoryTrack? fromJson(Object? json) {
     if (json is! Map) return null;
@@ -109,18 +105,20 @@ class JamHistoryRecord {
 
   /// The subset of [tracks] whose bytes are still readable locally — what a
   /// "play it again" flow can seed a new session with.
-  List<JamHistoryTrack> get replayableTracks =>
-      [for (final t in tracks) if (t.existsLocally) t];
+  List<JamHistoryTrack> get replayableTracks => [
+    for (final t in tracks)
+      if (t.existsLocally) t,
+  ];
 
   Map<String, Object?> toJson() => {
-        'sessionId': sessionId,
-        'sessionName': sessionName,
-        'wasHost': wasHost,
-        'startedAt': startedAt.toIso8601String(),
-        'updatedAt': updatedAt.toIso8601String(),
-        'peerNames': peerNames,
-        'tracks': [for (final t in tracks) t.toJson()],
-      };
+    'sessionId': sessionId,
+    'sessionName': sessionName,
+    'wasHost': wasHost,
+    'startedAt': startedAt.toIso8601String(),
+    'updatedAt': updatedAt.toIso8601String(),
+    'peerNames': peerNames,
+    'tracks': [for (final t in tracks) t.toJson()],
+  };
 
   static JamHistoryRecord? fromJson(Object? json) {
     if (json is! Map) return null;
@@ -132,10 +130,10 @@ class JamHistoryRecord {
       wasHost: (json['wasHost'] as bool?) ?? false,
       startedAt:
           DateTime.tryParse(json['startedAt'] as String? ?? '') ??
-              DateTime.fromMillisecondsSinceEpoch(0),
+          DateTime.fromMillisecondsSinceEpoch(0),
       updatedAt:
           DateTime.tryParse(json['updatedAt'] as String? ?? '') ??
-              DateTime.fromMillisecondsSinceEpoch(0),
+          DateTime.fromMillisecondsSinceEpoch(0),
       peerNames: [
         if (json['peerNames'] is List)
           ...(json['peerNames'] as List).whereType<String>(),
@@ -152,7 +150,7 @@ class JamHistoryRecord {
 /// to the newest [maxRecords] by `updatedAt`.
 class JamHistoryStore {
   JamHistoryStore(this.dir, {this.maxRecords = 50})
-      : assert(maxRecords > 0, 'maxRecords must be positive');
+    : assert(maxRecords > 0, 'maxRecords must be positive');
 
   /// The store directory. Created lazily on first save.
   final Directory dir;
@@ -171,8 +169,9 @@ class JamHistoryStore {
     }
   }
 
-  File _fileFor(String sessionId) =>
-      File('${dir.path}/${sessionId.replaceAll(RegExp(r'[^A-Za-z0-9_-]'), '_')}.json');
+  File _fileFor(String sessionId) => File(
+    '${dir.path}/${sessionId.replaceAll(RegExp(r'[^A-Za-z0-9_-]'), '_')}.json',
+  );
 
   /// Writes (or overwrites) [record] and prunes to [maxRecords].
   Future<void> save(JamHistoryRecord record) async {
@@ -191,8 +190,9 @@ class JamHistoryStore {
       await for (final entity in dir.list()) {
         if (entity is! File || !entity.path.endsWith('.json')) continue;
         try {
-          final record =
-              JamHistoryRecord.fromJson(jsonDecode(await entity.readAsString()));
+          final record = JamHistoryRecord.fromJson(
+            jsonDecode(await entity.readAsString()),
+          );
           if (record != null) records.add(record);
         } catch (_) {
           // Corrupt/partial file: skip.
@@ -225,8 +225,7 @@ class JamHistoryStore {
 /// still present), peers accumulate over the session, saves are debounced.
 /// Created by the engine's session guards; [dispose] flushes.
 class JamHistoryRecorder {
-  JamHistoryRecorder(this._engine, this._store)
-      : _startedAt = DateTime.now();
+  JamHistoryRecorder(this._engine, this._store) : _startedAt = DateTime.now();
 
   final JamEngine _engine;
   final JamHistoryStore _store;
@@ -271,9 +270,11 @@ class JamHistoryRecorder {
     if (engine is JamGuestEngine) {
       _subs.add(engine.peerEvents.listen((_) => _markDirty()));
     } else if (engine is JamHostEngine) {
-      _subs.add(engine.events.listen((event) {
-        if (event.kind == JamHostEventKind.peerJoined) _markDirty();
-      }));
+      _subs.add(
+        engine.events.listen((event) {
+          if (event.kind == JamHostEventKind.peerJoined) _markDirty();
+        }),
+      );
     }
   }
 
@@ -309,21 +310,21 @@ class JamHistoryRecorder {
   }
 
   JamHistoryRecord _buildRecord() => JamHistoryRecord(
-        sessionId: _engine.sessionId,
-        sessionName: _engine.sessionName,
-        wasHost: _engine.selfPeerId == JamPermissions.hostPeerId,
-        startedAt: _startedAt,
-        updatedAt: DateTime.now(),
-        peerNames: [..._peerNames]..sort(),
-        tracks: [
-          for (final item in _engine.playlist)
-            JamHistoryTrack(
-              item: item,
-              addedByName: _addedByNames[item.mediaId],
-              localPath: _localPaths[item.mediaId],
-            ),
-        ],
-      );
+    sessionId: _engine.sessionId,
+    sessionName: _engine.sessionName,
+    wasHost: _engine.selfPeerId == JamPermissions.hostPeerId,
+    startedAt: _startedAt,
+    updatedAt: DateTime.now(),
+    peerNames: [..._peerNames]..sort(),
+    tracks: [
+      for (final item in _engine.playlist)
+        JamHistoryTrack(
+          item: item,
+          addedByName: _addedByNames[item.mediaId],
+          localPath: _localPaths[item.mediaId],
+        ),
+    ],
+  );
 
   Future<void> _flush() async {
     if (!_dirty) return;

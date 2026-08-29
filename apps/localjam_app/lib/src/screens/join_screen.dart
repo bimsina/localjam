@@ -9,14 +9,13 @@ import '../util/format.dart';
 import '../util/permissions.dart';
 import '../widgets/artwork.dart';
 import '../widgets/nudge_slider.dart';
-import 'scan_screen.dart';
 import '../widgets/sync_telemetry_strip.dart';
+import 'scan_screen.dart';
 
-/// Guest flow: paste a `localjam://join?...` URI and hand everything else —
-/// connection, clock sync, prefetching, synchronized playback — to a
-/// [JamGuestEngine]. This screen only renders the engine's state.
-// TODO(localjam): QR scanning — pointless in simulators, add camera-based
-// scanning (e.g. mobile_scanner) for physical devices later.
+/// Guest flow: pick a nearby room (§1 mDNS), scan the host's QR, or paste a
+/// `localjam://join?...` URI, then hand everything else — connection, clock
+/// sync, prefetching, synchronized playback — to a [JamGuestEngine]. This
+/// screen only renders the engine's state.
 class JoinScreen extends StatefulWidget {
   const JoinScreen({super.key});
 
@@ -204,9 +203,9 @@ class _JoinScreenState extends State<JoinScreen> {
   }
 
   Future<void> _scanQr() async {
-    final scanned = await Navigator.of(context).push<String>(
-      MaterialPageRoute(builder: (_) => const ScanScreen()),
-    );
+    final scanned = await Navigator.of(
+      context,
+    ).push<String>(MaterialPageRoute(builder: (_) => const ScanScreen()));
     if (scanned == null || !mounted) return;
     await _connect(uriOverride: scanned);
   }
@@ -630,9 +629,7 @@ class _JoinScreenState extends State<JoinScreen> {
             : Icons.audio_file_outlined,
       ),
       title: Text(item.displayTitle, overflow: TextOverflow.ellipsis),
-      onTap: canSelect
-          ? () => engine.requestSetMedia(item.mediaId)
-          : null,
+      onTap: canSelect ? () => engine.requestSetMedia(item.mediaId) : null,
       subtitle: switch (fetch?.phase) {
         null => const Text('waiting'),
         JamPrefetchPhase.ready => Text(

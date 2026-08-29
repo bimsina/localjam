@@ -184,6 +184,7 @@ class JamGuestEngine extends JamEngine {
   /// [SocketException] if no host candidate is reachable.
   static Future<JamGuestEngine> join(
     Uri joinUri, {
+
     /// Display name announced to the room (§3.1). Defaults to the device's
     /// persistent quirky [JamIdentity.displayName] ("Neon Walrus").
     String? clientName,

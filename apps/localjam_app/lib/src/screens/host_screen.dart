@@ -162,10 +162,8 @@ class _HostScreenState extends State<HostScreen> {
     final confirmed = await showModalBottomSheet<Set<int>>(
       context: context,
       isScrollControlled: true,
-      builder: (context) => _LibraryPickerSheet(
-        tracks: tracks,
-        initiallySelected: selected,
-      ),
+      builder: (context) =>
+          _LibraryPickerSheet(tracks: tracks, initiallySelected: selected),
     );
     if (confirmed == null || !mounted) return;
     setState(() {
@@ -391,15 +389,11 @@ class _HostScreenState extends State<HostScreen> {
                     title: Text(track.title, overflow: TextOverflow.ellipsis),
                     subtitle: track.artist == null
                         ? null
-                        : Text(
-                            track.artist!,
-                            overflow: TextOverflow.ellipsis,
-                          ),
+                        : Text(track.artist!, overflow: TextOverflow.ellipsis),
                     trailing: IconButton(
                       icon: const Icon(Icons.close, size: 18),
-                      onPressed: () => setState(
-                        () => _pickedLibraryTracks.remove(track.id),
-                      ),
+                      onPressed: () =>
+                          setState(() => _pickedLibraryTracks.remove(track.id)),
                     ),
                   ),
               ],
@@ -796,9 +790,7 @@ class _HostScreenState extends State<HostScreen> {
     return ListTile(
       dense: true,
       leading: Icon(isCohost ? Icons.person : Icons.person_outline),
-      title: Text(
-        isCohost ? '${peer.clientName} · Co-host' : peer.clientName,
-      ),
+      title: Text(isCohost ? '${peer.clientName} · Co-host' : peer.clientName),
       subtitle: Text('${peer.peerId} · ${peer.clientKind}'),
       trailing: Row(
         mainAxisSize: MainAxisSize.min,
@@ -908,10 +900,7 @@ class _LibraryPickerSheetState extends State<_LibraryPickerSheet> {
                     title: Text(track.title, overflow: TextOverflow.ellipsis),
                     subtitle: track.artist == null
                         ? null
-                        : Text(
-                            track.artist!,
-                            overflow: TextOverflow.ellipsis,
-                          ),
+                        : Text(track.artist!, overflow: TextOverflow.ellipsis),
                     onChanged: (checked) => setState(() {
                       if (checked ?? false) {
                         _selected.add(track.id);

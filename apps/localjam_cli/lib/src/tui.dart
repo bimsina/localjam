@@ -34,13 +34,12 @@ String progressBar(double fraction, {int width = 24}) {
 
 /// Human label for a [DriftAction].
 String describeDriftAction(DriftAction action) => switch (action) {
-      DriftNone() => 'none',
-      DriftSlew(:final rateMultiplier, :final durationUs) =>
-        'slew x${rateMultiplier.toStringAsFixed(4)}/'
-            '${(durationUs / 1e6).toStringAsFixed(1)}s',
-      DriftHardResync(:final errorUs) =>
-        'HARD RESYNC (${formatSignedUs(errorUs)})',
-    };
+  DriftNone() => 'none',
+  DriftSlew(:final rateMultiplier, :final durationUs) =>
+    'slew x${rateMultiplier.toStringAsFixed(4)}/'
+        '${(durationUs / 1e6).toStringAsFixed(1)}s',
+  DriftHardResync(:final errorUs) => 'HARD RESYNC (${formatSignedUs(errorUs)})',
+};
 
 /// One `\r`-refreshed status line at the bottom, with normal scrolling log
 /// lines above it. On a non-terminal stdout it degrades to plain lines.

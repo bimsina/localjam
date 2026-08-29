@@ -24,45 +24,43 @@ void main() {
     required String id,
     required DateTime updatedAt,
     List<JamHistoryTrack> tracks = const [],
-  }) =>
-      JamHistoryRecord(
-        sessionId: id,
-        sessionName: 'Jam $id',
-        wasHost: true,
-        startedAt: updatedAt,
-        updatedAt: updatedAt,
-        tracks: tracks,
-      );
+  }) => JamHistoryRecord(
+    sessionId: id,
+    sessionName: 'Jam $id',
+    wasHost: true,
+    startedAt: updatedAt,
+    updatedAt: updatedAt,
+    tracks: tracks,
+  );
 
   group('JamHistoryStore', () {
-    test('round-trips records, lists newest first, prunes to maxRecords',
-        () async {
-      final store = JamHistoryStore(await makeTempDir(), maxRecords: 2);
-      final t0 = DateTime(2026, 8, 1);
-      await store.save(record(id: 's_a', updatedAt: t0));
-      await store.save(record(id: 's_b', updatedAt: t0.add(const Duration(hours: 1))));
-      expect(
-        (await store.list()).map((r) => r.sessionId),
-        ['s_b', 's_a'],
-      );
+    test(
+      'round-trips records, lists newest first, prunes to maxRecords',
+      () async {
+        final store = JamHistoryStore(await makeTempDir(), maxRecords: 2);
+        final t0 = DateTime(2026, 8, 1);
+        await store.save(record(id: 's_a', updatedAt: t0));
+        await store.save(
+          record(id: 's_b', updatedAt: t0.add(const Duration(hours: 1))),
+        );
+        expect((await store.list()).map((r) => r.sessionId), ['s_b', 's_a']);
 
-      // A third record evicts the oldest.
-      await store.save(record(id: 's_c', updatedAt: t0.add(const Duration(hours: 2))));
-      expect(
-        (await store.list()).map((r) => r.sessionId),
-        ['s_c', 's_b'],
-      );
+        // A third record evicts the oldest.
+        await store.save(
+          record(id: 's_c', updatedAt: t0.add(const Duration(hours: 2))),
+        );
+        expect((await store.list()).map((r) => r.sessionId), ['s_c', 's_b']);
 
-      // Re-saving an existing session updates in place (no duplicate).
-      await store.save(record(id: 's_c', updatedAt: t0.add(const Duration(hours: 3))));
-      expect(await store.list(), hasLength(2));
+        // Re-saving an existing session updates in place (no duplicate).
+        await store.save(
+          record(id: 's_c', updatedAt: t0.add(const Duration(hours: 3))),
+        );
+        expect(await store.list(), hasLength(2));
 
-      await store.delete('s_c');
-      expect(
-        (await store.list()).map((r) => r.sessionId),
-        ['s_b'],
-      );
-    });
+        await store.delete('s_c');
+        expect((await store.list()).map((r) => r.sessionId), ['s_b']);
+      },
+    );
 
     test('corrupt files are skipped; tracks round-trip with attribution and '
         'replayability', () async {
@@ -146,8 +144,7 @@ void main() {
       expect(rec.replayableTracks, hasLength(1));
     });
 
-    test('a guest session records the cache path and wasHost=false',
-        () async {
+    test('a guest session records the cache path and wasHost=false', () async {
       mockAudioChannel();
       final store = JamHistoryStore(await makeTempDir());
       JamEngine.historyStoreProvider = () async => store;

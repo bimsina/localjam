@@ -46,20 +46,23 @@ void main() {
     return engine;
   }
 
-  test('resume re-applies the snapshot when the player state is stale', () async {
-    // The mocked channel answers positionUs with null: "the OS killed audio
-    // while we were backgrounded" — exactly the stale state resume must fix.
-    final log = mockAudioChannel();
-    final engine = await playingEngine(log);
+  test(
+    'resume re-applies the snapshot when the player state is stale',
+    () async {
+      // The mocked channel answers positionUs with null: "the OS killed audio
+      // while we were backgrounded" — exactly the stale state resume must fix.
+      final log = mockAudioChannel();
+      final engine = await playingEngine(log);
 
-    log.clear();
-    await engine.handleLifecycleState(AppLifecycleState.resumed);
-    expect(
-      log.where((c) => c.method == 'playAt'),
-      isNotEmpty,
-      reason: 'stale player state must be re-anchored from the snapshot',
-    );
-  });
+      log.clear();
+      await engine.handleLifecycleState(AppLifecycleState.resumed);
+      expect(
+        log.where((c) => c.method == 'playAt'),
+        isNotEmpty,
+        reason: 'stale player state must be re-anchored from the snapshot',
+      );
+    },
+  );
 
   test('non-resume lifecycle transitions do not touch the player', () async {
     final log = mockAudioChannel();
@@ -87,66 +90,65 @@ void main() {
     expect(log.where((c) => c.method == 'playAt'), isEmpty);
   });
 
+  test('the observer is registered while the session lives and dispatches '
+      'through the real widgets binding', () async {
+    final log = mockAudioChannel();
+    final engine = await playingEngine(log);
+    expect(engine.lifecycleObserverAttached, isTrue);
+
+    // Drive the binding's lifecycle channel like the platform does. Go
+    // through paused first: the binding ignores a transition to the state
+    // it is already in, and tests may start out resumed.
+    log.clear();
+    final messenger = TestWidgetsFlutterBinding.instance.defaultBinaryMessenger;
+    Future<void> send(String state) => messenger.handlePlatformMessage(
+      SystemChannels.lifecycle.name,
+      const StringCodec().encodeMessage(state),
+      (_) {},
+    );
+    await send('AppLifecycleState.paused');
+    await send('AppLifecycleState.resumed');
+    await waitFor(
+      () => log.any((c) => c.method == 'playAt'),
+      reason: 'observer-driven re-anchor on resume',
+    );
+
+    await engine.close();
+    expect(engine.lifecycleObserverAttached, isFalse);
+  });
+
   test(
-    'the observer is registered while the session lives and dispatches '
-    'through the real widgets binding',
+    'engines acquire and release the keepalive around the session',
     () async {
-      final log = mockAudioChannel();
-      final engine = await playingEngine(log);
-      expect(engine.lifecycleObserverAttached, isTrue);
+      mockAudioChannel();
+      final calls = <String>[];
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(JamKeepAlive.channel, (call) async {
+            calls.add(call.method);
+            return null;
+          });
+      addTearDown(() {
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(JamKeepAlive.channel, null);
+      });
 
-      // Drive the binding's lifecycle channel like the platform does. Go
-      // through paused first: the binding ignores a transition to the state
-      // it is already in, and tests may start out resumed.
-      log.clear();
-      final messenger =
-          TestWidgetsFlutterBinding.instance.defaultBinaryMessenger;
-      Future<void> send(String state) => messenger.handlePlatformMessage(
-        SystemChannels.lifecycle.name,
-        const StringCodec().encodeMessage(state),
-        (_) {},
-      );
-      await send('AppLifecycleState.paused');
-      await send('AppLifecycleState.resumed');
-      await waitFor(
-        () => log.any((c) => c.method == 'playAt'),
-        reason: 'observer-driven re-anchor on resume',
-      );
+      // flutter_test runs with defaultTargetPlatform == android, so the
+      // JamKeepAlive platform gate is open.
+      final host = await startHostEngine();
+      expect(calls, ['acquire']);
 
-      await engine.close();
-      expect(engine.lifecycleObserverAttached, isFalse);
+      final guest = await JamGuestEngine.join(
+        host.joinUriFor(InternetAddress.loopbackIPv4),
+        clientName: 'lifecycle-guest',
+        mediaCacheDir: await makeTempDir(),
+      );
+      addTearDown(guest.close);
+      expect(calls, ['acquire', 'acquire']);
+
+      await guest.close();
+      expect(calls, ['acquire', 'acquire', 'release']);
+      await host.close();
+      expect(calls, ['acquire', 'acquire', 'release', 'release']);
     },
   );
-
-  test('engines acquire and release the keepalive around the session', () async {
-    mockAudioChannel();
-    final calls = <String>[];
-    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-        .setMockMethodCallHandler(JamKeepAlive.channel, (call) async {
-          calls.add(call.method);
-          return null;
-        });
-    addTearDown(() {
-      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-          .setMockMethodCallHandler(JamKeepAlive.channel, null);
-    });
-
-    // flutter_test runs with defaultTargetPlatform == android, so the
-    // JamKeepAlive platform gate is open.
-    final host = await startHostEngine();
-    expect(calls, ['acquire']);
-
-    final guest = await JamGuestEngine.join(
-      host.joinUriFor(InternetAddress.loopbackIPv4),
-      clientName: 'lifecycle-guest',
-      mediaCacheDir: await makeTempDir(),
-    );
-    addTearDown(guest.close);
-    expect(calls, ['acquire', 'acquire']);
-
-    await guest.close();
-    expect(calls, ['acquire', 'acquire', 'release']);
-    await host.close();
-    expect(calls, ['acquire', 'acquire', 'release', 'release']);
-  });
 }

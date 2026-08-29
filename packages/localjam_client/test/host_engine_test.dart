@@ -95,91 +95,92 @@ void main() {
     },
   );
 
-  test(
-    'addMediaFile extracts tags + artwork (§6.1 v0.2, §6.5); the native '
-    'duration probe wins over the tag duration',
-    () async {
-      mockAudioChannel(durationUs: 42_000_000);
-      final engine = await startEngine();
-
-      final item = await engine.addMediaFile(await makeTaggedMp3());
-      expect(item.title, 'Night Drive');
-      expect(item.artist, 'The Localhosts');
-      expect(item.album, 'Loopback Sessions');
-      expect(item.displayTitle, 'Night Drive');
-      // The mocked native probe answered 42 s; the tag claims ~1 s. The
-      // probe wins (§6.1: a decoder probe beats a tag claim).
-      expect(item.durationUs, 42_000_000);
-      expect(item.artworkId, startsWith('a_'));
-
-      // The host reads artwork from its own registry, no HTTP.
-      final artwork = await engine.artworkFor(item);
-      expect(artwork, isNotNull);
-      expect(artwork, isNotEmpty);
-
-      // An untagged file yields an item with null tags and no artwork.
-      final untagged = await engine.addMediaFile(
-        await writeTempMedia(makeMediaBytes(4096)),
-        name: 'Untitled.mp3',
-      );
-      expect(untagged.title, isNull);
-      expect(untagged.artworkId, isNull);
-      expect(untagged.displayTitle, 'Untitled.mp3');
-      expect(await engine.artworkFor(untagged), isNull);
-    },
-  );
-
-  test('host-side §5.6 surface: attribution, queue ops, policy/moderation',
-      () async {
-    mockAudioChannel();
+  test('addMediaFile extracts tags + artwork (§6.1 v0.2, §6.5); the native '
+      'duration probe wins over the tag duration', () async {
+    mockAudioChannel(durationUs: 42_000_000);
     final engine = await startEngine();
 
-    // The host holds every capability; its items carry host attribution.
-    expect(engine.selfPeerId, JamPermissions.hostPeerId);
-    expect(engine.can(JamCapability.manageMembers), isTrue);
-    final a = await engine.addMediaFile(
-      await writeTempMedia(makeMediaBytes(2048, seed: 1)),
-      name: 'A.mp3',
-    );
-    final b = await engine.addMediaFile(
-      await writeTempMedia(makeMediaBytes(2048, seed: 2)),
-      name: 'B.mp3',
-    );
-    expect(a.addedBy, JamPermissions.hostPeerId);
-    expect(engine.addedByLabel(a, engine.peers), 'You');
+    final item = await engine.addMediaFile(await makeTaggedMp3());
+    expect(item.title, 'Night Drive');
+    expect(item.artist, 'The Localhosts');
+    expect(item.album, 'Loopback Sessions');
+    expect(item.displayTitle, 'Night Drive');
+    // The mocked native probe answered 42 s; the tag claims ~1 s. The
+    // probe wins (§6.1: a decoder probe beats a tag claim).
+    expect(item.durationUs, 42_000_000);
+    expect(item.artworkId, startsWith('a_'));
 
-    // Queue ops mirror to a real guest.
-    final guest = await JamGuestClient.connect(
-      engine.joinUriFor(InternetAddress.loopbackIPv4),
-    );
-    addTearDown(guest.close);
-    engine.moveMediaItem(b.mediaId, 0);
-    await waitFor(
-      () => guest.playlist.isNotEmpty && guest.playlist.first.mediaId == b.mediaId,
-      reason: 'reorder to reach the guest',
-    );
-    engine.removeMediaItem(b.mediaId);
-    await waitFor(
-      () => guest.playlist.length == 1,
-      reason: 'removal to reach the guest',
-    );
+    // The host reads artwork from its own registry, no HTTP.
+    final artwork = await engine.artworkFor(item);
+    expect(artwork, isNotNull);
+    expect(artwork, isNotEmpty);
 
-    // Policy + promotion broadcasts reach the guest's document.
-    engine.setPolicy(JamPolicy.open);
-    engine.promotePeer(guest.selfPeerId);
-    await waitFor(
-      () => guest.permissions.cohosts.contains(guest.selfPeerId),
-      reason: 'promotion to reach the guest',
+    // An untagged file yields an item with null tags and no artwork.
+    final untagged = await engine.addMediaFile(
+      await writeTempMedia(makeMediaBytes(4096)),
+      name: 'Untitled.mp3',
     );
-    expect(guest.permissions.policy, JamPolicy.open);
-    expect(engine.permissions.rev, greaterThanOrEqualTo(2));
-
-    // Kick drops the guest terminally.
-    engine.kickPeer(guest.selfPeerId);
-    await guest.done.timeout(const Duration(seconds: 5));
-    expect(guest.lastFatalError?.code, ErrorCode.kicked);
-    expect(engine.peers, isEmpty);
+    expect(untagged.title, isNull);
+    expect(untagged.artworkId, isNull);
+    expect(untagged.displayTitle, 'Untitled.mp3');
+    expect(await engine.artworkFor(untagged), isNull);
   });
+
+  test(
+    'host-side §5.6 surface: attribution, queue ops, policy/moderation',
+    () async {
+      mockAudioChannel();
+      final engine = await startEngine();
+
+      // The host holds every capability; its items carry host attribution.
+      expect(engine.selfPeerId, JamPermissions.hostPeerId);
+      expect(engine.can(JamCapability.manageMembers), isTrue);
+      final a = await engine.addMediaFile(
+        await writeTempMedia(makeMediaBytes(2048, seed: 1)),
+        name: 'A.mp3',
+      );
+      final b = await engine.addMediaFile(
+        await writeTempMedia(makeMediaBytes(2048, seed: 2)),
+        name: 'B.mp3',
+      );
+      expect(a.addedBy, JamPermissions.hostPeerId);
+      expect(engine.addedByLabel(a, engine.peers), 'You');
+
+      // Queue ops mirror to a real guest.
+      final guest = await JamGuestClient.connect(
+        engine.joinUriFor(InternetAddress.loopbackIPv4),
+      );
+      addTearDown(guest.close);
+      engine.moveMediaItem(b.mediaId, 0);
+      await waitFor(
+        () =>
+            guest.playlist.isNotEmpty &&
+            guest.playlist.first.mediaId == b.mediaId,
+        reason: 'reorder to reach the guest',
+      );
+      engine.removeMediaItem(b.mediaId);
+      await waitFor(
+        () => guest.playlist.length == 1,
+        reason: 'removal to reach the guest',
+      );
+
+      // Policy + promotion broadcasts reach the guest's document.
+      engine.setPolicy(JamPolicy.open);
+      engine.promotePeer(guest.selfPeerId);
+      await waitFor(
+        () => guest.permissions.cohosts.contains(guest.selfPeerId),
+        reason: 'promotion to reach the guest',
+      );
+      expect(guest.permissions.policy, JamPolicy.open);
+      expect(engine.permissions.rev, greaterThanOrEqualTo(2));
+
+      // Kick drops the guest terminally.
+      engine.kickPeer(guest.selfPeerId);
+      await guest.done.timeout(const Duration(seconds: 5));
+      expect(guest.lastFatalError?.code, ErrorCode.kicked);
+      expect(engine.peers, isEmpty);
+    },
+  );
 
   test(
     'next/previous wrap the playlist; transport mirrors the server',

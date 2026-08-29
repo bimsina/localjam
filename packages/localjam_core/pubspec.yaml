@@ -1,15 +1,16 @@
 name: localjam_core
-description: A starting point for Dart libraries or applications.
-version: 1.0.0
-# repository: https://github.com/my_org/my_repo
+description: >-
+  Pure-Dart core of the LocalJam protocol: message types and codec,
+  NTP-style clock sync, permissions, and the anchor playback state machine.
+  No I/O.
+version: 0.2.0
+publish_to: none
 
 environment:
   sdk: ^3.12.2
 
-# Add regular dependencies here.
 dependencies:
   meta: ">=1.18.0 <2.0.0"
-  # path: ^1.9.0
 
 dev_dependencies:
   lints: ^6.0.0

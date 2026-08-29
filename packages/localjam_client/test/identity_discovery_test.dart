@@ -17,17 +17,20 @@ void main() {
       SharedPreferences.setMockInitialValues({});
     });
 
-    test('generates a quirky "Adjective Animal" name and persists it', () async {
-      final name = await JamIdentity.displayName();
-      final parts = name.split(' ');
-      expect(parts, hasLength(2));
-      expect(jamNameAdjectives, contains(parts[0]));
-      expect(jamNameAnimals, contains(parts[1]));
-      // Stable across calls and across a fresh in-process cache.
-      expect(await JamIdentity.displayName(), name);
-      JamIdentity.resetCacheForTesting();
-      expect(await JamIdentity.displayName(), name);
-    });
+    test(
+      'generates a quirky "Adjective Animal" name and persists it',
+      () async {
+        final name = await JamIdentity.displayName();
+        final parts = name.split(' ');
+        expect(parts, hasLength(2));
+        expect(jamNameAdjectives, contains(parts[0]));
+        expect(jamNameAnimals, contains(parts[1]));
+        // Stable across calls and across a fresh in-process cache.
+        expect(await JamIdentity.displayName(), name);
+        JamIdentity.resetCacheForTesting();
+        expect(await JamIdentity.displayName(), name);
+      },
+    );
 
     test('renames persist; blank renames are rejected', () async {
       await JamIdentity.setDisplayName('  DJ Sloth  ');
@@ -49,17 +52,16 @@ void main() {
         'name': 'RoadTrip',
         'token': 'cafe',
       },
-    }) =>
-        JamRoomBrowser.roomFromService(
-          BonsoirService(
-            name: 'RoadTrip',
-            type: jamServiceType,
-            port: 44100,
-            hostAddresses: hosts,
-            hostname: hostname,
-            attributes: attributes,
-          ),
-        );
+    }) => JamRoomBrowser.roomFromService(
+      BonsoirService(
+        name: 'RoadTrip',
+        type: jamServiceType,
+        port: 44100,
+        hostAddresses: hosts,
+        hostname: hostname,
+        attributes: attributes,
+      ),
+    );
 
     test('a resolved record becomes a joinable URI', () {
       final room = parse(hosts: ['192.168.1.7', '10.0.0.3'])!;

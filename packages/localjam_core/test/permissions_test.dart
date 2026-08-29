@@ -50,9 +50,14 @@ void main() {
     });
 
     test('overrides win over the role base, both directions', () {
-      final perms = const JamPermissions.initial() // jam: add + edit
-          .withOverride('p_4', JamCapability.addTracks, allowed: false)
-          .withOverride('p_5', JamCapability.controlPlayback, allowed: true);
+      final perms =
+          const JamPermissions.initial() // jam: add + edit
+              .withOverride('p_4', JamCapability.addTracks, allowed: false)
+              .withOverride(
+                'p_5',
+                JamCapability.controlPlayback,
+                allowed: true,
+              );
       expect(perms.allows('p_4', JamCapability.addTracks), isFalse);
       expect(perms.allows('p_4', JamCapability.editQueue), isTrue);
       expect(perms.allows('p_5', JamCapability.controlPlayback), isTrue);

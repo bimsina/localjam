@@ -167,9 +167,7 @@ Future<int> _runLoop(JamHostServer server, StatusScreen screen) async {
       case JamHostEventKind.permissionsBroadcast:
         screen.log('> permissions rev=${event.permissions!.rev}');
       case JamHostEventKind.requestDenied:
-        screen.log(
-          '! denied ${event.deniedAction!.wire} from ${event.peerId}',
-        );
+        screen.log('! denied ${event.deniedAction!.wire} from ${event.peerId}');
     }
   });
 

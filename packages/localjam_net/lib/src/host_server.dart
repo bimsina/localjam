@@ -559,10 +559,7 @@ class JamHostServer {
     // §5.6: uploads need addTracks. Attribution rides the peer-id header —
     // spoofable within the session, which §9's honest-guest model accepts;
     // an absent header is judged as a plain guest under the room policy.
-    if (!_permissions.allows(
-      peerId ?? '_anonymous',
-      JamCapability.addTracks,
-    )) {
+    if (!_permissions.allows(peerId ?? '_anonymous', JamCapability.addTracks)) {
       res.statusCode = HttpStatus.forbidden;
       await res.close();
       return;
@@ -941,7 +938,9 @@ class JamHostServer {
       (i) => i.mediaId == _session.snapshot.mediaId,
     );
     final target = (index + delta) % _playlist.length;
-    setMedia(_playlist[target < 0 ? target + _playlist.length : target].mediaId);
+    setMedia(
+      _playlist[target < 0 ? target + _playlist.length : target].mediaId,
+    );
   }
 
   void _apply(PlaybackSnapshot Function(int nowUs) mutate) {
@@ -1035,20 +1034,16 @@ class JamHostServer {
     String peerId,
     JamCapability capability, {
     required bool? allowed,
-  }) =>
-      _setPermissions(
-        _permissions.withOverride(peerId, capability, allowed: allowed),
-      );
+  }) => _setPermissions(
+    _permissions.withOverride(peerId, capability, allowed: allowed),
+  );
 
   void _setPermissions(JamPermissions next) {
     if (identical(next, _permissions)) return; // No-op mutation.
     _permissions = next;
     _broadcast(PermissionsMessage(permissions: next));
     _emit(
-      JamHostEvent._(
-        JamHostEventKind.permissionsBroadcast,
-        permissions: next,
-      ),
+      JamHostEvent._(JamHostEventKind.permissionsBroadcast, permissions: next),
     );
   }
 

@@ -37,13 +37,15 @@ void main() {
 
   group('round trips', () {
     test('hello', () {
-      final m = roundTrip(const HelloMessage(
-        token: 'tok-123',
-        clientName: 'Bibek’s phone',
-        clientKind: 'flutter',
-        caps: ['audio', 'video'],
-        encodings: ['json'],
-      ));
+      final m = roundTrip(
+        const HelloMessage(
+          token: 'tok-123',
+          clientName: 'Bibek’s phone',
+          clientKind: 'flutter',
+          caps: ['audio', 'video'],
+          encodings: ['json'],
+        ),
+      );
       expect(m.token, 'tok-123');
       expect(m.clientName, 'Bibek’s phone');
       expect(m.clientKind, 'flutter');
@@ -53,12 +55,14 @@ void main() {
     });
 
     test('hello with resumePeerId (§3.3 reconnect)', () {
-      final m = roundTrip(const HelloMessage(
-        token: 'tok-123',
-        clientName: 'Bibek’s phone',
-        clientKind: 'flutter',
-        resumePeerId: 'p_7',
-      ));
+      final m = roundTrip(
+        const HelloMessage(
+          token: 'tok-123',
+          clientName: 'Bibek’s phone',
+          clientKind: 'flutter',
+          resumePeerId: 'p_7',
+        ),
+      );
       expect(m.resumePeerId, 'p_7');
       // Omitted from the wire entirely when null (fresh join).
       final fresh = codec.encode(
@@ -84,16 +88,18 @@ void main() {
         durationUs: 180000000,
         sha256: 'abababab', // stand-in digest
       );
-      final m = roundTrip(const WelcomeMessage(
-        sessionId: 's_1',
-        sessionName: 'RoadTrip',
-        selfPeerId: 'p_9',
-        peers: [
-          PeerInfo(peerId: 'p_1', clientName: 'Host', clientKind: 'flutter'),
-        ],
-        snapshot: snapshot,
-        playlist: [item],
-      ));
+      final m = roundTrip(
+        const WelcomeMessage(
+          sessionId: 's_1',
+          sessionName: 'RoadTrip',
+          selfPeerId: 'p_9',
+          peers: [
+            PeerInfo(peerId: 'p_1', clientName: 'Host', clientKind: 'flutter'),
+          ],
+          snapshot: snapshot,
+          playlist: [item],
+        ),
+      );
       expect(m.sessionId, 's_1');
       expect(m.sessionName, 'RoadTrip');
       expect(m.selfPeerId, 'p_9');
@@ -120,11 +126,15 @@ void main() {
     });
 
     test('peer_joined', () {
-      final m = roundTrip(const PeerJoinedMessage(
-        peer: PeerInfo(peerId: 'p_2', clientName: 'Ana', clientKind: 'web'),
-      ));
-      expect(m.peer,
-          const PeerInfo(peerId: 'p_2', clientName: 'Ana', clientKind: 'web'));
+      final m = roundTrip(
+        const PeerJoinedMessage(
+          peer: PeerInfo(peerId: 'p_2', clientName: 'Ana', clientKind: 'web'),
+        ),
+      );
+      expect(
+        m.peer,
+        const PeerInfo(peerId: 'p_2', clientName: 'Ana', clientKind: 'web'),
+      );
     });
 
     test('peer_left', () {
@@ -145,20 +155,18 @@ void main() {
     });
 
     test('request (seek)', () {
-      final m = roundTrip(const RequestMessage(
-        action: RequestAction.seek,
-        positionUs: 42000000,
-      ));
+      final m = roundTrip(
+        const RequestMessage(action: RequestAction.seek, positionUs: 42000000),
+      );
       expect(m.action, RequestAction.seek);
       expect(m.positionUs, 42000000);
       expect(m.mediaId, isNull);
     });
 
     test('request (set_media) uses snake_case action', () {
-      final m = roundTrip(const RequestMessage(
-        action: RequestAction.setMedia,
-        mediaId: 'm_9f2c',
-      ));
+      final m = roundTrip(
+        const RequestMessage(action: RequestAction.setMedia, mediaId: 'm_9f2c'),
+      );
       expect(m.action, RequestAction.setMedia);
       expect(m.mediaId, 'm_9f2c');
       expect(m.payloadToJson()['action'], 'set_media');
@@ -175,15 +183,20 @@ void main() {
       );
       final m = roundTrip(const StateMessage(snapshot: snapshot));
       expect(m.snapshot, snapshot);
-      expect(m.snapshot.anchor,
-          const PlaybackAnchor(hostTimeUs: 8123456789, positionUs: 45000000));
+      expect(
+        m.snapshot.anchor,
+        const PlaybackAnchor(hostTimeUs: 8123456789, positionUs: 45000000),
+      );
 
       // The payload IS the snapshot (no extra wrapper), per §5.1.
       final wire = codec.encode(m, seq: 1);
       final payload =
           (jsonDecode(wire) as Map<String, Object?>)['payload'] as Map;
       expect(payload['rev'], 17);
-      expect(payload['anchor'], {'hostTime': 8123456789, 'positionUs': 45000000});
+      expect(payload['anchor'], {
+        'hostTime': 8123456789,
+        'positionUs': 45000000,
+      });
     });
 
     test('playlist', () {
@@ -263,19 +276,20 @@ void main() {
     });
 
     test('request queue ops carry mediaId/toIndex (§5.6)', () {
-      final move = roundTrip(const RequestMessage(
-        action: RequestAction.queueMove,
-        mediaId: 'm_1',
-        toIndex: 3,
-      ));
+      final move = roundTrip(
+        const RequestMessage(
+          action: RequestAction.queueMove,
+          mediaId: 'm_1',
+          toIndex: 3,
+        ),
+      );
       expect(move.action, RequestAction.queueMove);
       expect(move.mediaId, 'm_1');
       expect(move.toIndex, 3);
 
-      final remove = roundTrip(const RequestMessage(
-        action: RequestAction.queueRemove,
-        mediaId: 'm_2',
-      ));
+      final remove = roundTrip(
+        const RequestMessage(action: RequestAction.queueRemove, mediaId: 'm_2'),
+      );
       expect(remove.action, RequestAction.queueRemove);
       expect(remove.mediaId, 'm_2');
       expect(remove.toIndex, isNull);
@@ -300,13 +314,15 @@ void main() {
 
     test('welcome carries the permission document; absent = null (§5.6)', () {
       final perms = const JamPermissions.initial(policy: JamPolicy.open);
-      final m = roundTrip(WelcomeMessage(
-        sessionId: 's_1',
-        sessionName: 'RoadTrip',
-        selfPeerId: 'p_9',
-        snapshot: PlaybackSnapshot.initial,
-        permissions: perms,
-      ));
+      final m = roundTrip(
+        WelcomeMessage(
+          sessionId: 's_1',
+          sessionName: 'RoadTrip',
+          selfPeerId: 'p_9',
+          snapshot: PlaybackSnapshot.initial,
+          permissions: perms,
+        ),
+      );
       expect(m.permissions, perms);
 
       final legacy = WelcomeMessage.fromPayload({
@@ -340,12 +356,14 @@ void main() {
     });
 
     test('media_status', () {
-      final m = roundTrip(const MediaStatusMessage(
-        mediaId: 'm_1',
-        state: MediaFetchState.fetching,
-        progress: 0.87,
-        reportedLatencyUs: 150000,
-      ));
+      final m = roundTrip(
+        const MediaStatusMessage(
+          mediaId: 'm_1',
+          state: MediaFetchState.fetching,
+          progress: 0.87,
+          reportedLatencyUs: 150000,
+        ),
+      );
       expect(m.mediaId, 'm_1');
       expect(m.state, MediaFetchState.fetching);
       expect(m.progress, closeTo(0.87, 1e-9));
@@ -353,20 +371,21 @@ void main() {
     });
 
     test('media_status without optional fields', () {
-      final m = roundTrip(const MediaStatusMessage(
-        mediaId: 'm_1',
-        state: MediaFetchState.ready,
-      ));
+      final m = roundTrip(
+        const MediaStatusMessage(mediaId: 'm_1', state: MediaFetchState.ready),
+      );
       expect(m.progress, isNull);
       expect(m.reportedLatencyUs, isNull);
     });
 
     test('error', () {
-      final m = roundTrip(const ErrorMessage(
-        code: ErrorCode.mediaGone,
-        message: 'file removed',
-        fatal: true,
-      ));
+      final m = roundTrip(
+        const ErrorMessage(
+          code: ErrorCode.mediaGone,
+          message: 'file removed',
+          fatal: true,
+        ),
+      );
       expect(m.code, ErrorCode.mediaGone);
       expect(m.message, 'file removed');
       expect(m.fatal, isTrue);
@@ -376,12 +395,14 @@ void main() {
 
   group('forward compatibility', () {
     test('unknown type decodes to UnknownMessage, never throws', () {
-      final decoded = codec.decode(jsonEncode({
-        'v': 1,
-        'type': 'hologram_mode',
-        'seq': 99,
-        'payload': {'intensity': 11},
-      }));
+      final decoded = codec.decode(
+        jsonEncode({
+          'v': 1,
+          'type': 'hologram_mode',
+          'seq': 99,
+          'payload': {'intensity': 11},
+        }),
+      );
       final m = decoded.message;
       expect(m, isA<UnknownMessage>());
       m as UnknownMessage;
@@ -394,23 +415,30 @@ void main() {
     });
 
     test('unknown payload fields on known types are ignored', () {
-      final decoded = codec.decode(jsonEncode({
-        'v': 1,
-        'type': 'peer_left',
-        'seq': 1,
-        'payload': {'peerId': 'p_3', 'futureField': [1, 2, 3]},
-      }));
+      final decoded = codec.decode(
+        jsonEncode({
+          'v': 1,
+          'type': 'peer_left',
+          'seq': 1,
+          'payload': {
+            'peerId': 'p_3',
+            'futureField': [1, 2, 3],
+          },
+        }),
+      );
       expect((decoded.message as PeerLeftMessage).peerId, 'p_3');
     });
 
     test('absent optional fields do not crash decoding', () {
-      final decoded = codec.decode(jsonEncode({
-        'v': 1,
-        'type': 'hello',
-        'seq': 1,
-        // caps and encodings absent
-        'payload': {'token': 't', 'clientName': 'x', 'clientKind': 'flutter'},
-      }));
+      final decoded = codec.decode(
+        jsonEncode({
+          'v': 1,
+          'type': 'hello',
+          'seq': 1,
+          // caps and encodings absent
+          'payload': {'token': 't', 'clientName': 'x', 'clientKind': 'flutter'},
+        }),
+      );
       final m = decoded.message as HelloMessage;
       expect(m.caps, isEmpty);
       expect(m.encodings, ['json']);
@@ -419,8 +447,10 @@ void main() {
 
   group('malformed input', () {
     test('non-JSON text throws ProtocolException', () {
-      expect(() => codec.decode('not json {'),
-          throwsA(isA<ProtocolException>()));
+      expect(
+        () => codec.decode('not json {'),
+        throwsA(isA<ProtocolException>()),
+      );
     });
 
     test('non-object frame throws ProtocolException', () {
@@ -429,35 +459,47 @@ void main() {
     });
 
     test('missing or mistyped envelope fields throw ProtocolException', () {
-      expect(() => codec.decode(jsonEncode({'type': 'error', 'seq': 1})),
-          throwsA(isA<ProtocolException>()));
-      expect(() => codec.decode(jsonEncode({'v': 1, 'seq': 1})),
-          throwsA(isA<ProtocolException>()));
-      expect(() => codec.decode(jsonEncode({'v': 1, 'type': 'error'})),
-          throwsA(isA<ProtocolException>()));
       expect(
-          () => codec.decode(
-              jsonEncode({'v': '1', 'type': 'error', 'seq': 1, 'payload': {}})),
-          throwsA(isA<ProtocolException>()));
+        () => codec.decode(jsonEncode({'type': 'error', 'seq': 1})),
+        throwsA(isA<ProtocolException>()),
+      );
+      expect(
+        () => codec.decode(jsonEncode({'v': 1, 'seq': 1})),
+        throwsA(isA<ProtocolException>()),
+      );
+      expect(
+        () => codec.decode(jsonEncode({'v': 1, 'type': 'error'})),
+        throwsA(isA<ProtocolException>()),
+      );
+      expect(
+        () => codec.decode(
+          jsonEncode({'v': '1', 'type': 'error', 'seq': 1, 'payload': {}}),
+        ),
+        throwsA(isA<ProtocolException>()),
+      );
     });
 
     test('known type with invalid payload throws ProtocolException', () {
       expect(
-        () => codec.decode(jsonEncode({
-          'v': 1,
-          'type': 'clock_ping',
-          'seq': 1,
-          'payload': {'t0': 'not-an-int'},
-        })),
+        () => codec.decode(
+          jsonEncode({
+            'v': 1,
+            'type': 'clock_ping',
+            'seq': 1,
+            'payload': {'t0': 'not-an-int'},
+          }),
+        ),
         throwsA(isA<ProtocolException>()),
       );
       expect(
-        () => codec.decode(jsonEncode({
-          'v': 1,
-          'type': 'reject',
-          'seq': 1,
-          'payload': {'reason': 'meteor_strike'},
-        })),
+        () => codec.decode(
+          jsonEncode({
+            'v': 1,
+            'type': 'reject',
+            'seq': 1,
+            'payload': {'reason': 'meteor_strike'},
+          }),
+        ),
         throwsA(isA<ProtocolException>()),
       );
     });

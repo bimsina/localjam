@@ -33,9 +33,9 @@ enum JamCapability {
   final String wire;
 
   static JamCapability fromWire(String wire) => values.firstWhere(
-        (c) => c.wire == wire,
-        orElse: () => throw FormatException('Unknown capability: "$wire"'),
-      );
+    (c) => c.wire == wire,
+    orElse: () => throw FormatException('Unknown capability: "$wire"'),
+  );
 }
 
 /// A peer's role (PROTOCOL.md §5.6). The host itself is not a peer; its
@@ -51,9 +51,9 @@ enum JamRole {
   final String wire;
 
   static JamRole fromWire(String wire) => values.firstWhere(
-        (r) => r.wire == wire,
-        orElse: () => throw FormatException('Unknown role: "$wire"'),
-      );
+    (r) => r.wire == wire,
+    orElse: () => throw FormatException('Unknown role: "$wire"'),
+  );
 }
 
 /// What the GUEST role may do — the room-wide policy the host's presets
@@ -94,27 +94,26 @@ class JamPolicy {
   final bool editQueue;
 
   Map<String, Object?> toJson() => {
-        'addTracks': addTracks,
-        'controlPlayback': controlPlayback,
-        'editQueue': editQueue,
-      };
+    'addTracks': addTracks,
+    'controlPlayback': controlPlayback,
+    'editQueue': editQueue,
+  };
 
   factory JamPolicy.fromJson(Map<String, Object?> json) => JamPolicy(
-        addTracks: (json['addTracks'] as bool?) ?? false,
-        controlPlayback: (json['controlPlayback'] as bool?) ?? false,
-        editQueue: (json['editQueue'] as bool?) ?? false,
-      );
+    addTracks: (json['addTracks'] as bool?) ?? false,
+    controlPlayback: (json['controlPlayback'] as bool?) ?? false,
+    editQueue: (json['editQueue'] as bool?) ?? false,
+  );
 
   JamPolicy copyWith({
     bool? addTracks,
     bool? controlPlayback,
     bool? editQueue,
-  }) =>
-      JamPolicy(
-        addTracks: addTracks ?? this.addTracks,
-        controlPlayback: controlPlayback ?? this.controlPlayback,
-        editQueue: editQueue ?? this.editQueue,
-      );
+  }) => JamPolicy(
+    addTracks: addTracks ?? this.addTracks,
+    controlPlayback: controlPlayback ?? this.controlPlayback,
+    editQueue: editQueue ?? this.editQueue,
+  );
 
   @override
   bool operator ==(Object other) =>
@@ -146,7 +145,7 @@ class JamPermissions {
 
   /// A fresh document at rev 0 with [policy].
   const JamPermissions.initial({JamPolicy policy = JamPolicy.jam})
-      : this(rev: 0, policy: policy);
+    : this(rev: 0, policy: policy);
 
   /// The host's reserved peer id, used for attribution ([JamRole.host] in
   /// [roleOf]) — the host is not a joined peer.
@@ -180,8 +179,8 @@ class JamPermissions {
   JamRole roleOf(String peerId) => peerId == hostPeerId
       ? JamRole.host
       : cohosts.contains(peerId)
-          ? JamRole.cohost
-          : JamRole.guest;
+      ? JamRole.cohost
+      : JamRole.guest;
 
   /// [peerId]'s effective capability set: the role base ([JamRole.host] =
   /// everything, [JamRole.cohost] = [cohostCapabilities], [JamRole.guest] =
@@ -217,12 +216,10 @@ class JamPermissions {
 
   // --- Mutators (each returns a new document at rev + 1) -------------------
 
-  JamPermissions withPolicy(JamPolicy newPolicy) =>
-      _next(policy: newPolicy);
+  JamPermissions withPolicy(JamPolicy newPolicy) => _next(policy: newPolicy);
 
-  JamPermissions promote(String peerId) => cohosts.contains(peerId)
-      ? this
-      : _next(cohosts: {...cohosts, peerId});
+  JamPermissions promote(String peerId) =>
+      cohosts.contains(peerId) ? this : _next(cohosts: {...cohosts, peerId});
 
   JamPermissions demote(String peerId) => !cohosts.contains(peerId)
       ? this
@@ -269,27 +266,24 @@ class JamPermissions {
     JamPolicy? policy,
     Set<String>? cohosts,
     Map<String, Map<JamCapability, bool>>? overrides,
-  }) =>
-      JamPermissions(
-        rev: rev + 1,
-        policy: policy ?? this.policy,
-        cohosts: Set.unmodifiable(cohosts ?? this.cohosts),
-        overrides: Map.unmodifiable(overrides ?? this.overrides),
-      );
+  }) => JamPermissions(
+    rev: rev + 1,
+    policy: policy ?? this.policy,
+    cohosts: Set.unmodifiable(cohosts ?? this.cohosts),
+    overrides: Map.unmodifiable(overrides ?? this.overrides),
+  );
 
   // --- Wire shape ----------------------------------------------------------
 
   Map<String, Object?> toJson() => {
-        'rev': rev,
-        'policy': policy.toJson(),
-        'cohosts': [...cohosts]..sort(),
-        'overrides': {
-          for (final entry in overrides.entries)
-            entry.key: {
-              for (final o in entry.value.entries) o.key.wire: o.value,
-            },
-        },
-      };
+    'rev': rev,
+    'policy': policy.toJson(),
+    'cohosts': [...cohosts]..sort(),
+    'overrides': {
+      for (final entry in overrides.entries)
+        entry.key: {for (final o in entry.value.entries) o.key.wire: o.value},
+    },
+  };
 
   factory JamPermissions.fromJson(Map<String, Object?> json) {
     final rawPolicy = json['policy'];
@@ -348,7 +342,8 @@ class JamPermissions {
   }
 
   @override
-  int get hashCode => Object.hash(rev, policy, cohosts.length, overrides.length);
+  int get hashCode =>
+      Object.hash(rev, policy, cohosts.length, overrides.length);
 
   @override
   String toString() =>

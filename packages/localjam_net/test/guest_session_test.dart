@@ -88,95 +88,86 @@ Future<void> waitFor(
 }
 
 void main() {
-  test(
-    'kickPeer(allowResume: true) is a plain drop: session reconnects and '
-    'regains the same peerId',
-    () async {
-      final host = await startHost();
-      final file = await writeTempMedia(makeMediaBytes(1024));
-      final item = await JamHostServer.describeFile(
-        file,
-        kind: MediaKind.audio,
-      );
-      host.addMedia(item, file);
+  test('kickPeer(allowResume: true) is a plain drop: session reconnects and '
+      'regains the same peerId', () async {
+    final host = await startHost();
+    final file = await writeTempMedia(makeMediaBytes(1024));
+    final item = await JamHostServer.describeFile(file, kind: MediaKind.audio);
+    host.addMedia(item, file);
 
-      final session = await connectSession(host);
-      final oldId = session.selfPeerId;
-      expect(session.connectionState, JamConnectionState.connected);
+    final session = await connectSession(host);
+    final oldId = session.selfPeerId;
+    expect(session.connectionState, JamConnectionState.connected);
 
-      final connStates = <JamConnectionState>[];
-      session.connectionStates.listen(connStates.add);
-      final presence = <JamHostEventKind>[];
-      host.events.listen((e) {
-        if (e.kind == JamHostEventKind.peerLeft ||
-            e.kind == JamHostEventKind.peerJoined) {
-          presence.add(e.kind);
-        }
-      });
-      // Subscribed before the kick: the states stream must survive it.
-      final playing = session.states
-          .firstWhere((s) => s.status == PlaybackStatus.playing)
-          .timeout(const Duration(seconds: 5));
+    final connStates = <JamConnectionState>[];
+    session.connectionStates.listen(connStates.add);
+    final presence = <JamHostEventKind>[];
+    host.events.listen((e) {
+      if (e.kind == JamHostEventKind.peerLeft ||
+          e.kind == JamHostEventKind.peerJoined) {
+        presence.add(e.kind);
+      }
+    });
+    // Subscribed before the kick: the states stream must survive it.
+    final playing = session.states
+        .firstWhere((s) => s.status == PlaybackStatus.playing)
+        .timeout(const Duration(seconds: 5));
 
-      host.kickPeer(oldId, allowResume: true);
-      await waitFor(
-        () =>
-            session.connectionState == JamConnectionState.connected &&
-            connStates.contains(JamConnectionState.reconnecting),
-        reason: 'session to resume after kick',
-      );
-      // §3.3: resume within the grace window reclaims the same peerId.
-      expect(session.selfPeerId, oldId);
-      expect(connStates, [
-        JamConnectionState.reconnecting,
-        JamConnectionState.connected,
-      ]);
-      await waitFor(
-        () => presence.length >= 2,
-        reason: 'host peer_left then peer_joined',
-      );
-      expect(presence.sublist(0, 2), [
-        JamHostEventKind.peerLeft,
-        JamHostEventKind.peerJoined,
-      ]);
+    host.kickPeer(oldId, allowResume: true);
+    await waitFor(
+      () =>
+          session.connectionState == JamConnectionState.connected &&
+          connStates.contains(JamConnectionState.reconnecting),
+      reason: 'session to resume after kick',
+    );
+    // §3.3: resume within the grace window reclaims the same peerId.
+    expect(session.selfPeerId, oldId);
+    expect(connStates, [
+      JamConnectionState.reconnecting,
+      JamConnectionState.connected,
+    ]);
+    await waitFor(
+      () => presence.length >= 2,
+      reason: 'host peer_left then peer_joined',
+    );
+    expect(presence.sublist(0, 2), [
+      JamHostEventKind.peerLeft,
+      JamHostEventKind.peerJoined,
+    ]);
 
-      // A post-resume broadcast arrives on the same (pre-kick) subscription.
-      host.setMedia(item.mediaId);
-      host.play();
-      final snapshot = await playing;
-      expect(snapshot.mediaId, item.mediaId);
-    },
-  );
+    // A post-resume broadcast arrives on the same (pre-kick) subscription.
+    host.setMedia(item.mediaId);
+    host.play();
+    final snapshot = await playing;
+    expect(snapshot.mediaId, item.mediaId);
+  });
 
-  test(
-    'a real kick is terminal (§5.6): fatal kicked error, failed state, no '
-    'auto-rejoin, role forgotten',
-    () async {
-      final host = await startHost();
-      final session = await connectSession(host);
-      final oldId = session.selfPeerId;
-      host.promotePeer(oldId);
-      expect(host.permissions.roleOf(oldId), JamRole.cohost);
+  test('a real kick is terminal (§5.6): fatal kicked error, failed state, no '
+      'auto-rejoin, role forgotten', () async {
+    final host = await startHost();
+    final session = await connectSession(host);
+    final oldId = session.selfPeerId;
+    host.promotePeer(oldId);
+    expect(host.permissions.roleOf(oldId), JamRole.cohost);
 
-      final errors = <ErrorMessage>[];
-      session.errors.listen(errors.add);
+    final errors = <ErrorMessage>[];
+    session.errors.listen(errors.add);
 
-      host.kickPeer(oldId);
-      await waitFor(
-        () => session.connectionState == JamConnectionState.failed,
-        reason: 'session to land in failed after the kick',
-      );
-      expect(session.lastFatalError?.code, ErrorCode.kicked);
-      expect(errors.map((e) => e.code), contains(ErrorCode.kicked));
-      // The peer's role went with it.
-      expect(host.permissions.roleOf(oldId), JamRole.guest);
+    host.kickPeer(oldId);
+    await waitFor(
+      () => session.connectionState == JamConnectionState.failed,
+      reason: 'session to land in failed after the kick',
+    );
+    expect(session.lastFatalError?.code, ErrorCode.kicked);
+    expect(errors.map((e) => e.code), contains(ErrorCode.kicked));
+    // The peer's role went with it.
+    expect(host.permissions.roleOf(oldId), JamRole.guest);
 
-      // No rejoin happens on its own.
-      await Future<void>.delayed(const Duration(milliseconds: 300));
-      expect(session.connectionState, JamConnectionState.failed);
-      expect(host.peers, isEmpty);
-    },
-  );
+    // No rejoin happens on its own.
+    await Future<void>.delayed(const Duration(milliseconds: 300));
+    expect(session.connectionState, JamConnectionState.failed);
+    expect(host.peers, isEmpty);
+  });
 
   test('host closed for good: session keeps retrying until close()', () async {
     final host = await startHost();
