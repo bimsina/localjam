@@ -75,6 +75,38 @@ void main() {
     expect(session.engine, isNull);
   });
 
+  testWidgets('the room slides down to dismiss, not sideways', (tester) async {
+    // Minimising the player should read as putting it away, not as
+    // navigating somewhere else. As sibling routes these inherit the
+    // platform's horizontal push unless the room declares its own.
+    final session = testSession();
+    final router = await pumpApp(tester, session);
+    await startTestHost(tester, session, 'Slide Jam');
+
+    router.go('/room');
+    await tester.pump(); // Start the transition.
+    await tester.pump(const Duration(milliseconds: 120)); // Partway in.
+
+    final offsets = tester
+        .widgetList<SlideTransition>(find.byType(SlideTransition))
+        .map((w) => w.position.value)
+        .where((o) => o != Offset.zero)
+        .toList();
+
+    expect(
+      offsets,
+      isNotEmpty,
+      reason: 'the room should be mid-slide, not snapped into place',
+    );
+    for (final offset in offsets) {
+      expect(offset.dx, 0, reason: 'must not travel horizontally');
+      expect(offset.dy, greaterThan(0), reason: 'must rise from the bottom');
+    }
+
+    await tester.pumpAndSettle();
+    await leaveTestSession(tester, session);
+  });
+
   test('a host holds every capability; the room policy gates guests', () {
     // Guarding the gate the whole Room UI is built on.
     const open = JamPermissions.initial(policy: JamPolicy.open);

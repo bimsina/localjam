@@ -5,6 +5,7 @@ library;
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
+import 'design/tokens.dart';
 import 'screens/history_screen.dart';
 import 'screens/home_screen.dart';
 import 'screens/host_setup_screen.dart';
@@ -48,7 +49,31 @@ GoRouter buildRouter(JamSessionController session) => GoRouter(
         ),
       ],
     ),
-    GoRoute(path: '/room', builder: (context, state) => const RoomScreen()),
+    GoRoute(
+      path: '/room',
+      // The room rises from the bottom and dismisses back down — the
+      // now-playing gesture from Apple Music and Spotify. Without this it
+      // inherits the platform's horizontal push, which reads as navigating
+      // away from the jam rather than minimising it.
+      pageBuilder: (context, state) => CustomTransitionPage<void>(
+        key: state.pageKey,
+        child: const RoomScreen(),
+        transitionDuration: JamDuration.slow,
+        reverseTransitionDuration: JamDuration.base,
+        transitionsBuilder: (context, animation, secondary, child) =>
+            SlideTransition(
+              // Driven off the animation rather than a CurvedAnimation, which
+              // would be rebuilt (and leak its listener) every frame here.
+              position: animation.drive(
+                Tween<Offset>(
+                  begin: const Offset(0, 1),
+                  end: Offset.zero,
+                ).chain(CurveTween(curve: Curves.easeOutCubic)),
+              ),
+              child: child,
+            ),
+      ),
+    ),
     GoRoute(
       path: '/host',
       builder: (context, state) {
