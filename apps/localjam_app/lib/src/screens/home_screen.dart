@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import 'history_screen.dart';
 import 'host_screen.dart';
 import 'join_screen.dart';
 
@@ -67,6 +68,16 @@ class HomeScreen extends StatelessWidget {
                     onPressed: () => Navigator.of(context).push(
                       MaterialPageRoute<void>(
                         builder: (_) => const JoinScreen(),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  TextButton.icon(
+                    icon: const Icon(Icons.history),
+                    label: const Text('Past jams'),
+                    onPressed: () => Navigator.of(context).push(
+                      MaterialPageRoute<void>(
+                        builder: (_) => const HistoryScreen(),
                       ),
                     ),
                   ),

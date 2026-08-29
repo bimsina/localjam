@@ -18,7 +18,13 @@ import '../widgets/sync_telemetry_strip.dart';
 /// text), watch peers' readiness, and drive the transport. All server, clock,
 /// and audio wiring lives in the engine — this screen only renders it.
 class HostScreen extends StatefulWidget {
-  const HostScreen({super.key});
+  const HostScreen({super.key, this.initialPaths = const [], this.initialName});
+
+  /// Pre-seeded playlist paths — the "host it again" flow from jam history.
+  final List<String> initialPaths;
+
+  /// Pre-filled session name (defaults to the quirky identity otherwise).
+  final String? initialName;
 
   @override
   State<HostScreen> createState() => _HostScreenState();
@@ -59,8 +65,18 @@ class _HostScreenState extends State<HostScreen> {
   @override
   void initState() {
     super.initState();
+    for (final path in widget.initialPaths) {
+      if (!_pickedPaths.contains(path) && File(path).existsSync()) {
+        _pickedPaths.add(path);
+      }
+    }
     _scanDocumentsDirectory();
-    _defaultSessionName();
+    final initialName = widget.initialName?.trim();
+    if (initialName != null && initialName.isNotEmpty) {
+      _nameController.text = initialName;
+    } else {
+      _defaultSessionName();
+    }
   }
 
   /// Default the room name to the device's quirky identity ("Neon Walrus's

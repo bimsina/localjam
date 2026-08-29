@@ -150,9 +150,11 @@ class JamHostEngine extends JamEngine {
   // --- Server mirror -----------------------------------------------------------
 
   /// Human-readable session name (also in [joinUri]).
+  @override
   String get sessionName => _server.sessionName;
 
   /// Random session id sent in `welcome` (§3.1).
+  @override
   String get sessionId => _server.sessionId;
 
   /// The bound port.
@@ -177,10 +179,14 @@ class JamHostEngine extends JamEngine {
   Stream<List<MediaItem>> get playlistUpdates => _playlists.stream;
 
   /// Currently joined peers.
+  @override
   List<PeerInfo> get peers => _server.peers;
 
   @override
   String get selfPeerId => JamPermissions.hostPeerId;
+
+  @override
+  String? localPathFor(MediaItem item) => _mediaPaths[item.mediaId];
 
   @override
   JamPermissions get permissions => _server.permissions;

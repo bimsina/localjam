@@ -283,7 +283,7 @@ class JamMediaLibrary {
       final raw = await channel.invokeMethod<List<Object?>>('queryAudio');
       return [
         for (final entry in raw ?? const <Object?>[])
-          if (JamLibraryTrack._fromMap(entry) case final track?) track,
+          ?JamLibraryTrack._fromMap(entry),
       ];
     } on MissingPluginException {
       return const [];

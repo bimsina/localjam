@@ -299,9 +299,11 @@ class JamGuestEngine extends JamEngine {
   // --- Session mirror ----------------------------------------------------
 
   /// The session name from `welcome` (§3.1).
+  @override
   String get sessionName => _session.sessionName;
 
   /// The session id from `welcome` (§3.1).
+  @override
   String get sessionId => _session.sessionId;
 
   /// This guest's peer id (§3.1); stable across resumed reconnects (§3.3).
@@ -321,7 +323,12 @@ class JamGuestEngine extends JamEngine {
   Stream<List<MediaItem>> get playlistUpdates => _session.playlistUpdates;
 
   /// Other peers currently in the session (excluding this guest).
+  @override
   List<PeerInfo> get peers => _session.peers;
+
+  @override
+  String? localPathFor(MediaItem item) =>
+      prefetchStates.value[item.mediaId]?.path;
 
   /// Presence changes (§3.2).
   Stream<JamPeerEvent> get peerEvents => _session.peerEvents;

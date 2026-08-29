@@ -11,6 +11,7 @@ import 'package:localjam_audio/localjam_audio.dart';
 import 'package:localjam_net/localjam_net.dart';
 
 import 'audio_sync_controller.dart';
+import 'jam_history.dart';
 import 'latency_prefs.dart';
 import 'media_session_controller.dart';
 import 'session_keepalive.dart';
@@ -45,6 +46,19 @@ abstract class JamEngine {
   /// This side's peer id: the guest's assigned id, or the reserved
   /// [JamPermissions.hostPeerId] on a host.
   String get selfPeerId;
+
+  /// The session id (§3.1).
+  String get sessionId;
+
+  /// The session's human-readable name (§3.1).
+  String get sessionName;
+
+  /// The OTHER peers currently in the room (never includes this side).
+  List<PeerInfo> get peers;
+
+  /// Where [item]'s bytes live locally right now, if anywhere: a host's
+  /// source path, a guest's cache path once fetched. Null while not local.
+  String? localPathFor(MediaItem item);
 
   /// The room's permission document (§5.6).
   JamPermissions get permissions;
@@ -163,11 +177,23 @@ abstract class JamEngine {
   _EngineLifecycleObserver? _lifecycleObserver;
   bool _keepAliveHeld = false;
   JamMediaSessionController? _mediaSessionController;
+  JamHistoryRecorder? _historyRecorder;
+  bool _historyWanted = false;
 
   /// The live OS media-session controller, while the session guards are up.
   @visibleForTesting
   JamMediaSessionController? get mediaSessionController =>
       _mediaSessionController;
+
+  /// Provides the history store the session guards record into. The default
+  /// opens the persistent platform store; tests and embedders can inject
+  /// their own (or `() async => null` to disable recording).
+  static Future<JamHistoryStore?> Function() historyStoreProvider =
+      JamHistoryStore.open;
+
+  /// The live history recorder, once the store opened.
+  @visibleForTesting
+  JamHistoryRecorder? get historyRecorder => _historyRecorder;
 
   /// Whether the engine's app-lifecycle observer is currently registered.
   @visibleForTesting
@@ -206,6 +232,18 @@ abstract class JamEngine {
     }
     // OS media session: lock-screen/notification metadata + transport.
     _mediaSessionController ??= JamMediaSessionController(this)..start();
+    // Jam history: record the session as it unfolds (store opens async —
+    // the flag closes the race against a fast stopSessionGuards).
+    if (!_historyWanted) {
+      _historyWanted = true;
+      unawaited(() async {
+        final store = await historyStoreProvider();
+        if (store == null || !_historyWanted || _historyRecorder != null) {
+          return;
+        }
+        _historyRecorder = JamHistoryRecorder(this, store)..start();
+      }());
+    }
   }
 
   /// Removes the lifecycle observer and releases the platform keep-alive.
@@ -228,6 +266,10 @@ abstract class JamEngine {
     final mediaSession = _mediaSessionController;
     _mediaSessionController = null;
     await mediaSession?.dispose();
+    _historyWanted = false;
+    final history = _historyRecorder;
+    _historyRecorder = null;
+    await history?.dispose();
   }
 
   /// Handles one app-lifecycle transition; the engine's own observer feeds
