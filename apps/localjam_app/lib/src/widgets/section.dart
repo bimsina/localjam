@@ -39,16 +39,17 @@ class JamSection extends StatelessWidget {
               ],
             ),
           ),
-        DecoratedBox(
-          decoration: BoxDecoration(
-            color: colors.surface,
+        // Material, not a DecoratedBox: ListTile paints its background and
+        // ink on the nearest Material ancestor, so a coloured box in between
+        // hides every splash (Flutter asserts on exactly this).
+        Material(
+          color: colors.surface,
+          clipBehavior: Clip.antiAlias,
+          shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(JamRadius.lg),
-            border: Border.all(color: colors.separator, width: 0.5),
+            side: BorderSide(color: colors.separator, width: 0.5),
           ),
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(JamRadius.lg),
-            child: child,
-          ),
+          child: child,
         ),
       ],
     );

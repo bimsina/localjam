@@ -69,25 +69,29 @@ class _HistoryScreenState extends State<HistoryScreen> {
     final records = _records;
     return Scaffold(
       appBar: AppBar(title: const Text('Past jams')),
-      body: switch (records) {
-        null => const Center(child: CircularProgressIndicator()),
-        [] => const _NoHistory(),
-        _ => ListView.separated(
-          padding: const EdgeInsets.fromLTRB(
-            JamSpace.page,
-            JamSpace.sm,
-            JamSpace.page,
-            JamSpace.huge,
+      body: SafeArea(
+        top: false,
+        child: switch (records) {
+          null => const Center(child: CircularProgressIndicator()),
+          [] => const _NoHistory(),
+          _ => ListView.separated(
+            padding: const EdgeInsets.fromLTRB(
+              JamSpace.page,
+              JamSpace.sm,
+              JamSpace.page,
+              JamSpace.huge,
+            ),
+            itemCount: records.length,
+            separatorBuilder: (_, _) =>
+                const SizedBox(height: JamSpace.section),
+            itemBuilder: (context, index) => _RecordCard(
+              record: records[index],
+              onForget: () => unawaited(_delete(records[index])),
+              onHostAgain: () => _hostAgain(records[index]),
+            ),
           ),
-          itemCount: records.length,
-          separatorBuilder: (_, _) => const SizedBox(height: JamSpace.section),
-          itemBuilder: (context, index) => _RecordCard(
-            record: records[index],
-            onForget: () => unawaited(_delete(records[index])),
-            onHostAgain: () => _hostAgain(records[index]),
-          ),
-        ),
-      },
+        },
+      ),
     );
   }
 }

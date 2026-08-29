@@ -26,6 +26,7 @@ import '../state/session_controller.dart';
 import '../util/network.dart';
 import '../widgets/artwork.dart';
 import '../widgets/diagnostics_sheet.dart';
+import '../widgets/drag_to_dismiss.dart';
 import '../widgets/now_playing.dart';
 import '../widgets/peer_avatar.dart';
 import '../widgets/queue_sheet.dart';
@@ -164,6 +165,8 @@ class _RoomScreenState extends State<RoomScreen> {
         peer.clientName.isEmpty ? peer.peerId : peer.clientName,
     ];
 
+    void minimise() => context.canPop() ? context.pop() : context.go('/');
+
     void openRoom() => unawaited(
       showRoomSheet(
         context,
@@ -174,139 +177,147 @@ class _RoomScreenState extends State<RoomScreen> {
       ),
     );
 
-    return Scaffold(
-      appBar: AppBar(
-        centerTitle: true,
-        leading: IconButton(
-          icon: const Icon(Icons.keyboard_arrow_down_rounded),
-          tooltip: 'Back to nearby',
-          // A pop, so the room plays its reverse slide back down. `go` would
-          // replace the stack and skip the exit animation entirely.
-          onPressed: () => context.canPop() ? context.pop() : context.go('/'),
-        ),
-        title: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            SyncIndicator(
-              engine: engine,
-              connection: session.connection,
-              clockSynced: guest?.clockSynced ?? true,
-            ),
-            Text(
-              engine.sessionName,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: context.jamRowTitle,
-            ),
-          ],
-        ),
-        actions: [
-          PopupMenuButton<_RoomMenu>(
-            icon: const Icon(Icons.more_horiz_rounded),
-            onSelected: (choice) => switch (choice) {
-              _RoomMenu.people => openRoom(),
-              _RoomMenu.diagnostics => unawaited(
-                showDiagnosticsSheet(
-                  context,
-                  engine,
-                  clockOffsetUs: guest == null
-                      ? null
-                      : () => guest.clockOffsetUs,
-                ),
+    return DragToDismiss(
+      onDismiss: minimise,
+      child: Scaffold(
+        appBar: AppBar(
+          centerTitle: true,
+          leading: IconButton(
+            icon: const Icon(Icons.keyboard_arrow_down_rounded),
+            tooltip: 'Back to nearby',
+            // A pop, so the room plays its reverse slide back down. `go` would
+            // replace the stack and skip the exit animation entirely.
+            onPressed: () => context.canPop() ? context.pop() : context.go('/'),
+          ),
+          title: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              SyncIndicator(
+                engine: engine,
+                connection: session.connection,
+                clockSynced: guest?.clockSynced ?? true,
               ),
-              _RoomMenu.leave => unawaited(_confirmLeave(session)),
-            },
-            itemBuilder: (context) => [
-              PopupMenuItem(
-                value: _RoomMenu.people,
-                child: Text(session.isHost ? 'Room & invites' : 'Who’s here'),
-              ),
-              const PopupMenuItem(
-                value: _RoomMenu.diagnostics,
-                child: Text('Sync details'),
-              ),
-              PopupMenuItem(
-                value: _RoomMenu.leave,
-                child: Text(session.isHost ? 'End jam' : 'Leave jam'),
+              Text(
+                engine.sessionName,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: context.jamRowTitle,
               ),
             ],
           ),
-          const SizedBox(width: JamSpace.xs),
-        ],
-      ),
-      body: Column(
-        children: [
-          if (session.connection != JamConnectionState.connected)
-            _ReconnectBanner(connection: session.connection),
-          Expanded(
-            child: LayoutBuilder(
-              builder: (context, constraints) {
-                // Whichever bounds first: the page width, a share of the
-                // height, or the hero cap (so tablets and desktop do not
-                // blow the cover up absurdly).
-                final artSize = [
-                  constraints.maxWidth - JamSpace.xxxl * 2,
-                  constraints.maxHeight * 0.46,
-                  JamArtworkSize.hero,
-                ].reduce((a, b) => a < b ? a : b);
-                return Padding(
-                  padding: const EdgeInsets.fromLTRB(
-                    JamSpace.xxxl,
-                    JamSpace.sm,
-                    JamSpace.xxxl,
-                    JamSpace.lg,
+          actions: [
+            PopupMenuButton<_RoomMenu>(
+              icon: const Icon(Icons.more_horiz_rounded),
+              onSelected: (choice) => switch (choice) {
+                _RoomMenu.people => openRoom(),
+                _RoomMenu.diagnostics => unawaited(
+                  showDiagnosticsSheet(
+                    context,
+                    engine,
+                    clockOffsetUs: guest == null
+                        ? null
+                        : () => guest.clockOffsetUs,
                   ),
-                  child: Column(
-                    children: [
-                      // Weighted, not even: the cover belongs in the upper
-                      // half with the controls gathered below it.
-                      const Spacer(),
-                      JamArtwork(
-                        engine: engine,
-                        item: engine.currentItem,
-                        size: artSize,
-                      ),
-                      const Spacer(flex: 2),
-                      SizedBox(
-                        width: double.infinity,
-                        child: NowPlayingTitle(
-                          engine: engine,
-                          item: engine.currentItem,
-                          peers: peers,
-                        ),
-                      ),
-                      const SizedBox(height: JamSpace.xl),
-                      if (session.position case final ticker?)
-                        PlaybackTimeline(
-                          engine: engine,
-                          position: ticker,
-                          canControl: canControl,
-                        ),
-                      const SizedBox(height: JamSpace.sm),
-                      TransportBar(
-                        engine: engine,
-                        canControl: canControl,
-                        hasQueue: playlist.isNotEmpty,
-                      ),
-                      const SizedBox(height: JamSpace.lg),
-                      _ReadinessNote(engine: engine),
-                      const SizedBox(height: JamSpace.lg),
-                      _UtilityRow(
-                        roster: roster,
-                        isHost: session.isHost,
-                        selfName: _identity,
-                        queueCount: playlist.length,
-                        onPeople: openRoom,
-                        onQueue: () =>
-                            unawaited(showQueueSheet(context, engine)),
-                      ),
-                    ],
-                  ),
-                );
+                ),
+                _RoomMenu.leave => unawaited(_confirmLeave(session)),
               },
+              itemBuilder: (context) => [
+                PopupMenuItem(
+                  value: _RoomMenu.people,
+                  child: Text(session.isHost ? 'Room & invites' : 'Who’s here'),
+                ),
+                const PopupMenuItem(
+                  value: _RoomMenu.diagnostics,
+                  child: Text('Sync details'),
+                ),
+                PopupMenuItem(
+                  value: _RoomMenu.leave,
+                  child: Text(session.isHost ? 'End jam' : 'Leave jam'),
+                ),
+              ],
             ),
+            const SizedBox(width: JamSpace.xs),
+          ],
+        ),
+        body: SafeArea(
+          // The app bar covers the top; this is about the home indicator, which
+          // the utility row sits right on top of otherwise.
+          top: false,
+          child: Column(
+            children: [
+              if (session.connection != JamConnectionState.connected)
+                _ReconnectBanner(connection: session.connection),
+              Expanded(
+                child: LayoutBuilder(
+                  builder: (context, constraints) {
+                    // Whichever bounds first: the page width, a share of the
+                    // height, or the hero cap (so tablets and desktop do not
+                    // blow the cover up absurdly).
+                    final artSize = [
+                      constraints.maxWidth - JamSpace.xxxl * 2,
+                      constraints.maxHeight * 0.46,
+                      JamArtworkSize.hero,
+                    ].reduce((a, b) => a < b ? a : b);
+                    return Padding(
+                      padding: const EdgeInsets.fromLTRB(
+                        JamSpace.xxxl,
+                        JamSpace.sm,
+                        JamSpace.xxxl,
+                        JamSpace.lg,
+                      ),
+                      child: Column(
+                        children: [
+                          // Weighted, not even: the cover belongs in the upper
+                          // half with the controls gathered below it.
+                          const Spacer(),
+                          JamArtwork(
+                            engine: engine,
+                            item: engine.currentItem,
+                            size: artSize,
+                          ),
+                          const Spacer(flex: 2),
+                          SizedBox(
+                            width: double.infinity,
+                            child: NowPlayingTitle(
+                              engine: engine,
+                              item: engine.currentItem,
+                              peers: peers,
+                            ),
+                          ),
+                          const SizedBox(height: JamSpace.xl),
+                          if (session.position case final ticker?)
+                            PlaybackTimeline(
+                              engine: engine,
+                              position: ticker,
+                              canControl: canControl,
+                            ),
+                          const SizedBox(height: JamSpace.sm),
+                          TransportBar(
+                            engine: engine,
+                            canControl: canControl,
+                            hasQueue: playlist.isNotEmpty,
+                          ),
+                          const SizedBox(height: JamSpace.lg),
+                          _ReadinessNote(engine: engine),
+                          const SizedBox(height: JamSpace.lg),
+                          _UtilityRow(
+                            roster: roster,
+                            isHost: session.isHost,
+                            selfName: _identity,
+                            queueCount: playlist.length,
+                            onPeople: openRoom,
+                            onQueue: () =>
+                                unawaited(showQueueSheet(context, engine)),
+                          ),
+                        ],
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ],
           ),
-        ],
+        ),
       ),
     );
   }

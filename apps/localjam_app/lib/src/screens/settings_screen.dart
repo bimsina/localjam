@@ -73,51 +73,54 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
     return Scaffold(
       appBar: AppBar(title: const Text('Settings')),
-      body: ListView(
-        padding: const EdgeInsets.fromLTRB(
-          JamSpace.page,
-          JamSpace.sm,
-          JamSpace.page,
-          JamSpace.huge,
+      body: SafeArea(
+        top: false,
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(
+            JamSpace.page,
+            JamSpace.sm,
+            JamSpace.page,
+            JamSpace.huge,
+          ),
+          children: [
+            JamSection(
+              title: 'You',
+              child: ListTile(
+                onTap: () => unawaited(_rename()),
+                leading: _identity.isEmpty
+                    ? null
+                    : PeerAvatar(name: _identity, size: 44),
+                title: Text(
+                  _identity.isEmpty ? 'Loading…' : _identity,
+                  style: context.jamRowTitle,
+                ),
+                subtitle: const Text('How you appear in rooms'),
+                trailing: Icon(
+                  Icons.chevron_right_rounded,
+                  color: colors.textTertiary,
+                ),
+              ),
+            ),
+            const SizedBox(height: JamSpace.section),
+            JamSection(
+              title: 'Appearance',
+              child: RadioGroup<ThemeMode>(
+                groupValue: settings.themeMode,
+                onChanged: (value) =>
+                    unawaited(settings.setThemeMode(value ?? ThemeMode.system)),
+                child: Column(
+                  children: [
+                    for (final mode in ThemeMode.values)
+                      RadioListTile<ThemeMode>(
+                        value: mode,
+                        title: Text(_label(mode), style: context.jamBody),
+                      ),
+                  ],
+                ),
+              ),
+            ),
+          ],
         ),
-        children: [
-          JamSection(
-            title: 'You',
-            child: ListTile(
-              onTap: () => unawaited(_rename()),
-              leading: _identity.isEmpty
-                  ? null
-                  : PeerAvatar(name: _identity, size: 44),
-              title: Text(
-                _identity.isEmpty ? 'Loading…' : _identity,
-                style: context.jamRowTitle,
-              ),
-              subtitle: const Text('How you appear in rooms'),
-              trailing: Icon(
-                Icons.chevron_right_rounded,
-                color: colors.textTertiary,
-              ),
-            ),
-          ),
-          const SizedBox(height: JamSpace.section),
-          JamSection(
-            title: 'Appearance',
-            child: RadioGroup<ThemeMode>(
-              groupValue: settings.themeMode,
-              onChanged: (value) =>
-                  unawaited(settings.setThemeMode(value ?? ThemeMode.system)),
-              child: Column(
-                children: [
-                  for (final mode in ThemeMode.values)
-                    RadioListTile<ThemeMode>(
-                      value: mode,
-                      title: Text(_label(mode), style: context.jamBody),
-                    ),
-                ],
-              ),
-            ),
-          ),
-        ],
       ),
     );
   }

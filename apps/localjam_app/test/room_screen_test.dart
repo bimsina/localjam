@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:localjam_app/src/state/session_controller.dart';
+import 'package:localjam_app/src/widgets/drag_to_dismiss.dart';
 import 'package:localjam_client/localjam_client.dart';
 
 import 'harness.dart';
@@ -128,6 +129,57 @@ void main() {
     await tester.pumpAndSettle();
     // Dismissing minimises; it does not end the jam.
     expect(session.isLive, isTrue);
+    await leaveTestSession(tester, session);
+  });
+
+  testWidgets('dragging the player down dismisses it', (tester) async {
+    final session = testSession();
+    final router = await pumpApp(tester, session);
+    await startTestHost(tester, session, 'Drag Jam');
+    router.push('/room');
+    await tester.pumpAndSettle();
+
+    // A short drag is not a dismissal — it springs back.
+    await tester.drag(find.byType(DragToDismiss), const Offset(0, 40));
+    await tester.pumpAndSettle();
+    expect(find.text('Drag Jam'), findsOneWidget);
+
+    // A long one puts the player away without ending the jam.
+    await tester.drag(find.byType(DragToDismiss), const Offset(0, 400));
+    await tester.pumpAndSettle();
+    expect(find.text('Nearby'), findsOneWidget);
+    expect(session.isLive, isTrue);
+
+    await leaveTestSession(tester, session);
+  });
+
+  testWidgets('dragging up does not lift the player off the screen', (
+    tester,
+  ) async {
+    final session = testSession();
+    final router = await pumpApp(tester, session);
+    await startTestHost(tester, session, 'Up Jam');
+    router.push('/room');
+    await tester.pumpAndSettle();
+
+    await tester.drag(find.byType(DragToDismiss), const Offset(0, -300));
+    await tester.pumpAndSettle();
+
+    // The outermost Transform under DragToDismiss is the one it applies;
+    // everything deeper belongs to icons and ink.
+    final translate = tester
+        .widgetList<Transform>(
+          find.descendant(
+            of: find.byType(DragToDismiss),
+            matching: find.byType(Transform),
+          ),
+        )
+        .first
+        .transform
+        .getTranslation();
+    expect(translate.y, 0, reason: 'upward drags are clamped away');
+    expect(find.text('Up Jam'), findsOneWidget);
+
     await leaveTestSession(tester, session);
   });
 
