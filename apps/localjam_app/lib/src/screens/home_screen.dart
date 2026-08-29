@@ -106,7 +106,7 @@ class _HomeScreenState extends State<HomeScreen> {
     final joined = await session.join(room.joinUri);
     if (!mounted) return;
     if (joined) {
-      context.go('/room');
+      context.push('/room');
     } else {
       _showError(session.error);
     }
@@ -203,7 +203,7 @@ class _HomeScreenState extends State<HomeScreen> {
     final joined = await session.join(Uri.parse(uri));
     if (!mounted) return;
     if (joined) {
-      context.go('/room');
+      context.push('/room');
     } else {
       _showError(session.error);
     }

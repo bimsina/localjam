@@ -36,7 +36,17 @@ GoRouter buildRouter(JamSessionController session) => GoRouter(
   },
   routes: [
     ShellRoute(
-      builder: (context, state, child) => _RoomBarShell(child: child),
+      // pageBuilder, not builder: the shell owns a page of its own in the
+      // ROOT navigator, and that is the page that animates when the room is
+      // dismissed. Left to the default it fades-and-shifts horizontally,
+      // which is what made minimising the player slide sideways — a
+      // NoTransitionPage on the inner '/' route cannot reach it, because
+      // that one lives in the shell's nested navigator.
+      // The ground floor: pushed routes animate over it, it never moves.
+      pageBuilder: (context, state, child) => NoTransitionPage<void>(
+        key: state.pageKey,
+        child: _RoomBarShell(child: child),
+      ),
       routes: [
         GoRoute(path: '/', builder: (context, state) => const HomeScreen()),
         GoRoute(
@@ -52,9 +62,12 @@ GoRouter buildRouter(JamSessionController session) => GoRouter(
     GoRoute(
       path: '/room',
       // The room rises from the bottom and dismisses back down — the
-      // now-playing gesture from Apple Music and Spotify. Without this it
-      // inherits the platform's horizontal push, which reads as navigating
-      // away from the jam rather than minimising it.
+      // now-playing gesture from Apple Music and Spotify.
+      //
+      // It must be PUSHED and POPPED, never `go`-ed to and from: `go`
+      // replaces the whole stack, and a replacement removes the outgoing
+      // route without running its reverse transition, so the room would
+      // vanish instantly while the incoming page slid in horizontally.
       pageBuilder: (context, state) => CustomTransitionPage<void>(
         key: state.pageKey,
         child: const RoomScreen(),

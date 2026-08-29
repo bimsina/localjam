@@ -73,7 +73,7 @@ class _RoomBarState extends State<RoomBar> {
     return Material(
       color: colors.surface,
       child: InkWell(
-        onTap: () => context.go('/room'),
+        onTap: () => context.push('/room'),
         child: Container(
           decoration: BoxDecoration(
             border: Border(

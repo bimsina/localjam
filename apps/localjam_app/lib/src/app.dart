@@ -55,7 +55,7 @@ class _LocalJamAppState extends State<LocalJamApp> {
     // Never yank someone out of a running jam because a link arrived.
     if (_session.phase != JamSessionPhase.idle) return;
     final joined = await _session.join(uri);
-    if (joined) _router.go('/room');
+    if (joined) _router.push('/room');
   }
 
   @override

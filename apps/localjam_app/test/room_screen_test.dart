@@ -75,35 +75,59 @@ void main() {
     expect(session.engine, isNull);
   });
 
-  testWidgets('the room slides down to dismiss, not sideways', (tester) async {
+  /// Offsets of everything mid-slide, ignoring the settled ones.
+  List<Offset> slidingOffsets(WidgetTester tester) => tester
+      .widgetList<SlideTransition>(find.byType(SlideTransition))
+      .map((w) => w.position.value)
+      .where((o) => o != Offset.zero)
+      .toList();
+
+  testWidgets('the room rises from the bottom and drops back down', (
+    tester,
+  ) async {
     // Minimising the player should read as putting it away, not as
-    // navigating somewhere else. As sibling routes these inherit the
-    // platform's horizontal push unless the room declares its own.
+    // navigating somewhere else. Two things conspire against that: the
+    // platform's default page transition is a horizontal fade-forwards, and
+    // `go` REPLACES the stack — a replacement drops the outgoing route
+    // without running its reverse transition, so the room would vanish
+    // instantly while home slid in sideways. Hence a pushed route with its
+    // own vertical transition, popped to dismiss.
     final session = testSession();
     final router = await pumpApp(tester, session);
     await startTestHost(tester, session, 'Slide Jam');
 
-    router.go('/room');
-    await tester.pump(); // Start the transition.
-    await tester.pump(const Duration(milliseconds: 120)); // Partway in.
+    router.push('/room');
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 120));
 
-    final offsets = tester
-        .widgetList<SlideTransition>(find.byType(SlideTransition))
-        .map((w) => w.position.value)
-        .where((o) => o != Offset.zero)
-        .toList();
-
-    expect(
-      offsets,
-      isNotEmpty,
-      reason: 'the room should be mid-slide, not snapped into place',
-    );
-    for (final offset in offsets) {
+    final entering = slidingOffsets(tester);
+    expect(entering, isNotEmpty, reason: 'the room should be mid-slide');
+    for (final offset in entering) {
       expect(offset.dx, 0, reason: 'must not travel horizontally');
-      expect(offset.dy, greaterThan(0), reason: 'must rise from the bottom');
+      expect(offset.dy, greaterThan(0), reason: 'must rise from below');
     }
 
     await tester.pumpAndSettle();
+    expect(find.text('Slide Jam'), findsOneWidget);
+
+    await tester.tap(find.byIcon(Icons.keyboard_arrow_down_rounded));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+
+    final leaving = slidingOffsets(tester);
+    expect(
+      leaving,
+      isNotEmpty,
+      reason: 'the room must animate out, not disappear',
+    );
+    for (final offset in leaving) {
+      expect(offset.dx, 0, reason: 'must not travel horizontally');
+      expect(offset.dy, greaterThan(0), reason: 'must drop back down');
+    }
+
+    await tester.pumpAndSettle();
+    // Dismissing minimises; it does not end the jam.
+    expect(session.isLive, isTrue);
     await leaveTestSession(tester, session);
   });
 

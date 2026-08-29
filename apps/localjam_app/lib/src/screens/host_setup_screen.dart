@@ -151,7 +151,9 @@ class _HostSetupScreenState extends State<HostSetupScreen> {
     if (!mounted) return;
     setState(() => _starting = false);
     if (started) {
-      context.go('/room');
+      // Replace setup rather than stack on it, so dismissing the room lands
+      // on home instead of back in the form that created it.
+      context.pushReplacement('/room');
     } else {
       _showError(session.error ?? 'Could not start the room.');
     }

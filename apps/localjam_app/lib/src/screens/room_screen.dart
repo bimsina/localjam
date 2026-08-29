@@ -180,7 +180,9 @@ class _RoomScreenState extends State<RoomScreen> {
         leading: IconButton(
           icon: const Icon(Icons.keyboard_arrow_down_rounded),
           tooltip: 'Back to nearby',
-          onPressed: () => context.go('/'),
+          // A pop, so the room plays its reverse slide back down. `go` would
+          // replace the stack and skip the exit animation entirely.
+          onPressed: () => context.canPop() ? context.pop() : context.go('/'),
         ),
         title: Column(
           mainAxisSize: MainAxisSize.min,
