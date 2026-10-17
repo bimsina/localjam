@@ -1,0 +1,12 @@
+# Copy to android/key.properties (git-ignored) and fill in to sign a
+# distributable release build. Generate a keystore with:
+#
+#   keytool -genkey -v -keystore ~/localjam-upload.jks \
+#     -keyalg RSA -keysize 2048 -validity 10000 -alias upload
+#
+# storeFile is resolved relative to the android/ directory, so an absolute
+# path is usually what you want.
+storeFile=/absolute/path/to/localjam-upload.jks
+storePassword=changeme
+keyAlias=upload
+keyPassword=changeme

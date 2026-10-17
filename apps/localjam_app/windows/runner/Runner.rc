@@ -89,13 +89,13 @@ BEGIN
     BEGIN
         BLOCK "040904e4"
         BEGIN
-            VALUE "CompanyName", "np.com.bibektimsina" "\0"
-            VALUE "FileDescription", "localjam_app" "\0"
+            VALUE "CompanyName", "Bibek Timsina" "\0"
+            VALUE "FileDescription", "LocalJam" "\0"
             VALUE "FileVersion", VERSION_AS_STRING "\0"
-            VALUE "InternalName", "localjam_app" "\0"
-            VALUE "LegalCopyright", "Copyright (C) 2026 np.com.bibektimsina. All rights reserved." "\0"
+            VALUE "InternalName", "LocalJam" "\0"
+            VALUE "LegalCopyright", "Copyright (C) 2026 Bibek Timsina. All rights reserved." "\0"
             VALUE "OriginalFilename", "localjam_app.exe" "\0"
-            VALUE "ProductName", "localjam_app" "\0"
+            VALUE "ProductName", "LocalJam" "\0"
             VALUE "ProductVersion", VERSION_AS_STRING "\0"
         END
     END

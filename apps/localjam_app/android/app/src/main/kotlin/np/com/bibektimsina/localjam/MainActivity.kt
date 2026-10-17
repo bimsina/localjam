@@ -1,4 +1,4 @@
-package np.com.bibektimsina.localjam_app
+package np.com.bibektimsina.localjam
 
 import io.flutter.embedding.android.FlutterActivity
 

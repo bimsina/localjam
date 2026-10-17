@@ -12,10 +12,16 @@
         android:maxSdkVersion="32"/>
     <!-- Keep-alive service, locks, foreground-service and notification
          permissions merge in from the localjam_audio plugin's manifest. -->
+    <!-- Jams are local and ephemeral: the media cache, artwork, jam history and
+         device identity never leave this install — no cloud backup, no
+         device-to-device transfer (res/xml/{data_extraction_rules,backup_rules}). -->
     <application
         android:label="LocalJam"
         android:name="${applicationName}"
-        android:icon="@mipmap/ic_launcher">
+        android:icon="@mipmap/ic_launcher"
+        android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="@xml/backup_rules">
         <activity
             android:name=".MainActivity"
             android:exported="true"
