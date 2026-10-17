@@ -157,7 +157,8 @@ Future<int> _runLoop(
   }
   screen.log(
     'clock synchronized: offset=${client.clock.offsetUs}us '
-    'bestRtt=${client.clock.bestRttUs}us',
+    'bestRtt=${client.clock.bestRttUs}us '
+    '(skew is learned over the next ~10 s; see skew= below)',
   );
   screen.log(
     'keys: p = play/pause | s = +10s | S = -10s | q = quit '
@@ -168,6 +169,8 @@ Future<int> _runLoop(
 
   final keys = KeyInput.start((key) {
     final snapshot = client.snapshot;
+    // Seeking needs session time, undefined while the clock re-bursts.
+    if ((key == 's' || key == 'S') && !client.clock.isSynchronized) return;
     switch (key) {
       case 'p':
         unawaited(
@@ -207,6 +210,13 @@ Future<int> _runLoop(
     final elapsedUs = nowUs - lastTickUs;
     lastTickUs = nowUs;
 
+    // A detected clock discontinuity (this machine slept) resets the
+    // estimator until a fresh join burst lands (§4); session time is
+    // undefined until then.
+    if (!client.clock.isSynchronized) {
+      screen.status('clock resyncing after a discontinuity (device sleep?)…');
+      return;
+    }
     final snapshot = client.snapshot;
     final sessionNowUs = client.sessionNowUs;
     sim.tick(
@@ -216,9 +226,15 @@ Future<int> _runLoop(
     );
     final expectedUs = snapshot.positionAt(sessionNowUs);
 
+    // Clock telemetry (§4): the RTT floor gating samples, and the host
+    // clock's estimated rate relative to ours — the number that matters
+    // when the two terminals run on different machines.
+    final clock = client.clock;
     screen.status(
-      'offset=${formatSignedUs(client.clock.offsetUs ?? 0)} '
-      'rtt=${client.clock.bestRttUs}us | '
+      'offset=${formatSignedUs(clock.offsetUs ?? 0)} '
+      'floor=${clock.rttFloorUs}us '
+      'skew=${clock.skewPpm >= 0 ? '+' : ''}'
+      '${clock.skewPpm.toStringAsFixed(1)}ppm | '
       '${snapshot.status.name.padRight(7)} '
       'exp=${formatPositionUs(expectedUs)} '
       'act=${formatPositionUs(sim.positionUs)} '

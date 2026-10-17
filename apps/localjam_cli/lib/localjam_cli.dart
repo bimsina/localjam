@@ -1,7 +1,9 @@
 /// LocalJam demo CLI: host and join commands, the simulated drift-corrected
-/// player, and terminal formatting helpers.
+/// player, the virtual-time clock-sync simulation, and terminal formatting
+/// helpers.
 library;
 
+export 'src/clock_sim_command.dart';
 export 'src/host_command.dart';
 export 'src/join_command.dart';
 export 'src/sim_player.dart';

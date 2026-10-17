@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:args/args.dart';
+import 'package:localjam_cli/src/clock_sim_command.dart';
 import 'package:localjam_cli/src/host_command.dart';
 import 'package:localjam_cli/src/join_command.dart';
 
@@ -29,6 +30,8 @@ ArgParser _buildParser() {
     ..addOption('name', defaultsTo: 'guest', help: 'Client name.')
     ..addFlag('help', abbr: 'h', negatable: false, help: 'Show usage.');
 
+  addClockSimOptions(parser.addCommand('clock-sim'));
+
   return parser;
 }
 
@@ -50,11 +53,23 @@ void _printUsage(ArgParser parser, IOSink out) {
   out.writeln('  join <uri>       Join a session as a guest.');
   out.writeln(_indent(parser.commands['join']!.usage));
   out.writeln();
+  out.writeln(
+    '  clock-sim        Simulate host/guest clock skew and Wi-Fi jitter',
+  );
+  out.writeln('                   against the clock-sync estimator.');
+  out.writeln(_indent(parser.commands['clock-sim']!.usage));
+  out.writeln();
   out.writeln('Example (two terminals):');
   out.writeln(r'  $ localjam host song.mp3 other.mp3');
   out.writeln(
     r'  $ localjam join "localjam://join?v=1&host=..." '
     '--skew-ppm 5000',
+  );
+  out.writeln();
+  out.writeln('Example (clock sync under phone-like conditions):');
+  out.writeln(
+    r'  $ localjam clock-sim --clock-skew-ppm 100 --jitter powersave '
+    '--sleep-at 20',
   );
 }
 
@@ -81,7 +96,11 @@ Future<void> main(List<String> argv) async {
     );
   }
   if (command['help'] as bool) {
-    stdout.writeln(command.name == 'host' ? hostUsage : joinUsage);
+    stdout.writeln(switch (command.name) {
+      'host' => hostUsage,
+      'join' => joinUsage,
+      _ => clockSimUsage,
+    });
     stdout.writeln(parser.commands[command.name]!.usage);
     await stdout.flush();
     exit(0);
@@ -90,6 +109,7 @@ Future<void> main(List<String> argv) async {
   final code = switch (command.name) {
     'host' => await runHostCommand(command),
     'join' => await runJoinCommand(command),
+    'clock-sim' => runClockSimCommand(command, stdout, stderr),
     _ => 64, // Unreachable: the parser rejects unknown commands.
   };
   exit(code);
