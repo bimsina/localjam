@@ -8,7 +8,8 @@
 /// Recency is tracked via file mtimes: every hit/seed touches the file, and
 /// [evict] removes least-recently-used files once the directory exceeds
 /// [maxBytes] — except protected paths (the current track and the prefetch
-/// ahead window), which are never evicted even when the cap is exceeded.
+/// window), which are never evicted even when the cap is exceeded. [evict]
+/// reports what it deleted: the guest un-readies those items (§6.3).
 library;
 
 import 'dart:io';
@@ -52,9 +53,8 @@ class JamMediaCache {
 
   /// The cache path for content-addressed artwork (§6.5), or null when
   /// [artworkId] is not one — see [fileFor].
-  File? artworkFileFor(String artworkId) => _artworkId.hasMatch(artworkId)
-      ? File('${dir.path}/$artworkId')
-      : null;
+  File? artworkFileFor(String artworkId) =>
+      _artworkId.hasMatch(artworkId) ? File('${dir.path}/$artworkId') : null;
 
   /// Whether [sha256] is a well-formed digest, and so cacheable.
   static bool isCacheableSha256(String sha256) => _sha256.hasMatch(sha256);
@@ -115,10 +115,15 @@ class JamMediaCache {
 
   /// Evicts least-recently-used files (by mtime) until the directory's total
   /// size is at most [maxBytes]. Paths in [protectedPaths] — the current
-  /// track and the prefetch ahead window — are never evicted, so the total
-  /// may stay above the cap when the protected set alone exceeds it.
+  /// track and the prefetch window — are never evicted, so the total may
+  /// stay above the cap when the protected set alone exceeds it.
   /// Best-effort: filesystem races are swallowed.
-  Future<void> evict({Set<String> protectedPaths = const {}}) async {
+  ///
+  /// Returns the paths it deleted, so whoever tracks those files as "ready"
+  /// (the guest's prefetch states, the host's readiness view of this guest)
+  /// can stop believing it: a file that is gone is not playable.
+  Future<Set<String>> evict({Set<String> protectedPaths = const {}}) async {
+    final deleted = <String>{};
     final entries = <({File file, int size, DateTime mtime})>[];
     var total = 0;
     try {
@@ -133,9 +138,9 @@ class JamMediaCache {
         }
       }
     } catch (_) {
-      return; // Directory missing/unreadable: nothing to evict.
+      return deleted; // Directory missing/unreadable: nothing to evict.
     }
-    if (total <= maxBytes) return;
+    if (total <= maxBytes) return deleted;
     entries.sort((a, b) => a.mtime.compareTo(b.mtime)); // Oldest first.
     for (final entry in entries) {
       if (total <= maxBytes) break;
@@ -143,9 +148,11 @@ class JamMediaCache {
       try {
         await entry.file.delete();
         total -= entry.size;
+        deleted.add(entry.file.path);
       } catch (_) {
         // Already gone or busy: leave it for the next pass.
       }
     }
+    return deleted;
   }
 }

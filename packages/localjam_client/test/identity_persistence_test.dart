@@ -10,6 +10,7 @@ library;
 
 import 'dart:async';
 
+import 'package:fake_async/fake_async.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:localjam_client/localjam_client.dart';
@@ -23,8 +24,11 @@ const String _idKey = 'flutter.localjam.clientId';
 /// A prefs store that answers only when told to — and remembers every write,
 /// because "did anything overwrite the stored identity?" is the question.
 class TestPrefsStore extends SharedPreferencesStorePlatform {
-  TestPrefsStore({Map<String, Object>? data, this.gated = false, this.failures = 0})
-    : _data = <String, Object>{...?data};
+  TestPrefsStore({
+    Map<String, Object>? data,
+    this.gated = false,
+    this.failures = 0,
+  }) : _data = <String, Object>{...?data};
 
   final Map<String, Object> _data;
 
@@ -137,17 +141,30 @@ void main() {
     expect(JamIdentity.settling, isFalse);
   });
 
-  test('a store that throws is retried, not overruled', () async {
-    final store = install(
-      TestPrefsStore(failures: 2, data: {_nameKey: 'Disco Badger'}),
-    );
+  test('a store that throws is retried, not overruled', () {
+    // On fake time: the background retry is 250 ms behind the first answer,
+    // and on a machine loaded far past its cores the first `await` used to
+    // resume after the retry had already adopted the stored name.
+    fakeAsync((async) {
+      final store = install(
+        TestPrefsStore(failures: 2, data: {_nameKey: 'Disco Badger'}),
+      );
+      String? first;
+      unawaited(JamIdentity.displayName().then((name) => first = name));
+      async.flushMicrotasks();
+      expect(first, isNotNull);
+      expect(first, isNot('Disco Badger'));
+      expect(store.writes, isEmpty);
 
-    expect(await JamIdentity.displayName(), isNot('Disco Badger'));
-    expect(store.writes, isEmpty);
-
-    await JamIdentity.waitForSettle();
-    expect(await JamIdentity.displayName(), 'Disco Badger');
-    expect(store.writes, isEmpty);
+      // The retry fails once more (250 ms), then the store answers (500 ms).
+      async.elapse(const Duration(seconds: 2));
+      expect(JamIdentity.settling, isFalse);
+      String? later;
+      unawaited(JamIdentity.displayName().then((name) => later = name));
+      async.flushMicrotasks();
+      expect(later, 'Disco Badger');
+      expect(store.writes, isEmpty);
+    });
   });
 
   test('a store that answers "nothing here" does mint, and persists it', () {
@@ -162,19 +179,22 @@ void main() {
     });
   });
 
-  test('an ephemeral name is kept once the store confirms it is empty', () async {
-    // Continuity: the user has already seen this name. If the store turns
-    // out to be genuinely empty, that name becomes the persisted one rather
-    // than being swapped for a third.
-    final store = install(TestPrefsStore(gated: true));
-    final shown = await JamIdentity.displayName();
-    expect(store.writes, isEmpty);
+  test(
+    'an ephemeral name is kept once the store confirms it is empty',
+    () async {
+      // Continuity: the user has already seen this name. If the store turns
+      // out to be genuinely empty, that name becomes the persisted one rather
+      // than being swapped for a third.
+      final store = install(TestPrefsStore(gated: true));
+      final shown = await JamIdentity.displayName();
+      expect(store.writes, isEmpty);
 
-    store.release();
-    await JamIdentity.waitForSettle();
-    expect(await JamIdentity.displayName(), shown);
-    expect(store.data[_nameKey], shown);
-  });
+      store.release();
+      await JamIdentity.waitForSettle();
+      expect(await JamIdentity.displayName(), shown);
+      expect(store.data[_nameKey], shown);
+    },
+  );
 
   test('a rename beats a late read, and reaches the store', () async {
     final store = install(

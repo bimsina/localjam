@@ -85,32 +85,92 @@ void main() {
       addTearDown(guest.close);
       expect(guest.addedByLabel(item, guest.peers), 'Silky Puffin');
     });
+
+    test(
+      'a contributor who shared no name is never bylined by peer id',
+      () async {
+        // The byline used to fall back to the peer id ("added by p_7f3a"): a
+        // wire token on a screen about people.
+        mockAudioChannel();
+        final engine = await JamHostEngine.start(
+          sessionName: 'HostJam',
+          hostName: 'Silky Puffin',
+          address: InternetAddress.loopbackIPv4,
+          discoverable: false,
+        );
+        addTearDown(engine.close);
+        final item = (await engine.addMediaFile(await makeTaggedMp3()));
+        MediaItem by(String peerId) => MediaItem(
+          mediaId: item.mediaId,
+          kind: item.kind,
+          name: item.name,
+          mime: item.mime,
+          sizeBytes: item.sizeBytes,
+          sha256: item.sha256,
+          addedBy: peerId,
+        );
+        const peers = [
+          PeerInfo(peerId: 'p_anon', clientName: '', clientKind: 'flutter'),
+          PeerInfo(peerId: 'p_blank', clientName: '   ', clientKind: 'web'),
+          PeerInfo(peerId: 'p_ana', clientName: ' Ana ', clientKind: 'flutter'),
+        ];
+
+        for (final id in ['p_anon', 'p_blank']) {
+          // A neutral word by default; the app's own copy when it passes one;
+          // nothing at all on request — but never the id.
+          expect(engine.addedByLabel(by(id), peers), 'Guest');
+          expect(
+            engine.addedByLabel(by(id), peers, unnamedLabel: 'Someone'),
+            'Someone',
+          );
+          expect(
+            engine.addedByLabel(by(id), peers, unnamedLabel: null),
+            isNull,
+          );
+        }
+        expect(engine.addedByLabel(by('p_ana'), peers), 'Ana');
+        // Someone who already left has no byline (unchanged).
+        expect(engine.addedByLabel(by('p_gone'), peers), isNull);
+      },
+    );
   });
 
   group('LAN-only binding (§9)', () {
-    test('bindAddressFor picks an address every guest can reach', () {
-      // No LAN: a room of one on loopback, never 0.0.0.0.
-      expect(
-        JamHostEngine.bindAddressFor(const []),
-        InternetAddress.loopbackIPv4,
+    test('a room binds every interface whatever the scan found: no LAN, '
+        'one, several, or an interface list that never came back', () async {
+      mockAudioChannel();
+      addTearDown(
+        () => JamHostEngine.networkInterfaceLister =
+            JamHostEngine.defaultNetworkInterfaceLister,
       );
-      // An interface list that never came back is an unknown LAN, not an
-      // absent one: bind everything rather than hide on loopback.
-      expect(
-        JamHostEngine.bindAddressFor(const [], enumerated: false),
-        InternetAddress.anyIPv4,
-      );
-      // One LAN interface still means anyIPv4: a single-address bind drops
-      // loopback, and loopback is the only path a guest on this same machine
-      // has (two simulators, two emulators, the CLI beside the app). §9 is
-      // carried by the server's remote-address filter, not by the bind.
-      final wifi = InternetAddress('192.168.1.7');
-      expect(JamHostEngine.bindAddressFor([wifi]), InternetAddress.anyIPv4);
-      // Wi-Fi + hotspot: one port cannot be bound per-interface anyway.
-      expect(
-        JamHostEngine.bindAddressFor([wifi, InternetAddress('172.20.10.1')]),
-        InternetAddress.anyIPv4,
-      );
+      for (final interfaces in [
+        // Cellular only — e.g. an iPhone whose hotspot has no client yet
+        // (its bridge100 only appears once one joins): binding loopback
+        // here used to leave the room unreachable for good.
+        <NetworkInterface>[
+          FakeNetworkInterface('pdp_ip0', ['10.1.1.1']),
+        ],
+        [
+          FakeNetworkInterface('en0', ['192.168.1.7']),
+        ],
+        [
+          FakeNetworkInterface('en0', ['192.168.1.7']),
+          FakeNetworkInterface('bridge100', ['172.20.10.1']),
+        ],
+      ]) {
+        JamHostEngine.networkInterfaceLister = () async => interfaces;
+        final engine = await JamHostEngine.start(
+          sessionName: 'BindJam',
+          hostName: 'Silky Puffin',
+          discoverable: false,
+        );
+        // One HttpServer binds one address: anyIPv4 reaches every LAN and
+        // the machine itself. §9 is carried by the server's remote-address
+        // filter, not by the bind.
+        expect(engine.boundAddress, InternetAddress.anyIPv4);
+        expect(engine.debugServer.restrictToLanRemotes, isTrue);
+        await engine.close();
+      }
     });
 
     test('lanCandidates never offers a loopback or public address', () async {
@@ -138,8 +198,10 @@ void main() {
       expect(engine.joinUri.queryParameters['token'], engine.token);
       expect(engine.snapshot.status, PlaybackStatus.idle);
 
-      // addMediaFile loads the file through the engine's player to obtain the
-      // §5.5 duration, and registers + broadcasts the playlist item.
+      // addMediaFile probes the §5.5 duration from the file's headers —
+      // never by loading it into the shared engine, which would replace
+      // (and could even play) the current track — and registers +
+      // broadcasts the playlist item.
       final file = await writeTempMedia(makeMediaBytes(4096));
       final item = await engine.addMediaFile(file, name: 'Song A');
       expect(item.durationUs, 42_000_000);
@@ -148,9 +210,16 @@ void main() {
       expect(engine.playlist.map((i) => i.mediaId), [item.mediaId]);
       expect(
         log
-            .where((c) => c.method == 'load')
+            .where((c) => c.method == 'probeDuration')
             .map((c) => (c.arguments as Map)['path']),
         contains(file.path),
+      );
+      expect(
+        log
+            .where((c) => c.method == 'load')
+            .map((c) => (c.arguments as Map)['path']),
+        isNot(contains(file.path)),
+        reason: 'a probe must not load the file into the player',
       );
 
       // A real guest sees the playing broadcast.
@@ -367,9 +436,9 @@ void main() {
     expect(engine.sync.manualOffsetUs, 30_000);
     expect(engine.nudgeUs.value, 30_000);
 
-    // The persisted value is keyed by output route (mocked latency: 0).
+    // The persisted value is keyed by output route; the mock names none.
     final prefs = await SharedPreferences.getInstance();
-    expect(prefs.getInt('nudgeUs.route_0'), 30_000);
+    expect(prefs.getInt('nudgeUs.routeId.unknown'), 30_000);
   });
 
   test(

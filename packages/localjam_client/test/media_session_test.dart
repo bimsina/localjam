@@ -182,6 +182,68 @@ void main() {
     );
   });
 
+  test('a suspended guest shows paused on the card, and its play button '
+      'resumes this device without any §5.6 capability', () async {
+    final audio = mockAudioChannel();
+    final push = mockAudioEvents();
+    final log = mockMediaSession();
+
+    final host = JamHostServer(
+      sessionName: 'CallJam',
+      policy: JamPolicy.listenOnly,
+    );
+    await host.start(address: InternetAddress.loopbackIPv4);
+    addTearDown(host.close);
+    final file = await writeTempMedia(makeMediaBytes(2048));
+    final item = await JamHostServer.describeFile(
+      file,
+      kind: MediaKind.audio,
+      mime: 'audio/mpeg',
+      title: 'Call Track',
+      durationUs: 30_000_000,
+    );
+    host.addMedia(item, file);
+    host.setMedia(item.mediaId);
+    host.play();
+
+    final engine = await JamGuestEngine.join(
+      host.joinUriFor(InternetAddress.loopbackIPv4),
+      mediaCacheDir: await makeTempDir(),
+    );
+    addTearDown(engine.close);
+    await waitFor(
+      () => audio.any((c) => c.method == 'playAt'),
+      reason: 'the guest to play along',
+    );
+
+    // A phone call takes the audio.
+    push({'type': 'interruptionBegan'});
+    await waitFor(
+      () => engine.outputSuspension.value != null,
+      reason: 'suspension',
+    );
+    await waitFor(
+      () => log.any(
+        (e) =>
+            e.method == 'update' &&
+            e.args?['playing'] == false &&
+            e.args?['canPlayPause'] == true,
+      ),
+      reason: 'the card to say paused, with a play button',
+    );
+
+    // Play on the lock screen after the call: a local resume.
+    audio.clear();
+    final revBefore = host.snapshot.rev;
+    await injectCommand('play');
+    await waitFor(
+      () => audio.any((c) => c.method == 'playAt'),
+      reason: 're-anchor on resume',
+    );
+    expect(engine.outputSuspension.value, isNull);
+    expect(host.snapshot.rev, revBefore, reason: 'nothing sent to the room');
+  });
+
   test('an artless track gets the app-supplied placeholder cover, decoded '
       'once', () async {
     // Most files people add to a jam carry no embedded art, and an empty
@@ -220,7 +282,8 @@ void main() {
     expect(
       last['artworkId'],
       JamMediaSessionController.placeholderArtworkId,
-      reason: 'a stable key, so the platform decodes one bitmap for all of '
+      reason:
+          'a stable key, so the platform decodes one bitmap for all of '
           'them',
     );
 
@@ -247,9 +310,7 @@ void main() {
     engine.setMedia(tagged.mediaId);
     await waitFor(
       () => log.any(
-        (e) =>
-            e.method == 'update' &&
-            e.args?['artworkId'] == tagged.artworkId,
+        (e) => e.method == 'update' && e.args?['artworkId'] == tagged.artworkId,
       ),
       reason: 'the embedded cover to take over',
     );
@@ -260,31 +321,33 @@ void main() {
     );
   });
 
-  test('no placeholder configured leaves an artless card exactly as it was',
-      () async {
-    mockAudioChannel();
-    final log = mockMediaSession();
-    JamMediaSessionController.resetPlaceholderForTesting();
-    addTearDown(JamMediaSessionController.resetPlaceholderForTesting);
+  test(
+    'no placeholder configured leaves an artless card exactly as it was',
+    () async {
+      mockAudioChannel();
+      final log = mockMediaSession();
+      JamMediaSessionController.resetPlaceholderForTesting();
+      addTearDown(JamMediaSessionController.resetPlaceholderForTesting);
 
-    final engine = await JamHostEngine.start(
-      sessionName: 'BareJam',
-      address: InternetAddress.loopbackIPv4,
-    );
-    addTearDown(engine.close);
-    final item = await engine.addMediaFile(
-      await writeTempMedia(makeMediaBytes(4096)),
-      name: 'A.mp3',
-    );
-    engine.setMedia(item.mediaId);
-    await waitFor(
-      () => log.any((e) => e.method == 'update' && e.args?['title'] == 'A'),
-      reason: 'a card push',
-    );
-    final last = log.lastWhere((e) => e.method == 'update').args!;
-    expect(last['artworkBytes'], isNull);
-    expect(last['artworkId'], isNull);
-  });
+      final engine = await JamHostEngine.start(
+        sessionName: 'BareJam',
+        address: InternetAddress.loopbackIPv4,
+      );
+      addTearDown(engine.close);
+      final item = await engine.addMediaFile(
+        await writeTempMedia(makeMediaBytes(4096)),
+        name: 'A.mp3',
+      );
+      engine.setMedia(item.mediaId);
+      await waitFor(
+        () => log.any((e) => e.method == 'update' && e.args?['title'] == 'A'),
+        reason: 'a card push',
+      );
+      final last = log.lastWhere((e) => e.method == 'update').args!;
+      expect(last['artworkBytes'], isNull);
+      expect(last['artworkId'], isNull);
+    },
+  );
 
   test('joinUri is kept for rejoin flows', () async {
     mockAudioChannel();

@@ -366,8 +366,7 @@ void main() {
     expect(other.outcome, JamAddOutcome.added);
   });
 
-  test('the host reports the same outcome for its own duplicate add',
-      () async {
+  test('the host reports the same outcome for its own duplicate add', () async {
     mockAudioChannel();
     final engine = await JamHostEngine.start(
       sessionName: 'DupeJam',
@@ -380,5 +379,4 @@ void main() {
     expect(again.outcome, JamAddOutcome.alreadyQueued);
     expect(engine.playlist, hasLength(1));
   });
-
 }

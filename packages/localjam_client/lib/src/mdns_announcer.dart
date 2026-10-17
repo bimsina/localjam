@@ -144,9 +144,7 @@ class MdnsAnnouncer {
   Timer? _announceTimer;
   bool _stopped = false;
 
-  late final MdnsAnnounceThrottle _throttle = MdnsAnnounceThrottle(
-    send: _send,
-  );
+  late final MdnsAnnounceThrottle _throttle = MdnsAnnounceThrottle(send: _send);
 
   /// Binds the mDNS socket and starts announcing.
   ///

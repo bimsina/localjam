@@ -148,6 +148,48 @@ void main() {
       expect(rec.replayableTracks, hasLength(1));
     });
 
+    test('a track from a guest who shared no name is recorded as "Guest", '
+        'not its peer id', () async {
+      // The recorder snapshots JamEngine.addedByLabel, which fell back to
+      // the peer id — so the record said "added by p_2" for good.
+      mockAudioChannel();
+      final store = JamHistoryStore(await makeTempDir());
+      JamEngine.historyStoreProvider = () async => store;
+
+      final engine = await JamHostEngine.start(
+        sessionName: 'NamelessJam',
+        hostName: 'Silky Puffin',
+        address: InternetAddress.loopbackIPv4,
+        discoverable: false,
+      );
+      final guest = await JamGuestClient.connect(
+        engine.joinUriFor(InternetAddress.loopbackIPv4),
+        clientName: '',
+      );
+      await waitFor(() => engine.peers.isNotEmpty, reason: 'guest to join');
+      final file = await writeTempMedia(makeMediaBytes(2048));
+      final item = await JamHostServer.describeFile(
+        file,
+        kind: MediaKind.audio,
+        mime: 'audio/mpeg',
+        durationUs: 60_000_000,
+        addedBy: guest.selfPeerId,
+      );
+      engine.debugServer.addMedia(item, file);
+      await waitFor(
+        () => engine.playlist.isNotEmpty,
+        reason: 'the playlist broadcast',
+      );
+      engine.setMedia(item.mediaId);
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      await guest.close();
+      await engine.close();
+
+      final track = (await store.list()).single.tracks.single;
+      expect(track.addedByName, 'Guest');
+      expect(track.addedByName, isNot(guest.selfPeerId));
+    });
+
     test('a guest session records the cache path and wasHost=false', () async {
       mockAudioChannel();
       final store = JamHistoryStore(await makeTempDir());

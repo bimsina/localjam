@@ -1,11 +1,10 @@
 /// Persistence for the manual sync nudge (PROTOCOL.md §7: "persisted per
 /// output device").
 ///
-/// The pinned `localjam_audio` API does not (yet) expose a route identifier,
-/// so the platform-reported output latency is used as a stable-per-route
-/// proxy key: built-in speakers, wired, and Bluetooth routes report distinct
-/// constant latencies. TODO: switch to a real route id once the plugin
-/// exposes one.
+/// Keyed on the native output-route id ([LocaljamAudio.currentRouteId] /
+/// [LocaljamAudioEvent.routeId]): the same headphones get the same id across
+/// sessions, a different device a different one. A route the platform
+/// cannot name (null id) shares one "unknown route" slot.
 library;
 
 import 'package:localjam_audio/localjam_audio.dart';
@@ -14,25 +13,33 @@ import 'package:shared_preferences/shared_preferences.dart';
 class LatencyPrefs {
   LatencyPrefs._();
 
-  static Future<String> _routeKey(LocaljamAudio player) async {
-    int reported;
+  /// The prefs key for [routeId].
+  static String keyFor(String? routeId) => routeId == null || routeId.isEmpty
+      ? 'nudgeUs.routeId.unknown'
+      : 'nudgeUs.routeId.$routeId';
+
+  /// The player's current output route id, or null when the platform cannot
+  /// name it (or has no native side at all).
+  static Future<String?> currentRouteId(LocaljamAudio player) async {
     try {
-      reported = await player.outputLatencyUs();
+      return await player.currentRouteId();
     } catch (_) {
-      reported = 0; // Native side not available yet; use the default route.
+      return null;
     }
-    return 'nudgeUs.route_$reported';
   }
 
-  /// Loads the persisted nudge (µs) for the player's current output route.
-  static Future<int> load(LocaljamAudio player) async {
+  /// Loads the persisted nudge (µs) for [routeId] — the route the caller
+  /// means, which it has to know: one that changed between asking and
+  /// loading would hand one device's nudge to another.
+  static Future<int> load(String? routeId) async {
     final prefs = await SharedPreferences.getInstance();
-    return prefs.getInt(await _routeKey(player)) ?? 0;
+    return prefs.getInt(keyFor(routeId)) ?? 0;
   }
 
-  /// Persists the nudge (µs) for the player's current output route.
-  static Future<void> save(LocaljamAudio player, int offsetUs) async {
+  /// Persists the nudge (µs) for [routeId]: the route it was set on, not
+  /// whatever the output is by the time the write happens.
+  static Future<void> save(String? routeId, int offsetUs) async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setInt(await _routeKey(player), offsetUs);
+    await prefs.setInt(keyFor(routeId), offsetUs);
   }
 }

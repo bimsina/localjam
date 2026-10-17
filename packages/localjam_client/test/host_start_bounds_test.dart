@@ -63,14 +63,7 @@ void main() {
       expect(engine.port, greaterThan(0));
       // A LAN we could not enumerate is not a LAN we do not have: binding
       // loopback would have made the room unjoinable.
-      expect(
-        JamHostEngine.bindAddressFor(const [], enumerated: false),
-        InternetAddress.anyIPv4,
-      );
-      expect(
-        JamHostEngine.bindAddressFor(const []),
-        InternetAddress.loopbackIPv4,
-      );
+      expect(engine.boundAddress, InternetAddress.anyIPv4);
 
       // The room still works, on loopback, with the filter on.
       final guest = await JamGuestClient.connect(

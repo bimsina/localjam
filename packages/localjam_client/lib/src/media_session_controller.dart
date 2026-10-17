@@ -98,6 +98,9 @@ class JamMediaSessionController {
       _engine.states.listen((_) => _push()),
       _engine.playlistUpdates.listen((_) => _push()),
       _engine.permissionUpdates.listen((_) => _push()),
+      // A suspended device is silent while the room plays: the card says
+      // paused, and its play button is how the lock screen resumes it.
+      _engine.outputSuspensionChanges.listen((_) => _push()),
     ]);
     _push();
   }
@@ -124,6 +127,15 @@ class JamMediaSessionController {
   // --- OS → engine -----------------------------------------------------------
 
   void _onCommand(JamRemoteCommandEvent event) {
+    // Play on a card whose device is suspended (after a call, unplugged
+    // headphones) is a LOCAL resume: it re-anchors this device to the room
+    // and needs no §5.6 capability — it changes nothing for anyone else.
+    if (event.command == JamRemoteCommand.play &&
+        _engine.outputSuspension.value != null &&
+        !_engine.can(JamCapability.controlPlayback)) {
+      unawaited(_engine.resumeLocalOutput().catchError((Object _) {}));
+      return;
+    }
     // §5.6: the media card's buttons are capability-gated on push, but the
     // OS can race a permissions change — re-check and drop silently (the
     // host would refuse anyway; a lock screen has nowhere to show a denial).
@@ -162,6 +174,7 @@ class JamMediaSessionController {
     _ensureArtwork(item);
     final snapshot = _engine.snapshot;
     final canControl = _engine.can(JamCapability.controlPlayback);
+    final suspended = _engine.outputSuspension.value != null;
     unawaited(
       JamMediaSession.update(
         JamNowPlaying(
@@ -178,8 +191,10 @@ class JamMediaSessionController {
           durationUs: item.durationUs,
           positionUs: _engine.positionUsNow() ?? snapshot.positionUs,
           rate: snapshot.rate,
-          playing: snapshot.status == PlaybackStatus.playing,
-          canPlayPause: canControl,
+          // This device's output, not the room's: a suspended device shows
+          // paused even though the room plays on.
+          playing: snapshot.status == PlaybackStatus.playing && !suspended,
+          canPlayPause: canControl || suspended,
           canNext: canControl,
           canPrevious: canControl,
           canSeek: canControl,

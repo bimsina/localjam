@@ -108,11 +108,9 @@ void main() {
         JamRoomBrowser.defaultStaleAfter ~/ 2 + const Duration(seconds: 1),
       );
       h.browser.sweep();
-      expect(
-        h.browser.rooms.value.map((r) => r.sessionName),
-        ['RoadTrip'],
-        reason: 'the refreshed room survives, the silent one is dropped',
-      );
+      expect(h.browser.rooms.value.map((r) => r.sessionName), [
+        'RoadTrip',
+      ], reason: 'the refreshed room survives, the silent one is dropped');
     });
 
     test('a PTR goodbye retires a room immediately', () async {
@@ -282,8 +280,10 @@ void main() {
       ]);
       final answers = parseMdnsPtrAnswers(packet);
       expect(answers.map((a) => a.instanceName), ['RoadTrip', 'Kitchen']);
-      expect(answers.every((a) => a.serviceType == '_localjam._tcp.local'),
-          isTrue);
+      expect(
+        answers.every((a) => a.serviceType == '_localjam._tcp.local'),
+        isTrue,
+      );
       expect(answers.first.isGoodbye, isFalse);
       expect(answers.last.isGoodbye, isTrue);
     });
@@ -291,8 +291,10 @@ void main() {
     test('a question, a truncated record and junk all parse to nothing', () {
       expect(parseMdnsPtrAnswers(buildPtrQuery(jamServiceType)), isEmpty);
       final packet = _ptrResponse([(instance: 'RoadTrip', ttl: 120)]);
-      expect(parseMdnsPtrAnswers(packet.sublist(0, packet.length - 4)),
-          isEmpty);
+      expect(
+        parseMdnsPtrAnswers(packet.sublist(0, packet.length - 4)),
+        isEmpty,
+      );
       expect(parseMdnsPtrAnswers(Uint8List.fromList([1, 2, 3])), isEmpty);
     });
   });

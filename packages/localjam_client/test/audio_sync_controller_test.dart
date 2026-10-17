@@ -6,132 +6,13 @@
 /// run under fake_async.
 library;
 
-import 'dart:async';
-
 import 'package:fake_async/fake_async.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:localjam_audio/localjam_audio.dart';
 import 'package:localjam_client/src/audio_sync_controller.dart';
 import 'package:localjam_net/localjam_net.dart';
 
-/// Records every call and answers from scripted values. Extends the pinned
-/// [LocaljamAudio] API so the controller stays coupled only to that class.
-class FakeLocaljamAudio extends LocaljamAudio {
-  FakeLocaljamAudio();
-
-  /// Test-scripted player events; [events] serves this instead of the real
-  /// event channel.
-  final StreamController<LocaljamAudioEvent> eventsController =
-      StreamController<LocaljamAudioEvent>.broadcast(sync: true);
-
-  @override
-  Stream<LocaljamAudioEvent> get events => eventsController.stream;
-
-  final List<String> calls = [];
-  final List<({int nativeTimeUs, int positionUs, double rate})> playAtCalls =
-      [];
-  final List<double> setRateCalls = [];
-  final List<String> loadedPaths = [];
-
-  int calibrationOffsetUs = 0;
-  int calibrationRttUs = 100;
-  int scriptedDurationUs = 180000000; // 3 min
-  int scriptedOutputLatencyUs = 0;
-
-  /// Position served by [positionUs]; null = "nothing playing".
-  int? scriptedPositionUs;
-
-  int calibrateCount = 0;
-
-  @override
-  Future<NativeClockCalibration> calibrate(
-    int Function() dartNowUs, {
-    int samples = 10,
-  }) async {
-    calls.add('calibrate');
-    calibrateCount++;
-    return NativeClockCalibration(
-      offsetUs: calibrationOffsetUs,
-      rttUs: calibrationRttUs,
-    );
-  }
-
-  @override
-  Future<int> load(String filePath) async {
-    calls.add('load');
-    loadedPaths.add(filePath);
-    return scriptedDurationUs;
-  }
-
-  @override
-  Future<void> playAt({
-    required int nativeTimeUs,
-    required int positionUs,
-    double rate = 1.0,
-  }) async {
-    calls.add('playAt');
-    playAtCalls.add((
-      nativeTimeUs: nativeTimeUs,
-      positionUs: positionUs,
-      rate: rate,
-    ));
-  }
-
-  @override
-  Future<void> pause() async => calls.add('pause');
-
-  @override
-  Future<void> stop() async => calls.add('stop');
-
-  @override
-  Future<int?> positionUs() async {
-    calls.add('positionUs');
-    return scriptedPositionUs;
-  }
-
-  @override
-  Future<void> setRate(double rate) async {
-    calls.add('setRate');
-    setRateCalls.add(rate);
-  }
-
-  @override
-  Future<int> outputLatencyUs() async {
-    calls.add('outputLatencyUs');
-    return scriptedOutputLatencyUs;
-  }
-
-  @override
-  Future<void> dispose() async => calls.add('dispose');
-}
-
-/// Scripted clock pair: `sessionNow = localNow + sessionOffsetUs`.
-class ScriptedClock {
-  int localUs = 0;
-  int sessionOffsetUs = 0;
-
-  int localNowUs() => localUs;
-  int sessionNowUs() => localUs + sessionOffsetUs;
-  int sessionToLocalUs(int sessionUs) => sessionUs - sessionOffsetUs;
-}
-
-PlaybackSnapshot playingSnapshot({
-  int rev = 1,
-  String mediaId = 'm_1',
-  required int anchorHostTimeUs,
-  required int anchorPositionUs,
-  double rate = 1.0,
-}) => PlaybackSnapshot(
-  rev: rev,
-  status: PlaybackStatus.playing,
-  mediaId: mediaId,
-  anchor: PlaybackAnchor(
-    hostTimeUs: anchorHostTimeUs,
-    positionUs: anchorPositionUs,
-  ),
-  positionUs: anchorPositionUs,
-  rate: rate,
-);
+import 'sync_test_fakes.dart';
 
 void main() {
   late FakeLocaljamAudio player;
