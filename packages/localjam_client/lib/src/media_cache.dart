@@ -29,10 +29,39 @@ class JamMediaCache {
   /// keep the directory above the cap.
   final int maxBytes;
 
-  /// The cache path for [item]: `<sha256>.<ext>`, extension derived from the
-  /// item's MIME type.
-  File fileFor(MediaItem item) =>
-      File('${dir.path}/${item.sha256}.${extensionForMime(item.mime)}');
+  /// A sha256 as the protocol defines it (§6.1): 64 lowercase hex digits.
+  static final RegExp _sha256 = RegExp(r'^[0-9a-f]{64}$');
+
+  /// An artworkId as the host derives it (§6.5): `a_` + the first 12 hex
+  /// digits of the artwork's sha256.
+  static final RegExp _artworkId = RegExp(r'^a_[0-9a-f]{12}$');
+
+  /// The cache path for [item] (`<sha256>.<ext>`, extension from the item's
+  /// MIME type), or null when [MediaItem.sha256] is not a sha256.
+  ///
+  /// Ids arrive over the wire and end up naming files, so they are attacker
+  /// input as far as a guest is concerned: `sha256: "../../../.bashrc"`
+  /// would otherwise let a hostile host on the LAN choose where the guest
+  /// writes. Sanitising such a string into *some* filename answers the
+  /// traversal but keeps the premise — that a host gets to invent cache
+  /// keys. These ids have exactly one legal shape each, so anything else is
+  /// simply not a cache entry: it misses, and no path is ever built from it.
+  File? fileFor(MediaItem item) => _sha256.hasMatch(item.sha256)
+      ? File('${dir.path}/${item.sha256}.${extensionForMime(item.mime)}')
+      : null;
+
+  /// The cache path for content-addressed artwork (§6.5), or null when
+  /// [artworkId] is not one — see [fileFor].
+  File? artworkFileFor(String artworkId) => _artworkId.hasMatch(artworkId)
+      ? File('${dir.path}/$artworkId')
+      : null;
+
+  /// Whether [sha256] is a well-formed digest, and so cacheable.
+  static bool isCacheableSha256(String sha256) => _sha256.hasMatch(sha256);
+
+  /// Whether [artworkId] is a well-formed §6.5 artwork id.
+  static bool isCacheableArtworkId(String artworkId) =>
+      _artworkId.hasMatch(artworkId);
 
   /// Returns the cached file for [item] if it exists with the expected size
   /// (touching its mtime, since a lookup is a use), or null on a miss. A
@@ -40,6 +69,7 @@ class JamMediaCache {
   /// miss; the caller's fetch overwrites it.
   Future<File?> lookup(MediaItem item) async {
     final file = fileFor(item);
+    if (file == null) return null; // Not a digest: not a cache entry.
     try {
       if (await file.length() != item.sizeBytes) return null;
     } catch (_) {
@@ -60,11 +90,13 @@ class JamMediaCache {
 
   /// Copies [source] into the cache under [item]'s sha-keyed name (via a
   /// temp file + rename, so a crash never leaves a full-sized partial), and
-  /// returns the cached file. A same-sized existing entry is reused
-  /// untouched-but-touched. Used to seed an uploader's own file so it never
-  /// re-downloads its own song.
-  Future<File> seed(File source, MediaItem item) async {
+  /// returns the cached file — null, caching nothing, when the item's sha256
+  /// is malformed. A same-sized existing entry is reused untouched-but-
+  /// touched. Used to seed an uploader's own file so it never re-downloads
+  /// its own song.
+  Future<File?> seed(File source, MediaItem item) async {
     final dest = fileFor(item);
+    if (dest == null) return null;
     try {
       if (await dest.length() == item.sizeBytes) {
         await touch(dest);

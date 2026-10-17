@@ -15,11 +15,11 @@ void main() {
     log.clear();
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(channel, (call) async {
-      log.add(call);
-      final response = responses[call.method];
-      if (response is Object? Function()) return response();
-      return response;
-    });
+          log.add(call);
+          final response = responses[call.method];
+          if (response is Object? Function()) return response();
+          return response;
+        });
   }
 
   tearDown(() {
@@ -52,11 +52,14 @@ void main() {
       rate: 1.005,
     );
     expect(log, [
-      isMethodCall('playAt', arguments: {
-        'nativeTimeUs': 9876543210,
-        'positionUs': 45000000,
-        'rate': 1.005,
-      }),
+      isMethodCall(
+        'playAt',
+        arguments: {
+          'nativeTimeUs': 9876543210,
+          'positionUs': 45000000,
+          'rate': 1.005,
+        },
+      ),
     ]);
   });
 
@@ -65,11 +68,10 @@ void main() {
     final audio = LocaljamAudio();
     await audio.playAt(nativeTimeUs: 1, positionUs: 0);
     expect(log, [
-      isMethodCall('playAt', arguments: {
-        'nativeTimeUs': 1,
-        'positionUs': 0,
-        'rate': 1.0,
-      }),
+      isMethodCall(
+        'playAt',
+        arguments: {'nativeTimeUs': 1, 'positionUs': 0, 'rate': 1.0},
+      ),
     ]);
   });
 
@@ -122,16 +124,16 @@ void main() {
     void mockEvents(List<Object?> events) {
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
           .setMockStreamHandler(
-        eventChannel,
-        MockStreamHandler.inline(
-          onListen: (arguments, sink) {
-            for (final event in events) {
-              sink.success(event);
-            }
-            sink.endOfStream();
-          },
-        ),
-      );
+            eventChannel,
+            MockStreamHandler.inline(
+              onListen: (arguments, sink) {
+                for (final event in events) {
+                  sink.success(event);
+                }
+                sink.endOfStream();
+              },
+            ),
+          );
     }
 
     tearDown(() {
@@ -158,17 +160,19 @@ void main() {
       ]);
     });
 
-    test('passes outputLatencyUs through and leaves it null when absent',
-        () async {
-      mockEvents(const [
-        {'type': 'routeChanged', 'outputLatencyUs': 250000},
-        {'type': 'routeChanged'},
-        {'type': 'interruptionEnded', 'outputLatencyUs': null},
-      ]);
-      final audio = LocaljamAudio();
-      final events = await audio.events.toList();
-      expect(events.map((e) => e.outputLatencyUs), [250000, null, null]);
-    });
+    test(
+      'passes outputLatencyUs through and leaves it null when absent',
+      () async {
+        mockEvents(const [
+          {'type': 'routeChanged', 'outputLatencyUs': 250000},
+          {'type': 'routeChanged'},
+          {'type': 'interruptionEnded', 'outputLatencyUs': null},
+        ]);
+        final audio = LocaljamAudio();
+        final events = await audio.events.toList();
+        expect(events.map((e) => e.outputLatencyUs), [250000, null, null]);
+      },
+    );
 
     test('ignores unknown event types and non-map payloads', () async {
       mockEvents(const [
@@ -210,8 +214,10 @@ void main() {
     mockChannel({'nowUs': () => nativeTimes[nativeIndex++]});
 
     final audio = LocaljamAudio();
-    final calibration =
-        await audio.calibrate(() => dartTimes[dartIndex++], samples: 3);
+    final calibration = await audio.calibrate(
+      () => dartTimes[dartIndex++],
+      samples: 3,
+    );
 
     expect(calibration.rttUs, 40);
     expect(calibration.offsetUs, 597980);

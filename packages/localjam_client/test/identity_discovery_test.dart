@@ -76,17 +76,30 @@ void main() {
 
     test('IPv4 candidates come before IPv6 (zone-id URIs burn timeouts)', () {
       final room = parse(
-        hosts: ['fe80::145a:142%en0', '192.168.1.7', '2001:db8::5'],
+        hosts: ['fe80::145a:142%en0', '192.168.1.7', 'fd00::5'],
       )!;
       expect(
         room.joinUri.queryParameters['host'],
-        '192.168.1.7,fe80::145a:142%en0,2001:db8::5',
+        '192.168.1.7,fe80::145a:142%en0,fd00::5',
       );
     });
 
-    test('falls back to the mDNS hostname when no addresses resolved', () {
-      final room = parse(hosts: const [], hostname: 'phone.local')!;
-      expect(room.joinUri.queryParameters['host'], 'phone.local');
+    test('a hostname is never a candidate, however it resolved', () {
+      // mDNS is unauthenticated — anyone on the segment can answer — and a
+      // name is a promise about what some resolver returns later, which the
+      // join path cannot check. Only resolved numeric addresses are offered,
+      // so a record with none is not a room.
+      expect(parse(hosts: const [], hostname: 'phone.local'), isNull);
+      expect(parse(hosts: const ['phone.local']), isNull);
+    });
+
+    test('an off-LAN address advertised over mDNS is dropped', () {
+      // The half of the record an attacker controls: point the A record at a
+      // public host and every browsing app becomes its client.
+      expect(parse(hosts: const ['8.8.8.8']), isNull);
+      expect(parse(hosts: const ['2606:4700::1111']), isNull);
+      final room = parse(hosts: const ['8.8.8.8', '192.168.1.7'])!;
+      expect(room.joinUri.queryParameters['host'], '192.168.1.7');
     });
 
     test('records without a token or any address are unjoinable', () {

@@ -1,9 +1,12 @@
 # LocalJam Protocol — v0.2 (draft)
 
 > v0.1 → v0.2 is purely additive: optional tag metadata and attribution on
-> playlist items (§6.1), the artwork endpoint (§6.5), and roles/permissions,
-> queue operations, and moderation (§5.6). v0.1 clients interoperate
-> unchanged (unknown JSON fields and message types are ignored per §2).
+> playlist items (§6.1), the artwork endpoint (§6.5), roles/permissions,
+> queue operations, and moderation (§5.6), the `session_ended` goodbye
+> (§3.4), the stable `hello.clientId` (§3.1/§3.3), and `welcome.host`
+> (§3.1). v0.1 clients interoperate unchanged (unknown JSON fields and
+> message types are ignored per §2): they simply never send the new hello
+> field, and fall back to the §3.3 silence timeout instead of the goodbye.
 
 Synchronized local-network media playback. One **host** owns the files and the
 authoritative session state; N **guests** join over LAN, fetch media, and play
@@ -100,14 +103,29 @@ Message direction key below: **G→H** guest to host, **H→G** host to guest,
 ```
 G→H  hello     { token, clientName, clientKind: "flutter"|"web"|...,
                  caps: ["audio","video"], encodings: ["json"],    // encodings reserved for future binary negotiation
-                 resumePeerId? }                                   // §3.3 reconnect: resume this peer slot
-H→G  welcome   { sessionId, sessionName, you: {peerId}, peers: [...], snapshot: <state §5.1>, playlist: [...] }
+                 resumePeerId?,                                    // §3.3 reconnect: resume this peer slot
+                 clientId? }                                       // v0.2: stable per-device id, §3.3
+H→G  welcome   { sessionId, sessionName, you: {peerId}, peers: [...], snapshot: <state §5.1>, playlist: [...],
+                 host?: {peerId: "host", clientName, clientKind} }  // v0.2
      — or —
 H→G  reject    { reason: "bad_token" | "full" | "version" }
 ```
 
 `welcome.snapshot` makes late join trivial: it contains the full current
 playback state, and the guest converges on it like any other state update.
+
+`welcome.host` (v0.2, optional) is the host as a *person*: the reserved
+peer id `"host"` plus the display identity the host device carries
+("Silky Puffin"), same shape as any `peers` entry. It is deliberately NOT a
+member of `peers` — the host is not a joined peer (§5.6), and a client that
+counts the room must not double-count it. Guests SHOULD use this name
+wherever they would otherwise print the role word: the roster, and the
+`addedBy` byline for host-contributed tracks (§6.1). Absent (or empty) means
+the host shares no identity, and "Host" is the fallback.
+
+`hello.clientId` (v0.2, optional) is a stable, opaque per-device id —
+persisted by the client, never displayed, unrelated to `clientName` (which
+several devices may share, and which the user may change). See §3.3.
 
 ### 3.2 Presence
 
@@ -119,12 +137,79 @@ H→*  peer_left   { peerId }
 ### 3.3 Liveness
 
 WebSocket ping/pong at transport level; a peer is dropped after 10 s silence.
-Guests reconnect by sending `hello` with the same `token` plus
-`resumePeerId: <their old peerId>`; the host keeps a 30 s grace slot per
-dropped peer. A valid resume reclaims the old peerId (re-announced via
-`peer_joined`); an expired or unknown `resumePeerId` silently falls back to a
-fresh join. Readiness reports (§6.3) are forgotten on drop — guests re-send
-`media_status` after resuming.
+Guests reconnect by sending `hello` with the same `token`, the same
+`clientId`, plus `resumePeerId: <their old peerId>`; the host keeps a 30 s
+grace slot per dropped peer. A valid resume reclaims the old peerId
+(re-announced via `peer_joined`); an expired, unknown or unproven
+`resumePeerId` silently falls back to a fresh join. Readiness reports (§6.3)
+are forgotten on drop — guests re-send `media_status` after resuming.
+
+**A resume MUST be proved with `clientId`.** The grace slot records the
+`clientId` the dropped connection said hello with, and the host MUST honour
+`resumePeerId` only when the new `hello` carries a non-empty `clientId` equal
+to it. Everything else about a resume is public or shared: peerIds travel the
+room in `welcome.peers`, `peer_joined` and `peer_left`, and the token is what
+every guest in the room already holds. A slot keyed on those alone is
+claimable by anyone who watched a co-host drop — and since roles and
+overrides (§5.6) survive the grace window by design, claiming the slot means
+inheriting the role. The `clientId` is the only part of a resume the claimant
+has not been told.
+
+A `hello` whose resume is not proved is not an error: it is an ordinary fresh
+join. The host issues a **new** peerId, and the joiner gets the room's
+default role with no overrides — nothing carries over from the slot it
+named, which stays where it was until its owner returns or the window
+expires. A client that sends no `clientId` (a v0.1 client) therefore can
+never resume; it reconnects as a new peer, which is what v0.1 always did.
+This is a tightening of v0.2's rule and is compatible in the direction that
+matters: no client loses a capability it could exercise honestly, because an
+honest resume was always a device coming back to its own slot.
+
+**One device is one peer** (v0.2). A silence timeout is the only way to
+notice a peer that died without closing its socket — an app force-quit, a
+process killed while backgrounded, a phone that left the network — and for
+those 10 s the corpse is still in the roster. A device that comes back
+inside that window would otherwise join beside a ghost of itself: everyone
+sees a phantom, and the rejoining guest is handed one in `welcome.peers`.
+
+So a host that receives a `hello` carrying a `clientId` already held by a
+connected peer MUST drop that older connection first (a plain `peer_left`,
+no grace slot kept, its roles and overrides forgotten per §5.6) and only
+then admit the new one, which joins as an ordinary fresh peer. The new
+socket is the live one by definition — the device is on it. A client that
+sends no `clientId` (v0.1) is never superseded, and two devices with
+different ids both stay however identical their `clientName`s are.
+
+`clientId` is transport bookkeeping, not authentication: like everything
+else in §9's honest-guest model it is client-asserted, and a room where
+guests forge each other's ids is a room with a worse problem.
+
+### 3.4 Session end (v0.2)
+
+```
+H→*  session_ended { reason: "host_ended" }
+```
+
+Broadcast by the host immediately before it closes every control socket
+(with the WebSocket **normal closure** code, 1000, rather than
+`goingAway`). It means the room is over *on purpose* — the host tapped "End
+jam" — and it is terminal: a guest that receives one MUST NOT reconnect,
+and MUST NOT wait out any host-gone timeout, whatever the `reason` says.
+An unrecognized reason (from a later version) is still terminal; treat it
+as an end you do not have copy for, never as a message to ignore.
+
+Silence keeps its old meaning, which is the point of announcing anything at
+all: a host that crashes, runs out of battery, or walks out of range sends
+nothing, and guests fall back to reconnecting until their own host-gone
+timeout expires (§10: host death ends the room). Without a goodbye, every
+deliberate exit is indistinguishable from that — which is why a host that
+ended the jam on purpose used to leave the room staring at "Reconnecting…"
+for a minute and a half.
+
+Guests treat an announced end exactly as they treat host-gone once
+detected: the transport stops, and whatever is already playing from the
+local cache is left alone — the protocol has no opinion on whether the
+music fades out, and the app decides.
 
 ---
 
@@ -269,7 +354,8 @@ H→*  permissions {
 ```
 
 **Roles.** `host` (the serving device; the reserved peer id `"host"` is used
-for attribution — the host is not a joined peer) → `cohost` (promoted peers)
+for attribution — the host is not a joined peer, and is named by
+`welcome.host`, §3.1) → `cohost` (promoted peers)
 → `guest` (everyone else).
 
 **Capabilities.** `add_tracks` (upload, §6.4), `control_playback`
@@ -319,6 +405,10 @@ H→*  playlist { rev, items: [ {mediaId, kind: "audio"|"video"|"image",
 
 `addedBy` attributes the contribution (§5.6): a peerId, the reserved
 `"host"`, or absent for legacy items. Ordering is queue order (§5.6).
+Rendering `"host"` as the literal word "Host" names nobody — every room has
+exactly one — so clients SHOULD resolve it through `welcome.host` (§3.1)
+and print the host's display name, falling back to the role word only when
+the host shared none.
 
 `title`/`artist`/`album` are tag metadata, `artworkId` references embedded
 cover art servable via §6.5. All four are optional and **host-extracted**:
@@ -398,9 +488,26 @@ Responses:
 - `401 Unauthorized` — bad or missing bearer token (§9).
 - `403 Forbidden` — the uploader (per `X-LocalJam-Peer-Id`, judged as a
   plain guest when absent) lacks `add_tracks` (§5.6).
+- `411 Length Required` — no `Content-Length`. A body of undeclared length
+  (chunked) cannot be budgeted before it is read, so hosts MAY refuse it
+  outright; every LocalJam client declares a length.
 - `413 Content Too Large` — the body exceeds the host's upload size limit
   (host policy; default 512 MB). The host MAY reject from `Content-Length`
   alone without reading the body.
+- `507 Insufficient Storage` — the upload does not fit the host's
+  whole-session budget (default 2 GB of guest uploads) or its playlist cap
+  (default 500 items). Both are host policy; a guest SHOULD treat a 507 as
+  "this room is full of music", not as an error to retry.
+
+**Budget accounting.** A host that enforces a session budget MUST reserve the
+declared `Content-Length` (and one playlist slot) when the request arrives,
+not when it finishes: uploads overlap, and a check that only counts bytes
+already stored is one every simultaneous upload passes before any of them
+lands. The reservation is reconciled to the bytes actually received on
+success and released on every failure — a 413, a 507, or a client that
+disappears mid-body. Idempotent re-uploads (the `200` above) store nothing
+and so spend nothing. Host-side additions (the host's own library) are not
+remote input and are not budgeted.
 
 ### 6.5 Artwork
 
@@ -463,6 +570,59 @@ Codes: `bad_token`, `version_unsupported`, `session_full`, `media_gone`,
   self-signed cert pinned via the QR is the upgrade path — required before any
   future web guest client (browser secure-context rules), optional until then.
 - Host MUST bind to LAN interfaces only, never 0.0.0.0 on a public interface.
+  Binding one interface is not always possible (a phone on Wi-Fi *and* a
+  hotspot needs one port on several), so hosts SHOULD also filter by remote
+  address on both planes and answer `403` to anything off-LAN. "On-LAN" is
+  loopback, RFC1918 v4, v4 link-local, and their v6 equivalents (`::1`,
+  `fe80::/10`, `fc00::/7`, v4-mapped). An IPv6 **global** unicast remote
+  (`2000::/3`) counts as on-LAN only when it shares a /64 with one of the
+  host's own interface addresses — native-v6 home networks give every device
+  a global address, and the shared prefix is the closest an address alone
+  gets to "same link".
+- **Discovery is not a channel of trust.** mDNS records are unauthenticated:
+  anyone on the segment can answer, including with an address that is not on
+  it. A joiner MUST apply the same on-LAN rule to every `host` candidate it
+  is about to dial, whatever door the join URI came in by — QR, pasted link,
+  deep link, or a nearby-room row — and SHOULD refuse candidates that are
+  names rather than IP literals, since what a name resolves to is not
+  knowable from the link. (`*.local` is the reasonable exception: multicast
+  DNS answers only from the local link, and the resolved addresses can then
+  be checked like any other.)
+- An mDNS responder SHOULD answer only queries that arrive from port 5353,
+  rate-limit its responses to at most one per second (coalescing the rest),
+  and cap a response's size — an unauthenticated packet that costs a few
+  dozen bytes to send must not buy an unbounded multicast to the whole
+  segment.
+
+### 9.1 Host-side limits (v0.2)
+
+§9 is an honest-guest model; "honest" is not the same as "unbounded". A host
+SHOULD bound what one LAN neighbour can spend of its memory, sockets, disk
+and queue, and the defaults below are what the reference host ships. All of
+them are host policy — none is negotiated, and a guest observes them only as
+a reject, a close, or a 4xx/5xx.
+
+| Limit | Default | On breach |
+|---|---|---|
+| Joined peers | 32 | `reject { full }`, socket closed |
+| Half-open (pre-`hello`) sockets | 8 | `503` on the upgrade |
+| One control frame, joined peer | 256 KB | close `1008` |
+| One control frame, before `hello` | 16 KB | close `1008` |
+| Time to send a valid `hello` | 10 s | socket dropped |
+| One upload | 512 MB | `413` |
+| Uploads this session | 2 GB | `507` |
+| Playlist items from guests | 500 | `507` |
+
+Two notes on the frame caps. They are counted in **UTF-8 bytes**, not
+UTF-16 code units — a text frame of three-byte characters is three times its
+`length`. And the cap is not a receive-buffer bound: WebSocket messages are
+reassembled before a host sees them, so what a cap of this shape actually
+bounds is the cost of parsing and acting on a frame, plus how many times a
+sender gets to impose it (once — the socket goes with the frame). The
+pre-`hello` cap is the one that bounds memory usefully, because a `hello` is
+a few hundred bytes and the sockets it applies to have proved nothing yet.
+For the same reason a rejected `hello` (`bad_token`, `full`) frees its
+half-open slot immediately rather than when the close handshake completes.
 
 ---
 
@@ -474,7 +634,9 @@ Codes: `bad_token`, `version_unsupported`, `session_full`, `media_gone`,
   on the same anchor model; images are trivial (`state.mediaId` + display).
 - **Session lifetime**: one host; host death ends the room. No migration.
   "Multiple admins" shipped in v0.2 as co-hosts (§5.6) — still exactly one
-  state writer.
+  state writer. v0.2 distinguishes *ending* the room from *dying*: a
+  deliberate shutdown says so (§3.4 `session_ended`), and only an
+  unannounced death costs guests their host-gone timeout.
 - **Encoding**: JSON v1; binary (CBOR/MessagePack) negotiable later via
   `hello.encodings`. Not a performance requirement — control plane is low-rate.
 

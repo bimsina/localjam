@@ -16,6 +16,41 @@ import 'latency_prefs.dart';
 import 'media_session_controller.dart';
 import 'session_keepalive.dart';
 
+/// What adding a file to the queue actually did.
+enum JamAddOutcome {
+  /// The file was new to this jam and is now in the queue.
+  added,
+
+  /// The exact same bytes were already in the queue, so nothing changed.
+  ///
+  /// Media ids are content-derived, so "add" is idempotent by construction
+  /// (§6.4) — the host answers 200 with the item it already had instead of
+  /// 201 with a new one, and broadcasts no playlist. That is correct, and it
+  /// is also indistinguishable from a silent failure to whoever just picked a
+  /// file: nothing happened, and nothing said why. This is what lets the app
+  /// say "already in the queue".
+  alreadyQueued,
+}
+
+/// The outcome of one queue add, plus the item it resolved to.
+@immutable
+class JamAddResult {
+  const JamAddResult(this.item, this.outcome);
+
+  /// The authoritative item — the newly added one, or the one that was
+  /// already there.
+  final MediaItem item;
+
+  /// What the add did.
+  final JamAddOutcome outcome;
+
+  /// Shorthand for the case the UI has to say something about.
+  bool get alreadyQueued => outcome == JamAddOutcome.alreadyQueued;
+
+  @override
+  String toString() => 'JamAddResult(${item.mediaId}, ${outcome.name})';
+}
+
 /// Common playback surface of a LocalJam engine (host or guest): the shared
 /// [AudioSyncController], the authoritative snapshot/playlist, drift
 /// telemetry, and the persisted manual sync nudge (PROTOCOL.md §7).
@@ -53,8 +88,16 @@ abstract class JamEngine {
   /// The session's human-readable name (§3.1).
   String get sessionName;
 
-  /// The OTHER peers currently in the room (never includes this side).
+  /// The OTHER peers currently in the room (never includes this side, and
+  /// never the host — the host is not a joined peer, §5.6; see [hostPeer]).
   List<PeerInfo> get peers;
+
+  /// The host as a person: the reserved [JamPermissions.hostPeerId] plus its
+  /// display identity ("Silky Puffin"). A host engine describes itself; a
+  /// guest reports what `welcome.host` carried (§3.1), which is null against
+  /// a host that shares no identity. Rosters and bylines should prefer this
+  /// name over the role word "Host".
+  PeerInfo? get hostPeer;
 
   /// Where [item]'s bytes live locally right now, if anywhere: a host's
   /// source path, a guest's cache path once fetched. Null while not local.
@@ -98,13 +141,21 @@ abstract class JamEngine {
   Future<void> transportSeek(int positionUs);
 
   /// A short display label for the peer who added [item], for "added by"
-  /// bylines: "You", "Host", a peer's clientName, or null when unattributed.
+  /// bylines: "You", the host's name (falling back to "Host" when it has no
+  /// identity to share), a peer's clientName, or null when unattributed.
   /// [peers] is the caller's current peer list (engines expose their own).
+  ///
+  /// The host gets a name like everyone else: "added by Silky Puffin", not
+  /// "added by Host". Host is what they DO in the room, not who they are,
+  /// and every room has exactly one — a byline that says it names nobody.
   String? addedByLabel(MediaItem item, List<PeerInfo> peers) {
     final addedBy = item.addedBy;
     if (addedBy == null) return null;
     if (addedBy == selfPeerId) return 'You';
-    if (addedBy == JamPermissions.hostPeerId) return 'Host';
+    if (addedBy == JamPermissions.hostPeerId) {
+      final name = hostPeer?.clientName.trim() ?? '';
+      return name.isEmpty ? 'Host' : name;
+    }
     for (final peer in peers) {
       if (peer.peerId == addedBy) {
         return peer.clientName.isEmpty ? peer.peerId : peer.clientName;
@@ -199,6 +250,13 @@ abstract class JamEngine {
   @visibleForTesting
   bool get lifecycleObserverAttached => _lifecycleObserver != null;
 
+  /// Whether the OS-level keep-alive is actually held ([JamKeepAlive.active],
+  /// which is also listenable). False on platforms that have none, and on an
+  /// Android that refused the foreground service — a host in that state loses
+  /// its server the moment the app is backgrounded, which is worth telling
+  /// the user about.
+  bool get keepAliveActive => JamKeepAlive.active.value;
+
   /// Starts the guards an active session needs to survive app lifecycle
   /// events:
   ///
@@ -228,6 +286,8 @@ abstract class JamEngine {
     }
     if (!_keepAliveHeld) {
       _keepAliveHeld = true;
+      // The OS may refuse (Android 12+ blocks background foreground-service
+      // starts): the session runs on regardless — see [keepAliveActive].
       await JamKeepAlive.acquire();
     }
     // OS media session: lock-screen/notification metadata + transport.

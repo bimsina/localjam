@@ -22,6 +22,7 @@ export 'src/jam_engine.dart';
 export 'src/jam_history.dart';
 export 'src/jam_identity.dart';
 export 'src/latency_prefs.dart';
+export 'src/mdns_announcer.dart';
 export 'src/media_cache.dart';
 export 'src/media_mime.dart';
 export 'src/media_session_controller.dart';

@@ -35,12 +35,19 @@ Future<JamHostServer> startHost({String sessionName = 'TestJam'}) async {
 }
 
 /// A session with test-friendly reconnect timings (fast, jitterless).
+var _deviceSeq = 0;
+
 Future<JamGuestSession> connectSession(
   JamHostServer host, {
   JamBackoff? backoff,
+  String? clientId,
 }) async {
+  // §3.3: resuming a slot means proving the device that held it — so a test
+  // session that expects to reconnect carries a stable clientId, and each
+  // gets its own (two sessions sharing one id would supersede each other).
   final session = await JamGuestSession.connect(
     host.joinUriFor(InternetAddress.loopbackIPv4),
+    clientId: clientId ?? 'test-device-${++_deviceSeq}',
     backoff:
         backoff ??
         JamBackoff(
@@ -177,7 +184,7 @@ void main() {
     final connStates = <JamConnectionState>[];
     session.connectionStates.listen(connStates.add);
 
-    await host.close();
+    await host.close(announce: false);
     await waitFor(
       () => session.connectionState == JamConnectionState.reconnecting,
       reason: 'reconnecting after host death',
@@ -204,7 +211,7 @@ void main() {
     () async {
       final host = await startHost();
       final session = await connectSession(host);
-      await host.close();
+      await host.close(announce: false);
       await waitFor(
         () => session.connectionState == JamConnectionState.reconnecting,
         reason: 'reconnecting after host death',
@@ -236,7 +243,7 @@ void main() {
     expect(event.peerId, session.selfPeerId);
     expect(host.allPeersReady(item.mediaId), isTrue);
 
-    await host.close();
+    await host.close(announce: false);
     await waitFor(
       () => session.connectionState == JamConnectionState.reconnecting,
       reason: 'reconnecting after host death',
@@ -261,7 +268,7 @@ void main() {
       final connStates = <JamConnectionState>[];
       session.connectionStates.listen(connStates.add);
 
-      await host.close();
+      await host.close(announce: false);
       await waitFor(
         () => session.connectionState == JamConnectionState.reconnecting,
         reason: 'reconnecting after host death',

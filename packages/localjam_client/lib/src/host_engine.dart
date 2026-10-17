@@ -9,12 +9,14 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart' show debugPrint, visibleForTesting;
 import 'package:localjam_audio/localjam_audio.dart';
 import 'package:localjam_net/localjam_net.dart';
 
 import 'audio_sync_controller.dart';
 import 'jam_discovery.dart';
 import 'jam_engine.dart';
+import 'jam_identity.dart';
 import 'media_mime.dart';
 
 /// One hosted session: server + registry + local playback.
@@ -37,44 +39,112 @@ class JamHostEngine extends JamEngine {
   /// Starts a [JamHostServer] for [sessionName] and the host's own playback
   /// engine.
   ///
-  /// Binds [address] (default: every IPv4 interface, so guests on any LAN the
-  /// device sits on can reach it) on [port] (default: ephemeral). [endPolicy]
-  /// is applied when the current item reaches its end (§5.5); the engine
-  /// defaults to advancing through the playlist.
+  /// Binds [port] (default: ephemeral) on [address], or — when no address is
+  /// given — on whatever reaches every guest without ever serving the
+  /// internet (§9). The IPv4 interfaces are enumerated and the
+  /// private/link-local ones kept ([JamHostServer.isLanAddress]); a device
+  /// with any LAN at all binds `anyIPv4`, because one [HttpServer] binds one
+  /// address and a room has to be reachable both across the LAN and on the
+  /// machine itself (two simulators, two emulators, the CLI beside the app).
+  /// §9 is then carried by the server's own remote-address filter
+  /// ([JamHostServer.restrictToLanRemotes], on by default), which refuses
+  /// every off-LAN request on both planes. With no LAN interface at all the
+  /// host binds loopback and is a room of one — see [bindAddressFor].
+  ///
+  /// [endPolicy] is applied when the current item reaches its end (§5.5); the
+  /// engine defaults to advancing through the playlist.
+  ///
+  /// [maxPeers], [maxUploadBytes], [uploadBudgetBytes] and
+  /// [maxPlaylistLength] forward the server's room-size and guest-upload
+  /// caps (§6.4) so a host UI can offer a smaller room or a tighter disk
+  /// budget than the defaults.
+  ///
+  /// Advertising, identity, the saved nudge and the OS session guards are all
+  /// best-effort and time-boxed; a room appears even when every one of them
+  /// is unavailable.
   ///
   /// With [discoverable] (the default) the room is advertised over mDNS so
   /// nearby devices list it for one-tap join — which means ANYONE on the
   /// network can join without the QR (the advertisement carries the token,
   /// §1/§9). Pass false for invite-only rooms. Best-effort: platforms
   /// without mDNS just stay QR-only.
+  ///
+  /// [hostName] is how guests see the person hosting — in the room roster and
+  /// in "added by" bylines. It defaults to this device's persistent
+  /// [JamIdentity.displayName] ("Silky Puffin"), the same identity a guest
+  /// announces, so the host is a person in the room rather than the word
+  /// "Host". Pass an empty string to host anonymously.
   static Future<JamHostEngine> start({
     required String sessionName,
+    String? hostName,
     JamEndPolicy endPolicy = JamEndPolicy.advance,
     JamPolicy policy = JamPolicy.jam,
     bool discoverable = true,
     int port = 0,
     InternetAddress? address,
+    int maxPeers = JamHostServer.defaultMaxPeers,
+    int maxUploadBytes = JamHostServer.defaultMaxUploadBytes,
+    int uploadBudgetBytes = JamHostServer.defaultUploadBudgetBytes,
+    int maxPlaylistLength = JamHostServer.defaultMaxPlaylistLength,
   }) async {
+    // Nothing on the way to a room may be unbounded: every step below either
+    // finishes inside its own budget or is abandoned for a working fallback,
+    // so start() returns in well under two seconds on every platform —
+    // including one whose prefs, interface list or mDNS stack has stopped
+    // answering. Only the socket bind is allowed to fail the call: a host
+    // without a server is not a host.
+    final displayName =
+        hostName ??
+        await _bounded<String>(
+          JamIdentity.displayName(),
+          _identityBudget,
+          () => generateJamName(),
+        );
     final server = JamHostServer(
       sessionName: sessionName,
+      hostName: displayName,
+      hostKind: 'flutter',
       endPolicy: endPolicy,
       policy: policy,
+      maxPeers: maxPeers,
+      maxUploadBytes: maxUploadBytes,
+      uploadBudgetBytes: uploadBudgetBytes,
+      maxPlaylistLength: maxPlaylistLength,
     );
+    final scan = await _scanLan();
     try {
       await server.start(
-        address: address ?? InternetAddress.anyIPv4,
+        address:
+            address ??
+            bindAddressFor(scan.addresses, enumerated: scan.enumerated),
         port: port,
       );
-      final joinUri = await _buildCombinedJoinUri(server);
+      final joinUri = _buildCombinedJoinUri(server, scan.addresses);
       final engine = JamHostEngine._(server, joinUri);
-      await engine.restorePersistedNudge();
-      await engine.startSessionGuards();
+      // Neither the saved nudge nor the OS-level guards are worth a room:
+      // both are bounded and both are allowed to fail.
+      await _bounded<void>(engine.restorePersistedNudge(), _guardBudget, () {});
+      await _bounded<void>(engine.startSessionGuards(), _guardBudget, () {});
       if (discoverable) {
-        engine._advertiser = await JamRoomAdvertiser.start(
-          sessionName: sessionName,
-          port: server.port,
-          token: server.token,
+        final advertiser = await _bounded<JamRoomAdvertiser?>(
+          roomAdvertiserStarter(
+            sessionName: sessionName,
+            port: server.port,
+            token: server.token,
+            addresses: scan.addresses,
+            timeout: _advertiseBudget,
+          ),
+          // The outer bound has to cover BOTH responders, or a daemon that
+          // eats its whole slice would take the fallback down with it.
+          JamRoomAdvertiser.totalTimeout,
+          () => null,
         );
+        // The room may already be over by the time mDNS answered.
+        if (engine._closed) {
+          await advertiser?.stop();
+        } else {
+          engine._advertiser = advertiser;
+        }
       }
       // Preload whatever the (idle) snapshot says — a no-op until setMedia.
       unawaited(engine.sync.onSnapshot(server.snapshot));
@@ -85,21 +155,138 @@ class JamHostEngine extends JamEngine {
     }
   }
 
-  /// One `localjam://join?...` URI carrying every non-loopback IPv4 candidate,
-  /// comma-joined (§1: guests try them in order).
-  static Future<Uri> _buildCombinedJoinUri(JamHostServer server) async {
-    final addresses = <InternetAddress>[];
+  /// Time each optional step of [start] is given before the fallback wins.
+  static const Duration _identityBudget = Duration(milliseconds: 400);
+  static const Duration _lanScanBudget = Duration(milliseconds: 400);
+  static const Duration _guardBudget = Duration(milliseconds: 500);
+
+  /// The Bonjour daemon's own slice; [JamRoomAdvertiser.totalTimeout] is the
+  /// whole step, daemon plus built-in-responder fallback.
+  static const Duration _advertiseBudget = JamRoomAdvertiser.defaultTimeout;
+
+  /// [future] with a deadline: on timeout OR on error the [fallback] value is
+  /// used and the room still happens. A timed-out future is abandoned, not
+  /// cancelled — Dart cannot cancel one — so its own error, if it ever
+  /// arrives, is swallowed rather than left to reach the zone.
+  static Future<T> _bounded<T>(
+    Future<T> future,
+    Duration budget,
+    T Function() fallback,
+  ) async {
+    // The abandoned future keeps running — Dart cannot cancel one — so it is
+    // given a listener of its own; without it a late failure would surface as
+    // an unhandled error long after the room opened.
+    unawaited(future.then((_) {}, onError: (Object _) {}));
     try {
-      for (final iface in await NetworkInterface.list(
+      return await future.timeout(budget);
+    } catch (error) {
+      debugPrint('localjam: host start step gave up after $budget ($error)');
+      return fallback();
+    }
+  }
+
+  /// Starts the room advertisement. A seam so tests can make advertising
+  /// hang, fail, or succeed without an mDNS stack.
+  @visibleForTesting
+  static Future<JamRoomAdvertiser?> Function({
+    required String sessionName,
+    required int port,
+    required String token,
+    List<InternetAddress> addresses,
+    Duration timeout,
+  })
+  roomAdvertiserStarter = JamRoomAdvertiser.start;
+
+  /// Enumerates the device's network interfaces. A seam so tests can make
+  /// enumeration slow, huge, or broken.
+  @visibleForTesting
+  static Future<List<NetworkInterface>> Function() networkInterfaceLister =
+      defaultNetworkInterfaceLister;
+
+  /// The real enumeration, and what [networkInterfaceLister] must be put back
+  /// to after a test replaces it.
+  @visibleForTesting
+  static Future<List<NetworkInterface>> defaultNetworkInterfaceLister() =>
+      NetworkInterface.list(
         type: InternetAddressType.IPv4,
         includeLoopback: false,
-      )) {
-        addresses.addAll(iface.addresses);
-      }
-    } catch (_) {
-      // NetworkInterface.list can fail on locked-down systems.
+      );
+
+  /// The LAN scan plus whether it actually finished: a device whose interface
+  /// list is slow or refused is NOT a device without a LAN, and must not be
+  /// demoted to a loopback room of one.
+  static Future<({List<InternetAddress> addresses, bool enumerated})>
+  _scanLan() async {
+    try {
+      final interfaces = await networkInterfaceLister().timeout(_lanScanBudget);
+      return (
+        addresses: [
+          for (final iface in interfaces)
+            for (final address in iface.addresses)
+              if (JamHostServer.isLanAddress(address)) address,
+        ],
+        enumerated: true,
+      );
+    } catch (error) {
+      // NetworkInterface.list can fail on locked-down systems, and can hang
+      // on a device whose network stack is mid-transition.
+      debugPrint(
+        'localjam: interface enumeration failed ($error); '
+        'binding anyIPv4 behind the LAN-remote filter.',
+      );
+      return (addresses: const <InternetAddress>[], enumerated: false);
     }
-    if (addresses.isEmpty) addresses.add(InternetAddress.loopbackIPv4);
+  }
+
+  /// The device's own LAN-facing IPv4 addresses (§9): every non-loopback
+  /// interface address that [JamHostServer.isLanAddress] accepts — private
+  /// RFC1918, link-local, or hotspot-range. A machine with a public IPv4 on
+  /// an interface contributes nothing: a jam is never hosted on the
+  /// internet.
+  ///
+  /// Empty when the device has no LAN at all (airplane mode) or when the
+  /// platform refuses to enumerate interfaces.
+  @visibleForTesting
+  static Future<List<InternetAddress>> lanCandidates() async =>
+      (await _scanLan()).addresses;
+
+  /// The address to bind so every guest can reach the room, and nobody else
+  /// can (§9).
+  ///
+  /// `anyIPv4` whenever the device has any LAN at all. One [HttpServer] binds
+  /// exactly one address, and a room has to be reachable on two kinds of
+  /// path: the LAN, and the machine itself — two iOS simulators or two
+  /// Android emulators on one host, a desktop app beside the CLI, a
+  /// dev-machine pair. Binding the single Wi-Fi address instead drops
+  /// loopback, which is how a co-located guest is reachable at all on an iOS
+  /// Simulator, whose apps do not receive inbound connections on the host's
+  /// LAN address. §9 is not weakened by that: the server refuses every
+  /// off-LAN remote itself ([JamHostServer.restrictToLanRemotes], on by
+  /// default), on both planes, whichever address is bound.
+  ///
+  /// Loopback — a room of one — only when there is no LAN at all, and only
+  /// when the interface list actually came back: [enumerated] false means an
+  /// unknown LAN, not an absent one, so the host binds `anyIPv4` rather than
+  /// shrinking to a room nobody can join.
+  @visibleForTesting
+  static InternetAddress bindAddressFor(
+    List<InternetAddress> lan, {
+    bool enumerated = true,
+  }) => lan.isEmpty && enumerated
+      ? InternetAddress.loopbackIPv4
+      : InternetAddress.anyIPv4;
+
+  /// One `localjam://join?...` URI carrying every candidate a guest may try,
+  /// comma-joined (§1: guests try them in order): the LAN addresses first,
+  /// then loopback, which is the only path that works for a guest running on
+  /// this same machine (two simulators, two emulators, the CLI beside the
+  /// app). Off-machine guests spend nothing on it — a connect to their own
+  /// loopback is refused at once.
+  static Uri _buildCombinedJoinUri(
+    JamHostServer server,
+    List<InternetAddress> lan,
+  ) {
+    final addresses = [...lan, InternetAddress.loopbackIPv4];
     return Uri(
       scheme: 'localjam',
       host: 'join',
@@ -178,9 +365,14 @@ class JamHostEngine extends JamEngine {
   @override
   Stream<List<MediaItem>> get playlistUpdates => _playlists.stream;
 
-  /// Currently joined peers.
+  /// Currently joined peers (never this host — see [hostPeer]).
   @override
   List<PeerInfo> get peers => _server.peers;
+
+  /// This host as a person: the reserved host peer id plus the display name
+  /// [start] was given, which is what every guest sees in `welcome.host`.
+  @override
+  PeerInfo get hostPeer => _server.hostPeer;
 
   @override
   String get selfPeerId => JamPermissions.hostPeerId;
@@ -244,7 +436,16 @@ class JamHostEngine extends JamEngine {
   /// best-effort path guest uploads go through on the server — so the
   /// broadcast item carries title/artist/album/artworkId when the file has
   /// them.
-  Future<MediaItem> addMediaFile(File file, {String? name}) async {
+  Future<MediaItem> addMediaFile(File file, {String? name}) async =>
+      (await addMedia(file, name: name)).item;
+
+  /// [addMediaFile], plus what the add did — the host's half of the same
+  /// answer [JamGuestEngine.addMedia] gives, so one app call site serves both
+  /// sides. Media ids are content-derived, so re-adding a file that is
+  /// already in the queue changes nothing and reports
+  /// [JamAddOutcome.alreadyQueued] rather than silently succeeding.
+  Future<JamAddResult> addMedia(File file, {String? name}) async {
+    final knownBefore = {for (final item in playlist) item.mediaId};
     final durationUs = await _probeDurationUs(file.path);
     final tags = await readAudioTags(file);
     String? artworkId;
@@ -267,9 +468,14 @@ class JamHostEngine extends JamEngine {
       artworkId: artworkId,
       addedBy: JamPermissions.hostPeerId,
     );
+    if (knownBefore.contains(item.mediaId)) {
+      // Same bytes, same id: the registry already points at a copy, and
+      // re-adding would broadcast a playlist that did not change.
+      return JamAddResult(item, JamAddOutcome.alreadyQueued);
+    }
     _mediaPaths[item.mediaId] = file.path;
     _server.addMedia(item, file);
-    return item;
+    return JamAddResult(item, JamAddOutcome.added);
   }
 
   /// Artwork bytes for [item], read straight from the server's registry
@@ -418,16 +624,19 @@ class JamHostEngine extends JamEngine {
 
   /// Tears the session down: server, sockets, local playback.
   ///
-  /// Session-end contract for guests: the server closes every guest socket
-  /// with WebSocket status `goingAway`, and no protocol-level
-  /// `error {code: session_closed}` is broadcast first (that message would
-  /// have to be sent by `localjam_net`, which owns the sockets). Guests
-  /// therefore detect host shutdown via the socket close: their sessions
-  /// enter `reconnecting`, and `JamGuestEngine` publishes
-  /// [JamSessionEndReason.hostGone] once its `hostGoneTimeout` elapses (or
-  /// [JamSessionEndReason.rejected] immediately, if another host answers
-  /// with `reject` in the meantime). That guest-side timeout IS the
-  /// contract — PROTOCOL.md §10: host death ends the room.
+  /// Session-end contract for guests: this is a DELIBERATE end, so the
+  /// server says so (§3.4). Every guest is sent
+  /// `session_ended { reason: host_ended }` and its socket is then closed
+  /// with `normalClosure`; each guest engine publishes
+  /// [JamSessionEndReason.hostEnded] on the spot — no "Reconnecting…"
+  /// banner, no waiting out a 90 s `hostGoneTimeout` for a host that is
+  /// never coming back. Guests keep whatever they were playing locally; the
+  /// transport is what ends.
+  ///
+  /// Silence still means the same thing it always did: a host that crashes,
+  /// runs out of battery or leaves the network sends nothing, and guests
+  /// fall back to [JamSessionEndReason.hostGone] after their timeout
+  /// (PROTOCOL.md §10: host death ends the room).
   @override
   Future<void> close() async {
     if (_closed) return;

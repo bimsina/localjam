@@ -61,55 +61,55 @@ class _MyAppState extends State<MyApp> {
     try {
       await body();
     } on PlatformException catch (e) {
-      if (mounted) setState(() => _status = '$action failed: ${e.code} ${e.message}');
+      if (mounted) {
+        setState(() => _status = '$action failed: ${e.code} ${e.message}');
+      }
     }
   }
 
   Future<void> _load() => _run('Load', () async {
-        final bytes = await rootBundle.load('assets/click_tone.wav');
-        final file = File(
-            '${Directory.systemTemp.path}${Platform.pathSeparator}localjam_click_tone.wav');
-        await file.writeAsBytes(bytes.buffer
-            .asUint8List(bytes.offsetInBytes, bytes.lengthInBytes));
-        final durationUs = await _audio.load(file.path);
-        final latencyUs = await _audio.outputLatencyUs();
-        setState(() {
-          _durationUs = durationUs;
-          _latencyUs = latencyUs;
-          _status = 'Loaded (${_fmtUs(durationUs)})';
-        });
-      });
+    final bytes = await rootBundle.load('assets/click_tone.wav');
+    final file = File(
+      '${Directory.systemTemp.path}${Platform.pathSeparator}localjam_click_tone.wav',
+    );
+    await file.writeAsBytes(
+      bytes.buffer.asUint8List(bytes.offsetInBytes, bytes.lengthInBytes),
+    );
+    final durationUs = await _audio.load(file.path);
+    final latencyUs = await _audio.outputLatencyUs();
+    setState(() {
+      _durationUs = durationUs;
+      _latencyUs = latencyUs;
+      _status = 'Loaded (${_fmtUs(durationUs)})';
+    });
+  });
 
   Future<void> _playIn2s() => _run('Play', () async {
-        final calibration = await _audio.calibrate(_dartNowUs);
-        final nativeTimeUs =
-            _dartNowUs() + 2000000 + calibration.offsetUs;
-        await _audio.playAt(
-          nativeTimeUs: nativeTimeUs,
-          positionUs: 0,
-          rate: _rate,
-        );
-        setState(() {
-          _calibration = calibration;
-          _status = 'Scheduled: position 0 in 2 s '
-              '(offset ${calibration.offsetUs} µs, rtt ${calibration.rttUs} µs)';
-        });
-      });
+    final calibration = await _audio.calibrate(_dartNowUs);
+    final nativeTimeUs = _dartNowUs() + 2000000 + calibration.offsetUs;
+    await _audio.playAt(nativeTimeUs: nativeTimeUs, positionUs: 0, rate: _rate);
+    setState(() {
+      _calibration = calibration;
+      _status =
+          'Scheduled: position 0 in 2 s '
+          '(offset ${calibration.offsetUs} µs, rtt ${calibration.rttUs} µs)';
+    });
+  });
 
   Future<void> _pause() => _run('Pause', () async {
-        await _audio.pause();
-        setState(() => _status = 'Paused');
-      });
+    await _audio.pause();
+    setState(() => _status = 'Paused');
+  });
 
   Future<void> _stop() => _run('Stop', () async {
-        await _audio.stop();
-        setState(() => _status = 'Stopped');
-      });
+    await _audio.stop();
+    setState(() => _status = 'Stopped');
+  });
 
   Future<void> _setRate(double rate) => _run('setRate', () async {
-        setState(() => _rate = rate);
-        await _audio.setRate(rate);
-      });
+    setState(() => _rate = rate);
+    await _audio.setRate(rate);
+  });
 
   static String _fmtUs(int? us) {
     if (us == null) return '—';
@@ -132,8 +132,10 @@ class _MyAppState extends State<MyApp> {
                 'Position: ${_fmtUs(_positionUs)} / ${_fmtUs(_durationUs)}',
                 style: Theme.of(context).textTheme.headlineSmall,
               ),
-              Text('Output latency: ${_latencyUs ?? '—'} µs'
-                  '${_calibration == null ? '' : '   clock rtt: ${_calibration!.rttUs} µs'}'),
+              Text(
+                'Output latency: ${_latencyUs ?? '—'} µs'
+                '${_calibration == null ? '' : '   clock rtt: ${_calibration!.rttUs} µs'}',
+              ),
               const SizedBox(height: 16),
               Wrap(
                 spacing: 8,

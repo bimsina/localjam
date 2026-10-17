@@ -51,6 +51,10 @@ android {
     testOptions {
         unitTests {
             isIncludeAndroidResources = true
+            // android.util.Log is a stub in JVM unit tests; the gate logs on
+            // its failure paths, and a "not mocked" throw there would hide the
+            // very behaviour under test.
+            isReturnDefaultValues = true
             all {
                 it.useJUnitPlatform()
 

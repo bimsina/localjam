@@ -115,6 +115,7 @@ void main() {
 
       final engine = await JamHostEngine.start(
         sessionName: 'HistoryJam',
+        hostName: 'Silky Puffin',
         address: InternetAddress.loopbackIPv4,
         discoverable: false,
       );
@@ -137,6 +138,9 @@ void main() {
       expect(rec.sessionId, engine.sessionId);
       expect(rec.wasHost, isTrue);
       expect(rec.peerNames, contains('Funky Walrus'));
+      // Attendees are everyone BUT this device — the host does not attend
+      // its own room.
+      expect(rec.peerNames, isNot(contains('Silky Puffin')));
       final track = rec.tracks.single;
       expect(track.item.title, 'Night Drive');
       expect(track.addedByName, 'You');
@@ -149,7 +153,10 @@ void main() {
       final store = JamHistoryStore(await makeTempDir());
       JamEngine.historyStoreProvider = () async => store;
 
-      final host = JamHostServer(sessionName: 'GuestSideJam');
+      final host = JamHostServer(
+        sessionName: 'GuestSideJam',
+        hostName: 'Silky Puffin',
+      );
       await host.start(address: InternetAddress.loopbackIPv4);
       addTearDown(host.close);
       final file = await writeTempMedia(makeMediaBytes(4096));
@@ -176,11 +183,44 @@ void main() {
       final rec = (await store.list()).single;
       expect(rec.wasHost, isFalse);
       expect(rec.sessionName, 'GuestSideJam');
+      // The host is a person in the record on both sides: named in the
+      // byline, and counted among who was there (it is not a joined peer,
+      // so a guest's roster alone would leave the room looking empty).
+      expect(rec.peerNames, ['Silky Puffin']);
       final track = rec.tracks.single;
       expect(track.item.title, 'Cached Track');
-      expect(track.addedByName, 'Host');
+      expect(track.addedByName, 'Silky Puffin');
       expect(track.existsLocally, isTrue);
       expect(rec.replayableTracks.single.localPath, track.localPath);
+    });
+
+    test('an anonymous host is still the role word, and no attendee', () async {
+      mockAudioChannel();
+      final store = JamHistoryStore(await makeTempDir());
+      JamEngine.historyStoreProvider = () async => store;
+
+      final host = JamHostServer(sessionName: 'AnonJam');
+      await host.start(address: InternetAddress.loopbackIPv4);
+      addTearDown(() => host.close());
+      final file = await writeTempMedia(makeMediaBytes(1024));
+      final item = await JamHostServer.describeFile(
+        file,
+        kind: MediaKind.audio,
+        mime: 'audio/mpeg',
+        durationUs: 60_000_000,
+        addedBy: JamPermissions.hostPeerId,
+      );
+      host.addMedia(item, file);
+
+      final engine = await JamGuestEngine.join(
+        host.joinUriFor(InternetAddress.loopbackIPv4),
+        mediaCacheDir: await makeTempDir(),
+      );
+      expect(engine.hostPeer?.clientName, isEmpty);
+      expect(engine.addedByLabel(item, engine.peers), 'Host');
+      await engine.close();
+
+      expect((await store.list()).single.peerNames, isEmpty);
     });
   });
 }

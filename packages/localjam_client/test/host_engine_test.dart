@@ -34,6 +34,98 @@ void main() {
     return engine;
   }
 
+  group('the host is a person (§3.1)', () {
+    test('hostName defaults to the device identity, and reaches guests '
+        'through welcome', () async {
+      mockAudioChannel();
+      JamIdentity.resetCacheForTesting();
+      addTearDown(JamIdentity.resetCacheForTesting);
+      SharedPreferences.setMockInitialValues({
+        'localjam.displayName': 'Silky Puffin',
+      });
+
+      final engine = await startEngine();
+      expect(engine.hostPeer.clientName, 'Silky Puffin');
+      expect(engine.hostPeer.peerId, JamPermissions.hostPeerId);
+      expect(
+        engine.peers,
+        isEmpty,
+        reason: 'the host is not one of its own peers',
+      );
+
+      final guest = await JamGuestClient.connect(
+        engine.joinUriFor(InternetAddress.loopbackIPv4),
+        clientName: 'Funky Walrus',
+      );
+      addTearDown(guest.close);
+      expect(guest.hostPeer?.clientName, 'Silky Puffin');
+    });
+
+    test("the host's own tracks are attributed to it by name, not by "
+        'role', () async {
+      mockAudioChannel();
+      final engine = await JamHostEngine.start(
+        sessionName: 'HostJam',
+        hostName: 'Silky Puffin',
+        address: InternetAddress.loopbackIPv4,
+        discoverable: false,
+      );
+      addTearDown(engine.close);
+      final item = await engine.addMediaFile(await makeTaggedMp3());
+      expect(item.addedBy, JamPermissions.hostPeerId);
+      // On the host's own screen it is still "You"...
+      expect(engine.addedByLabel(item, engine.peers), 'You');
+
+      // ...and to everyone else it is a name.
+      final guest = await JamGuestEngine.join(
+        engine.joinUriFor(InternetAddress.loopbackIPv4),
+        clientName: 'Funky Walrus',
+        mediaCacheDir: await makeTempDir(),
+      );
+      addTearDown(guest.close);
+      expect(guest.addedByLabel(item, guest.peers), 'Silky Puffin');
+    });
+  });
+
+  group('LAN-only binding (§9)', () {
+    test('bindAddressFor picks an address every guest can reach', () {
+      // No LAN: a room of one on loopback, never 0.0.0.0.
+      expect(
+        JamHostEngine.bindAddressFor(const []),
+        InternetAddress.loopbackIPv4,
+      );
+      // An interface list that never came back is an unknown LAN, not an
+      // absent one: bind everything rather than hide on loopback.
+      expect(
+        JamHostEngine.bindAddressFor(const [], enumerated: false),
+        InternetAddress.anyIPv4,
+      );
+      // One LAN interface still means anyIPv4: a single-address bind drops
+      // loopback, and loopback is the only path a guest on this same machine
+      // has (two simulators, two emulators, the CLI beside the app). §9 is
+      // carried by the server's remote-address filter, not by the bind.
+      final wifi = InternetAddress('192.168.1.7');
+      expect(JamHostEngine.bindAddressFor([wifi]), InternetAddress.anyIPv4);
+      // Wi-Fi + hotspot: one port cannot be bound per-interface anyway.
+      expect(
+        JamHostEngine.bindAddressFor([wifi, InternetAddress('172.20.10.1')]),
+        InternetAddress.anyIPv4,
+      );
+    });
+
+    test('lanCandidates never offers a loopback or public address', () async {
+      final candidates = await JamHostEngine.lanCandidates();
+      for (final address in candidates) {
+        expect(address.isLoopback, isFalse, reason: address.address);
+        expect(
+          JamHostServer.isLanAddress(address),
+          isTrue,
+          reason: address.address,
+        );
+      }
+    });
+  });
+
   test(
     'start → addMediaFile probes the duration → play broadcasts playing',
     () async {
@@ -95,6 +187,60 @@ void main() {
     },
   );
 
+  test('next()/previous() while playing keep the host player scheduled '
+      'instead of releasing it (§5.5 ADVANCE parity)', () async {
+    final log = mockAudioChannel(durationUs: 42_000_000);
+    final engine = await startEngine();
+    final a = await engine.addMediaFile(
+      await writeTempMedia(makeMediaBytes(4096)),
+      name: 'A',
+    );
+    final b = await engine.addMediaFile(
+      await writeTempMedia(makeMediaBytes(4096, seed: 7)),
+      name: 'B',
+    );
+
+    engine.setMedia(a.mediaId);
+    engine.play();
+    await waitFor(
+      () => log.any((c) => c.method == 'playAt'),
+      reason: 'the first scheduled start',
+    );
+    log.clear();
+
+    // The reported bug: Next left the broadcast at `loading`, so the
+    // controller paused the player and never scheduled anything again — the
+    // new track sat at 00:00 with the transport showing the play glyph.
+    engine.next();
+    expect(engine.snapshot.mediaId, b.mediaId);
+    expect(engine.snapshot.status, PlaybackStatus.playing);
+    await waitFor(
+      () => log.any((c) => c.method == 'playAt'),
+      reason: 'the new track to be scheduled on the local host player',
+    );
+    expect(log.where((c) => c.method == 'stop'), isEmpty);
+    expect(engine.sync.snapshot?.status, PlaybackStatus.playing);
+
+    log.clear();
+    engine.previous();
+    expect(engine.snapshot.mediaId, a.mediaId);
+    expect(engine.snapshot.status, PlaybackStatus.playing);
+    await waitFor(
+      () => log.any((c) => c.method == 'playAt'),
+      reason: 'previous to re-schedule too',
+    );
+
+    // Paused stays paused: the track changes, nothing starts.
+    engine.pause();
+    log.clear();
+    engine.next();
+    expect(engine.snapshot.mediaId, b.mediaId);
+    expect(engine.snapshot.status, isNot(PlaybackStatus.playing));
+    expect(engine.snapshot.positionUs, 0);
+    await pumpEventQueue();
+    expect(log.where((c) => c.method == 'playAt'), isEmpty);
+  });
+
   test('addMediaFile extracts tags + artwork (§6.1 v0.2, §6.5); the native '
       'duration probe wins over the tag duration', () async {
     mockAudioChannel(durationUs: 42_000_000);
@@ -122,7 +268,9 @@ void main() {
     );
     expect(untagged.title, isNull);
     expect(untagged.artworkId, isNull);
-    expect(untagged.displayTitle, 'Untitled.mp3');
+    // The filename fallback drops the extension but keeps `name` intact.
+    expect(untagged.name, 'Untitled.mp3');
+    expect(untagged.displayTitle, 'Untitled');
     expect(await engine.artworkFor(untagged), isNull);
   });
 

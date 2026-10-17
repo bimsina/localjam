@@ -62,7 +62,9 @@ void main() {
       );
       expect(engine.sessionEnded.value, isNull);
 
-      await host.close(); // Host death: guests only see the socket close.
+      // Host death with no goodbye: guests only see the socket close, which
+      // is all a crash or a dead battery ever leaves behind.
+      await host.close(announce: false);
       await waitFor(
         () => engine.connectionState == JamConnectionState.reconnecting,
         reason: 'session to enter reconnecting',
@@ -120,7 +122,7 @@ void main() {
         hostGoneTimeout: const Duration(seconds: 30),
       );
       final port = host.port;
-      await host.close();
+      await host.close(announce: false);
 
       // A different session on the same port: the guest's token is now
       // invalid, so the next reconnect attempt is answered with reject
@@ -134,6 +136,37 @@ void main() {
         reason: 'rejected to propagate',
       );
       expect(engine.sessionEnded.value, JamSessionEndReason.rejected);
+      expect(engine.connectionState, JamConnectionState.failed);
+    },
+  );
+
+  test(
+    'a host that ends the jam is terminal at once, not after hostGone',
+    () async {
+      mockAudioChannel();
+      final host = await startHost();
+      final engine = await joinEngine(
+        host,
+        // A hostGone timeout that would outlast the test many times over:
+        // the announced end must not wait for it.
+        hostGoneTimeout: const Duration(seconds: 90),
+      );
+      expect(engine.sessionEnded.value, isNull);
+
+      final started = DateTime.now();
+      await host.close(); // "End jam": announced (§3.4), not inferred.
+
+      await waitFor(
+        () => engine.sessionEnded.value != null,
+        timeout: const Duration(seconds: 1),
+        reason: 'session_ended to land within a second',
+      );
+      expect(engine.sessionEnded.value, JamSessionEndReason.hostEnded);
+      expect(
+        DateTime.now().difference(started),
+        lessThan(const Duration(seconds: 1)),
+      );
+      // Terminal: no reconnect attempts are left running.
       expect(engine.connectionState, JamConnectionState.failed);
     },
   );

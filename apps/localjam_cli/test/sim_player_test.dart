@@ -8,18 +8,17 @@ PlaybackSnapshot _playing({
   int anchorHostTimeUs = 0,
   int anchorPositionUs = 0,
   double rate = 1.0,
-}) =>
-    PlaybackSnapshot(
-      rev: rev,
-      status: PlaybackStatus.playing,
-      mediaId: 'm_test',
-      anchor: PlaybackAnchor(
-        hostTimeUs: anchorHostTimeUs,
-        positionUs: anchorPositionUs,
-      ),
-      positionUs: anchorPositionUs,
-      rate: rate,
-    );
+}) => PlaybackSnapshot(
+  rev: rev,
+  status: PlaybackStatus.playing,
+  mediaId: 'm_test',
+  anchor: PlaybackAnchor(
+    hostTimeUs: anchorHostTimeUs,
+    positionUs: anchorPositionUs,
+  ),
+  positionUs: anchorPositionUs,
+  rate: rate,
+);
 
 void main() {
   group('SimPlayer playhead', () {
@@ -32,32 +31,44 @@ void main() {
       expect(sim.positionUs, 0);
 
       // 1 s of wall time -> 1.01 s of playhead.
-      final action =
-          sim.tick(snapshot: snap, sessionNowUs: 1_000_000, elapsedUs: 1_000_000);
+      final action = sim.tick(
+        snapshot: snap,
+        sessionNowUs: 1_000_000,
+        elapsedUs: 1_000_000,
+      );
       expect(sim.positionUs, 1_010_000);
       // 10 ms of drift is below the 15 ms ignore floor.
       expect(action, const DriftNone());
       expect(sim.lastDriftUs, 10_000);
     });
 
-    test('stays pinned at the anchor position during the scheduled lead-in',
-        () {
-      final sim = SimPlayer();
-      final snap = _playing(anchorHostTimeUs: 750_000, anchorPositionUs: 5000);
-      sim.tick(snapshot: snap, sessionNowUs: 0, elapsedUs: 0);
-      sim.tick(snapshot: snap, sessionNowUs: 500_000, elapsedUs: 500_000);
-      expect(sim.positionUs, 5000); // Still waiting for the start.
-      // Crossing the anchor: only time past it counts as playback.
-      sim.tick(snapshot: snap, sessionNowUs: 1_000_000, elapsedUs: 500_000);
-      expect(sim.positionUs, 5000 + 250_000);
-      expect(sim.lastDriftUs, 0);
-    });
+    test(
+      'stays pinned at the anchor position during the scheduled lead-in',
+      () {
+        final sim = SimPlayer();
+        final snap = _playing(
+          anchorHostTimeUs: 750_000,
+          anchorPositionUs: 5000,
+        );
+        sim.tick(snapshot: snap, sessionNowUs: 0, elapsedUs: 0);
+        sim.tick(snapshot: snap, sessionNowUs: 500_000, elapsedUs: 500_000);
+        expect(sim.positionUs, 5000); // Still waiting for the start.
+        // Crossing the anchor: only time past it counts as playback.
+        sim.tick(snapshot: snap, sessionNowUs: 1_000_000, elapsedUs: 500_000);
+        expect(sim.positionUs, 5000 + 250_000);
+        expect(sim.lastDriftUs, 0);
+      },
+    );
 
     test('a new rev adopts the snapshot (snap + cancel slew)', () {
       final sim = SimPlayer();
       sim.tick(snapshot: _playing(), sessionNowUs: 0, elapsedUs: 0);
       sim.debugSetPositionUs(20_000); // Force a slew to start.
-      final action = sim.tick(snapshot: _playing(), sessionNowUs: 0, elapsedUs: 0);
+      final action = sim.tick(
+        snapshot: _playing(),
+        sessionNowUs: 0,
+        elapsedUs: 0,
+      );
       expect(action, isA<DriftSlew>());
       expect(sim.isSlewing, isTrue);
 
@@ -84,8 +95,11 @@ void main() {
       sim.tick(snapshot: snap, sessionNowUs: 1_000_000, elapsedUs: 1_000_000);
       sim.debugSetPositionUs(sim.positionUs + 20_000);
 
-      final action =
-          sim.tick(snapshot: snap, sessionNowUs: 1_000_000, elapsedUs: 0);
+      final action = sim.tick(
+        snapshot: snap,
+        sessionNowUs: 1_000_000,
+        elapsedUs: 0,
+      );
       expect(
         action,
         const DriftSlew(rateMultiplier: 0.995, durationUs: 4_000_000),
@@ -113,8 +127,11 @@ void main() {
       sim.tick(snapshot: snap, sessionNowUs: 1_000_000, elapsedUs: 1_000_000);
       sim.debugSetPositionUs(sim.positionUs - 30_000);
 
-      final action =
-          sim.tick(snapshot: snap, sessionNowUs: 1_000_000, elapsedUs: 0);
+      final action = sim.tick(
+        snapshot: snap,
+        sessionNowUs: 1_000_000,
+        elapsedUs: 0,
+      );
       expect(
         action,
         const DriftSlew(rateMultiplier: 1.005, durationUs: 6_000_000),
@@ -136,16 +153,22 @@ void main() {
       sim.tick(snapshot: snap, sessionNowUs: 1_000_000, elapsedUs: 1_000_000);
       sim.debugSetPositionUs(sim.positionUs + 100_000); // 100 ms: way out.
 
-      final action =
-          sim.tick(snapshot: snap, sessionNowUs: 1_000_000, elapsedUs: 0);
+      final action = sim.tick(
+        snapshot: snap,
+        sessionNowUs: 1_000_000,
+        elapsedUs: 0,
+      );
       expect(action, const DriftHardResync(errorUs: 100_000));
       expect(sim.hardResyncs, 1);
       expect(sim.positionUs, 1_000_000); // Snapped back to expected.
       expect(sim.isSlewing, isFalse);
 
       // Next tick is clean again.
-      final next =
-          sim.tick(snapshot: snap, sessionNowUs: 1_250_000, elapsedUs: 250_000);
+      final next = sim.tick(
+        snapshot: snap,
+        sessionNowUs: 1_250_000,
+        elapsedUs: 250_000,
+      );
       expect(next, const DriftNone());
       expect(sim.lastDriftUs, 0);
     });
@@ -160,8 +183,11 @@ void main() {
       );
       sim.tick(snapshot: paused, sessionNowUs: 0, elapsedUs: 0);
       sim.debugSetPositionUs(999_000);
-      final action =
-          sim.tick(snapshot: paused, sessionNowUs: 250_000, elapsedUs: 250_000);
+      final action = sim.tick(
+        snapshot: paused,
+        sessionNowUs: 250_000,
+        elapsedUs: 250_000,
+      );
       expect(action, const DriftNone());
       expect(sim.positionUs, 999_000); // Frozen: no advance, no correction.
     });

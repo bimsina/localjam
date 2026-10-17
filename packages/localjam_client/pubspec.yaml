@@ -22,11 +22,24 @@ dependencies:
   shared_preferences: ^2.3.2
   bonsoir: ^7.1.5
 
+# `bonsoir_darwin` 7.1.1's `broadcast.start` waits for the Bonjour daemon with a
+# synchronous `DNSServiceProcessResult` on the platform main thread, which on
+# Flutter's merged UI thread takes the whole app down when the daemon never
+# answers. The vendored copy schedules the registration on a background queue
+# instead — see packages/third_party/bonsoir_darwin/PATCHES.md. Overrides do not
+# propagate, so every consumer that builds for Apple platforms repeats this.
+dependency_overrides:
+  bonsoir_darwin:
+    path: ../third_party/bonsoir_darwin
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
   fake_async: ^1.3.1
   flutter_lints: ^6.0.0
   audio_metadata_reader: ^1.7.1
+  # The identity tests stand a fake prefs store in front of the plugin, to
+  # hold a cold start's channel at arm's length.
+  shared_preferences_platform_interface: ^2.4.1
 
 flutter:

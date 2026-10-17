@@ -22,7 +22,8 @@ ArgParser _buildParser() {
     ..addOption(
       'skew-ppm',
       defaultsTo: '0',
-      help: 'Artificial playback-clock skew in parts per million\n'
+      help:
+          'Artificial playback-clock skew in parts per million\n'
           '(e.g. 5000 = +0.5%; makes drift correction observable).',
     )
     ..addOption('name', defaultsTo: 'guest', help: 'Client name.')
@@ -51,12 +52,13 @@ void _printUsage(ArgParser parser, IOSink out) {
   out.writeln();
   out.writeln('Example (two terminals):');
   out.writeln(r'  $ localjam host song.mp3 other.mp3');
-  out.writeln(r'  $ localjam join "localjam://join?v=1&host=..." '
-      '--skew-ppm 5000');
+  out.writeln(
+    r'  $ localjam join "localjam://join?v=1&host=..." '
+    '--skew-ppm 5000',
+  );
 }
 
-String _indent(String text) =>
-    text.split('\n').map((l) => '    $l').join('\n');
+String _indent(String text) => text.split('\n').map((l) => '    $l').join('\n');
 
 Future<void> main(List<String> argv) async {
   final parser = _buildParser();
@@ -74,9 +76,9 @@ Future<void> main(List<String> argv) async {
   if (args['help'] as bool || command == null) {
     _printUsage(parser, stdout);
     await stdout.flush();
-    exit(command == null && !(args['help'] as bool) && argv.isNotEmpty
-        ? 64
-        : 0);
+    exit(
+      command == null && !(args['help'] as bool) && argv.isNotEmpty ? 64 : 0,
+    );
   }
   if (command['help'] as bool) {
     stdout.writeln(command.name == 'host' ? hostUsage : joinUsage);

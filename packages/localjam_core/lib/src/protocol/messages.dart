@@ -60,6 +60,28 @@ enum ErrorCode {
   );
 }
 
+/// Why a session ended, as carried by `session_ended` (PROTOCOL.md §3.4).
+enum SessionEndedReason {
+  /// The host deliberately ended the room (v0.2): "End jam", not a crash.
+  hostEnded('host_ended'),
+
+  /// A reason this client does not know. `session_ended` is terminal
+  /// whatever the reason, so an unrecognized one decodes here instead of
+  /// throwing — a later protocol version may name reasons we predate, and
+  /// the guest still must leave rather than sit in reconnect (§2).
+  unknown('unknown');
+
+  const SessionEndedReason(this.wire);
+
+  /// Wire string for this reason.
+  final String wire;
+
+  /// The reason [wire] names, or [SessionEndedReason.unknown] for anything
+  /// this version does not know (forward compatibility, §2).
+  static SessionEndedReason fromWire(String wire) =>
+      values.firstWhere((r) => r.wire == wire, orElse: () => unknown);
+}
+
 /// Kind of a playlist item (PROTOCOL.md §6.1).
 enum MediaKind {
   audio('audio'),
@@ -163,6 +185,30 @@ class PeerInfo {
   int get hashCode => Object.hash(peerId, clientName, clientKind);
 }
 
+/// Container extensions stripped from a filename when it stands in for a
+/// missing tag title ([MediaItem.displayTitle]).
+///
+/// A whitelist, not "everything after the last dot": a track legitimately
+/// called `Vol. 2` or `Ep. 04` must keep its number, and only a known media
+/// suffix is noise worth hiding.
+const Set<String> _strippableMediaExtensions = {
+  'aac',
+  'aif',
+  'aiff',
+  'alac',
+  'caf',
+  'flac',
+  'm4a',
+  'm4b',
+  'mp3',
+  'mp4',
+  'oga',
+  'ogg',
+  'opus',
+  'wav',
+  'wma',
+};
+
 /// One playlist entry (PROTOCOL.md §6.1).
 @immutable
 class MediaItem {
@@ -209,8 +255,22 @@ class MediaItem {
   /// [JamPermissions.hostPeerId], or null for legacy items.
   final String? addedBy;
 
-  /// The best display title: [title] when tagged, else [name].
-  String get displayTitle => (title?.isNotEmpty ?? false) ? title! : name;
+  /// The best display title: [title] when tagged, else the filename with its
+  /// media extension stripped ("track1.m4a" reads as "track1"). The untouched
+  /// filename stays available as [name] for anything that needs the real file
+  /// — cache keys, downloads, diagnostics.
+  ///
+  /// A name that is all extension (`.mp3`) or carries an unrecognized suffix
+  /// is returned whole; there is nothing better to show.
+  String get displayTitle {
+    final tagged = title;
+    if (tagged != null && tagged.isNotEmpty) return tagged;
+    final dot = name.lastIndexOf('.');
+    if (dot <= 0) return name;
+    final extension = name.substring(dot + 1).toLowerCase();
+    if (!_strippableMediaExtensions.contains(extension)) return name;
+    return name.substring(0, dot);
+  }
 
   Map<String, Object?> toJson() => {
     'mediaId': mediaId,
@@ -303,6 +363,7 @@ class HelloMessage extends Message {
     this.caps = const [],
     this.encodings = const ['json'],
     this.resumePeerId,
+    this.clientId,
   });
 
   static const wireType = 'hello';
@@ -314,6 +375,12 @@ class HelloMessage extends Message {
   /// Peer id to resume within the host's reconnect grace window (§3.3).
   /// Omitted from the wire when null (fresh join).
   final String? resumePeerId;
+
+  /// Stable per-device id (v0.2, optional): one device is one peer slot, so
+  /// a host replaces any peer already joined under this id instead of
+  /// leaving a ghost of it in the roster (§3.3). Omitted when null — a
+  /// client without one behaves exactly as in v0.1.
+  final String? clientId;
 
   /// Capabilities, e.g. "audio", "video".
   final List<String> caps;
@@ -332,6 +399,7 @@ class HelloMessage extends Message {
     'caps': caps,
     'encodings': encodings,
     if (resumePeerId != null) 'resumePeerId': resumePeerId,
+    if (clientId != null) 'clientId': clientId,
   };
 
   factory HelloMessage.fromPayload(Map<String, Object?> json) => HelloMessage(
@@ -341,6 +409,7 @@ class HelloMessage extends Message {
     caps: _stringList(json['caps']),
     encodings: _stringList(json['encodings'], fallback: const ['json']),
     resumePeerId: json['resumePeerId'] as String?,
+    clientId: json['clientId'] as String?,
   );
 }
 
@@ -354,6 +423,7 @@ class WelcomeMessage extends Message {
     required this.snapshot,
     this.playlist = const [],
     this.permissions,
+    this.host,
   });
 
   static const wireType = 'welcome';
@@ -375,6 +445,14 @@ class WelcomeMessage extends Message {
   /// clients then assume listen-only until a broadcast arrives.
   final JamPermissions? permissions;
 
+  /// The host itself as a person (v0.2, optional): peerId is the reserved
+  /// [JamPermissions.hostPeerId] and `clientName` its display identity
+  /// ("Silky Puffin"), so guests can name the host in a roster and in
+  /// "added by" bylines instead of calling everyone's host "Host". NOT a
+  /// member of [peers] — the host is not a joined peer (§5.6). Null from a
+  /// host that does not send one; clients fall back to the role word.
+  final PeerInfo? host;
+
   @override
   String get type => wireType;
 
@@ -387,11 +465,13 @@ class WelcomeMessage extends Message {
     'snapshot': snapshot.toJson(),
     'playlist': [for (final i in playlist) i.toJson()],
     if (permissions != null) 'permissions': permissions!.toJson(),
+    if (host != null) 'host': host!.toJson(),
   };
 
   factory WelcomeMessage.fromPayload(Map<String, Object?> json) {
     final you = json['you'] as Map<String, Object?>? ?? const {};
     final rawPermissions = json['permissions'];
+    final rawHost = json['host'];
     return WelcomeMessage(
       sessionId: json['sessionId'] as String,
       sessionName: (json['sessionName'] as String?) ?? '',
@@ -405,6 +485,9 @@ class WelcomeMessage extends Message {
       ],
       permissions: rawPermissions is Map
           ? JamPermissions.fromJson(rawPermissions.cast<String, Object?>())
+          : null,
+      host: rawHost is Map
+          ? PeerInfo.fromJson(rawHost.cast<String, Object?>())
           : null,
     );
   }
@@ -464,6 +547,35 @@ class PeerLeftMessage extends Message {
 
   factory PeerLeftMessage.fromPayload(Map<String, Object?> json) =>
       PeerLeftMessage(peerId: json['peerId'] as String);
+}
+
+/// H→* the room is over, deliberately (PROTOCOL.md §3.4).
+///
+/// Sent immediately before the host closes every socket, so a planned
+/// shutdown ("End jam") is distinguishable from a crash or a walk out of
+/// range — which is only detectable as silence, and so costs guests a long
+/// reconnect timeout. Terminal: a guest that receives one must not attempt
+/// to reconnect, whatever the [reason] says.
+class SessionEndedMessage extends Message {
+  const SessionEndedMessage({this.reason = SessionEndedReason.hostEnded});
+
+  static const wireType = 'session_ended';
+
+  final SessionEndedReason reason;
+
+  @override
+  String get type => wireType;
+
+  @override
+  Map<String, Object?> payloadToJson() => {'reason': reason.wire};
+
+  factory SessionEndedMessage.fromPayload(Map<String, Object?> json) =>
+      SessionEndedMessage(
+        // An absent or unrecognized reason still ends the session (§2).
+        reason: SessionEndedReason.fromWire(
+          (json['reason'] as String?) ?? SessionEndedReason.unknown.wire,
+        ),
+      );
 }
 
 /// G→H clock sync ping (PROTOCOL.md §4). Times are monotonic microseconds.

@@ -97,7 +97,8 @@ class JamHistoryRecord {
   final DateTime updatedAt;
 
   /// Everyone seen in the room over the session's lifetime (display names,
-  /// this device excluded).
+  /// this device excluded). Includes the host on a guest's record, and the
+  /// guests on the host's: both sides record everyone but themselves.
   final List<String> peerNames;
 
   /// The queue in its final order.
@@ -272,7 +273,10 @@ class JamHistoryRecorder {
     } else if (engine is JamHostEngine) {
       _subs.add(
         engine.events.listen((event) {
-          if (event.kind == JamHostEventKind.peerJoined) _markDirty();
+          if (event.kind == JamHostEventKind.peerJoined ||
+              event.kind == JamHostEventKind.peerLeft) {
+            _markDirty();
+          }
         }),
       );
     }
@@ -292,13 +296,27 @@ class JamHistoryRecorder {
   void _collect() {
     final peers = _engine.peers;
     for (final peer in peers) {
-      if (peer.clientName.trim().isNotEmpty) _peerNames.add(peer.clientName);
+      _rememberAttendee(peer);
+    }
+    // The host is not a joined peer (§5.6), so a guest's roster leaves it
+    // out — and a guest's record used to say a room of two had nobody in
+    // it. On a host engine this is the device itself and stays excluded.
+    final host = _engine.hostPeer;
+    if (host != null && host.peerId != _engine.selfPeerId) {
+      _rememberAttendee(host);
     }
     for (final item in _engine.playlist) {
       final label = _engine.addedByLabel(item, peers);
       if (label != null) _addedByNames.putIfAbsent(item.mediaId, () => label);
     }
     _refreshLocalPaths();
+  }
+
+  /// Records one attendee's display name. Unnamed peers are skipped rather
+  /// than recorded as an id: a history entry nobody recognizes is noise.
+  void _rememberAttendee(PeerInfo peer) {
+    final name = peer.clientName.trim();
+    if (name.isNotEmpty) _peerNames.add(name);
   }
 
   void _refreshLocalPaths() {

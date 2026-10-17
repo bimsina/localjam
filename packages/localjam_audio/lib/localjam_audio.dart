@@ -366,7 +366,9 @@ class JamNowPlaying {
     required this.title,
     this.artist,
     this.album,
+    this.sessionName,
     this.artworkBytes,
+    this.artworkId,
     this.durationUs,
     required this.positionUs,
     this.rate = 1.0,
@@ -381,8 +383,18 @@ class JamNowPlaying {
   final String? artist;
   final String? album;
 
+  /// The room this is playing in. The media card's identity line: platforms
+  /// show it as the subtitle when [artist] is unknown, and as a third line
+  /// beneath the artist when it is — a jam card should say *which* jam.
+  final String? sessionName;
+
   /// Encoded image bytes (any format the platform decodes); null = no art.
   final Uint8List? artworkBytes;
+
+  /// Content-addressed id of [artworkBytes] (§6.5), so the platform can cache
+  /// one decoded bitmap per cover instead of re-decoding on every position
+  /// update. Null when the item has no artwork.
+  final String? artworkId;
 
   final int? durationUs;
 
@@ -404,7 +416,9 @@ class JamNowPlaying {
     'title': title,
     'artist': artist,
     'album': album,
+    'sessionName': sessionName,
     'artworkBytes': artworkBytes,
+    'artworkId': artworkId,
     'durationUs': durationUs,
     'positionUs': positionUs,
     'rate': rate,

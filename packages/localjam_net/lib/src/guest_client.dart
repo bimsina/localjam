@@ -33,6 +33,15 @@ enum JamPeerEventKind { joined, left }
 class JamPeerEvent {
   const JamPeerEvent._(this.kind, this.peerId, [this.peer]);
 
+  /// A peer is present. Also used by the reconnect layer to replay a
+  /// resumed connection's roster as presence deltas.
+  JamPeerEvent.joined(PeerInfo peer)
+    : this._(JamPeerEventKind.joined, peer.peerId, peer);
+
+  /// A peer is gone.
+  const JamPeerEvent.left(String peerId)
+    : this._(JamPeerEventKind.left, peerId);
+
   final JamPeerEventKind kind;
   final String peerId;
 
@@ -63,12 +72,26 @@ class JamGuestClient {
     );
   }
 
+  /// Ceiling on one `GET /artwork/{id}` response (§6.5). Embedded cover art
+  /// is tens of kilobytes; 8 MB is generous for a hi-res cover and still
+  /// small enough to hold in memory on a phone.
+  static const int maxArtworkBytes = 8 * 1024 * 1024;
+
+  /// How far past a playlist item's declared `sizeBytes` a media response may
+  /// run before [fetchMediaToFile] abandons it. Non-zero only so a host that
+  /// pads a response (a trailing newline, a re-encode that grew a few bytes)
+  /// still fails on the honest sha256 check rather than on this one.
+  static const int sizeSlackBytes = 64 * 1024;
+
   /// Parses a `localjam://join?...` URI (§1 Discovery), tries each `host`
   /// candidate in order, performs the §3.1 handshake, and starts the §4
   /// clock-sync schedule (burst of 8 pings, then one every [pingInterval]).
   ///
   /// Pass [resumePeerId] to resume a dropped slot within the host's grace
-  /// window (§3.3); it is carried in the `hello` payload.
+  /// window (§3.3); it is carried in the `hello` payload. [clientId] is this
+  /// device's stable id (§3.3): the host replaces any peer still joined
+  /// under it, so a client that force-quit and came back never haunts the
+  /// roster as a second copy of itself.
   ///
   /// Throws [JamRejectedException] if the host rejects the join, or
   /// [SocketException] if no candidate host is reachable.
@@ -80,6 +103,7 @@ class JamGuestClient {
     Duration pingInterval = const Duration(seconds: 2),
     Duration connectTimeout = const Duration(seconds: 5),
     String? resumePeerId,
+    String? clientId,
   }) async {
     final params = joinUri.queryParameters;
     final hostsParam = params['host'];
@@ -115,6 +139,7 @@ class JamGuestClient {
           caps: caps,
           timeout: connectTimeout,
           resumePeerId: resumePeerId,
+          clientId: clientId,
         );
         return client;
       } on JamRejectedException {
@@ -150,6 +175,8 @@ class JamGuestClient {
   PlaybackSnapshot _snapshot = PlaybackSnapshot.initial;
   List<MediaItem> _playlist = const [];
   final Map<String, PeerInfo> _peers = {};
+  PeerInfo? _hostPeer;
+  SessionEndedMessage? _sessionEnded;
 
   /// Until a v0.2 host says otherwise, assume nothing is allowed (§5.6).
   JamPermissions _permissions = const JamPermissions.initial(
@@ -203,6 +230,17 @@ class JamGuestClient {
   /// Presence changes (§3.2).
   Stream<JamPeerEvent> get peerEvents => _peerEvents.stream;
 
+  /// The host as a person, from `welcome.host` (§3.1): the reserved host
+  /// peer id plus its display name ("Silky Puffin"). Never a member of
+  /// [peers] — the host is not a joined peer. Null when the host sent none
+  /// (a pre-v0.2 host, or one with no identity to share).
+  PeerInfo? get hostPeer => _hostPeer;
+
+  /// The `session_ended` the host sent before closing (§3.4), if any: a
+  /// deliberate shutdown, which reconnect layers must treat as terminal
+  /// instead of retrying against a host that is gone on purpose.
+  SessionEndedMessage? get sessionEnded => _sessionEnded;
+
   /// The room's permission document (§5.6): from `welcome`, then every
   /// `permissions` broadcast. Listen-only until a v0.2 host says otherwise.
   JamPermissions get permissions => _permissions;
@@ -247,6 +285,7 @@ class JamGuestClient {
     required List<String> caps,
     required Duration timeout,
     String? resumePeerId,
+    String? clientId,
   }) async {
     final completer = Completer<Message>();
     _handshakeCompleter = completer;
@@ -257,6 +296,7 @@ class JamGuestClient {
         clientKind: clientKind,
         caps: caps,
         resumePeerId: resumePeerId,
+        clientId: clientId,
       ),
     );
     final reply = await completer.future.timeout(timeout);
@@ -270,6 +310,7 @@ class JamGuestClient {
         _playlist = reply.playlist;
         final permissions = reply.permissions;
         if (permissions != null) _permissions = permissions;
+        _hostPeer = reply.host;
         for (final peer in reply.peers) {
           _peers[peer.peerId] = peer;
         }
@@ -346,6 +387,10 @@ class JamGuestClient {
             _permissionUpdates.add(permissions);
           }
         }
+      case SessionEndedMessage():
+        // §3.4: the host ended the room on purpose. Remember it so the
+        // reconnect layer knows this close is not a drop to retry.
+        _sessionEnded = message;
       case ErrorMessage():
         // §8: fatal errors are followed by a host-side close; remember the
         // reason so reconnect layers can tell a kick from a plain drop.
@@ -441,11 +486,17 @@ class JamGuestClient {
   /// with progress while downloading, `ready` once the sha256 digest matches
   /// the playlist entry.
   ///
+  /// The transfer is also bounded by the playlist entry's `sizeBytes`
+  /// ([sizeSlackBytes] of slack): a host that keeps sending past the size it
+  /// advertised is either broken or hostile, and either way the guest stops
+  /// writing instead of filling the device's disk. The digest check alone is
+  /// too late — it only fires once the whole body has landed.
+  ///
   /// [onProgress] receives values in [0, 1]. Returns [destination]. Throws
   /// [ArgumentError] if [mediaId] is not in the current playlist,
   /// [HttpException] on a non-200 response, and [StateError] on a digest
-  /// mismatch — after deleting the partial [destination] and reporting
-  /// `media_status: none`.
+  /// mismatch or an over-size body — after deleting the partial
+  /// [destination] and reporting `media_status: none`.
   Future<File> fetchMediaToFile(
     String mediaId,
     File destination, {
@@ -488,10 +539,18 @@ class JamGuestClient {
     final hasher = sha256.startChunkedConversion(digestSink);
     await destination.parent.create(recursive: true);
     final sink = destination.openWrite();
+    // The declared size plus slack: 0 means "unknown" (a legacy item without
+    // sizeBytes and a chunked response), where there is nothing to enforce.
+    final limit = item.sizeBytes > 0 ? item.sizeBytes + sizeSlackBytes : 0;
     var received = 0;
     var lastReported = 0.0;
+    var overSize = false;
     try {
       await for (final chunk in response) {
+        if (limit > 0 && received + chunk.length > limit) {
+          overSize = true;
+          break;
+        }
         hasher.add(chunk);
         sink.add(chunk);
         received += chunk.length;
@@ -516,13 +575,19 @@ class JamGuestClient {
     }
     hasher.close();
 
+    if (overSize) {
+      // Breaking out of the `await for` above already cancelled the response
+      // subscription, which tears the connection down: nothing more arrives.
+      await _abandonFetch(mediaId, destination);
+      throw StateError(
+        'media $mediaId exceeded its declared size (${item.sizeBytes} bytes)',
+      );
+    }
+
     // §6.2: sha256 verifies the transfer (and enables cross-session caching).
     final digest = digestSink.value!.toString();
     if (item.sha256.isNotEmpty && digest != item.sha256) {
-      try {
-        await destination.delete();
-      } catch (_) {}
-      _send(MediaStatusMessage(mediaId: mediaId, state: MediaFetchState.none));
+      await _abandonFetch(mediaId, destination);
       throw StateError(
         'sha256 mismatch for $mediaId: expected ${item.sha256}, got $digest',
       );
@@ -552,7 +617,11 @@ class JamGuestClient {
     try {
       final file = await fetchMediaToFile(
         mediaId,
-        File('${dir.path}/$mediaId'),
+        // The id is host-supplied and is about to name a file: strip
+        // anything that could walk out of the temp directory.
+        File(
+          '${dir.path}/${mediaId.replaceAll(RegExp(r'[^A-Za-z0-9_-]'), '_')}',
+        ),
         onProgress: onProgress,
       );
       return await file.readAsBytes();
@@ -563,10 +632,27 @@ class JamGuestClient {
     }
   }
 
+  /// Deletes the partial [destination] and tells the host this guest no
+  /// longer holds [mediaId] (§6.3) — the shared tail of every failed fetch.
+  Future<void> _abandonFetch(String mediaId, File destination) async {
+    try {
+      await destination.delete();
+    } catch (_) {
+      // Never written, or already gone: nothing to undo.
+    }
+    _send(MediaStatusMessage(mediaId: mediaId, state: MediaFetchState.none));
+  }
+
   /// Fetches `GET /artwork/{artworkId}` with Bearer auth (§6.5) into memory.
   /// Artwork is small (an embedded cover), so no streaming/progress plumbing.
   ///
-  /// Throws [HttpException] on a non-200 response (404 for an unknown id).
+  /// Capped at [maxArtworkBytes]: artwork is the one response a guest holds
+  /// whole in memory, and its size is asserted by the host alone (no
+  /// playlist entry declares it), so an over-cap body is abandoned mid-stream
+  /// rather than grown until the app dies.
+  ///
+  /// Throws [HttpException] on a non-200 response (404 for an unknown id) and
+  /// [StateError] when the body exceeds [maxArtworkBytes].
   Future<Uint8List> fetchArtwork(String artworkId) async {
     final uri = Uri(
       scheme: 'http',
@@ -586,6 +672,12 @@ class JamGuestClient {
     }
     final builder = BytesBuilder(copy: false);
     await for (final chunk in response) {
+      if (builder.length + chunk.length > maxArtworkBytes) {
+        builder.clear();
+        throw StateError(
+          'artwork $artworkId exceeds the $maxArtworkBytes byte cap',
+        );
+      }
       builder.add(chunk);
     }
     return builder.takeBytes();

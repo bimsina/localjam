@@ -7,10 +7,15 @@
 library;
 
 import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
 
 import 'package:bonsoir/bonsoir.dart';
 import 'package:flutter/foundation.dart';
 import 'package:localjam_net/localjam_net.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+import 'mdns_announcer.dart';
 
 /// The advertised service type (PROTOCOL.md §1).
 const String jamServiceType = '_localjam._tcp';
@@ -18,11 +23,12 @@ const String jamServiceType = '_localjam._tcp';
 /// One discoverable room on the local network, resolved to a joinable URI.
 @immutable
 class JamNearbyRoom {
-  const JamNearbyRoom({
+  JamNearbyRoom({
     required this.key,
     required this.sessionName,
     required this.joinUri,
-  });
+    DateTime? lastSeen,
+  }) : lastSeen = lastSeen ?? DateTime.now();
 
   /// Stable identity within one browse (the mDNS service name).
   final String key;
@@ -34,6 +40,37 @@ class JamNearbyRoom {
   /// addresses and TXT attributes.
   final Uri joinUri;
 
+  /// When this room was last *confirmed* — an announcement, a resolve, or a
+  /// PTR answer to one of [JamRoomBrowser]'s re-queries. Not when it was
+  /// first found: a room that stops answering ages out of the list
+  /// ([JamRoomBrowser.staleAfter]) instead of sitting there forever.
+  final DateTime lastSeen;
+
+  /// The session token from the join URI — the room's identity across
+  /// interfaces and across restarts of the browse (a host on Wi-Fi and a
+  /// hotspot publishes two address lists and one token).
+  String? get token {
+    final token = joinUri.queryParameters['token'];
+    return (token == null || token.isEmpty) ? null : token;
+  }
+
+  /// The `host:port` candidates a join would try, in order (§1).
+  List<({String host, int port})> get candidates {
+    final port = int.tryParse(joinUri.queryParameters['port'] ?? '');
+    if (port == null) return const [];
+    return [
+      for (final host in (joinUri.queryParameters['host'] ?? '').split(','))
+        if (host.isNotEmpty) (host: host, port: port),
+    ];
+  }
+
+  JamNearbyRoom withLastSeen(DateTime at) => JamNearbyRoom(
+    key: key,
+    sessionName: sessionName,
+    joinUri: joinUri,
+    lastSeen: at,
+  );
+
   @override
   String toString() => 'JamNearbyRoom($sessionName, $joinUri)';
 }
@@ -44,104 +81,668 @@ class JamNearbyRoom {
 /// invitation, exactly like being handed the QR; see PROTOCOL.md §9) —
 /// which is why hosts opt in via `JamHostEngine.start(discoverable:)`.
 class JamRoomAdvertiser {
-  JamRoomAdvertiser._(this._broadcast);
+  JamRoomAdvertiser._(this._broadcast, this._announcer);
 
-  final BonsoirBroadcast _broadcast;
+  final BonsoirBroadcast? _broadcast;
+  final MdnsAnnouncer? _announcer;
 
-  /// Starts advertising; returns null when the platform cannot (no mDNS
-  /// implementation, missing OS permission, tests).
+  /// How long a room start will wait for the system Bonjour daemon before
+  /// giving up on it and falling back. Hosting must never be held hostage by
+  /// mDNS.
+  static const Duration defaultTimeout = Duration(milliseconds: 700);
+
+  /// How long the built-in responder gets to bind its socket once the daemon
+  /// path has been abandoned. It is a bind and two sendto calls, so this is
+  /// generous.
+  static const Duration fallbackTimeout = Duration(milliseconds: 300);
+
+  /// The whole of [start], worst case: the daemon's budget, then the
+  /// fallback's, plus slack for the hop between them. What a caller must
+  /// allow if it wants advertising to actually get its chance.
+  static const Duration totalTimeout = Duration(milliseconds: 1200);
+
+  /// Which responder is carrying this advertisement — for diagnostics.
+  /// `'bonjour'` when the OS daemon took it, `'builtin'` when our own
+  /// responder did.
+  String get transport => _broadcast != null ? 'bonjour' : 'builtin';
+
+  /// Set once the platform side of `bonsoir` has stopped answering at all in
+  /// this process.
+  ///
+  /// Upstream `bonsoir_darwin`'s `broadcast.start` handed `DNSServiceRegister`
+  /// a callback and then waited for it with a **synchronous**
+  /// `DNSServiceProcessResult` on the platform MAIN thread. Our `await` was
+  /// rescued by the budget below, but the main thread was not: a daemon that
+  /// never confirmed wedged the UI for good. The vendored plugin in
+  /// `packages/third_party/bonsoir_darwin` schedules that read on a background
+  /// queue instead, so the method call now always comes back — but a method
+  /// call that still does not is the signature of a platform thread that has
+  /// gone away, and one offence is all it gets. Every later room in this
+  /// process then goes straight to [MdnsAnnouncer].
+  ///
+  /// A daemon that answers the call and simply never *confirms* the
+  /// registration is a different thing, and does not set this: nothing is
+  /// stuck, and the next room deserves its own try (the Local Network prompt
+  /// the user has not answered yet is exactly that case).
+  static bool _daemonWedged = false;
+
+  /// Whether this process is an app running in an Apple **Simulator**, where
+  /// the daemon accepts a registration and then never confirms it.
+  ///
+  /// `DNSServiceRegister` succeeds there and the daemon even puts a PTR on the
+  /// wire, but the register reply never comes back. That used to be fatal:
+  /// upstream waited for it with a synchronous `DNSServiceProcessResult`, and
+  /// sampling a wedged app showed exactly where, on the thread that matters:
+  ///
+  /// ```text
+  /// Thread_987308  DispatchQueue_1: com.apple.main-thread
+  ///   … FlutterMethodChannel setMethodCallHandler _block_invoke
+  ///     SwiftBonsoirPlugin.handle           SwiftBonsoirPlugin.swift:56
+  ///       BonsoirServiceBroadcast.start()   BonsoirServiceBroadcast.swift:35
+  ///         DNSServiceProcessResult → read_all → __recvfrom_nocancel
+  /// ```
+  ///
+  /// No budget could rescue that: since Flutter merged the UI thread onto the
+  /// platform thread on iOS, Dart *is* the main thread — the sample has no
+  /// `io.flutter.1.ui` at all — so the blocked read stopped every timer in the
+  /// isolate, `Future.timeout` included. The app did not get a slow room; it
+  /// stopped existing.
+  ///
+  /// The vendored plugin reads that socket on a background queue, so the
+  /// registration is now just unconfirmed rather than fatal, the budget below
+  /// does what it says, and the built-in responder picks the room up. This
+  /// flag survives only to explain that in the log.
+  static final bool _appleSimulator = _detectAppleSimulator();
+
+  static bool _detectAppleSimulator() {
+    if (!Platform.isIOS && !Platform.isMacOS) return false;
+    try {
+      // A simulated app's bundle lives under the device's CoreSimulator
+      // directory; `Platform.environment` is not a reliable signal here —
+      // `SIMULATOR_UDID` and friends are set for the launcher, not for the
+      // app process Dart runs in.
+      return Platform.resolvedExecutable.contains('/CoreSimulator/Devices/') ||
+          Platform.environment.containsKey('SIMULATOR_UDID');
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Prefs key holding "a Bonjour registration was started and never came
+  /// back". See [_startDaemonBroadcast].
+  static const String _daemonBreadcrumbKey = 'localjam.bonjourRegisterInFlight';
+
+  /// Prefs, or null — bounded, because this sits on the way to a room.
+  static Future<SharedPreferences?> _prefs() async {
+    try {
+      return await SharedPreferences.getInstance().timeout(_prefsBudget);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static const Duration _prefsBudget = Duration(milliseconds: 150);
+
+  /// Whether this process may hand a room to the platform's Bonjour daemon.
+  ///
+  /// The Simulator is no longer excluded: with the vendored plugin, asking
+  /// there costs the budget below and nothing else.
+  @visibleForTesting
+  static bool get daemonRegistrationIsSafe => !_daemonWedged;
+
+  /// Whether a previous [start] found the platform side of `bonsoir` not
+  /// answering at all.
+  @visibleForTesting
+  static bool get daemonWedged => _daemonWedged;
+
+  /// Puts the process-wide daemon state back; for tests.
+  @visibleForTesting
+  static void resetDaemonState() => _daemonWedged = false;
+
+  /// Starts advertising; returns null when neither responder could (no mDNS
+  /// implementation, missing OS permission, a socket the platform refuses,
+  /// tests). Never throws: the QR/link path is always there.
+  ///
+  /// Order matters. The **system daemon** goes first, on every platform:
+  /// mDNSResponder / NsdManager / Avahi already owns port 5353, probes for
+  /// name conflicts, answers queries we never see, and — the part that
+  /// decides it on Apple hardware — needs no
+  /// `com.apple.developer.networking.multicast` entitlement, because the
+  /// packets leave the daemon rather than the app. Our [MdnsAnnouncer] is
+  /// the fallback for when the daemon does not answer inside [timeout]:
+  /// correct enough to be found, but it sends its own multicast, which a
+  /// real iOS device will not do unentitled.
+  ///
+  /// The instance name registered is [sessionName] plus a short suffix drawn
+  /// from [token] — see [instanceNameFor]. Guests never see it (the room
+  /// name they display comes from the `name` TXT attribute), and it means two
+  /// hosts with the same room name, or a host restarted while the LAN still
+  /// remembers its last registration, never collide. A collision is not
+  /// cosmetic here: DNS-SD resolves it by probing and renaming, which delays
+  /// the register confirmation that the Apple plugin is blocking the main
+  /// thread to wait for.
   static Future<JamRoomAdvertiser?> start({
     required String sessionName,
     required int port,
     required String token,
+    List<InternetAddress> addresses = const [],
+    Duration timeout = defaultTimeout,
   }) async {
+    final attributes = {
+      'v': '${MessageCodec.protocolVersion}',
+      'name': sessionName,
+      'token': token,
+    };
+    final instanceName = instanceNameFor(sessionName, token);
+    final broadcast = await _startDaemonBroadcast(
+      instanceName: instanceName,
+      port: port,
+      attributes: attributes,
+      timeout: timeout,
+    );
+    if (broadcast != null) return JamRoomAdvertiser._(broadcast, null);
+
+    final announcer = await MdnsAnnouncer.start(
+      serviceName: instanceName,
+      serviceType: jamServiceType,
+      port: port,
+      attributes: attributes,
+      addresses: addresses,
+      timeout: fallbackTimeout,
+    );
+    if (announcer == null) {
+      debugPrint('localjam: mDNS advertising unavailable; room is QR-only.');
+      return null;
+    }
+    debugPrint(
+      'localjam: advertising "$instanceName" via the built-in responder '
+      '(${_appleSimulator ? 'Apple Simulator: the daemon never confirms a '
+                'registration there' : 'the OS daemon did not take it'}).',
+    );
+    return JamRoomAdvertiser._(null, announcer);
+  }
+
+  /// The mDNS instance name for a room: the session name, trimmed to leave
+  /// room, plus four hex digits of the session token. Purely a uniqueness
+  /// device — the human-readable name travels in the `name` TXT attribute,
+  /// which is what [JamRoomBrowser] displays.
+  @visibleForTesting
+  static String instanceNameFor(String sessionName, String token) {
+    // A DNS-SD instance label is at most 63 BYTES; room names are free-form
+    // UTF-8, so trim on encoded length, not characters.
+    const suffixBytes = 6; // ' ' + 4 hex + one byte of headroom.
+    var name = sessionName.trim();
+    while (utf8.encode(name).length > 63 - suffixBytes) {
+      name = name.substring(0, name.length - 1);
+    }
+    final suffix = token.isEmpty
+        ? '0000'
+        : token.substring(0, token.length < 4 ? token.length : 4);
+    return name.isEmpty ? 'Jam $suffix' : '$name $suffix';
+  }
+
+  /// Registers with the platform Bonjour daemon, or returns null when it
+  /// fails or outruns [timeout]. Never throws.
+  ///
+  /// [timeout] is the budget for the whole daemon path, not for each step:
+  /// the method calls and the wait for confirmation share one deadline, so a
+  /// slow registration cannot eat the fallback's slice of [totalTimeout].
+  ///
+  /// What counts as confirmation matters here. `broadcast.start()` returns as
+  /// soon as the plugin has *asked* the daemon to register — that is the whole
+  /// point of the vendored `bonsoir_darwin` — so it says nothing about whether
+  /// the room is on the wire. `broadcastStarted` does, and it is what the
+  /// daemon on an Apple Simulator never sends.
+  static Future<BonsoirBroadcast?> _startDaemonBroadcast({
+    required String instanceName,
+    required int port,
+    required Map<String, String> attributes,
+    required Duration timeout,
+  }) async {
+    if (!daemonRegistrationIsSafe) return null;
+    // A breadcrumb across process lifetimes, because the in-process latch
+    // below can only be read by a process that survived. A platform thread
+    // that stops answering takes the app with it, and the app that asked is
+    // then unkillable-by-us dead. So the attempt is written down first: a run
+    // that finds the note still there knows the last registration never
+    // returned, and never asks again. Belt and braces now that the plugin
+    // does not block, and cheap enough to keep.
+    final prefs = await _prefs();
+    if (prefs?.getBool(_daemonBreadcrumbKey) ?? false) {
+      _daemonWedged = true;
+      debugPrint(
+        'localjam: a previous Bonjour registration never came back; '
+        'advertising through the built-in responder from now on.',
+      );
+      return null;
+    }
     try {
-      final broadcast = BonsoirBroadcast(
+      await prefs?.setBool(_daemonBreadcrumbKey, true).timeout(_prefsBudget);
+    } catch (_) {
+      // No note is better than no room; the in-process latch still applies.
+    }
+    final deadline = DateTime.now().add(timeout);
+    Duration remaining() {
+      final left = deadline.difference(DateTime.now());
+      return left.isNegative ? Duration.zero : left;
+    }
+
+    BonsoirBroadcast? broadcast;
+    // Whether the platform side answered at all. Everything after this point
+    // is a daemon that is merely slow or unwilling, not a wedged thread.
+    var platformAnswered = false;
+    try {
+      broadcast = BonsoirBroadcast(
         service: BonsoirService(
-          name: sessionName,
+          name: instanceName,
           type: jamServiceType,
           port: port,
-          attributes: {
-            'v': '${MessageCodec.protocolVersion}',
-            'name': sessionName,
-            'token': token,
-          },
+          // No `host`: let the daemon advertise whatever hostname and
+          // addresses it currently owns. Pinning one interface address here
+          // is how a host disappears the moment Wi-Fi changes.
+          attributes: attributes,
         ),
       );
-      await broadcast.initialize();
-      await broadcast.start();
-      return JamRoomAdvertiser._(broadcast);
+      await broadcast.initialize().timeout(remaining());
+      final events = broadcast.eventStream;
+      if (events == null) {
+        throw StateError('bonsoir produced no event stream');
+      }
+      // Subscribed BEFORE start, or the confirmation for a daemon that is
+      // quick about it lands before anyone is listening.
+      final started = events.firstWhere(
+        (event) => event is BonsoirBroadcastStartedEvent,
+      );
+      // It may end up unawaited (a failing start below); a broadcast that
+      // errors or ends must not then reach the zone as an unhandled error.
+      unawaited(started.then((_) {}, onError: (Object _) {}));
+      await broadcast.start().timeout(remaining());
+      platformAnswered = true;
+      unawaited(_clearBreadcrumb(prefs));
+      await started.timeout(remaining());
+      return broadcast;
+    } on TimeoutException {
+      if (platformAnswered) {
+        // Registered but not confirmed — the Simulator always, a device whose
+        // Local Network prompt is still up, a LAN where Bonjour is filtered.
+        // Nothing is stuck, so the next room gets its own try.
+        debugPrint(
+          'localjam: the Bonjour daemon took the registration but did not '
+          'confirm it inside $timeout; falling back to the built-in '
+          'responder.',
+        );
+      } else {
+        // The method channel itself never came back: the platform thread is
+        // gone. Do not ask twice, and leave the breadcrumb for the next run.
+        _daemonWedged = true;
+        debugPrint(
+          'localjam: the bonsoir platform channel did not answer inside '
+          '$timeout; advertising through the built-in responder from now on.',
+        );
+      }
+      unawaited(_stopQuietly(broadcast));
+      return null;
+    } catch (error) {
+      // The daemon answered — it just said no. Nothing was left in flight, so
+      // the breadcrumb comes back off.
+      unawaited(_clearBreadcrumb(prefs));
+      debugPrint(
+        'localjam: Bonjour registration failed ($error); '
+        'falling back to the built-in responder.',
+      );
+      unawaited(_stopQuietly(broadcast));
+      return null;
+    }
+  }
+
+  static Future<void> _clearBreadcrumb(SharedPreferences? prefs) async {
+    try {
+      await prefs?.remove(_daemonBreadcrumbKey);
+    } catch (_) {}
+  }
+
+  static Future<void> _stopQuietly(BonsoirBroadcast? broadcast) async {
+    try {
+      await broadcast?.stop();
     } catch (_) {
-      return null; // Best-effort: the QR/link path always remains.
+      // Never started, or the platform is gone.
     }
   }
 
   Future<void> stop() async {
-    try {
-      await _broadcast.stop();
-    } catch (_) {
-      // Already stopped / platform gone.
-    }
+    await _announcer?.stop();
+    await _stopQuietly(_broadcast);
   }
 }
 
 /// Browses the LAN for advertised rooms. Create, [start], read/watch
 /// [rooms], [stop].
+///
+/// **Discovery is not the same problem as un-discovery.** Every platform
+/// browser is announcement-driven and generous about arrivals: bonsoir's
+/// service-found/resolved events (and the `NsdManager` / `mDNSResponder`
+/// callbacks underneath them) fire the moment a room appears. Departures are
+/// the unreliable half — the host has to *send* a goodbye for a
+/// service-lost event to exist at all, and a host that is force-quit, walks
+/// out of range, loses Wi-Fi or has its process killed by the OS sends
+/// nothing. Worse, both platform daemons cache what they have heard across
+/// our process lifetime, so a relaunched app is handed the ghosts again on
+/// its first browse and never hears them leave.
+///
+/// So arrivals are trusted and presence is verified. Every entry carries a
+/// [JamNearbyRoom.lastSeen]; every [sweepInterval] the browser re-resolves
+/// what it holds through the platform and sends its own PTR query
+/// ([MdnsQuerier]); anything not confirmed within [staleAfter] — two record
+/// TTLs — is dropped. A goodbye, when one does arrive, is still honoured
+/// immediately.
 class JamRoomBrowser {
+  JamRoomBrowser({
+    Duration? staleAfter,
+    Duration? sweepInterval,
+    Duration? probeTimeout,
+  }) : staleAfter = staleAfter ?? defaultStaleAfter,
+       sweepInterval = sweepInterval ?? defaultSweepInterval,
+       probeTimeout = probeTimeout ?? defaultProbeTimeout,
+       _clock = DateTime.now,
+       _events = null,
+       _answers = null,
+       _connect = _tcpConnect;
+
+  /// A browser wired to injected event sources instead of the platform —
+  /// bonsoir discovery events, PTR answers, a clock and a TCP probe. Lets the
+  /// staleness policy be tested without a network.
+  @visibleForTesting
+  JamRoomBrowser.withSources({
+    required Stream<BonsoirDiscoveryEvent> events,
+    Stream<MdnsPtrAnswer>? answers,
+    DateTime Function()? clock,
+    Future<bool> Function(String host, int port, Duration timeout)? connect,
+    Duration? staleAfter,
+    Duration? sweepInterval,
+    Duration? probeTimeout,
+  }) : staleAfter = staleAfter ?? defaultStaleAfter,
+       sweepInterval = sweepInterval ?? defaultSweepInterval,
+       probeTimeout = probeTimeout ?? defaultProbeTimeout,
+       _clock = clock ?? DateTime.now,
+       // ignore: prefer_initializing_formals
+       _events = events,
+       // ignore: prefer_initializing_formals
+       _answers = answers,
+       _connect = connect ?? _tcpConnect;
+
+  /// The PTR TTL the built-in responder advertises (`mdns_announcer.dart`),
+  /// and what the platform daemons use for a service like this one.
+  static const Duration recordTtl = Duration(seconds: 120);
+
+  /// How long a room may go unconfirmed before it is dropped: two TTLs, so a
+  /// single lost re-announcement or a dropped query never blinks a live room
+  /// out of the list.
+  static const Duration defaultStaleAfter = Duration(seconds: 240);
+
+  /// How often presence is re-verified. Cheap — one PTR question and a
+  /// re-resolve per known room.
+  static const Duration defaultSweepInterval = Duration(seconds: 20);
+
+  /// How long [probe] waits for a TCP handshake before calling a candidate
+  /// dead. A LAN connect is single-digit milliseconds; this is the budget for
+  /// a host that has gone away without saying so, and it sits on a tap.
+  static const Duration defaultProbeTimeout = Duration(milliseconds: 900);
+
   /// Currently visible resolved rooms, updated in place (the list instance
   /// is replaced on every change, so listeners can compare identity).
   final ValueNotifier<List<JamNearbyRoom>> rooms =
       ValueNotifier<List<JamNearbyRoom>>(const []);
 
+  /// See [defaultStaleAfter].
+  final Duration staleAfter;
+
+  /// See [defaultSweepInterval].
+  final Duration sweepInterval;
+
+  /// See [defaultProbeTimeout].
+  final Duration probeTimeout;
+
+  final DateTime Function() _clock;
+  final Stream<BonsoirDiscoveryEvent>? _events;
+  final Stream<MdnsPtrAnswer>? _answers;
+  final Future<bool> Function(String host, int port, Duration timeout) _connect;
+
   BonsoirDiscovery? _discovery;
   StreamSubscription<BonsoirDiscoveryEvent>? _sub;
+  StreamSubscription<MdnsPtrAnswer>? _answerSub;
+  MdnsQuerier? _querier;
+  Timer? _sweepTimer;
   final Map<String, JamNearbyRoom> _byKey = {};
+
+  /// The last resolved service per key, so a sweep can ask the platform to
+  /// resolve it again — a resolve that succeeds is a room that is still
+  /// there.
+  final Map<String, BonsoirService> _services = {};
+
+  String? _excludedToken;
+  bool _started = false;
   bool _disposed = false;
 
   /// Whether the browser is currently running. Stays false when the
   /// platform has no mDNS support (start is best-effort).
-  bool get running => _discovery != null;
+  bool get running => _discovery != null || (_started && _events != null);
+
+  /// The session token of the room this device is *in*, which is never a
+  /// room it can join.
+  ///
+  /// A host discovers its own advertisement (its own daemon answers its own
+  /// browse), and so does a guest whose host is on the same segment. Filtered
+  /// here rather than in the UI so every consumer gets it — and by token,
+  /// because the token is the room's identity across interfaces, while the
+  /// join URI differs per address list.
+  String? get excludedToken => _excludedToken;
+
+  set excludedToken(String? token) {
+    final next = (token == null || token.isEmpty) ? null : token;
+    if (next == _excludedToken) return;
+    _excludedToken = next;
+    _publish();
+  }
 
   Future<void> start() async {
-    if (_disposed || _discovery != null) return;
+    if (_disposed || _started) return;
+    _started = true;
+    final injected = _events;
+    if (injected != null) {
+      _sub = injected.listen(
+        (event) => _onEvent(event),
+        onError: (Object _) {},
+      );
+      _listenForAnswers(_answers);
+      _startSweeping();
+      return;
+    }
     try {
       final discovery = BonsoirDiscovery(type: jamServiceType);
       await discovery.initialize();
       _sub = discovery.eventStream?.listen(
-        (event) => _onEvent(discovery, event),
+        (event) => _onEvent(event),
         onError: (Object _) {},
       );
       await discovery.start();
       _discovery = discovery;
-    } catch (_) {
+    } catch (error) {
+      debugPrint('localjam: nearby-room browsing unavailable ($error).');
       unawaited(_sub?.cancel());
       _sub = null;
       _discovery = null; // Best-effort: nearby list just stays empty.
     }
+    // The querier runs even when bonsoir did not start: its PTR answers
+    // cannot fill the list (no TXT, no addresses) but they are what expires
+    // one, and a browser that only ever adds is the bug this exists for.
+    _querier ??= await MdnsQuerier.start(serviceType: jamServiceType);
+    if (_disposed) {
+      await _querier?.stop();
+      _querier = null;
+      return;
+    }
+    _listenForAnswers(_querier?.answers);
+    _startSweeping();
+    _querier?.query();
   }
 
-  void _onEvent(BonsoirDiscovery discovery, BonsoirDiscoveryEvent event) {
+  void _listenForAnswers(Stream<MdnsPtrAnswer>? answers) {
+    if (answers == null) return;
+    _answerSub = answers.listen(_onAnswer, onError: (Object _) {});
+  }
+
+  void _startSweeping() {
+    _sweepTimer?.cancel();
+    _sweepTimer = Timer.periodic(sweepInterval, (_) => sweep());
+  }
+
+  /// One round of presence verification: expire what has gone quiet, then ask
+  /// everything that is left to prove it is still there. Runs on
+  /// [sweepInterval]; exposed so tests (and an app that wants a pull-to-
+  /// refresh) can drive it directly.
+  void sweep() {
+    if (_disposed) return;
+    final cutoff = _clock().subtract(staleAfter);
+    final expired = [
+      for (final entry in _byKey.entries)
+        if (entry.value.lastSeen.isBefore(cutoff)) entry.key,
+    ];
+    for (final key in expired) {
+      _byKey.remove(key);
+      _services.remove(key);
+    }
+    if (expired.isNotEmpty) _publish();
+    // Re-resolving is how the platform half of this gets re-confirmed: a
+    // resolve that succeeds lands as a resolved event and refreshes lastSeen,
+    // one that fails is silent and lets the deadline do its work.
+    final discovery = _discovery;
+    if (discovery != null) {
+      for (final service in _services.values.toList()) {
+        try {
+          discovery.serviceResolver.resolveService(service);
+        } catch (_) {}
+      }
+    }
+    _querier?.query();
+  }
+
+  void _onEvent(BonsoirDiscoveryEvent event) {
     switch (event) {
       case BonsoirDiscoveryServiceFoundEvent(:final service):
         // Resolution fills in host addresses; failures surface as a
         // resolve-failed event, which we simply ignore.
         try {
-          discovery.serviceResolver.resolveService(service);
+          _discovery?.serviceResolver.resolveService(service);
         } catch (_) {}
       case BonsoirDiscoveryServiceResolvedEvent(:final service):
       case BonsoirDiscoveryServiceUpdatedEvent(:final service):
-        final room = _roomFrom(service);
+        final room = _roomFrom(service, _clock());
         if (room == null) {
           _byKey.remove(service.name);
+          _services.remove(service.name);
         } else {
           _byKey[room.key] = room;
+          _services[room.key] = service;
         }
         _publish();
       case BonsoirDiscoveryServiceLostEvent(:final service):
         _byKey.remove(service.name);
+        _services.remove(service.name);
         _publish();
       default:
         break;
+    }
+  }
+
+  /// A PTR answer from our own re-query: a live record refreshes the entry it
+  /// names, a goodbye (TTL 0, RFC 6762 §10.1) retires it at once.
+  ///
+  /// A PTR alone can never *add* a room — it carries no token and no address,
+  /// and this browser only ever offers records it could check (§9).
+  void _onAnswer(MdnsPtrAnswer answer) {
+    if (_disposed) return;
+    final key = _keyFor(answer.instanceName);
+    if (key == null) return;
+    if (answer.isGoodbye) {
+      _byKey.remove(key);
+      _services.remove(key);
+      _publish();
+      return;
+    }
+    _touch(key);
+  }
+
+  /// Matches a wire instance label to a held key. DNS names are
+  /// case-insensitive, and responders are free to change the case.
+  String? _keyFor(String instanceName) {
+    if (_byKey.containsKey(instanceName)) return instanceName;
+    final wanted = instanceName.toLowerCase();
+    for (final key in _byKey.keys) {
+      if (key.toLowerCase() == wanted) return key;
+    }
+    return null;
+  }
+
+  void _touch(String key) {
+    final room = _byKey[key];
+    if (room == null) return;
+    _byKey[key] = room.withLastSeen(_clock());
+    _publish();
+  }
+
+  // --- Verify and prune (the app's half) --------------------------------
+
+  /// Whether [room] actually answers right now: a TCP connect to each join
+  /// candidate in turn, [probeTimeout] each, closed immediately.
+  ///
+  /// mDNS says a room *was* advertised; only a socket says it is there. Call
+  /// this before joining (on the tap, behind the spinner the join already
+  /// shows) so a ghost fails in a tenth of a second with a reason, instead of
+  /// as a join timeout. A room that answers has its [JamNearbyRoom.lastSeen]
+  /// refreshed; one that does not is left in place for the caller to
+  /// [remove] — probing is a question, not a policy.
+  Future<bool> probe(JamNearbyRoom room, {Duration? timeout}) async {
+    final budget = timeout ?? probeTimeout;
+    for (final candidate in room.candidates) {
+      if (_disposed) return false;
+      if (await _connect(candidate.host, candidate.port, budget)) {
+        _touch(room.key);
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /// Drops [room] from the list. For the app to call when a [probe] or a join
+  /// proved it dead — the record can outlive the room by two TTLs, and a user
+  /// who has just been told "that jam has ended" should not still see it.
+  void remove(JamNearbyRoom room) => removeKey(room.key);
+
+  /// [remove] by mDNS key.
+  void removeKey(String key) {
+    if (_byKey.remove(key) == null) return;
+    _services.remove(key);
+    _publish();
+  }
+
+  static Future<bool> _tcpConnect(
+    String host,
+    int port,
+    Duration timeout,
+  ) async {
+    Socket? socket;
+    try {
+      // A zone id (`fe80::1%en0`) is not something `Socket.connect` accepts on
+      // every platform; the candidate list is ordered IPv4-first precisely so
+      // this is the rare path.
+      socket = await Socket.connect(host, port, timeout: timeout);
+      return true;
+    } catch (_) {
+      return false;
+    } finally {
+      try {
+        socket?.destroy();
+      } catch (_) {}
     }
   }
 
@@ -150,29 +751,51 @@ class JamRoomBrowser {
   /// stops advertising tokens).
   @visibleForTesting
   static JamNearbyRoom? roomFromService(BonsoirService service) =>
-      _roomFrom(service);
+      _roomFrom(service, DateTime.now());
 
-  static JamNearbyRoom? _roomFrom(BonsoirService service) {
+  /// Whether a resolved mDNS address is one a room may live on (§9).
+  ///
+  /// mDNS records are unauthenticated: anyone on the segment can answer, and
+  /// a `_localjam._tcp` record whose A record points at a public address
+  /// turns every browsing app on the network into a client of that address.
+  /// So candidates are held to the same LAN rule the host enforces on its
+  /// own remotes — a zone suffix (`fe80::1%en0`) is stripped for the test and
+  /// kept in the candidate.
+  static bool _isLocalCandidate(String address) {
+    try {
+      return JamHostServer.isLanAddress(
+        InternetAddress(address.split('%').first),
+      );
+    } catch (_) {
+      return false; // Not an IP literal at all.
+    }
+  }
+
+  static JamNearbyRoom? _roomFrom(BonsoirService service, DateTime seenAt) {
     final token = service.attributes['token'];
     // Guests try candidates in order (§1): put IPv4 first — link-local IPv6
     // (`fe80::…%en0`) often resolves first on Apple platforms but zone-id
     // URIs are unreliable, so leading with them just burns connect timeouts.
-    final addresses = [
-      for (final a in service.hostAddresses)
-        if (!a.contains(':')) a, // IPv4 first…
-      for (final a in service.hostAddresses)
-        if (a.contains(':')) a, // …then IPv6, each keeping resolved order.
-    ];
+    //
+    // Only the numeric addresses mDNS actually resolved are offered, and only
+    // the local ones. The SRV hostname used to ride along as a last-resort
+    // candidate, but a name is a promise about what some resolver will return
+    // later — and a discovery path that hands the join layer something it
+    // cannot check has decided nothing. A record with no usable address is
+    // simply not a joinable room.
     final hosts = [
-      ...addresses,
-      // The SRV hostname (e.g. `host.local`) as a last-resort candidate.
-      if (addresses.isEmpty && service.hostname != null) service.hostname!,
+      for (final a in service.hostAddresses)
+        if (!a.contains(':') && _isLocalCandidate(a)) a, // IPv4 first…
+      for (final a in service.hostAddresses)
+        if (a.contains(':') && _isLocalCandidate(a))
+          a, // …then IPv6, each keeping resolved order.
     ];
     if (token == null || token.isEmpty || hosts.isEmpty) return null;
     final sessionName = service.attributes['name'] ?? service.name;
     return JamNearbyRoom(
       key: service.name,
       sessionName: sessionName,
+      lastSeen: seenAt,
       joinUri: Uri(
         scheme: 'localjam',
         host: 'join',
@@ -189,19 +812,31 @@ class JamRoomBrowser {
 
   void _publish() {
     if (_disposed) return;
-    final sorted = _byKey.values.toList()
-      ..sort((a, b) => a.sessionName.compareTo(b.sessionName));
+    final excluded = _excludedToken;
+    final sorted = [
+      for (final room in _byKey.values)
+        if (excluded == null || room.token != excluded) room,
+    ]..sort((a, b) => a.sessionName.compareTo(b.sessionName));
     rooms.value = List.unmodifiable(sorted);
   }
 
   Future<void> stop() async {
     _disposed = true;
+    _sweepTimer?.cancel();
+    _sweepTimer = null;
     unawaited(_sub?.cancel());
     _sub = null;
+    unawaited(_answerSub?.cancel());
+    _answerSub = null;
+    final querier = _querier;
+    _querier = null;
+    await querier?.stop();
     try {
       await _discovery?.stop();
     } catch (_) {}
     _discovery = null;
+    _byKey.clear();
+    _services.clear();
     rooms.dispose();
   }
 }

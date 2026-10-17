@@ -286,6 +286,55 @@ void main() {
     );
   });
 
+  test('a hostile sha256 or artworkId is a cache miss, not a path', () async {
+    // Both ids are host-supplied strings that end up naming files: a
+    // malicious host on the LAN must not get to pick where a guest writes.
+    // Each id has exactly one legal shape, so anything else names nothing —
+    // no sanitising, no file, no disk touched at all.
+    final cacheDir = await makeTempDir();
+    final cache = JamMediaCache(cacheDir);
+    MediaItem itemWith(String sha256) => MediaItem(
+      mediaId: 'm_evil',
+      kind: MediaKind.audio,
+      name: 'evil',
+      mime: 'audio/mpeg',
+      sizeBytes: 1,
+      sha256: sha256,
+    );
+    for (final sha256 in [
+      '../../../../../../tmp/localjam_pwned',
+      '', // Empty.
+      'F' * 64, // Uppercase: not the wire form.
+      'f' * 63, // One short.
+      'f' * 65, // One long.
+      '${'f' * 60}.mp3',
+    ]) {
+      expect(cache.fileFor(itemWith(sha256)), isNull, reason: sha256);
+      expect(await cache.lookup(itemWith(sha256)), isNull, reason: sha256);
+    }
+    for (final artworkId in [
+      '../../.bash_profile',
+      'f' * 64, // A digest is not an artwork id (§6.5 is `a_` + 12 hex).
+      'a_',
+      'a_XXXXXXXXXXXX',
+      'a_0123456789abc', // One too many.
+    ]) {
+      expect(cache.artworkFileFor(artworkId), isNull, reason: artworkId);
+    }
+    // The honest shapes are untouched, so no real cache path moves.
+    final honest = 'f' * 64;
+    expect(
+      cache.fileFor(itemWith(honest))?.path,
+      '${cacheDir.path}/$honest.mp3',
+    );
+    expect(
+      cache.artworkFileFor('a_0123456789ab')?.path,
+      '${cacheDir.path}/a_0123456789ab',
+    );
+    // Nothing above wrote anything: a miss never touches disk.
+    expect(cacheDir.listSync(), isEmpty);
+  });
+
   test('LRU eviction respects the cap and evicts oldest first', () async {
     mockAudioChannel();
     final host = await startHost();

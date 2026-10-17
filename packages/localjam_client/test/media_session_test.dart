@@ -90,6 +90,13 @@ void main() {
     expect(last['artist'], 'The Localhosts');
     expect(last['album'], 'Loopback Sessions');
     expect(last['durationUs'], 42_000_000);
+    // Room identity: the card says which jam, so the platform can use it as
+    // the subtitle when tags carry no artist and as a third line when they do.
+    expect(last['sessionName'], 'CardJam');
+    // Artwork is content-addressed, so the platform decodes one bitmap per
+    // cover instead of re-decoding on every position push.
+    expect(last['artworkId'], isNotNull);
+    expect(last['artworkId'], item.artworkId);
     // The host always controls playback.
     expect(last['canPlayPause'], isTrue);
     expect(last['canSeek'], isTrue);
@@ -173,6 +180,110 @@ void main() {
       () => host.snapshot.status == PlaybackStatus.playing,
       reason: 'remote play to arrive as a validated request',
     );
+  });
+
+  test('an artless track gets the app-supplied placeholder cover, decoded '
+      'once', () async {
+    // Most files people add to a jam carry no embedded art, and an empty
+    // square is what the OS shows for one. The engine has no widget tree to
+    // draw the brand placeholder with, so the app hands it over as bytes.
+    mockAudioChannel();
+    final log = mockMediaSession();
+    var renders = 0;
+    JamMediaSessionController.resetPlaceholderForTesting();
+    addTearDown(JamMediaSessionController.resetPlaceholderForTesting);
+    JamMediaSessionController.placeholderArtworkProvider = () async {
+      renders++;
+      return tinyPngBytes;
+    };
+
+    final engine = await JamHostEngine.start(
+      sessionName: 'ArtlessJam',
+      address: InternetAddress.loopbackIPv4,
+    );
+    addTearDown(engine.close);
+    final a = await engine.addMediaFile(
+      await writeTempMedia(makeMediaBytes(4096)),
+      name: 'A.mp3',
+    );
+    expect(a.artworkId, isNull, reason: 'the fixture has no embedded cover');
+    engine.setMedia(a.mediaId);
+
+    await waitFor(
+      () => log.any(
+        (e) => e.method == 'update' && e.args?['artworkBytes'] != null,
+      ),
+      reason: 'the placeholder to reach the card',
+    );
+    var last = log.lastWhere((e) => e.method == 'update').args!;
+    expect(last['artworkBytes'], tinyPngBytes);
+    expect(
+      last['artworkId'],
+      JamMediaSessionController.placeholderArtworkId,
+      reason: 'a stable key, so the platform decodes one bitmap for all of '
+          'them',
+    );
+
+    // A second artless track reuses the resolved bytes rather than asking
+    // the app to render again.
+    final b = await engine.addMediaFile(
+      await writeTempMedia(makeMediaBytes(4096, seed: 7)),
+      name: 'B.mp3',
+    );
+    engine.setMedia(b.mediaId);
+    await waitFor(
+      () => log.any(
+        (e) =>
+            e.method == 'update' &&
+            e.args?['title'] == 'B' &&
+            e.args?['artworkBytes'] != null,
+      ),
+      reason: "the second track's card",
+    );
+    expect(renders, 1);
+
+    // A track with its own cover still wins.
+    final tagged = await engine.addMediaFile(await makeTaggedMp3());
+    engine.setMedia(tagged.mediaId);
+    await waitFor(
+      () => log.any(
+        (e) =>
+            e.method == 'update' &&
+            e.args?['artworkId'] == tagged.artworkId,
+      ),
+      reason: 'the embedded cover to take over',
+    );
+    last = log.lastWhere((e) => e.method == 'update').args!;
+    expect(
+      last['artworkId'],
+      isNot(JamMediaSessionController.placeholderArtworkId),
+    );
+  });
+
+  test('no placeholder configured leaves an artless card exactly as it was',
+      () async {
+    mockAudioChannel();
+    final log = mockMediaSession();
+    JamMediaSessionController.resetPlaceholderForTesting();
+    addTearDown(JamMediaSessionController.resetPlaceholderForTesting);
+
+    final engine = await JamHostEngine.start(
+      sessionName: 'BareJam',
+      address: InternetAddress.loopbackIPv4,
+    );
+    addTearDown(engine.close);
+    final item = await engine.addMediaFile(
+      await writeTempMedia(makeMediaBytes(4096)),
+      name: 'A.mp3',
+    );
+    engine.setMedia(item.mediaId);
+    await waitFor(
+      () => log.any((e) => e.method == 'update' && e.args?['title'] == 'A'),
+      reason: 'a card push',
+    );
+    final last = log.lastWhere((e) => e.method == 'update').args!;
+    expect(last['artworkBytes'], isNull);
+    expect(last['artworkId'], isNull);
   });
 
   test('joinUri is kept for rejoin flows', () async {

@@ -266,13 +266,51 @@ void main() {
       expect(decoded, untagged);
       expect(decoded.title, isNull);
       expect(decoded.artworkId, isNull);
-      expect(decoded.displayTitle, 'a.mp3');
+      // The fallback title is the filename minus its extension (§6.1).
+      expect(decoded.displayTitle, 'a');
+      expect(decoded.name, 'a.mp3'); // The real filename is kept as-is.
       // And an untagged item's JSON carries no null-valued tag keys.
       final json = untagged.toJson();
       expect(json.containsKey('title'), isFalse);
       expect(json.containsKey('artist'), isFalse);
       expect(json.containsKey('album'), isFalse);
       expect(json.containsKey('artworkId'), isFalse);
+    });
+
+    test('displayTitle strips the media extension from the filename '
+        'fallback, and only that', () {
+      MediaItem named(String name, {String? title}) => MediaItem(
+        mediaId: 'm_1',
+        kind: MediaKind.audio,
+        name: name,
+        mime: 'audio/mp4',
+        sizeBytes: 10,
+        sha256: '00000000',
+        title: title,
+      );
+
+      // The reported bug: an untagged file showed as "track1.m4a".
+      expect(named('track1.m4a').displayTitle, 'track1');
+      expect(named('Track 01.MP3').displayTitle, 'Track 01');
+      expect(named('a.b.flac').displayTitle, 'a.b');
+
+      // A tag always wins, extension or not.
+      final tagged = named('track1.m4a', title: 'Night Drive');
+      expect(tagged.displayTitle, 'Night Drive');
+      // An empty tag is not a tag.
+      expect(named('track1.m4a', title: '').displayTitle, 'track1');
+
+      // Only known media suffixes are noise: a track really called "Vol. 2"
+      // keeps its number, and a name with no extension is untouched.
+      expect(named('Vol. 2').displayTitle, 'Vol. 2');
+      expect(named('Interview').displayTitle, 'Interview');
+      expect(named('notes.txt').displayTitle, 'notes.txt');
+      // A name that is nothing but an extension has no better form.
+      expect(named('.mp3').displayTitle, '.mp3');
+      expect(named('').displayTitle, '');
+
+      // The untouched filename is always still there.
+      expect(named('track1.m4a').name, 'track1.m4a');
     });
 
     test('request queue ops carry mediaId/toIndex (§5.6)', () {
@@ -310,6 +348,77 @@ void main() {
           .withOverride('p_3', JamCapability.addTracks, allowed: false);
       final m = roundTrip(PermissionsMessage(permissions: perms));
       expect(m.permissions, perms);
+    });
+
+    test('hello carries the stable clientId; omitted when null (§3.3)', () {
+      final m = roundTrip(
+        const HelloMessage(
+          token: 'tok-123',
+          clientName: 'Quirky Toucan',
+          clientKind: 'flutter',
+          clientId: 'c_abc123',
+        ),
+      );
+      expect(m.clientId, 'c_abc123');
+      final v01 = codec.encode(
+        const HelloMessage(token: 't', clientName: 'n', clientKind: 'k'),
+        seq: 1,
+      );
+      expect(v01, isNot(contains('clientId')));
+      // A v0.1 hello still decodes: the field is additive.
+      expect(HelloMessage.fromPayload({'token': 't'}).clientId, isNull);
+    });
+
+    test('session_ended round-trips; an unknown reason still ends the '
+        'session (§3.4)', () {
+      final m = roundTrip(
+        const SessionEndedMessage(reason: SessionEndedReason.hostEnded),
+      );
+      expect(m.reason, SessionEndedReason.hostEnded);
+
+      // Forward compatibility: a reason from a later version, or none at
+      // all, decodes rather than throwing — the message is terminal either
+      // way, and a guest that ignored it would sit in reconnect instead.
+      expect(
+        SessionEndedMessage.fromPayload({'reason': 'host_exploded'}).reason,
+        SessionEndedReason.unknown,
+      );
+      expect(
+        SessionEndedMessage.fromPayload(const {}).reason,
+        SessionEndedReason.unknown,
+      );
+      final decoded = codec
+          .decode(codec.encode(const SessionEndedMessage(), seq: 4))
+          .message;
+      expect(decoded, isA<SessionEndedMessage>());
+      expect(decoded.type, 'session_ended');
+    });
+
+    test('welcome carries the host identity; absent = null (§3.1)', () {
+      final m = roundTrip(
+        const WelcomeMessage(
+          sessionId: 's_1',
+          sessionName: 'RoadTrip',
+          selfPeerId: 'p_9',
+          snapshot: PlaybackSnapshot.initial,
+          host: PeerInfo(
+            peerId: JamPermissions.hostPeerId,
+            clientName: 'Silky Puffin',
+            clientKind: 'flutter',
+          ),
+        ),
+      );
+      expect(m.host?.clientName, 'Silky Puffin');
+      expect(m.host?.peerId, JamPermissions.hostPeerId);
+      // The host is never smuggled into the peer list (§5.6).
+      expect(m.peers, isEmpty);
+
+      final legacy = WelcomeMessage.fromPayload({
+        'sessionId': 's_1',
+        'you': {'peerId': 'p_9'},
+        'snapshot': PlaybackSnapshot.initial.toJson(),
+      });
+      expect(legacy.host, isNull);
     });
 
     test('welcome carries the permission document; absent = null (§5.6)', () {

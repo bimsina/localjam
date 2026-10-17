@@ -31,6 +31,122 @@ import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToLong
 
+private const val LOG_TAG = "LocaljamAudio"
+
+/**
+ * How long [LocaljamAudioPlugin] waits for threads to leave the native
+ * AudioTrack before releasing it. The pause()/flush() that precedes the wait
+ * unblocks a WRITE_BLOCKING writer immediately, so in practice this expires
+ * only on a wedged HAL — where releasing anyway (and letting the guarded call
+ * site catch the IllegalStateException) beats hanging the teardown.
+ */
+private const val TRACK_DRAIN_WAIT_NS = 200_000_000L
+
+/**
+ * Lifetime guard for one native [AudioTrack] handle — the fix for
+ * "IllegalStateException: Unable to retrieve AudioTrack pointer for write()".
+ *
+ * ## The race
+ * Every AudioTrack call the writer thread makes — above all the
+ * WRITE_BLOCKING `write` — can block for as long as the sink takes to drain,
+ * and blocks FOREVER on a paused track. Holding the plugin's state lock across
+ * it would hang every method-channel handler, so the writer necessarily calls
+ * the track with no lock held. That is the bug: the writer's staleness check
+ * releases the lock, an End-jam teardown takes it, releases the track, and the
+ * writer's next `write` lands on a freed native handle.
+ *
+ * ## The guard
+ * A caller registers itself in [use] and is refused once [release] has run;
+ * [release] sets that flag FIRST, then pause()/flush()es (which interrupts an
+ * in-flight blocking write so its caller returns promptly), then waits for the
+ * registered callers to leave, and only then frees the handle. So teardown
+ * never blocks behind a long write, and a write never reaches a freed handle.
+ * [IllegalStateException] is still caught in [use] as defense in depth: a HAL
+ * can kill a track on its own, and the wait above is bounded.
+ *
+ * This monitor is a LEAF: it may be taken while holding the plugin lock, never
+ * the other way round, and nothing running inside [use] takes the plugin lock.
+ */
+internal class AudioTrackGate(private val track: AudioTrack) {
+    private val gate = Object()
+    private var released = false
+    private var users = 0
+
+    /** Whether the handle is gone — callers must give up, not retry. */
+    val isReleased: Boolean get() = synchronized(gate) { released }
+
+    /** Test seam: how many callers are inside the track right now. */
+    internal val activeUsers: Int get() = synchronized(gate) { users }
+
+    /**
+     * Runs [op] on a track guaranteed not to be freed underneath it. Returns
+     * null when the track is already released (give up) or when the call threw
+     * [IllegalStateException] anyway. Any other throwable propagates — that is
+     * a real, reportable track failure.
+     */
+    fun <T> use(op: (AudioTrack) -> T): T? {
+        synchronized(gate) {
+            if (released) return null
+            users += 1
+        }
+        try {
+            return op(track)
+        } catch (e: IllegalStateException) {
+            Log.w(LOG_TAG, "AudioTrack call on a dead track", e)
+            return null
+        } finally {
+            synchronized(gate) {
+                users -= 1
+                gate.notifyAll()
+            }
+        }
+    }
+
+    /**
+     * Frees the handle exactly once, after every [use] caller has left it.
+     * Idempotent, so the Dart teardown order (session guards → plugin
+     * `dispose`) can never double-release: a second call returns at the flag
+     * check without touching the freed handle.
+     */
+    fun release() {
+        synchronized(gate) {
+            if (released) return
+            released = true // no new caller can enter from here on
+        }
+        // Interrupt an in-flight WRITE_BLOCKING so its caller returns and
+        // deregisters (AudioTrack::pause/flush interrupt the buffer proxy);
+        // without this a paused track would never drain and the wait below
+        // would always time out.
+        try {
+            track.pause()
+            track.flush()
+        } catch (_: Throwable) {
+        }
+        synchronized(gate) {
+            val deadline = System.nanoTime() + TRACK_DRAIN_WAIT_NS
+            while (users > 0) {
+                val remainMs = (deadline - System.nanoTime()) / 1_000_000L
+                if (remainMs <= 0) break
+                try {
+                    gate.wait(remainMs)
+                } catch (_: InterruptedException) {
+                }
+            }
+            if (users > 0) {
+                Log.w(
+                    LOG_TAG,
+                    "releasing AudioTrack with $users caller(s) still inside it " +
+                        "(wedged HAL); the guarded call site will catch the throw"
+                )
+            }
+        }
+        try {
+            track.release()
+        } catch (_: Throwable) {
+        }
+    }
+}
+
 /**
  * Sample-accurate scheduled audio playback for LocalJam (PROTOCOL.md §5.3–§5.4),
  * Android implementation. Semantic reference: the iOS/macOS Swift plugin.
@@ -166,13 +282,18 @@ import kotlin.math.roundToLong
  * All shared state is guarded by [lock]; the PCM queue has its own internal
  * monitor and is retired (both sides unblocked) whenever the schedule is
  * released. Events are delivered on the main thread.
+ *
+ * The native AudioTrack handle has a THIRD monitor of its own — the gate in
+ * [Schedule.useTrack] / [Schedule.releaseTrack] — because the writer's
+ * blocking calls cannot be made under [lock]. Lock order is strictly
+ * lock → queue / trackGate; nothing running inside a gate takes [lock].
  */
 class LocaljamAudioPlugin :
     FlutterPlugin,
     MethodCallHandler,
     EventChannel.StreamHandler {
     private companion object {
-        const val TAG = "LocaljamAudio"
+        const val TAG = LOG_TAG
 
         /**
          * Minimum achievable scheduling lead (µs): track creation + timestamp
@@ -328,13 +449,33 @@ class LocaljamAudioPlugin :
 
     /**
      * One playAt schedule. Immutable identity + mutable position-mapping
-     * fields; ALL fields (and the track's lifecycle) are guarded by [lock]
-     * except where noted in the writer, which snapshots under the lock, and
-     * [queue], which has its own monitor.
+     * fields; ALL fields are guarded by [lock] except where noted in the
+     * writer, which snapshots under the lock, [queue], which has its own
+     * monitor, and the native track, which has its own gate (see [useTrack]).
+     *
+     * ## Why the track needs its own gate rather than [lock]
+     * Every AudioTrack call the writer makes — above all the WRITE_BLOCKING
+     * `write` — can block for as long as the sink takes to drain, and blocks
+     * FOREVER on a paused track. Holding [lock] across it would hang every
+     * method-channel handler, so the writer necessarily calls the track with
+     * no lock held. That is the whole bug: `isStale()` releases [lock], the
+     * teardown path takes it, releases the track, and the writer's next
+     * `write` lands on a freed native handle — "IllegalStateException: Unable
+     * to retrieve AudioTrack pointer for write()".
+     *
+     * The gate closes it without ever blocking teardown behind a long write:
+     * a caller registers itself under [trackGate] and is refused once
+     * [trackReleased] is set, and [releaseTrack] sets that flag, *then*
+     * pause()/flush()es (which interrupts an in-flight blocking write so it
+     * returns promptly), then waits for the registered callers to leave, and
+     * only then frees the handle. [trackGate] is a leaf monitor — it is taken
+     * while holding [lock] but never the other way round, and [useTrack]
+     * bodies never take [lock] — so the two cannot deadlock.
      */
     private class Schedule(
         val generation: Long,
-        val track: AudioTrack,
+        /** Owned by [gate] from here on; nothing else may touch it. */
+        track: AudioTrack,
         val sampleRate: Int,
         val channels: Int,
         /** Effective anchor instant, native ns (already ≥ now + MIN_LEAD). */
@@ -352,7 +493,22 @@ class LocaljamAudioPlugin :
         var refFrame: Double = 0.0,
         var refNanos: Long = 0L,
         var refValid: Boolean = false
-    )
+    ) {
+        private val gate = AudioTrackGate(track)
+
+        /** Whether the native track is gone (writers must exit, not retry). */
+        val isTrackReleased: Boolean get() = gate.isReleased
+
+        /**
+         * The ONLY way to touch the native track; see [AudioTrackGate.use].
+         * MUST NOT be called with a body that takes [LocaljamAudioPlugin.lock]
+         * (see the lock order in the class doc).
+         */
+        fun <T> useTrack(op: (AudioTrack) -> T): T? = gate.use(op)
+
+        /** Frees the native track once every writer has left it; idempotent. */
+        fun releaseTrack() = gate.release()
+    }
 
     private lateinit var channel: MethodChannel
     private lateinit var eventChannel: EventChannel
@@ -408,13 +564,21 @@ class LocaljamAudioPlugin :
         // keep-alive channel keeps the pre-existing `localjam/keepalive`
         // contract of package:localjam_client's JamKeepAlive.
         JamMediaSessionManager.attach(binding.applicationContext)
+        // Teardown ordering: the keep-alive `release` (Dart's
+        // stopSessionGuards) runs BEFORE the engine's `player.dispose()`, so
+        // without this hook the foreground service would be stopped while the
+        // writer thread is still feeding the track. Release the track first;
+        // the later `dispose` is then a no-op (the schedule is already gone
+        // and Schedule.releaseTrack is idempotent — no double-release).
+        JamMediaSessionManager.onSessionEnding = { stopPlaybackForSessionEnd() }
         keepAliveChannel = MethodChannel(binding.binaryMessenger, "localjam/keepalive").apply {
+            JamMediaSessionManager.keepAliveChannel = this
             setMethodCallHandler { call, result ->
                 when (call.method) {
-                    "acquire" -> {
-                        JamMediaSessionManager.acquire()
-                        result.success(null)
-                    }
+                    // `acquire` answers whether the OS accepted the start;
+                    // a later refusal inside the service arrives as the
+                    // `keepAliveLost` call on this same channel.
+                    "acquire" -> result.success(JamMediaSessionManager.acquire())
                     "release" -> {
                         JamMediaSessionManager.release()
                         result.success(null)
@@ -446,11 +610,15 @@ class LocaljamAudioPlugin :
     override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         channel.setMethodCallHandler(null)
         eventChannel.setStreamHandler(null)
+        if (JamMediaSessionManager.keepAliveChannel === keepAliveChannel) {
+            JamMediaSessionManager.keepAliveChannel = null
+        }
         keepAliveChannel?.setMethodCallHandler(null)
         keepAliveChannel = null
         if (JamMediaSessionManager.channel === mediaSessionChannel) {
             JamMediaSessionManager.channel = null
         }
+        JamMediaSessionManager.onSessionEnding = null
         mediaSessionChannel?.setMethodCallHandler(null)
         mediaSessionChannel = null
         JamMediaSessionManager.dispose()
@@ -675,7 +843,8 @@ class LocaljamAudioPlugin :
         synchronized(lock) {
             if (state == State.PLAYING) {
                 try {
-                    schedule?.track?.pause()
+                    // Gated: a released track is a no-op, never a throw.
+                    schedule?.useTrack { it.pause() }
                 } catch (e: Throwable) {
                     Log.w(TAG, "pause failed", e)
                 }
@@ -718,7 +887,7 @@ class LocaljamAudioPlugin :
             // are immature (nothing presented yet, latency excluded) and are
             // never accepted as a mapping.
             val ts = AudioTimestamp()
-            if (trackTimestamp(sched.track, ts) && ts.framePosition > 0 &&
+            if (trackTimestamp(sched, ts) && ts.framePosition > 0 &&
                 ts.nanoTime > sched.refNanos
             ) {
                 sched.refFrame = ts.framePosition.toDouble()
@@ -754,8 +923,11 @@ class LocaljamAudioPlugin :
                 }
                 sched.rate = rate
                 try {
-                    sched.track.playbackParams =
-                        PlaybackParams().setSpeed(rate.toFloat()).setPitch(1.0f)
+                    // Gated: a released track is a no-op, never a throw.
+                    sched.useTrack {
+                        it.playbackParams =
+                            PlaybackParams().setSpeed(rate.toFloat()).setPitch(1.0f)
+                    }
                 } catch (e: Throwable) {
                     Log.w(TAG, "setRate($rate) failed", e)
                 }
@@ -776,6 +948,22 @@ class LocaljamAudioPlugin :
         replySuccess(result, null)
     }
 
+    /**
+     * The session is ending (keep-alive release): retire the schedule and free
+     * the track — waiting for the writer to leave it — BEFORE the foreground
+     * service is stopped. Idempotent, and safe to call from the platform
+     * thread: the wait is bounded by TRACK_DRAIN_WAIT_NS and normally returns
+     * at once, because releaseTrack interrupts the blocking write first.
+     */
+    private fun stopPlaybackForSessionEnd() {
+        synchronized(lock) {
+            if (schedule == null) return
+            bumpGenerationLocked()
+            releaseTrackLocked()
+            state = if (loaded != null) State.LOADED else State.IDLE
+        }
+    }
+
     // ------------------------------------------------------------ shared state
 
     /** Must hold [lock]. Retires all outstanding writers/decoders/completions. */
@@ -784,21 +972,22 @@ class LocaljamAudioPlugin :
         lock.notifyAll() // wake any writer parked in PAUSED
     }
 
-    /** Must hold [lock]. */
+    /**
+     * Must hold [lock]. Retires the current schedule and frees its native
+     * track — never while a writer is inside it (see [Schedule.releaseTrack]).
+     *
+     * The brief wait for the writer to leave happens with [lock] held, which
+     * is safe by construction: nothing a [Schedule.useTrack] body does takes
+     * [lock], so the writer always reaches its deregistration without needing
+     * the lock this thread is holding. Callers must have bumped the generation
+     * first so the writer exits instead of looping.
+     */
     private fun releaseTrackLocked() {
         val sched = schedule ?: return
         schedule = null
         // Unblock a decoder parked in push() and a writer parked in pop().
         sched.queue.retire()
-        try {
-            sched.track.pause()
-            sched.track.flush()
-        } catch (_: Throwable) {
-        }
-        try {
-            sched.track.release() // also unblocks a writer stuck in write()
-        } catch (_: Throwable) {
-        }
+        sched.releaseTrack()
     }
 
     /** Must hold [lock]. */
@@ -810,15 +999,28 @@ class LocaljamAudioPlugin :
     private fun isStale(sched: Schedule): Boolean =
         synchronized(lock) { generation != sched.generation }
 
+    /**
+     * Whether the writer must exit silently: its schedule was superseded, or
+     * its native track was released out from under it. Both mean "somebody
+     * else already owns the outcome" — reporting engineRestarted here would
+     * make an orderly End-jam look like a failure.
+     */
+    private fun writerRetired(sched: Schedule): Boolean =
+        sched.isTrackReleased || isStale(sched)
+
     // ------------------------------------------------------------ writer thread
 
     /**
      * Streams one schedule: silence priming, then media PCM popped from the
      * decoder's bounded queue, then completion detection. Exits silently the
-     * moment its generation is stale.
+     * moment its generation is stale or its track is released.
+     *
+     * Every native-track call goes through [Schedule.useTrack]; a null result
+     * means the track is gone (or died mid-call), which is either a normal
+     * teardown — exit — or, if the schedule is still current, a real track
+     * failure to report.
      */
     private fun writerMain(sched: Schedule, audio: LoadedAudio) {
-        val track = sched.track
         val sr = sched.sampleRate
         val bpf = audio.bytesPerFrame
         val chunkFrames = max(sr / 100, 128) // ~10 ms
@@ -826,7 +1028,11 @@ class LocaljamAudioPlugin :
         var written = 0L // source frames queued to the track so far
 
         try {
-            track.play()
+            if (sched.useTrack { it.play() } == null) {
+                if (writerRetired(sched)) return
+                writerTrackFailure(sched, "play() threw on a dead track")
+                return
+            }
         } catch (e: Throwable) {
             writerTrackFailure(sched, "play() failed: $e")
             return
@@ -845,20 +1051,33 @@ class LocaljamAudioPlugin :
         var primed = false
         while (!primed) {
             if (isStale(sched)) return
-            val n = track.write(silence, 0, silence.size, AudioTrack.WRITE_BLOCKING)
+            // The write is NOT guarded by `lock` (it blocks): the gate is what
+            // keeps the handle alive across it, and returns null the instant
+            // teardown claimed the track.
+            val n = sched.useTrack {
+                it.write(silence, 0, silence.size, AudioTrack.WRITE_BLOCKING)
+            }
+            if (n == null) {
+                if (writerRetired(sched)) return
+                writerTrackFailure(sched, "write threw on a dead track during priming")
+                return
+            }
             if (n < 0) {
                 writerTrackFailure(sched, "write returned $n during priming")
                 return
             }
             written += n / bpf
-            if (trackTimestamp(track, ts) && ts.framePosition > 0) {
+            if (trackTimestamp(sched, ts) && ts.framePosition > 0) {
                 primed = true
             } else if (System.nanoTime() >= warmupDeadline) {
                 // Some outputs (emulators, odd HALs) never publish timestamps.
                 // Degrade to playbackHeadPosition ~= "presented now": the
                 // pipeline latency goes unaccounted (schedule lands early by
                 // that much); §7 calibration absorbs it. Logged loudly.
-                ts.framePosition = track.playbackHeadPosition.toLong() and 0xffffffffL
+                val head =
+                    sched.useTrack { it.playbackHeadPosition.toLong() and 0xffffffffL }
+                        ?: return // track gone: teardown owns the outcome
+                ts.framePosition = head
                 ts.nanoTime = System.nanoTime()
                 primed = true
                 Log.w(
@@ -888,7 +1107,14 @@ class LocaljamAudioPlugin :
         while (written < s) {
             if (isStale(sched)) return
             val todoFrames = min(chunkFrames.toLong(), s - written).toInt()
-            val n = track.write(silence, 0, todoFrames * bpf, AudioTrack.WRITE_BLOCKING)
+            val n = sched.useTrack {
+                it.write(silence, 0, todoFrames * bpf, AudioTrack.WRITE_BLOCKING)
+            }
+            if (n == null) {
+                if (writerRetired(sched)) return
+                writerTrackFailure(sched, "write threw on a dead track during silence pad")
+                return
+            }
             if (n < 0) {
                 writerTrackFailure(sched, "write returned $n during silence pad")
                 return
@@ -898,7 +1124,7 @@ class LocaljamAudioPlugin :
             // remains — the warm-up sample can be jittery; later samples are
             // steadier. framePosition == 0 reports are optimistic (no latency)
             // and must never re-anchor the mapping.
-            if (trackTimestamp(track, ts) && ts.framePosition > 0) {
+            if (trackTimestamp(sched, ts) && ts.framePosition > 0) {
                 synchronized(lock) {
                     if (generation != sched.generation) return
                     if (ts.nanoTime > sched.refNanos) {
@@ -995,7 +1221,20 @@ class LocaljamAudioPlugin :
                         skipBytes -= drop
                     }
                     while (len > 0) {
-                        val w = track.write(buf, off, len, AudioTrack.WRITE_BLOCKING)
+                        // THE crash site: an End-jam teardown used to free the
+                        // track between the staleness check at the top of this
+                        // loop and this call. The gate now refuses the call
+                        // (null) instead of letting it reach a freed handle.
+                        val w = sched.useTrack {
+                            it.write(buf, off, len, AudioTrack.WRITE_BLOCKING)
+                        }
+                        if (w == null) {
+                            if (writerRetired(sched)) return
+                            writerTrackFailure(
+                                sched, "write threw on a dead track during media stream"
+                            )
+                            return
+                        }
                         if (w < 0) {
                             writerTrackFailure(sched, "write returned $w during media stream")
                             return
@@ -1004,7 +1243,7 @@ class LocaljamAudioPlugin :
                         len -= w
                         mediaBytesWritten += w
                     }
-                    if (trackTimestamp(track, ts) && ts.framePosition > 0) {
+                    if (trackTimestamp(sched, ts) && ts.framePosition > 0) {
                         synchronized(lock) {
                             if (generation != sched.generation) return
                             if (ts.nanoTime > sched.refNanos) {
@@ -1054,7 +1293,7 @@ class LocaljamAudioPlugin :
             if (isStale(sched)) return
             val fNow = synchronized(lock) {
                 if (generation != sched.generation) return
-                if (trackTimestamp(track, ts) && ts.framePosition > 0 &&
+                if (trackTimestamp(sched, ts) && ts.framePosition > 0 &&
                     ts.nanoTime > sched.refNanos
                 ) {
                     sched.refFrame = ts.framePosition.toDouble()
@@ -1078,15 +1317,9 @@ class LocaljamAudioPlugin :
             state = State.FINISHED
             schedule = null
             sched.queue.retire() // decoder already exited at EOS; belt-and-braces
-            try {
-                sched.track.pause()
-                sched.track.flush()
-            } catch (_: Throwable) {
-            }
-            try {
-                sched.track.release()
-            } catch (_: Throwable) {
-            }
+            // This thread IS the only track user and it is not inside
+            // useTrack here, so the release takes effect immediately.
+            sched.releaseTrack()
         }
         Log.d(TAG, "playbackFinished (generation=${sched.generation})")
         emitEvent("playbackFinished")
@@ -1104,13 +1337,18 @@ class LocaljamAudioPlugin :
                     .roundToLong()
         )
 
-    /** getTimestamp that never throws (dead track → false). */
-    private fun trackTimestamp(track: AudioTrack, ts: AudioTimestamp): Boolean =
-        try {
-            track.getTimestamp(ts)
-        } catch (_: Throwable) {
-            false
-        }
+    /**
+     * getTimestamp that never throws and never touches a freed handle:
+     * gated like every other track call, false for a released track.
+     */
+    private fun trackTimestamp(sched: Schedule, ts: AudioTimestamp): Boolean =
+        sched.useTrack {
+            try {
+                it.getTimestamp(ts)
+            } catch (_: Throwable) {
+                false
+            }
+        } ?: false
 
     /**
      * A track (or decoder) error the schedule cannot survive: drop the
@@ -1516,7 +1754,7 @@ class LocaljamAudioPlugin :
                 synchronized(lock) {
                     if (state == State.PLAYING) {
                         try {
-                            schedule?.track?.pause()
+                            schedule?.useTrack { it.pause() }
                         } catch (_: Throwable) {
                         }
                         state = State.PAUSED

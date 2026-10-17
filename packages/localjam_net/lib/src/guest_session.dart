@@ -24,9 +24,11 @@ enum JamConnectionState {
   /// [JamGuestSession.close] was called. Terminal.
   closed,
 
-  /// The host answered a reconnect attempt with `reject` — the session is
-  /// gone (e.g. `bad_token` after a host restart). Terminal; no further
-  /// retries.
+  /// The session is over and no retry can bring it back: the host answered
+  /// with `reject` (e.g. `bad_token` after a host restart), kicked this
+  /// guest, or announced `session_ended` (§3.4). Terminal — see
+  /// [JamGuestSession.hostEnded] and [JamGuestSession.lastFatalError] for
+  /// which of the three it was.
   failed,
 }
 
@@ -100,6 +102,7 @@ class JamGuestSession {
     this._pingInterval,
     this._connectTimeout,
     this._backoff,
+    this._clientId,
     JamGuestClient client,
   ) {
     _adopt(client);
@@ -120,6 +123,7 @@ class JamGuestSession {
     Duration pingInterval = const Duration(seconds: 2),
     Duration connectTimeout = const Duration(seconds: 5),
     JamBackoff? backoff,
+    String? clientId,
   }) async {
     final client = await JamGuestClient.connect(
       joinUri,
@@ -128,6 +132,7 @@ class JamGuestSession {
       caps: caps,
       pingInterval: pingInterval,
       connectTimeout: connectTimeout,
+      clientId: clientId,
     );
     return JamGuestSession._(
       joinUri,
@@ -137,6 +142,7 @@ class JamGuestSession {
       pingInterval,
       connectTimeout,
       backoff ?? JamBackoff(),
+      clientId,
       client,
     );
   }
@@ -148,6 +154,7 @@ class JamGuestSession {
   final Duration _pingInterval;
   final Duration _connectTimeout;
   final JamBackoff _backoff;
+  final String? _clientId;
 
   late JamGuestClient _client;
   List<StreamSubscription<Object?>> _clientSubs = const [];
@@ -210,7 +217,19 @@ class JamGuestSession {
   Stream<List<MediaItem>> get playlistUpdates => _playlists.stream;
 
   /// Other peers currently in the session (last known while reconnecting).
+  /// Always the CURRENT connection's roster — a resume starts from the fresh
+  /// `welcome`, never from a union with what the dead connection remembered.
   List<PeerInfo> get peers => _client.peers;
+
+  /// The host as a person (§3.1 `welcome.host`), or null when the host sent
+  /// none.
+  PeerInfo? get hostPeer => _client.hostPeer;
+
+  /// Whether the host announced a deliberate end (§3.4) before the current
+  /// connection closed — the difference between "the room is over" and "the
+  /// host fell off the network", which otherwise costs a long timeout to
+  /// tell apart.
+  bool get hostEnded => _client.sessionEnded != null;
 
   /// Presence changes (§3.2), continuous across reconnects.
   Stream<JamPeerEvent> get peerEvents => _peerEvents.stream;
@@ -403,6 +422,12 @@ class JamGuestSession {
   void _onClientDone(JamGuestClient client) {
     if (!identical(client, _client)) return; // A superseded connection.
     if (_state != JamConnectionState.connected) return; // Local close/failed.
+    if (client.sessionEnded != null) {
+      // §3.4: the host said the room is over. Retrying would only wait for
+      // a host that shut down on purpose.
+      _transition(JamConnectionState.failed);
+      return;
+    }
     if (client.lastFatalError?.code == ErrorCode.kicked) {
       // §5.6: a kick is deliberate and terminal — never auto-rejoin.
       _transition(JamConnectionState.failed);
@@ -432,6 +457,7 @@ class JamGuestSession {
           // back to a fresh join on the host side — either way the new
           // welcome's peerId is adopted.
           resumePeerId: _client.selfPeerId,
+          clientId: _clientId,
         );
       } on JamRejectedException {
         // §3.1: a reject is authoritative — the session is gone (bad_token
@@ -447,8 +473,15 @@ class JamGuestSession {
         await next.close(); // close() raced the reconnect; discard.
         return;
       }
+      final before = {for (final p in _client.peers) p.peerId: p};
       _adopt(next);
       _transition(JamConnectionState.connected);
+      // §3.2 presence is a delta stream, and a reconnect is a gap in it: the
+      // fresh `welcome` roster is the truth, so consumers that track
+      // presence by event (rather than re-reading [peers]) are handed the
+      // difference instead of silently keeping whoever left while this
+      // guest was away.
+      _emitPeerDelta(before, {for (final p in next.peers) p.peerId: p});
       // Re-emit the fresh welcome snapshot, playlist, and permissions so
       // stream consumers converge without re-reading the getters.
       if (!_states.isClosed) _states.add(next.snapshot);
@@ -457,6 +490,24 @@ class JamGuestSession {
         _permissionUpdates.add(next.permissions);
       }
       return;
+    }
+  }
+
+  /// Emits joined/left events for the difference between two rosters.
+  void _emitPeerDelta(
+    Map<String, PeerInfo> before,
+    Map<String, PeerInfo> after,
+  ) {
+    if (_peerEvents.isClosed) return;
+    for (final peerId in before.keys) {
+      if (!after.containsKey(peerId)) {
+        _peerEvents.add(JamPeerEvent.left(peerId));
+      }
+    }
+    for (final entry in after.entries) {
+      if (!before.containsKey(entry.key)) {
+        _peerEvents.add(JamPeerEvent.joined(entry.value));
+      }
     }
   }
 

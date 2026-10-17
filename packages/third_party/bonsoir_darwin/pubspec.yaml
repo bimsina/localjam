@@ -1,0 +1,30 @@
+name: bonsoir_darwin
+description: >-
+  Darwin (iOS & macOS) implementation of the Bonsoir plugin — LocalJam's
+  vendored copy of 7.1.1, patched so DNS-SD registration never blocks the
+  platform main thread. See PATCHES.md.
+homepage: https://bonsoir.skyost.eu
+repository: https://github.com/Skyost/Bonsoir/tree/main/packages/bonsoir_darwin
+issue_tracker: https://github.com/Skyost/Bonsoir/issues
+publish_to: 'none'
+version: 7.1.1
+
+environment:
+  sdk: ^3.11.0
+  flutter: ">=3.41.0"
+
+flutter:
+  plugin:
+    implements: bonsoir
+    platforms:
+      ios:
+        pluginClass: SwiftBonsoirPlugin
+        sharedDarwinSource: true
+      macos:
+        pluginClass: SwiftBonsoirPlugin
+        sharedDarwinSource: true
+
+dependencies:
+  flutter:
+    sdk: flutter
+  bonsoir_platform_interface: ^7.0.0

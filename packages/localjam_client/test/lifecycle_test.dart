@@ -151,4 +151,49 @@ void main() {
       expect(calls, ['acquire', 'acquire', 'release', 'release']);
     },
   );
+
+  test('a refused keep-alive is surfaced, not swallowed', () async {
+    // Android 12+ refuses a foreground-service start from the background;
+    // the session must survive that, and the engine must know it happened.
+    mockAudioChannel();
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(JamKeepAlive.channel, (call) async {
+          return call.method == 'acquire' ? false : null;
+        });
+    addTearDown(() {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(JamKeepAlive.channel, null);
+    });
+
+    final host = await startHostEngine();
+    expect(host.port, greaterThan(0), reason: 'the session still came up');
+    expect(host.keepAliveActive, isFalse);
+  });
+
+  test('a keep-alive lost after acquire flips active back to false', () async {
+    mockAudioChannel();
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(JamKeepAlive.channel, (call) async {
+          return call.method == 'acquire' ? true : null;
+        });
+    addTearDown(() {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(JamKeepAlive.channel, null);
+    });
+
+    final host = await startHostEngine();
+    expect(host.keepAliveActive, isTrue);
+
+    // The service was refused foreground status after the fact: the platform
+    // pushes `keepAliveLost` back over the same channel.
+    await TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .handlePlatformMessage(
+          JamKeepAlive.channel.name,
+          JamKeepAlive.channel.codec.encodeMethodCall(
+            const MethodCall('keepAliveLost'),
+          ),
+          (_) {},
+        );
+    expect(host.keepAliveActive, isFalse);
+  });
 }

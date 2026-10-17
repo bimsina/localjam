@@ -60,6 +60,44 @@ void main() {
     return engine;
   }
 
+  test('a relaunched guest rejoins as one peer, not two (§3.3)', () async {
+    mockAudioChannel();
+    JamIdentity.resetCacheForTesting();
+    addTearDown(JamIdentity.resetCacheForTesting);
+    SharedPreferences.setMockInitialValues({
+      'localjam.displayName': 'Quirky Toucan',
+      'localjam.clientId': 'c_this_device',
+    });
+    // Long enough that the host's silence sweep cannot quietly clean up
+    // after us: this device is back before its corpse could be reaped.
+    final host = JamHostServer(
+      sessionName: 'RelaunchJam',
+      silenceTimeout: const Duration(seconds: 30),
+    );
+    await host.start(address: InternetAddress.loopbackIPv4);
+    addTearDown(host.close);
+    final joinUri = host.joinUriFor(InternetAddress.loopbackIPv4);
+
+    final first = await JamGuestEngine.join(
+      joinUri,
+      mediaCacheDir: await makeTempDir(),
+    );
+    await waitFor(() => host.peers.isNotEmpty, reason: 'the first join');
+
+    // The app is force-quit: no goodbye reaches the host, and the device
+    // comes back as a brand new engine with the same persisted identity.
+    final back = await JamGuestEngine.join(
+      joinUri,
+      mediaCacheDir: await makeTempDir(),
+    );
+    addTearDown(back.close);
+
+    expect(host.peers.map((p) => p.peerId), [back.selfPeerId]);
+    expect(back.peers, isEmpty, reason: 'no ghost of itself in the roster');
+    expect(back.selfPeerId, isNot(first.selfPeerId));
+    await first.close();
+  });
+
   test(
     'join → prefetches the playlist over real HTTP and reports ready',
     () async {
@@ -294,4 +332,53 @@ void main() {
     );
     expect(host.snapshot.status, PlaybackStatus.paused);
   });
+  test('re-adding a file the jam already has reports alreadyQueued instead '
+      'of silently doing nothing (§6.4)', () async {
+    // Media ids are content-derived, so the host answers a duplicate upload
+    // 200-with-the-existing-item and broadcasts no playlist. Correct, and
+    // indistinguishable from a failure to whoever just picked the file.
+    mockAudioChannel();
+    final host = await startHost();
+    final engine = await joinEngine(host);
+    final file = await writeTempMedia(makeMediaBytes(4096, seed: 11));
+
+    final first = await engine.addMedia(file, name: 'Song.mp3');
+    expect(first.outcome, JamAddOutcome.added);
+    expect(first.alreadyQueued, isFalse);
+    await waitFor(
+      () => engine.playlist.any((i) => i.mediaId == first.item.mediaId),
+      reason: 'the playlist broadcast for the new item',
+    );
+
+    final again = await engine.addMedia(file, name: 'Song.mp3');
+    expect(again.item.mediaId, first.item.mediaId);
+    expect(again.outcome, JamAddOutcome.alreadyQueued);
+    expect(host.playlist, hasLength(1), reason: 'nothing was duplicated');
+
+    // The legacy entry point still returns the item, unchanged.
+    expect((await engine.addMediaFile(file)).mediaId, first.item.mediaId);
+
+    // Different bytes are a genuine add, even under the same name.
+    final other = await engine.addMedia(
+      await writeTempMedia(makeMediaBytes(4096, seed: 12)),
+      name: 'Song.mp3',
+    );
+    expect(other.outcome, JamAddOutcome.added);
+  });
+
+  test('the host reports the same outcome for its own duplicate add',
+      () async {
+    mockAudioChannel();
+    final engine = await JamHostEngine.start(
+      sessionName: 'DupeJam',
+      address: InternetAddress.loopbackIPv4,
+    );
+    addTearDown(engine.close);
+    final file = await writeTempMedia(makeMediaBytes(2048, seed: 3));
+    expect((await engine.addMedia(file)).outcome, JamAddOutcome.added);
+    final again = await engine.addMedia(file);
+    expect(again.outcome, JamAddOutcome.alreadyQueued);
+    expect(engine.playlist, hasLength(1));
+  });
+
 }

@@ -14,7 +14,9 @@ import 'package:localjam_audio/localjam_audio.dart';
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
 
-  testWidgets('nowUs returns a monotonic native clock', (WidgetTester tester) async {
+  testWidgets('nowUs returns a monotonic native clock', (
+    WidgetTester tester,
+  ) async {
     final LocaljamAudio plugin = LocaljamAudio();
     final int a = await plugin.nativeNowUs();
     final int b = await plugin.nativeNowUs();
@@ -22,11 +24,14 @@ void main() {
     expect(b, greaterThanOrEqualTo(a));
   });
 
-  testWidgets('calibrate produces a plausible offset', (WidgetTester tester) async {
+  testWidgets('calibrate produces a plausible offset', (
+    WidgetTester tester,
+  ) async {
     final LocaljamAudio plugin = LocaljamAudio();
     final Stopwatch clock = Stopwatch()..start();
-    final NativeClockCalibration cal =
-        await plugin.calibrate(() => clock.elapsedMicroseconds);
+    final NativeClockCalibration cal = await plugin.calibrate(
+      () => clock.elapsedMicroseconds,
+    );
     expect(cal.rttUs, greaterThanOrEqualTo(0));
     // offset + dartNow should be close to nativeNow (within one second).
     final int predicted = clock.elapsedMicroseconds + cal.offsetUs;

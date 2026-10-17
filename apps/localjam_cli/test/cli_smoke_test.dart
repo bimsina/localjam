@@ -89,7 +89,8 @@ Future<int> _playAndMeasure(
     );
 
     final anchor = snapshot.anchor;
-    final started = snapshot.status == PlaybackStatus.playing &&
+    final started =
+        snapshot.status == PlaybackStatus.playing &&
         anchor != null &&
         sessionNowUs > anchor.hostTimeUs + 100_000;
     if (started) {
@@ -121,8 +122,11 @@ void main() {
       playFor: const Duration(seconds: 2),
     );
 
-    expect(maxAbsDriftUs, lessThan(1000),
-        reason: 'with no skew the sim player should track the anchor');
+    expect(
+      maxAbsDriftUs,
+      lessThan(1000),
+      reason: 'with no skew the sim player should track the anchor',
+    );
     expect(sim.hardResyncs, 0);
     expect(sim.slews, 0);
   });
@@ -140,10 +144,16 @@ void main() {
       playFor: const Duration(milliseconds: 4500),
     );
 
-    expect(sim.slews, greaterThanOrEqualTo(1),
-        reason: 'skew-induced drift must trigger a slew');
-    expect(maxAbsDriftUs, lessThan(50_000),
-        reason: 'slewing must keep drift bounded below the hard-resync line');
+    expect(
+      sim.slews,
+      greaterThanOrEqualTo(1),
+      reason: 'skew-induced drift must trigger a slew',
+    );
+    expect(
+      maxAbsDriftUs,
+      lessThan(50_000),
+      reason: 'slewing must keep drift bounded below the hard-resync line',
+    );
     expect(sim.hardResyncs, 0);
   });
 }

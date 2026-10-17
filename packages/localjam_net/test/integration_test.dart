@@ -33,6 +33,7 @@ Future<File> writeTempMedia(Uint8List bytes) async {
 
 Future<JamHostServer> startHost({
   String sessionName = 'TestJam',
+  String hostName = '',
   int leadTimeUs = 750_000,
   JamEndPolicy endPolicy = JamEndPolicy.pause,
   // Tests that are NOT about permissions run wide open; enforcement has its
@@ -42,9 +43,13 @@ Future<JamHostServer> startHost({
   Duration reconnectGrace = const Duration(seconds: 30),
   Duration livenessCheckInterval = const Duration(seconds: 1),
   int maxUploadBytes = 512 * 1024 * 1024,
+  int uploadBudgetBytes = 2 * 1024 * 1024 * 1024,
+  int maxPlaylistLength = 500,
+  int maxPeers = 32,
 }) async {
   final host = JamHostServer(
     sessionName: sessionName,
+    hostName: hostName,
     leadTimeUs: leadTimeUs,
     endPolicy: endPolicy,
     policy: policy,
@@ -52,6 +57,9 @@ Future<JamHostServer> startHost({
     reconnectGrace: reconnectGrace,
     livenessCheckInterval: livenessCheckInterval,
     maxUploadBytes: maxUploadBytes,
+    uploadBudgetBytes: uploadBudgetBytes,
+    maxPlaylistLength: maxPlaylistLength,
+    maxPeers: maxPeers,
   );
   await host.start(address: InternetAddress.loopbackIPv4);
   addTearDown(host.close);
@@ -61,10 +69,12 @@ Future<JamHostServer> startHost({
 Future<JamGuestClient> joinGuest(
   JamHostServer host, {
   String clientName = 'guest',
+  String? clientId,
 }) async {
   final guest = await JamGuestClient.connect(
     host.joinUriFor(InternetAddress.loopbackIPv4),
     clientName: clientName,
+    clientId: clientId,
   );
   addTearDown(guest.close);
   return guest;
@@ -463,6 +473,143 @@ void main() {
       expect(await dest.readAsBytes(), equals(bytes));
     });
 
+    test('uploads past the session upload budget are answered 507', () async {
+      // Two uploads fit the per-file cap; together they do not fit the
+      // session budget (§6.4 hardening: the per-file cap bounds one file,
+      // not a guest looping just-under-the-cap files).
+      final host = await startHost(
+        maxUploadBytes: 4096,
+        uploadBudgetBytes: 3000,
+      );
+      final guest = await joinGuest(host);
+      final first = await guest.uploadMedia(
+        await writeTempMedia(makeMediaBytes(2000, seed: 1)),
+        kind: MediaKind.audio,
+      );
+      expect(host.playlist.map((i) => i.mediaId), [first.mediaId]);
+      expect(host.uploadedBytes, 2000);
+
+      await expectLater(
+        guest.uploadMedia(
+          await writeTempMedia(makeMediaBytes(2000, seed: 2)),
+          kind: MediaKind.audio,
+        ),
+        throwsA(
+          isA<HttpException>().having(
+            (e) => e.message,
+            'message',
+            contains('507'),
+          ),
+        ),
+      );
+      expect(host.playlist, hasLength(1));
+      expect(host.uploadedBytes, 2000);
+    });
+
+    test('parallel uploads cannot outrun the budget between them', () async {
+      // The TOCTOU the reservation exists for: five uploads that each read
+      // the budget before any of them had written to it. Checking only
+      // already-stored bytes lets all five pass and the session land at
+      // 5000 bytes against a 3000-byte budget.
+      final host = await startHost(
+        maxUploadBytes: 4096,
+        uploadBudgetBytes: 3000,
+      );
+      final guest = await joinGuest(host);
+      final files = [
+        for (var i = 0; i < 5; i++)
+          await writeTempMedia(makeMediaBytes(1000, seed: 100 + i)),
+      ];
+      final results = await Future.wait([
+        for (final file in files)
+          guest
+              .uploadMedia(file, kind: MediaKind.audio)
+              .then<Object?>((item) => item)
+              .catchError((Object e) => e),
+      ]);
+      final accepted = results.whereType<MediaItem>().toList();
+      final refused = results.whereType<HttpException>().toList();
+      expect(accepted, hasLength(3), reason: 'only what fits the budget');
+      expect(refused, hasLength(2));
+      for (final e in refused) {
+        expect(e.message, contains('507'));
+      }
+      expect(host.uploadedBytes, 3000);
+      expect(host.playlist, hasLength(3));
+    });
+
+    test('an upload that dies mid-body refunds its reservation', () async {
+      // A reservation that leaked on failure would be a slower version of
+      // the same bug: the budget would drain without a byte being stored.
+      final host = await startHost(
+        maxUploadBytes: 4096,
+        uploadBudgetBytes: 3000,
+      );
+      final guest = await joinGuest(host);
+
+      final client = HttpClient();
+      final req = await client.postUrl(
+        Uri.parse('http://127.0.0.1:${host.port}/media'),
+      );
+      req.headers.set(HttpHeaders.authorizationHeader, 'Bearer ${host.token}');
+      req.headers.set('X-LocalJam-Kind', 'audio');
+      req.contentLength = 2000;
+      req.add(Uint8List(500));
+      await req.flush();
+      client.close(force: true); // Vanishes with 1500 bytes still promised.
+
+      // The whole budget is available again, so a 2000-byte upload fits.
+      await waitFor(() => host.uploadedBytes == 0, reason: 'nothing stored');
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+      final item = await guest.uploadMedia(
+        await writeTempMedia(makeMediaBytes(2000, seed: 7)),
+        kind: MediaKind.audio,
+      );
+      expect(host.playlist.map((i) => i.mediaId), [item.mediaId]);
+      expect(host.uploadedBytes, 2000);
+    });
+
+    test('uploads past maxPlaylistLength are answered 507', () async {
+      final host = await startHost(maxPlaylistLength: 1);
+      final guest = await joinGuest(host);
+      await guest.uploadMedia(
+        await writeTempMedia(makeMediaBytes(64, seed: 3)),
+        kind: MediaKind.audio,
+      );
+      await expectLater(
+        guest.uploadMedia(
+          await writeTempMedia(makeMediaBytes(64, seed: 4)),
+          kind: MediaKind.audio,
+        ),
+        throwsA(
+          isA<HttpException>().having(
+            (e) => e.message,
+            'message',
+            contains('507'),
+          ),
+        ),
+      );
+      expect(host.playlist, hasLength(1));
+    });
+
+    test('upload without a Content-Length is answered 411', () async {
+      // A chunked body cannot be checked against any cap before it is read,
+      // so it is refused outright — every LocalJam client declares a length.
+      final host = await startHost();
+      final http = HttpClient();
+      addTearDown(() => http.close(force: true));
+      final req = await http.postUrl(
+        Uri.parse('http://127.0.0.1:${host.port}/media'),
+      );
+      req.headers.set(HttpHeaders.authorizationHeader, 'Bearer ${host.token}');
+      req.headers.set('X-LocalJam-Kind', 'audio');
+      req.add(makeMediaBytes(64));
+      final res = await req.close();
+      expect(res.statusCode, HttpStatus.lengthRequired);
+      await res.drain<void>();
+      expect(host.playlist, isEmpty);
+    });
+
     test('upload over maxUploadBytes is answered 413', () async {
       final host = await startHost(maxUploadBytes: 100);
       final guest = await joinGuest(host);
@@ -715,6 +862,74 @@ void main() {
       expect(host.snapshot.mediaId, a.mediaId);
     });
 
+    test('next/previous keep a playing session playing, from 0 with a fresh '
+        'anchor (§5.5 ADVANCE parity)', () async {
+      final host = await startHost();
+      final a = await addTrack(host, seed: 1);
+      final b = await addTrack(host, seed: 2);
+      final c = await addTrack(host, seed: 3);
+      final guest = await joinGuest(host);
+
+      host.setMedia(a.mediaId);
+      host.play();
+      await waitFor(
+        () => guest.snapshot.status == PlaybackStatus.playing,
+        reason: 'playing on a',
+      );
+
+      // The reported bug: next() selected the track and left the state at
+      // `loading`, so every follower stopped and the transport flipped to
+      // the play glyph.
+      host.next();
+      expect(host.snapshot.mediaId, b.mediaId);
+      expect(host.snapshot.status, PlaybackStatus.playing);
+      expect(host.snapshot.anchor, isNotNull);
+      // A fresh scheduled start at position 0 (§5.3), not a carried-over one.
+      expect(host.snapshot.anchor!.positionUs, 0);
+      expect(host.snapshot.positionUs, 0);
+      final untilAnchorUs = host.snapshot.anchor!.hostTimeUs - monotonicNowUs();
+      expect(untilAnchorUs, greaterThan(400_000));
+      expect(untilAnchorUs, lessThanOrEqualTo(750_000));
+      // The position the anchor formula yields right now is still ~0: the
+      // scheduled start has not arrived yet.
+      expect(host.snapshot.positionAt(monotonicNowUs()), 0);
+
+      // Guests land on the same playing state, not on `loading`.
+      await waitFor(
+        () =>
+            guest.snapshot.mediaId == b.mediaId &&
+            guest.snapshot.status == PlaybackStatus.playing,
+        reason: 'guest playing b',
+      );
+      expect(guest.snapshot.anchor, isNotNull);
+
+      // Previous is the same transition in the other direction, and wraps.
+      host.previous();
+      expect(host.snapshot.mediaId, a.mediaId);
+      expect(host.snapshot.status, PlaybackStatus.playing);
+      host.previous();
+      expect(host.snapshot.mediaId, c.mediaId);
+      expect(host.snapshot.status, PlaybackStatus.playing);
+
+      // A guest's request travels the same path.
+      await guest.requestNext();
+      await waitFor(
+        () =>
+            guest.snapshot.mediaId == a.mediaId &&
+            guest.snapshot.status == PlaybackStatus.playing,
+        reason: 'guest-requested next keeps playing',
+      );
+
+      // Paused stays paused: skipping selects the track and does not start it.
+      host.pause();
+      expect(host.snapshot.status, PlaybackStatus.paused);
+      host.next();
+      expect(host.snapshot.mediaId, b.mediaId);
+      expect(host.snapshot.status, isNot(PlaybackStatus.playing));
+      expect(host.snapshot.anchor, isNull);
+      expect(host.snapshot.positionUs, 0);
+    });
+
     test(
       'a kicked peer\'s role is forgotten but a resumable drop keeps it',
       () async {
@@ -934,6 +1149,62 @@ void main() {
       final dest = File('${Directory.systemTemp.path}/never_written.bin');
       expect(() => guest.fetchMediaToFile('m_nope', dest), throwsArgumentError);
     });
+
+    test(
+      'a body past the declared sizeBytes is abandoned mid-stream',
+      () async {
+        final host = await startHost();
+        // The playlist under-declares by more than the slack: the guest must
+        // stop writing rather than take whatever the host keeps sending.
+        final bytes = makeMediaBytes(512 * 1024);
+        final file = await writeTempMedia(bytes);
+        final honest = await JamHostServer.describeFile(
+          file,
+          kind: MediaKind.audio,
+        );
+        final lying = MediaItem(
+          mediaId: honest.mediaId,
+          kind: honest.kind,
+          name: honest.name,
+          mime: honest.mime,
+          sizeBytes: 1024,
+          // Empty digest: the size check is what must fire, not the hash.
+          sha256: '',
+        );
+        host.addMedia(lying, file);
+        final guest = await joinGuest(host);
+
+        final dir = await Directory.systemTemp.createTemp('localjam_dl');
+        addTearDown(() => dir.delete(recursive: true));
+        final dest = File('${dir.path}/track.bin');
+        await expectLater(
+          guest.fetchMediaToFile(lying.mediaId, dest),
+          throwsA(
+            isA<StateError>().having(
+              (e) => e.message,
+              'message',
+              contains('declared size'),
+            ),
+          ),
+        );
+        expect(dest.existsSync(), isFalse);
+      },
+    );
+  });
+
+  test('artwork past the guest-side cap is abandoned (§6.5)', () async {
+    // Artwork is the one response a guest buffers whole, and nothing on the
+    // wire declares its size — so the cap is the only bound.
+    final host = await startHost();
+    final oversized = Uint8List(JamGuestClient.maxArtworkBytes + 1024);
+    final artworkId = await host.addArtwork(oversized, mime: 'image/png');
+    final guest = await joinGuest(host);
+    await expectLater(
+      guest.fetchArtwork(artworkId),
+      throwsA(
+        isA<StateError>().having((e) => e.message, 'message', contains('cap')),
+      ),
+    );
   });
 
   test('wrong token on the control plane is rejected', () async {
@@ -955,6 +1226,183 @@ void main() {
     expect((decoded.message as RejectMessage).reason, RejectReason.badToken);
     await frames.done; // Host closes after the reject.
     await ws.close();
+  });
+
+  group('returning devices (§3.3 clientId)', () {
+    /// A socket that says hello and then never speaks again: an app
+    /// force-quit or killed while backgrounded, whose FIN never arrives. The
+    /// host cannot know it is dead until the silence timeout — which is the
+    /// whole window in which a phantom can exist.
+    Future<void> joinAndPlayDead(
+      JamHostServer host, {
+      required String clientName,
+      String? clientId,
+    }) async {
+      final ws = await WebSocket.connect('ws://127.0.0.1:${host.port}/ws');
+      ws.listen((_) {});
+      addTearDown(() => ws.close().catchError((Object _) {}));
+      ws.add(
+        _codec.encode(
+          HelloMessage(
+            token: host.token,
+            clientName: clientName,
+            clientKind: 'flutter',
+            clientId: clientId,
+          ),
+          seq: 0,
+        ),
+      );
+      await waitFor(
+        () => host.peers.any((p) => p.clientName == clientName),
+        reason: '$clientName to join',
+      );
+    }
+
+    test('a device that force-quits and rejoins replaces its own ghost, '
+        'instead of haunting the roster next to itself', () async {
+      // Long enough that the silence sweep cannot rescue us: the ghost is
+      // still "connected" as far as the host knows when the device returns.
+      final host = await startHost(silenceTimeout: const Duration(seconds: 30));
+      await joinAndPlayDead(
+        host,
+        clientName: 'Quirky Toucan',
+        clientId: 'c_device_a',
+      );
+      expect(host.peers, hasLength(1));
+
+      // Same device, new process, new peerId — and the same clientId.
+      final back = await joinGuest(
+        host,
+        clientName: 'Quirky Toucan',
+        clientId: 'c_device_a',
+      );
+
+      expect(
+        host.peers.map((p) => p.peerId),
+        [back.selfPeerId],
+        reason: 'the room is exactly {host, the returning guest}',
+      );
+      expect(
+        back.peers,
+        isEmpty,
+        reason: 'the rejoining guest is not handed a copy of itself',
+      );
+    });
+
+    test('a kicked device that rejoins is one peer, not two', () async {
+      final host = await startHost(silenceTimeout: const Duration(seconds: 30));
+      final first = await joinGuest(
+        host,
+        clientName: 'Quirky Toucan',
+        clientId: 'c_device_a',
+      );
+      host.promotePeer(first.selfPeerId);
+      host.kickPeer(first.selfPeerId);
+      await waitFor(() => host.peers.isEmpty, reason: 'the kick to land');
+
+      final back = await joinGuest(
+        host,
+        clientName: 'Quirky Toucan',
+        clientId: 'c_device_a',
+      );
+      expect(host.peers.map((p) => p.peerId), [back.selfPeerId]);
+      expect(back.peers, isEmpty);
+      // §5.6: a kicked peer's role is forgotten; the new slot starts plain.
+      expect(host.permissions.cohosts, isNot(contains(back.selfPeerId)));
+    });
+
+    test('two different devices sharing a display name both stay', () async {
+      final host = await startHost();
+      final a = await joinGuest(
+        host,
+        clientName: 'Quirky Toucan',
+        clientId: 'c_device_a',
+      );
+      final b = await joinGuest(
+        host,
+        clientName: 'Quirky Toucan',
+        clientId: 'c_device_b',
+      );
+      expect(host.peers, hasLength(2));
+      expect(b.peers.map((p) => p.peerId), [a.selfPeerId]);
+    });
+
+    test('a v0.1 client without a clientId is left alone', () async {
+      final host = await startHost();
+      final a = await joinGuest(host, clientName: 'Quirky Toucan');
+      final b = await joinGuest(host, clientName: 'Quirky Toucan');
+      expect(host.peers, hasLength(2));
+      expect(a.selfPeerId, isNot(b.selfPeerId));
+    });
+  });
+
+  group('deliberate session end (§3.4)', () {
+    test('close() announces session_ended and closes normally', () async {
+      final host = await startHost();
+      final guest = await joinGuest(host);
+      expect(guest.sessionEnded, isNull);
+
+      await host.close();
+
+      await waitFor(
+        () => guest.sessionEnded != null,
+        timeout: const Duration(seconds: 1),
+        reason: 'the goodbye to arrive within a second',
+      );
+      expect(guest.sessionEnded!.reason, SessionEndedReason.hostEnded);
+      await guest.done;
+    });
+
+    test('close(announce: false) is a crash: silence only', () async {
+      final host = await startHost();
+      final guest = await joinGuest(host);
+
+      await host.close(announce: false);
+      await guest.done;
+      expect(guest.sessionEnded, isNull);
+    });
+
+    test('an announced end is terminal for a reconnecting session', () async {
+      final host = await startHost();
+      final session = await JamGuestSession.connect(
+        host.joinUriFor(InternetAddress.loopbackIPv4),
+        backoff: JamBackoff(
+          initialDelay: const Duration(milliseconds: 20),
+          maxDelay: const Duration(milliseconds: 50),
+          jitterRatio: 0,
+        ),
+      );
+      addTearDown(session.close);
+
+      await host.close();
+      await waitFor(
+        () => session.connectionState == JamConnectionState.failed,
+        timeout: const Duration(seconds: 1),
+        reason: 'the session to end without a reconnect round',
+      );
+      expect(session.hostEnded, isTrue);
+    });
+  });
+
+  group('the host is a person (§3.1 welcome.host)', () {
+    test('welcome carries the host identity, outside the peer list', () async {
+      final host = await startHost(hostName: 'Silky Puffin');
+      final guest = await joinGuest(host);
+
+      expect(guest.hostPeer?.clientName, 'Silky Puffin');
+      expect(guest.hostPeer?.peerId, JamPermissions.hostPeerId);
+      expect(
+        guest.peers,
+        isEmpty,
+        reason: 'the host is not a joined peer (§5.6)',
+      );
+    });
+
+    test('an anonymous host sends an empty name, not a fake one', () async {
+      final host = await startHost();
+      final guest = await joinGuest(host);
+      expect(guest.hostPeer?.clientName, isEmpty);
+    });
   });
 
   test('peer_left is broadcast after a guest closes', () async {
@@ -994,6 +1442,7 @@ void main() {
             token: host.token,
             clientName: 'sleepy',
             clientKind: 'test',
+            clientId: 'device-sleepy',
           ),
           seq: 0,
         ),
@@ -1019,6 +1468,9 @@ void main() {
             clientName: 'sleepy',
             clientKind: 'test',
             resumePeerId: peerId,
+            // §3.3: the slot belongs to the device that held it, and this
+            // is how the device proves it is that one.
+            clientId: 'device-sleepy',
           ),
           seq: 0,
         ),
@@ -1029,6 +1481,140 @@ void main() {
       await ws2.close();
     },
   );
+
+  test(
+    'a resume without the slot\'s clientId gets a fresh peer, not the role',
+    () async {
+      // §3.3/§9: peerIds are public — they ride `welcome.peers`,
+      // `peer_joined` and `peer_left` — so any guest in the room can name a
+      // co-host's id the moment it drops. If naming it were enough, the
+      // grace window would be a 30-second offer of someone else's role.
+      final host = await startHost(
+        silenceTimeout: const Duration(milliseconds: 300),
+        reconnectGrace: const Duration(seconds: 5),
+        livenessCheckInterval: const Duration(milliseconds: 50),
+      );
+
+      Future<(WebSocket, StreamQueue, WelcomeMessage)> sayHello({
+        required String name,
+        String? clientId,
+        String? resumePeerId,
+      }) async {
+        final ws = await WebSocket.connect('ws://127.0.0.1:${host.port}/ws');
+        final frames = StreamQueue(ws);
+        ws.add(
+          _codec.encode(
+            HelloMessage(
+              token: host.token,
+              clientName: name,
+              clientKind: 'test',
+              clientId: clientId,
+              resumePeerId: resumePeerId,
+            ),
+            seq: 0,
+          ),
+        );
+        final welcome =
+            _codec.decode(await frames.next as String).message
+                as WelcomeMessage;
+        return (ws, frames, welcome);
+      }
+
+      // Guest A joins and is promoted to co-host, then dies without a FIN
+      // (force-quit, phone off the network): the silence timeout reaps it and
+      // its slot — role and all — sits in the grace window.
+      final (wsA, _, welcomeA) = await sayHello(
+        name: 'A',
+        clientId: 'device-a',
+      );
+      final aId = welcomeA.selfPeerId;
+      host.promotePeer(aId);
+      expect(host.permissions.roleOf(aId), JamRole.cohost);
+      final dropped = host.events
+          .firstWhere((e) => e.kind == JamHostEventKind.peerLeft)
+          .timeout(const Duration(seconds: 3));
+      expect((await dropped).peerId, aId);
+
+      // Guest B — a different device, holding the same room token, which is
+      // all "possession of the QR" ever proved — claims A's slot.
+      final (wsB, _, welcomeB) = await sayHello(
+        name: 'B',
+        clientId: 'device-b',
+        resumePeerId: aId,
+      );
+      expect(
+        welcomeB.selfPeerId,
+        isNot(aId),
+        reason: 'an unproven resume is a fresh join, not an inheritance',
+      );
+      expect(host.permissions.roleOf(welcomeB.selfPeerId), JamRole.guest);
+      expect(
+        host.permissions.allows(
+          welcomeB.selfPeerId,
+          JamCapability.manageMembers,
+        ),
+        isFalse,
+      );
+      // A's slot survived the theft attempt, role intact.
+      expect(host.permissions.roleOf(aId), JamRole.cohost);
+
+      // ...and A, back on the network, still gets it.
+      final (wsA2, _, welcomeA2) = await sayHello(
+        name: 'A',
+        clientId: 'device-a',
+        resumePeerId: aId,
+      );
+      expect(welcomeA2.selfPeerId, aId);
+      expect(host.permissions.roleOf(aId), JamRole.cohost);
+
+      await wsA.close();
+      await wsB.close();
+      await wsA2.close();
+    },
+  );
+
+  test('a v0.1 client (no clientId) never resumes a slot', () async {
+    // Documented in §3.3: proving identity is what a resume is now, and a
+    // client that carries no identity cannot. It joins fresh instead.
+    final host = await startHost(
+      silenceTimeout: const Duration(milliseconds: 300),
+      reconnectGrace: const Duration(seconds: 5),
+      livenessCheckInterval: const Duration(milliseconds: 50),
+    );
+    final ws = await WebSocket.connect('ws://127.0.0.1:${host.port}/ws');
+    final frames = StreamQueue(ws);
+    ws.add(
+      _codec.encode(
+        HelloMessage(token: host.token, clientName: 'old', clientKind: 'test'),
+        seq: 0,
+      ),
+    );
+    final peerId =
+        (_codec.decode(await frames.next as String).message as WelcomeMessage)
+            .selfPeerId;
+    await host.events
+        .firstWhere((e) => e.kind == JamHostEventKind.peerLeft)
+        .timeout(const Duration(seconds: 3));
+
+    final ws2 = await WebSocket.connect('ws://127.0.0.1:${host.port}/ws');
+    final frames2 = StreamQueue(ws2);
+    ws2.add(
+      _codec.encode(
+        HelloMessage(
+          token: host.token,
+          clientName: 'old',
+          clientKind: 'test',
+          resumePeerId: peerId,
+        ),
+        seq: 0,
+      ),
+    );
+    final welcome2 =
+        _codec.decode(await frames2.next as String).message as WelcomeMessage;
+    expect(welcome2.selfPeerId, isNot(peerId));
+    await ws.close();
+    await ws2.close();
+  });
 
   test('per-peer readiness is retained across setMedia switches', () async {
     final host = await startHost();

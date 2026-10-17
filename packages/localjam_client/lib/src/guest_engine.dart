@@ -103,9 +103,11 @@ class JamPrefetchState {
 enum JamSessionEndReason {
   /// The connection dropped and stayed in [JamConnectionState.reconnecting]
   /// for longer than [JamGuestEngine.hostGoneTimeout]; the engine stopped
-  /// the retries. The host is gone (host death ends the room — PROTOCOL.md
-  /// §10; the host closes sockets with `goingAway`, and this timeout is the
-  /// guest-side contract for detecting it when no reject ever arrives).
+  /// the retries. The host is gone without having said so — a crash, a dead
+  /// battery, a walk out of range (host death ends the room, PROTOCOL.md
+  /// §10). A host that shuts down deliberately announces it and lands on
+  /// [hostEnded] instead, in milliseconds; this timeout is the contract for
+  /// silence, which is all a crash leaves behind.
   hostGone,
 
   /// The host answered a (re)join with `reject` (§3.1) — e.g. `bad_token`
@@ -115,6 +117,14 @@ enum JamSessionEndReason {
   /// The host removed this guest from the session (§5.6, fatal `kicked`
   /// error). Immediate and final; the engine never auto-rejoins.
   kicked,
+
+  /// The host ended the room on purpose and said so (§3.4 `session_ended`):
+  /// "End jam", not a crash. Immediate and final — the engine never waits
+  /// out [JamGuestEngine.hostGoneTimeout] for a host that already said
+  /// goodbye. Local playback is left exactly as [hostGone] leaves it: the
+  /// transport stops, cached audio is not touched, and the app decides what
+  /// its terminal screen does with it.
+  hostEnded,
 
   /// [JamGuestEngine.close] was called locally.
   closedLocally,
@@ -194,12 +204,18 @@ class JamGuestEngine extends JamEngine {
     int cacheMaxBytes = 1 << 30,
     JamBackoff? backoff,
     Duration hostGoneTimeout = const Duration(seconds: 90),
+
+    /// Stable per-device id announced in `hello` (§3.3), so a host replaces
+    /// this device's previous slot instead of keeping a ghost of it in the
+    /// roster. Defaults to the persistent [JamIdentity.clientId].
+    String? clientId,
   }) async {
     final session = await JamGuestSession.connect(
       joinUri,
       clientName: clientName ?? await JamIdentity.displayName(),
       clientKind: clientKind,
       backoff: backoff,
+      clientId: clientId ?? await JamIdentity.clientId(),
     );
     final Directory cacheDir;
     try {
@@ -323,9 +339,15 @@ class JamGuestEngine extends JamEngine {
   @override
   Stream<List<MediaItem>> get playlistUpdates => _session.playlistUpdates;
 
-  /// Other peers currently in the session (excluding this guest).
+  /// Other peers currently in the session (excluding this guest, and never
+  /// including the host — see [hostPeer]).
   @override
   List<PeerInfo> get peers => _session.peers;
+
+  /// The host as a person (§3.1 `welcome.host`): the reserved host peer id
+  /// plus its display name. Null against a host that shares no identity.
+  @override
+  PeerInfo? get hostPeer => _session.hostPeer;
 
   @override
   String? localPathFor(MediaItem item) =>
@@ -428,7 +450,23 @@ class JamGuestEngine extends JamEngine {
   /// bytes were already in the session — uploads are idempotent, §6.4).
   /// Throws [HttpException] on a rejected upload (401/413/...), or
   /// [StateError] while the session is not connected.
-  Future<MediaItem> addMediaFile(File file, {String? name}) async {
+  ///
+  /// Prefer [addMedia], which says whether the add actually added anything.
+  Future<MediaItem> addMediaFile(File file, {String? name}) async =>
+      (await addMedia(file, name: name)).item;
+
+  /// [addMediaFile], plus what the add did (§6.4).
+  ///
+  /// Uploads are idempotent on content hash: re-adding a file the jam already
+  /// has is answered 200 with the existing item and broadcasts no playlist,
+  /// so from the app's side it is a no-op that looks exactly like a failure.
+  /// `localjam_net`'s `uploadMedia` collapses the host's 200 and 201 into one
+  /// `MediaItem`, so the distinction is recovered here: the playlist is
+  /// snapshotted *before* the upload — the broadcast for a genuinely new item
+  /// can beat the HTTP response — and an id that was already in it means the
+  /// queue already had these bytes.
+  Future<JamAddResult> addMedia(File file, {String? name}) async {
+    final knownBefore = {for (final item in playlist) item.mediaId};
     final durationUs = await _probeDurationUs(file.path);
     final mime = mimeForPath(file.path);
     // Describe the file locally (sha256 + size) to seed the cache before the
@@ -454,18 +492,32 @@ class JamGuestEngine extends JamEngine {
           if (!_closed) uploadProgress.value = progress;
         },
       );
-      if (_closed) return item;
-      _setPrefetch(
-        item.mediaId,
-        JamPrefetchState(
-          phase: JamPrefetchPhase.ready,
-          progress: 1,
-          path: cached.path,
-        ),
-      );
+      if (_closed) {
+        return JamAddResult(
+          item,
+          knownBefore.contains(item.mediaId)
+              ? JamAddOutcome.alreadyQueued
+              : JamAddOutcome.added,
+        );
+      }
+      if (cached != null) {
+        _setPrefetch(
+          item.mediaId,
+          JamPrefetchState(
+            phase: JamPrefetchPhase.ready,
+            progress: 1,
+            path: cached.path,
+          ),
+        );
+      }
       await sync.notifyMediaAvailable(item.mediaId);
       unawaited(_cache.evict(protectedPaths: _protectedCachePaths()));
-      return item;
+      return JamAddResult(
+        item,
+        knownBefore.contains(item.mediaId)
+            ? JamAddOutcome.alreadyQueued
+            : JamAddOutcome.added,
+      );
     } finally {
       if (!_closed) uploadProgress.value = null;
     }
@@ -510,16 +562,21 @@ class JamGuestEngine extends JamEngine {
   }
 
   Future<Uint8List?> _loadArtwork(String artworkId) async {
-    final file = File('${_cache.dir.path}/$artworkId');
-    try {
-      final bytes = await file.readAsBytes();
-      if (bytes.isNotEmpty) return bytes;
-    } catch (_) {
-      // Miss: fetch from the host.
+    // The id comes from the host and names a file: an id that is not a §6.5
+    // artwork id is a permanent cache miss, and no path is built from it.
+    final file = _cache.artworkFileFor(artworkId);
+    if (file != null) {
+      try {
+        final bytes = await file.readAsBytes();
+        if (bytes.isNotEmpty) return bytes;
+      } catch (_) {
+        // Miss: fetch from the host.
+      }
     }
     try {
       final bytes = await _session.fetchArtwork(artworkId);
       try {
+        if (file == null) throw const FormatException('uncacheable artworkId');
         await _cache.dir.create(recursive: true);
         final tmp = File('${file.path}.part');
         await tmp.writeAsBytes(bytes, flush: true);
@@ -586,14 +643,15 @@ class JamGuestEngine extends JamEngine {
       case JamConnectionState.reconnecting:
         _hostGoneTimer ??= Timer(hostGoneTimeout, _onHostGoneTimeout);
       case JamConnectionState.failed:
-        // §3.1/§5.6: terminal — either the host rejected a (re)join
-        // (bad_token, full, version) or it kicked this guest (fatal error
-        // before the close).
-        _end(
-          _session.lastFatalError?.code == ErrorCode.kicked
-              ? JamSessionEndReason.kicked
-              : JamSessionEndReason.rejected,
-        );
+        // Terminal, and which terminal matters to the copy on screen: the
+        // host said goodbye (§3.4), removed this guest (§5.6 fatal
+        // `kicked`), or refused the (re)join (§3.1 bad_token/full/version).
+        _end(switch (_session) {
+          _ when _session.hostEnded => JamSessionEndReason.hostEnded,
+          _ when _session.lastFatalError?.code == ErrorCode.kicked =>
+            JamSessionEndReason.kicked,
+          _ => JamSessionEndReason.rejected,
+        });
       case JamConnectionState.closed:
         // Only reachable via a local close (ours or _end's); the reason has
         // already been published by whoever initiated it.
@@ -652,10 +710,11 @@ class JamGuestEngine extends JamEngine {
   /// Cache paths eviction must never remove: the current track and the ahead
   /// window (regardless of `prefetchAll`), plus any in-flight destination.
   Set<String> _protectedCachePaths() => {
-    for (final item in _windowItems()) ...[
-      _cache.fileFor(item).path,
-      '${_cache.fileFor(item).path}.part',
-    ],
+    for (final item in _windowItems())
+      if (_cache.fileFor(item) case final file?) ...[
+        file.path,
+        '${file.path}.part',
+      ],
   };
 
   /// Rebuilds the prefetch plan: window items become queued (ready ones stay
@@ -806,8 +865,21 @@ class JamGuestEngine extends JamEngine {
       // Cache probe failed: fall through to the network.
     }
     if (_closed) return;
-    _setPrefetch(id, const JamPrefetchState(phase: JamPrefetchPhase.fetching));
     final dest = _cache.fileFor(item);
+    if (dest == null) {
+      // §6.1 says a MediaItem carries a sha256; one that does not is not
+      // fetchable (there is nothing to verify the bytes against) and never
+      // touches the cache directory.
+      _setPrefetch(
+        id,
+        const JamPrefetchState(
+          phase: JamPrefetchPhase.failed,
+          error: 'malformed sha256',
+        ),
+      );
+      return;
+    }
+    _setPrefetch(id, const JamPrefetchState(phase: JamPrefetchPhase.fetching));
     final part = File('${dest.path}.part');
     try {
       // fetchMediaToFile streams to disk (never whole files in memory),

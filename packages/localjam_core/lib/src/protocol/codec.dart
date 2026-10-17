@@ -123,6 +123,8 @@ class MessageCodec {
         return PeerJoinedMessage.fromPayload(payload);
       case PeerLeftMessage.wireType:
         return PeerLeftMessage.fromPayload(payload);
+      case SessionEndedMessage.wireType:
+        return SessionEndedMessage.fromPayload(payload);
       case ClockPingMessage.wireType:
         return ClockPingMessage.fromPayload(payload);
       case ClockPongMessage.wireType:
