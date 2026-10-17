@@ -14,6 +14,7 @@ library;
 import 'dart:async';
 import 'dart:ui' show FontFeature, ImageFilter;
 
+import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_svg/flutter_svg.dart';
@@ -25,6 +26,7 @@ import 'package:share_plus/share_plus.dart';
 import '../design/tokens.dart';
 import '../design/typography.dart';
 import '../state/session_controller.dart';
+import '../util/format.dart';
 import '../util/network.dart';
 import 'avatar.dart';
 import 'buttons.dart';
@@ -40,6 +42,15 @@ abstract final class RoomSheetStrings {
       'Anyone on this network can scan this to join.';
   static const String inviteOnHotspot =
       'Everyone joins your hotspot first, then scans this.';
+
+  /// No Wi-Fi and no hotspot: there is no address a guest could reach, so
+  /// there is no code to show. The engine re-checks every couple of seconds
+  /// and the code appears by itself once a network does.
+  static const String noNetworkTitle =
+      'Connect to Wi\u2011Fi or start a hotspot';
+  static const String noNetworkDetail =
+      'The code to join shows up here as soon as there\u2019s a network to '
+      'share.';
   static const String roomCode = 'Room code';
   static const String roomCodeDetail = 'Tap to copy the invite link';
   static const String copy = 'Copy the invite link';
@@ -85,17 +96,34 @@ abstract final class RoomSheetStrings {
       'You can rejoin as long as the room is still up.';
   static const String leave = 'Leave';
 
-  /// The host's row when this device is a guest — a guest never learns the
-  /// host's display name over the wire.
+  /// People the host removed this session, and the way back in for them.
+  static const String removed = 'Removed';
+  static const String removedDetail =
+      'They can\u2019t rejoin until you let them back in.';
+  static const String letBackIn = 'Let back in';
+
+  /// The button's spoken name: the words on it first (so "tap Let back in"
+  /// works by voice), then whom it is for.
+  static String letBackInFor(String name) => '$letBackIn: $name';
+  static String letBackInDone(String name) => '$name can join again';
+
+  /// A host action the room refused — never the exception's own text.
+  static const String actionFailed = 'Couldn\u2019t change that. Try again.';
+
+  /// The host's row when this device is a guest and the host shared no
+  /// display name.
   static const String host = 'Host';
 
   /// "4 in the room".
   static String inTheRoom(int n) => '$n in the room';
 
   static String removeTitle(String name) => 'Remove $name?';
+
+  /// A removal holds (§5.6): the device stays out — the room code included
+  /// — until the host lets it back in from the Removed list.
   static const String removeDetail =
-      'They stop hearing the room straight away. They can come back with the '
-      'room code.';
+      'They stop hearing the room straight away, and can\u2019t rejoin until '
+      'you let them back in.';
 
   /// The preset [policy] matches, or [presetCustom] once a switch diverges.
   static String presetName(JamPolicy policy) => switch (policy) {
@@ -157,7 +185,6 @@ Future<void> showRoomSheet(
   JamEngine engine, {
   required String selfName,
   required JamNetworkStatus network,
-  Uri? joinUri,
 }) {
   return showModalBottomSheet<void>(
     context: context,
@@ -182,7 +209,6 @@ Future<void> showRoomSheet(
             engine: engine,
             selfName: selfName,
             network: network,
-            joinUri: joinUri,
             inSheet: true,
           ),
         ),
@@ -229,7 +255,6 @@ class RoomPanel extends StatefulWidget {
     required this.engine,
     required this.selfName,
     required this.network,
-    this.joinUri,
     this.scrollController,
     this.inSheet = false,
   });
@@ -240,9 +265,6 @@ class RoomPanel extends StatefulWidget {
   final String selfName;
 
   final JamNetworkStatus network;
-
-  /// Host only: the room's join URI.
-  final Uri? joinUri;
 
   /// Supplied by a DraggableScrollableSheet; when null the enclosing sheet's
   /// controller is picked up from [JamSheetScrollController].
@@ -279,23 +301,37 @@ class _RoomPanelState extends State<RoomPanel> {
     } else {
       _subs.add(_host!.events.listen(refresh));
     }
+    // The end rebuilds the page off the engine's listenables (see
+    // [_whileLive]) before the engine releases them.
+    if (_engine.sessionEnded.value == null) {
+      _engine.sessionEnded.addListener(_onEnded);
+    }
+  }
+
+  void _onEnded() {
+    if (mounted) setState(() {});
   }
 
   @override
   void dispose() {
+    _engine.sessionEnded.removeListener(_onEnded);
     for (final sub in _subs) {
       unawaited(sub.cancel());
     }
     super.dispose();
   }
 
+  /// Runs a host mutation that may throw (a peer who left between the menu
+  /// opening and the tap, a policy the server refused). The exception is for
+  /// the log; the person gets a sentence.
   void _guarded(void Function() action) {
     try {
       action();
       if (mounted) setState(() {});
     } catch (e) {
+      debugPrint('localjam: host action failed: $e');
       if (!mounted) return;
-      JamSession.read(context).notify('$e');
+      JamSession.read(context).notify(RoomSheetStrings.actionFailed);
     }
   }
 
@@ -305,7 +341,6 @@ class _RoomPanelState extends State<RoomPanel> {
     final peers = _engine.peers;
     final permissions = _engine.permissions;
     final isHost = host != null;
-    final joinUri = widget.joinUri;
     final mediaId = _engine.snapshot.mediaId;
     final readinessById = isHost && mediaId != null
         ? host.peerMediaStates(mediaId)
@@ -357,7 +392,7 @@ class _RoomPanelState extends State<RoomPanel> {
 
               for (final peer in peers)
                 _Person(
-                  name: peer.clientName.isEmpty ? peer.peerId : peer.clientName,
+                  name: jamPeerName(peer),
                   role: _roleOf(permissions.roleOf(peer.peerId)),
                   addsBlocked:
                       permissions.overrides[peer.peerId]?[JamCapability
@@ -376,10 +411,23 @@ class _RoomPanelState extends State<RoomPanel> {
                       : null,
                 ),
 
-              if (isHost && joinUri != null) ...[
+              if (isHost) ...[
+                _Removed(
+                  host: host,
+                  onLetBackIn: (peer) => _guarded(() {
+                    // False when they were already let back in from
+                    // somewhere else (another sheet, the room screen): what
+                    // the tap asked for is true, so there is nothing to
+                    // report — the list just redraws without them.
+                    if (!host.unkickPeer(peer.peerId)) return;
+                    JamSession.read(
+                      context,
+                    ).notify(RoomSheetStrings.letBackInDone(jamPeerName(peer)));
+                  }),
+                ),
                 const SizedBox(height: JamSpace.section),
-                _Invite(
-                  joinUri: joinUri,
+                _HostInvite(
+                  host: host,
                   network: widget.network,
                   roomName: _engine.sessionName,
                 ),
@@ -472,7 +520,7 @@ class _RoomPanelState extends State<RoomPanel> {
     if (action == null || !mounted) return;
 
     if (action == _PeerAction.kick) {
-      final name = peer.clientName.isEmpty ? peer.peerId : peer.clientName;
+      final name = jamPeerName(peer);
       final confirmed = await JamDialogs.confirmDestructive(
         context,
         title: RoomSheetStrings.removeTitle(name),
@@ -592,6 +640,227 @@ class _Person extends StatelessWidget {
   }
 }
 
+/// The invite, following the room's reachable addresses.
+///
+/// The join link is not fixed for the life of a room: the engine re-scans the
+/// phone's interfaces, so moving from one Wi-Fi to another — or turning the
+/// hotspot on — changes the addresses inside it. A QR built once at sheet
+/// open kept pointing at the network the phone had left. And with no LAN at
+/// all there is nothing a guest could reach, so instead of a code that cannot
+/// work the sheet says what would make one.
+class _HostInvite extends StatelessWidget {
+  const _HostInvite({
+    required this.host,
+    required this.network,
+    required this.roomName,
+  });
+
+  final JamHostEngine host;
+  final JamNetworkStatus network;
+  final String roomName;
+
+  @override
+  Widget build(BuildContext context) => _whileLive(
+    host,
+    host.lanAddresses,
+    (context, addresses) => addresses.isEmpty
+        ? const _NoNetworkInvite()
+        : _whileLive(
+            host,
+            host.joinUriListenable,
+            (context, joinUri) =>
+                _Invite(joinUri: joinUri, network: network, roomName: roomName),
+          ),
+  );
+}
+
+/// [listenable], followed while the room lives — and read once, without
+/// subscribing, after it ended.
+///
+/// Ending the jam with this sheet open releases the engine's listenables
+/// while the sheet is still on screen: it animates out, and a row the list
+/// had scrolled away (the invite, above the End row) is built again on the
+/// way. A fresh subscription then landed on a disposed notifier (the
+/// 2026-10-17 run's "ValueNotifier used after being disposed"). Nothing
+/// changes after the end, so the last value is all there is to show.
+Widget _whileLive<T>(
+  JamEngine engine,
+  ValueListenable<T> listenable,
+  Widget Function(BuildContext context, T value) builder,
+) {
+  if (engine.sessionEnded.value != null) {
+    return Builder(builder: (context) => builder(context, listenable.value));
+  }
+  return ValueListenableBuilder<T>(
+    valueListenable: listenable,
+    builder: (context, value, _) => builder(context, value),
+  );
+}
+
+/// Where the QR would be, while there is no network to put in it.
+class _NoNetworkInvite extends StatelessWidget {
+  const _NoNetworkInvite();
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.jamColors;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(
+            JamSpace.page,
+            0,
+            JamSpace.page,
+            JamSpace.md,
+          ),
+          child: Semantics(
+            header: true,
+            child: Text(RoomSheetStrings.invite, style: context.jamTitle),
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: JamSpace.page),
+          child: Semantics(
+            liveRegion: true,
+            label:
+                '${RoomSheetStrings.noNetworkTitle}. '
+                '${RoomSheetStrings.noNetworkDetail}',
+            excludeSemantics: true,
+            child: Container(
+              padding: const EdgeInsets.all(JamSpace.card),
+              decoration: BoxDecoration(
+                color: colors.highlightSoft,
+                borderRadius: BorderRadius.circular(JamRadius.md),
+              ),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(Icons.wifi_off_rounded, size: 20, color: colors.warning),
+                  const SizedBox(width: JamSpace.md),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          RoomSheetStrings.noNetworkTitle,
+                          style: context.jamRowTitle.copyWith(
+                            color: colors.warning,
+                          ),
+                        ),
+                        const SizedBox(height: JamSpace.xxs),
+                        Text(
+                          RoomSheetStrings.noNetworkDetail,
+                          style: context.jamFootnote,
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// People the host removed this session (§5.6): a kicked device stays out
+/// until the host lets it back in, and this is the only place that can.
+/// Hidden while nobody has been removed.
+class _Removed extends StatelessWidget {
+  const _Removed({required this.host, required this.onLetBackIn});
+
+  final JamHostEngine host;
+  final ValueChanged<PeerInfo> onLetBackIn;
+
+  @override
+  Widget build(BuildContext context) => _whileLive(
+    host,
+    // Follows kicks made anywhere — this sheet's menu, the docked panel,
+    // an engine-level kick — not only the ones this widget saw.
+    host.kickedPeersListenable,
+    (context, kicked) {
+      if (kicked.isEmpty) return const SizedBox.shrink();
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const SizedBox(height: JamSpace.section),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(
+              JamSpace.page,
+              0,
+              JamSpace.page,
+              JamSpace.xs,
+            ),
+            child: Semantics(
+              header: true,
+              child: Text(RoomSheetStrings.removed, style: context.jamTitle),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: JamSpace.page),
+            child: Text(
+              RoomSheetStrings.removedDetail,
+              style: context.jamFootnote,
+            ),
+          ),
+          const SizedBox(height: JamSpace.sm),
+          for (final peer in kicked)
+            _RemovedPerson(peer: peer, onLetBackIn: onLetBackIn),
+        ],
+      );
+    },
+  );
+}
+
+class _RemovedPerson extends StatelessWidget {
+  const _RemovedPerson({required this.peer, required this.onLetBackIn});
+
+  final PeerInfo peer;
+  final ValueChanged<PeerInfo> onLetBackIn;
+
+  @override
+  Widget build(BuildContext context) {
+    final name = jamPeerName(peer);
+    return SizedBox(
+      height: kJamPeerRowHeight,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: JamSpace.page),
+        child: Row(
+          children: [
+            // Dimmed: they are not in the room, and the row should not read
+            // as though they were.
+            Opacity(
+              opacity: 0.5,
+              child: JamAvatar(name: name, size: JamAvatarSize.sheet),
+            ),
+            const SizedBox(width: JamSpace.md),
+            Expanded(
+              child: Text(
+                name,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: context.jamRowTitle.copyWith(
+                  color: context.jamColors.textSecondary,
+                ),
+              ),
+            ),
+            JamButton.tertiary(
+              label: RoomSheetStrings.letBackIn,
+              // "Let back in" alone, heard apart from the name before it,
+              // does not say who.
+              semanticLabel: RoomSheetStrings.letBackInFor(name),
+              onPressed: () => onLetBackIn(peer),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 /// The code that gets people in.
 ///
 /// This matters more than mDNS discovery on a trip: a personal hotspot does
@@ -689,6 +958,10 @@ class _Invite extends StatelessWidget {
                     alignment: Alignment.center,
                     children: [
                       QrImageView(
+                        // Keyed on the link, so a new address list (another
+                        // Wi-Fi, the hotspot coming up) is a new code rather
+                        // than a repaint of the old one's cached state.
+                        key: ValueKey<String>(joinUri.toString()),
                         data: joinUri.toString(),
                         size: _qrSize,
                         backgroundColor: Colors.white,
@@ -736,10 +1009,16 @@ class _Invite extends StatelessWidget {
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: JamSpace.page),
           child: Semantics(
+            // Its own element, and one that works: excluding the row's
+            // semantics took the InkWell's tap with it, and the row was
+            // folded into the invite's text above (2026-10-17 run) — a
+            // screen reader heard a paragraph it could not activate.
+            container: true,
             button: true,
             label:
                 '${RoomSheetStrings.roomCode} '
                 '${jamShortRoomCode(joinUri)}. ${RoomSheetStrings.copy}',
+            onTap: () => unawaited(_copy(context)),
             excludeSemantics: true,
             child: Material(
               color: colors.surfaceMuted,
@@ -928,8 +1207,12 @@ class _LeaveRow extends StatelessWidget {
     final colors = context.jamColors;
     final label = isHost ? RoomSheetStrings.endJam : RoomSheetStrings.leaveJam;
     return Semantics(
+      container: true,
       button: true,
       label: label,
+      // Declared here: the row's InkWell is excluded with its semantics,
+      // and a screen reader could not end (or leave) the jam at all.
+      onTap: () => unawaited(_confirm(context)),
       excludeSemantics: true,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,

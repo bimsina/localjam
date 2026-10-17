@@ -26,11 +26,13 @@ import '../state/session_controller.dart';
 import '../util/format.dart';
 import 'artwork.dart';
 import 'avatar.dart';
+import 'room_banner.dart';
 
 /// Strings the bar owns.
 abstract final class JamRoomBarStrings {
   static const String ended = 'This jam ended';
   static const String endedAction = 'Details';
+  static const String rejoining = 'Getting back in\u2026';
   static const String open = 'Open the room';
   static const String play = 'Play';
   static const String pause = 'Pause';
@@ -69,6 +71,8 @@ class JamRoomBar extends StatelessWidget {
     this.tint,
     this.floating = false,
     this.borderRadius,
+    this.alert,
+    this.playLabel,
   });
 
   /// Line one: the track, or the room when nothing is queued. `jamRowTitle`.
@@ -95,6 +99,15 @@ class JamRoomBar extends StatelessWidget {
 
   /// Opens the room. Fired by a tap anywhere on the bar and by a swipe up.
   final VoidCallback? onOpen;
+
+  /// Something about this phone's place in the room that should not wait
+  /// for the room screen to be opened — "Headphones disconnected", "The
+  /// host's phone is asleep". Replaces [subtitle], in the warning tint.
+  final String? alert;
+
+  /// The play button's spoken name when it is not plain "Play" — "Resume
+  /// audio", while this phone's output is suspended.
+  final String? playLabel;
 
   /// The current artwork's ambient tint: 0.08 at the left edge, fading out
   /// across the bar's first two thirds. Never touches text — see
@@ -132,7 +145,7 @@ class JamRoomBar extends StatelessWidget {
     return Semantics(
       container: true,
       button: onOpen != null,
-      label: '$title. $subtitle',
+      label: '$title. ${alert ?? subtitle}',
       hint: onOpen == null ? null : JamRoomBarStrings.open,
       // The tap lives on this node rather than on the GestureDetector below,
       // which `excludeSemantics` deliberately silences: one bar, one thing
@@ -206,10 +219,12 @@ class JamRoomBar extends StatelessWidget {
                               ),
                               child: _BarRow(
                                 title: title,
-                                subtitle: subtitle,
+                                subtitle: alert ?? subtitle,
+                                alert: alert != null,
                                 artwork: artwork,
                                 people: people,
                                 playing: playing,
+                                playLabel: playLabel,
                                 onPlayPause: onPlayPause,
                                 collapsed:
                                     constraints.maxWidth < kCollapseWidth,
@@ -245,6 +260,8 @@ class _BarRow extends StatelessWidget {
     required this.playing,
     required this.onPlayPause,
     required this.collapsed,
+    this.alert = false,
+    this.playLabel,
   });
 
   final String title;
@@ -255,6 +272,10 @@ class _BarRow extends StatelessWidget {
   final VoidCallback? onPlayPause;
   final bool collapsed;
 
+  /// [subtitle] is a warning, not the session's name.
+  final bool alert;
+  final String? playLabel;
+
   @override
   Widget build(BuildContext context) {
     final cover = SizedBox.square(
@@ -263,7 +284,11 @@ class _BarRow extends StatelessWidget {
     );
     final transport = onPlayPause == null
         ? null
-        : _TransportButton(playing: playing, onPressed: onPlayPause!);
+        : _TransportButton(
+            playing: playing,
+            playLabel: playLabel,
+            onPressed: onPlayPause!,
+          );
 
     if (collapsed) {
       return Row(children: [cover, const Spacer(), ?transport]);
@@ -288,7 +313,11 @@ class _BarRow extends StatelessWidget {
                 subtitle,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: context.jamFootnote,
+                style: alert
+                    ? context.jamFootnote.copyWith(
+                        color: context.jamColors.warning,
+                      )
+                    : context.jamFootnote,
               ),
             ],
           ),
@@ -333,24 +362,35 @@ class _ProgressLine extends StatelessWidget {
 /// A 44 dp play/pause target. The glyph cross-fades rather than swapping, so
 /// a tap reads as one control changing state.
 class _TransportButton extends StatelessWidget {
-  const _TransportButton({required this.playing, required this.onPressed});
+  const _TransportButton({
+    required this.playing,
+    required this.onPressed,
+    this.playLabel,
+  });
 
   final bool playing;
   final VoidCallback onPressed;
+  final String? playLabel;
 
   @override
   Widget build(BuildContext context) {
     final colors = context.jamColors;
     final noMotion = MediaQuery.disableAnimationsOf(context);
+    final label = playing
+        ? JamRoomBarStrings.pause
+        : (playLabel ?? JamRoomBarStrings.play);
     return Semantics(
+      container: true,
       button: true,
-      label: playing ? JamRoomBarStrings.pause : JamRoomBarStrings.play,
+      label: label,
+      // The IconButton's own action goes with its excluded semantics.
+      onTap: onPressed,
       excludeSemantics: true,
       child: SizedBox.square(
         dimension: 44,
         child: IconButton(
           padding: EdgeInsets.zero,
-          tooltip: playing ? JamRoomBarStrings.pause : JamRoomBarStrings.play,
+          tooltip: label,
           onPressed: onPressed,
           icon: AnimatedSwitcher(
             duration: noMotion ? JamDuration.instant : JamDuration.fast,
@@ -443,8 +483,7 @@ class _RoomBarState extends State<RoomBar> {
   List<String> _roster(JamEngine engine, JamSessionController session) => [
     if (_identity.isNotEmpty) _identity,
     if (!session.isHost) _hostName(engine, session),
-    for (final peer in engine.peers)
-      peer.clientName.isEmpty ? peer.peerId : peer.clientName,
+    for (final peer in engine.peers) jamPeerName(peer),
   ];
 
   String _hostName(JamEngine engine, JamSessionController session) {
@@ -467,7 +506,10 @@ class _RoomBarState extends State<RoomBar> {
 
     _subs
       ..add(engine.states.listen(refresh))
-      ..add(engine.playlistUpdates.listen(refresh));
+      ..add(engine.playlistUpdates.listen(refresh))
+      // "Headphones disconnected" belongs on the bar too: the user is
+      // usually on home when they pull them out.
+      ..add(engine.outputSuspensionChanges.listen(refresh));
     // The avatar stack is only honest if it repaints when the room's
     // membership changes.
     if (engine is JamGuestEngine) {
@@ -493,18 +535,40 @@ class _RoomBarState extends State<RoomBar> {
     // A session that ended while the user was elsewhere still needs somewhere
     // to be acknowledged from, so the bar survives into the terminal phase
     // and carries them to the room screen that explains it.
-    if (session.phase == JamSessionPhase.ended) {
+    if (session.phase == JamSessionPhase.ended || session.rejoining) {
       return _EndedBar(
         floating: widget.floating,
         borderRadius: widget.borderRadius,
+        rejoining: session.rejoining,
       );
     }
     if (engine == null || !session.isLive) return const SizedBox.shrink();
 
     final item = engine.currentItem;
-    final playing = engine.snapshot.status == PlaybackStatus.playing;
+    final roomPlaying = engine.snapshot.status == PlaybackStatus.playing;
     final canControl = engine.can(JamCapability.controlPlayback);
     final position = session.position;
+    final suspension = engine.outputSuspension.value;
+    // While this phone's sound is suspended the button is "Resume audio" —
+    // for everyone, since it touches only this phone. Showing "pause" there
+    // offered to stop the whole room for someone who just wanted their own
+    // sound back.
+    final suspended = suspension != null;
+    final playing = roomPlaying && !suspended;
+    final VoidCallback? onPlayPause = suspended
+        ? () => unawaited(engine.resumeLocalOutput())
+        : canControl
+        ? () => unawaited(
+            session.act(
+              (e) => roomPlaying ? e.transportPause() : e.transportPlay(),
+            ),
+          )
+        : null;
+    final alert = suspension != null
+        ? jamOutputSuspensionCopy(suspension)
+        : session.hostAway
+        ? JamRoomBannerStrings.hostAsleep
+        : null;
 
     Widget bar(double? progress) => JamTintBuilder(
       engine: engine,
@@ -531,9 +595,9 @@ class _RoomBarState extends State<RoomBar> {
         borderRadius: widget.borderRadius,
         progress: progress,
         playing: playing,
-        onPlayPause: canControl
-            ? () => playing ? engine.transportPause() : engine.transportPlay()
-            : null,
+        onPlayPause: onPlayPause,
+        alert: alert,
+        playLabel: suspended ? JamRoomBannerStrings.resume : null,
         onOpen: () => context.push('/room'),
       ),
     );
@@ -541,26 +605,37 @@ class _RoomBarState extends State<RoomBar> {
     if (position == null) return bar(null);
     // Only the 2 dp line rebuilds per frame; the rest of the bar is built
     // once per state change, which is the whole reason the ticker exists.
+    // The length is listened to as well: while paused the position does not
+    // move, and a file that loads meanwhile (a Retry) has its own length.
     return ValueListenableBuilder<int?>(
-      valueListenable: position,
-      builder: (context, positionUs, _) {
-        final durationUs =
-            engine.loadedDurationUs.value ?? item?.durationUs ?? 0;
-        final progress = (positionUs == null || durationUs <= 0)
-            ? null
-            : (positionUs / durationUs).clamp(0.0, 1.0);
-        return bar(progress);
-      },
+      valueListenable: engine.loadedDurationUs,
+      builder: (context, loadedUs, _) => ValueListenableBuilder<int?>(
+        valueListenable: position,
+        builder: (context, positionUs, _) {
+          final durationUs = loadedUs ?? item?.durationUs ?? 0;
+          final progress = (positionUs == null || durationUs <= 0)
+              ? null
+              : (positionUs / durationUs).clamp(0.0, 1.0);
+          return bar(progress);
+        },
+      ),
     );
   }
 }
 
 /// The same dock, in the terminal phase: what happened, and the way out.
 class _EndedBar extends StatelessWidget {
-  const _EndedBar({this.floating = false, this.borderRadius});
+  const _EndedBar({
+    this.floating = false,
+    this.borderRadius,
+    this.rejoining = false,
+  });
 
   final bool floating;
   final BorderRadius? borderRadius;
+
+  /// A "Try again" is in flight from the room screen.
+  final bool rejoining;
 
   @override
   Widget build(BuildContext context) {
@@ -570,8 +645,9 @@ class _EndedBar extends StatelessWidget {
     return Semantics(
       container: true,
       button: true,
-      label: JamRoomBarStrings.ended,
+      label: rejoining ? JamRoomBarStrings.rejoining : JamRoomBarStrings.ended,
       hint: JamRoomBarStrings.endedAction,
+      onTap: () => context.push('/room'),
       excludeSemantics: true,
       child: ClipRRect(
         borderRadius: borderRadius ?? BorderRadius.zero,
@@ -608,7 +684,9 @@ class _EndedBar extends StatelessWidget {
                           const SizedBox(width: JamSpace.md),
                           Expanded(
                             child: Text(
-                              JamRoomBarStrings.ended,
+                              rejoining
+                                  ? JamRoomBarStrings.rejoining
+                                  : JamRoomBarStrings.ended,
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                               style: context.jamRowTitle,

@@ -197,10 +197,13 @@ GoRouter _buildRouter(
     GoRoute(
       path: '/host',
       builder: (context, state) {
+        // `extra` when the router still has it; the controller's draft when
+        // a rebuild dropped it — the same args either way.
         final args = state.extra as HostSetupArgs?;
+        final draft = session.hostSetupDraft;
         return HostSetupScreen(
-          initialPaths: args?.paths,
-          initialName: args?.name,
+          initialPaths: args?.paths ?? draft?.paths,
+          initialName: args?.name ?? draft?.name,
         );
       },
     ),

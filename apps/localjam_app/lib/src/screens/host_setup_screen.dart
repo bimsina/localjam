@@ -31,6 +31,7 @@ import '../util/media_picking.dart';
 import '../util/network.dart';
 import '../widgets/buttons.dart';
 import '../widgets/section.dart';
+import '../widgets/session_gate.dart';
 import '../widgets/track_row.dart';
 
 /// Everything this screen says out loud.
@@ -230,8 +231,12 @@ class _HostSetupScreenState extends State<HostSetupScreen> {
       JamSession.read(context).notify(HostSetupStrings.needsName);
       return;
     }
-    setState(() => _starting = true);
     final session = JamSession.read(context);
+    // Setup is normally reached through the same gate, but a jam can have
+    // started (a deep link, the sidebar) while this form sat open — and a
+    // refused start said only "Could not start the room".
+    if (!await jamReadyForNewSession(context, session) || !mounted) return;
+    setState(() => _starting = true);
     // Local-network and notification permissions are the controller's job
     // now, so the join paths get them too.
     final started = await session.startHost(
@@ -530,8 +535,10 @@ class _NameFieldState extends State<_NameField> {
               ),
               const SizedBox(width: JamSpace.sm),
               Semantics(
+                container: true,
                 button: true,
                 label: HostSetupStrings.editName,
+                onTap: () => _focus.requestFocus(),
                 excludeSemantics: true,
                 child: IconButton(
                   icon: const Icon(Icons.edit_rounded, size: 20),

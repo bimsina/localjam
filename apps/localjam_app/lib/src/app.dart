@@ -16,6 +16,7 @@ import 'package:localjam_client/localjam_client.dart';
 import 'design/theme.dart';
 import 'router.dart';
 import 'state/app_settings.dart';
+import 'state/link_inbox.dart';
 import 'state/onboarding_prefs.dart';
 import 'state/session_controller.dart';
 import 'util/network.dart';
@@ -23,6 +24,7 @@ import 'util/permissions.dart';
 import 'widgets/artwork.dart';
 import 'widgets/join_link_dialog.dart';
 import 'widgets/permission_sheet.dart';
+import 'widgets/session_gate.dart';
 
 class LocalJamApp extends StatefulWidget {
   const LocalJamApp({super.key});
@@ -39,6 +41,15 @@ class _LocalJamAppState extends State<LocalJamApp> {
   final AppLinks _appLinks = AppLinks();
   StreamSubscription<Uri>? _linkSub;
 
+  /// Dedupes the cold-start double delivery, and parks a link that arrives
+  /// before the intro is done, while another link is in hand, or while a
+  /// session is starting — see [JamLinkInbox]. Parked, not dropped: it is
+  /// handed over once the way is clear.
+  late final JamLinkInbox _links = JamLinkInbox(
+    onLink: _handleLinkSoon,
+    ready: () => _onboarding.loaded && _onboarding.seen && !_session.isBusy,
+  );
+
   @override
   void initState() {
     super.initState();
@@ -46,6 +57,9 @@ class _LocalJamAppState extends State<LocalJamApp> {
     // The gate holds every route until this lands, so nobody sees the intro
     // flash past on their second launch.
     unawaited(_onboarding.load());
+    _onboarding.addListener(_links.readyChanged);
+    // A start finishing (or failing) clears the way for a parked link.
+    _session.addListener(_links.readyChanged);
     unawaited(_listenForLinks());
     // Every OS permission prompt in the app goes through `util/permissions`,
     // and this is what lets it explain itself first. Installed here because
@@ -93,31 +107,35 @@ class _LocalJamAppState extends State<LocalJamApp> {
   /// manifest; before the overhaul neither existed and links were inert.
   Future<void> _listenForLinks() async {
     try {
-      _linkSub = _appLinks.uriLinkStream.listen(_handleLink);
+      _linkSub = _appLinks.uriLinkStream.listen(_links.receive);
+      // app_links 6 also replays the launch link on the stream, so on a cold
+      // start the same link arrives twice — two confirm dialogs, two joins.
+      // Both deliveries go through the inbox, which keeps the first.
       final initial = await _appLinks.getInitialLink();
-      if (initial == null) return;
-      // A cold start's link arrives before the shell exists — and the shell
-      // owns both the navigator the confirm dialog needs and the subscriber
-      // that turns notices into SnackBars. Handled a frame later, it lands.
-      WidgetsBinding.instance.addPostFrameCallback(
-        (_) => unawaited(_handleLink(initial)),
-      );
+      if (initial != null) _links.receive(initial);
     } catch (_) {
       // No deep-link support on this platform; QR and nearby still work.
     }
   }
 
+  /// A cold start's link arrives before the shell exists — and the shell
+  /// owns both the navigator the confirm dialog needs and the subscriber
+  /// that turns notices into SnackBars. Handled a frame later, it lands.
+  ///
+  /// The inbox holds every other link until the returned future completes:
+  /// one link at a time, and never on top of a start already in flight.
+  Future<void> _handleLinkSoon(Uri uri) {
+    final done = Completer<void>();
+    WidgetsBinding.instance
+      ..addPostFrameCallback((_) => done.complete(_joinFromLink(uri)))
+      ..ensureVisualUpdate();
+    return done.future;
+  }
+
   /// A link is the one entry point the user did not aim: it can arrive from a
   /// chat, a web page, a QR sticker on a wall. So it is the one that has to
   /// be checked and confirmed before it opens a socket.
-  Future<void> _handleLink(Uri uri) async {
-    if (uri.scheme != 'localjam') return;
-    // Never yank someone out of a running jam because a link arrived. An
-    // `ended` session is different: join() clears it and proceeds.
-    if (_session.phase == JamSessionPhase.live ||
-        _session.phase == JamSessionPhase.starting) {
-      return;
-    }
+  Future<void> _joinFromLink(Uri uri) async {
     final parsed = parseJoinUri('$uri');
     if (parsed == null) {
       _session.notify('That link is not a jam invite.');
@@ -134,8 +152,15 @@ class _LocalJamAppState extends State<LocalJamApp> {
     }
     final context = _router.routerDelegate.navigatorKey.currentContext;
     if (context == null || !context.mounted) return;
-    final go = await confirmLinkJoin(context, roomName: joinUriName(parsed));
-    if (!go) return;
+    // Never yank someone out of a running jam because a link arrived — but
+    // never swallow the link either. A live jam gets the "leave it first?"
+    // question, which is the confirmation; otherwise the usual one.
+    if (_session.isLive) {
+      if (!await jamReadyForNewSession(context, _session)) return;
+    } else {
+      final go = await confirmLinkJoin(context, roomName: joinUriName(parsed));
+      if (!go) return;
+    }
     // Permission prompts before the join, not through its spinner.
     await _session.prepareForSession();
     final joined = await _session.join(parsed, roomName: joinUriName(parsed));
@@ -151,6 +176,8 @@ class _LocalJamAppState extends State<LocalJamApp> {
   void dispose() {
     jamRationalePresenter = null;
     JamMediaSessionController.placeholderArtworkProvider = null;
+    _onboarding.removeListener(_links.readyChanged);
+    _session.removeListener(_links.readyChanged);
     unawaited(_linkSub?.cancel());
     _session.dispose();
     _settings.dispose();

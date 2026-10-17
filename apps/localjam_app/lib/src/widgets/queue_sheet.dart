@@ -15,15 +15,14 @@ library;
 
 import 'dart:async';
 import 'dart:io';
-import 'dart:typed_data';
 import 'dart:math' as math;
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:localjam_client/localjam_client.dart';
 
 import '../design/tokens.dart';
 import '../design/typography.dart';
-import '../state/queue_actions.dart';
 import '../state/session_controller.dart';
 import '../util/format.dart';
 import '../util/media_picking.dart';
@@ -47,7 +46,16 @@ abstract final class QueueSheetStrings {
   static String removed(String title) => 'Removed $title';
   static const String undo = 'Undo';
   static const String uploading = 'Sending your track to the room';
+  static const String importing = 'Adding your music to the room';
   static const String hostRunsQueue = 'The host is running this queue';
+
+  /// Why Add is grey while the host cannot be reached — the same rule as
+  /// the transport's: a control that stops working says why.
+  static const String hostAsleep =
+      'The host’s phone is asleep. You can add music when it wakes.';
+  static const String reconnecting =
+      'Reconnecting to the host. You can add music again in a moment.';
+  static const String retry = 'Try getting this track again';
   static const String nowPlayingLocked =
       'The track that\u2019s playing stays at the top';
   static const String emptyTitle = 'Nothing queued';
@@ -140,7 +148,40 @@ class _QueuePanelState extends State<QueuePanel> {
   /// than a disc lettered from the word "You".
   String _selfName = '';
 
+  /// Rows swiped away whose removal the room has not confirmed yet.
+  ///
+  /// A swiped [Dismissible] has to leave the tree when its animation ends,
+  /// but a guest's removal is only a request: the playlist broadcast that
+  /// actually drops the row comes later — or never, if the host says no. So
+  /// the row is held out of the list here until the broadcast lands, and
+  /// put back if it has not after [_removalGrace].
+  final Map<String, Timer> _removing = {};
+  static const Duration _removalGrace = Duration(seconds: 5);
+
   JamEngine get _engine => widget.engine;
+
+  void _hideRemoved(String mediaId) {
+    _removing[mediaId]?.cancel();
+    _removing[mediaId] = Timer(_removalGrace, () {
+      // Still in the queue: the host refused (its `not_allowed` already
+      // said so through the notice channel). The row comes back.
+      _removing.remove(mediaId);
+      if (mounted) setState(() {});
+    });
+    if (mounted) setState(() {});
+  }
+
+  /// Forgets hidden rows the playlist no longer carries — their removal
+  /// landed.
+  void _pruneRemoved(List<MediaItem> playlist) {
+    if (_removing.isEmpty) return;
+    final ids = {for (final item in playlist) item.mediaId};
+    _removing.removeWhere((id, timer) {
+      if (ids.contains(id)) return false;
+      timer.cancel();
+      return true;
+    });
+  }
 
   Future<void> _loadIdentity() async {
     final name = await JamIdentity.displayName();
@@ -174,6 +215,9 @@ class _QueuePanelState extends State<QueuePanel> {
     for (final sub in _subs) {
       unawaited(sub.cancel());
     }
+    for (final timer in _removing.values) {
+      timer.cancel();
+    }
     final guest = _engine;
     if (guest is JamGuestEngine) {
       guest.prefetchStates.removeListener(_onPrefetch);
@@ -183,13 +227,20 @@ class _QueuePanelState extends State<QueuePanel> {
 
   @override
   Widget build(BuildContext context) {
-    final playlist = _engine.playlist;
+    final session = JamSession.of(context);
+    _pruneRemoved(_engine.playlist);
+    final playlist = [
+      for (final item in _engine.playlist)
+        if (!_removing.containsKey(item.mediaId)) item,
+    ];
     final peers = _engine.peers;
     final canAdd = _engine.can(JamCapability.addTracks);
     final canEdit = _engine.can(JamCapability.editQueue);
     final canControl = _engine.can(JamCapability.controlPlayback);
+    final canSend = session.canSendCommands;
     final currentId = _engine.snapshot.mediaId;
     final playing = _engine.snapshot.status == PlaybackStatus.playing;
+    final guest = _engine is JamGuestEngine ? _engine as JamGuestEngine : null;
 
     final ids = {for (final item in playlist) item.mediaId};
     final fresh = _drawnOnce ? ids.difference(_seen) : const <String>{};
@@ -199,10 +250,11 @@ class _QueuePanelState extends State<QueuePanel> {
     final current = playlist
         .where((item) => item.mediaId == currentId)
         .firstOrNull;
-    final rest = [
-      for (final item in playlist)
-        if (item.mediaId != currentId) item,
-    ];
+    // NEXT UP is the order the room will play, not the order the queue is
+    // stored in: once the room has wrapped (skipping and the end policy
+    // both go round, §5.5) the tracks above the current one come AFTER the
+    // ones below it — the 2026-10-17 run listed songs already heard first.
+    final rest = jamUpNext(playlist, currentId);
 
     // The key rides on the outermost widget: `SliverReorderableList` looks
     // for it there, and the insert animation wraps the row.
@@ -221,11 +273,25 @@ class _QueuePanelState extends State<QueuePanel> {
             playing: playing,
             animateIn: fresh.contains(item.mediaId),
             dragIndex: dragIndex,
-            canRemove: jamCanRemove(_engine, item),
-            onTap: canControl
-                ? () => unawaited(jamSetMedia(_engine, item.mediaId))
+            canRemove: _engine.canRemove(item),
+            // Picking the track that is already on changes nothing (§5.2
+            // `set_media`): the pinned row is not a button.
+            onTap: canControl && !isCurrent
+                ? () => unawaited(
+                    session.act((e) => e.transportSetMedia(item.mediaId)),
+                  )
                 : null,
-            onRemove: () => unawaited(jamRemoveItem(_engine, item.mediaId)),
+            onRemoved: () => _hideRemoved(item.mediaId),
+            onRetry: guest == null
+                ? null
+                : () {
+                    // False when there is nothing to retry any more — it
+                    // landed, or is already on its way. Say so rather than
+                    // leaving a tap that did nothing.
+                    if (!guest.retryFetch(item.mediaId)) {
+                      session.notify(kJamIntentFailed);
+                    }
+                  },
           ),
         );
 
@@ -239,8 +305,15 @@ class _QueuePanelState extends State<QueuePanel> {
           ),
         // Pinned under the header rather than dropped into the flow, so a
         // running upload never shifts the list under a finger (§6.10).
-        _UploadLine(engine: _engine),
-        if (!canAdd) const _QueueGateNote(),
+        _UploadLine(engine: _engine, import: session.hostImport),
+        if (!canAdd)
+          const _QueueGateNote(QueueSheetStrings.hostRunsQueue)
+        else if (!canSend)
+          _QueueGateNote(
+            session.hostAway
+                ? QueueSheetStrings.hostAsleep
+                : QueueSheetStrings.reconnecting,
+          ),
         Expanded(
           child: playlist.isEmpty
               ? JamEmptyState(
@@ -251,7 +324,7 @@ class _QueuePanelState extends State<QueuePanel> {
                       ? QueueSheetStrings.emptyCanAdd
                       : QueueSheetStrings.emptyCannotAdd,
                   actionLabel: canAdd ? QueueSheetStrings.addMusic : null,
-                  onAction: canAdd
+                  onAction: canAdd && canSend
                       ? () => unawaited(jamAddToQueue(context, _engine))
                       : null,
                 )
@@ -292,7 +365,9 @@ class _QueuePanelState extends State<QueuePanel> {
                           );
                           if (move != null) {
                             unawaited(
-                              jamMoveItem(_engine, move.mediaId, move.toIndex),
+                              session.act(
+                                (e) => e.queueMove(move.mediaId, move.toIndex),
+                              ),
                             );
                           }
                         },
@@ -325,55 +400,55 @@ class _QueuePanelState extends State<QueuePanel> {
   }
 }
 
+/// What plays after [currentId], in the order the room will play it: the
+/// rest of the queue below the current track, then from the top round to it
+/// — `next` and the advance end policy both wrap (§5.5). With nothing
+/// current (or a current track no longer queued), the queue as it stands.
+List<MediaItem> jamUpNext(List<MediaItem> playlist, String? currentId) {
+  final at = currentId == null
+      ? -1
+      : playlist.indexWhere((item) => item.mediaId == currentId);
+  if (at < 0) return List.of(playlist);
+  return [...playlist.sublist(at + 1), ...playlist.sublist(0, at)];
+}
+
 /// Where a queue row dropped at [newIndex] of the NEXT UP list lands in the
 /// *whole* playlist.
 ///
-/// The sheet shows two groups (the pinned current track, then the rest) but
-/// the engine moves items within one list, so the reorder has to be replayed
-/// against the full order before it can be sent. Pure, and tested directly.
+/// The sheet shows the current track pinned, then the rest in play order
+/// ([jamUpNext]), but the engine moves items within one stored list, so the
+/// drop has to be replayed against it before it can be sent. The moved
+/// track goes straight after whatever now plays before it — the row above
+/// it, or the current track when it was dropped at the top — which keeps
+/// the play order the person sees, wrap included. (NOW PLAYING is never a
+/// drop target: nothing can be put in front of the track that is on.)
+/// Pure, and tested directly.
 ({String mediaId, int toIndex})? queueReorderTarget({
   required List<MediaItem> playlist,
   required String? currentId,
   required int oldIndex,
   required int newIndex,
 }) {
-  final rest = [
-    for (final item in playlist)
-      if (item.mediaId != currentId) item.mediaId,
+  final upNext = [
+    for (final item in jamUpNext(playlist, currentId)) item.mediaId,
   ];
-  if (oldIndex < 0 || oldIndex >= rest.length) return null;
+  if (oldIndex < 0 || oldIndex >= upNext.length) return null;
   // `onReorderItem` (unlike the deprecated `onReorder`) hands back an index
   // already adjusted for the removed row.
-  final target = newIndex.clamp(0, rest.length - 1);
+  final target = newIndex.clamp(0, upNext.length - 1);
   if (target == oldIndex) return null;
 
-  final movedId = rest[oldIndex];
-  final reordered = List<String>.of(rest)..removeAt(oldIndex);
-  reordered.insert(target, movedId);
-
-  final currentIndex = currentId == null
-      ? -1
-      : playlist.indexWhere((item) => item.mediaId == currentId);
-  if (currentIndex >= 0) {
-    reordered.insert(math.min(currentIndex, reordered.length), currentId!);
-  }
-  var toIndex = reordered.indexOf(movedId);
-
-  // NOW PLAYING is not a drop target. Dropping a row above the current track
-  // used to land it at playlist index 0, which on a host silently changed
-  // what was playing — a queue reorder should never touch the transport.
-  // The floor is the slot immediately after the current track in the list
-  // the engine will have once the moved item is lifted out of it.
-  if (currentId != null) {
-    final withoutMoved = [
-      for (final item in playlist)
-        if (item.mediaId != movedId) item.mediaId,
-    ];
-    final currentAfterLift = withoutMoved.indexOf(currentId);
-    if (currentAfterLift >= 0) {
-      toIndex = math.max(toIndex, currentAfterLift + 1);
-    }
-  }
+  final movedId = upNext[oldIndex];
+  final reordered = List<String>.of(upNext)
+    ..removeAt(oldIndex)
+    ..insert(target, movedId);
+  final playsAfter = target == 0 ? currentId : reordered[target - 1];
+  final withoutMoved = [
+    for (final item in playlist)
+      if (item.mediaId != movedId) item.mediaId,
+  ];
+  // -1 + 1: nothing before it (no current track) is the top of the queue.
+  final toIndex = withoutMoved.indexOf(playsAfter ?? '') + 1;
   if (toIndex == playlist.indexWhere((item) => item.mediaId == movedId)) {
     return null;
   }
@@ -428,7 +503,11 @@ class _QueueHeaderActionsState extends State<QueueHeaderActions> {
 
   @override
   Widget build(BuildContext context) {
-    final canAdd = widget.engine.can(JamCapability.addTracks);
+    // Grey, with the panel's gate note saying why, while a guest cannot reach
+    // the host — every file would fail with the same "not connected".
+    final canAdd =
+        widget.engine.can(JamCapability.addTracks) &&
+        JamSession.of(context).canSendCommands;
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -452,7 +531,9 @@ class _QueueHeaderActionsState extends State<QueueHeaderActions> {
 
 /// Why the Add button next to this is grey.
 class _QueueGateNote extends StatelessWidget {
-  const _QueueGateNote();
+  const _QueueGateNote(this.message);
+
+  final String message;
 
   @override
   Widget build(BuildContext context) => Padding(
@@ -462,35 +543,67 @@ class _QueueGateNote extends StatelessWidget {
       JamSpace.page,
       0,
     ),
-    child: Text(QueueSheetStrings.hostRunsQueue, style: context.jamFootnote),
+    child: Text(message, style: context.jamFootnote),
   );
 }
 
-/// The guest's upload, as a 3 dp accent line under the header.
+/// Music on its way into the room, as a 3 dp accent line under the header:
+/// a guest's upload, or the host's background import of the files the room
+/// started with.
 class _UploadLine extends StatelessWidget {
-  const _UploadLine({required this.engine});
+  const _UploadLine({required this.engine, this.import});
 
   final JamEngine engine;
+
+  /// The host's import, while there is one.
+  final JamImport? import;
 
   @override
   Widget build(BuildContext context) {
     final guest = engine;
-    if (guest is! JamGuestEngine) return const SizedBox.shrink();
-    final colors = context.jamColors;
-    return ValueListenableBuilder<double?>(
-      valueListenable: guest.uploadProgress,
-      builder: (context, progress, _) => progress == null
-          ? const SizedBox.shrink()
-          : Semantics(
-              liveRegion: true,
-              label: QueueSheetStrings.uploading,
-              child: LinearProgressIndicator(
+    final job = import;
+    if (guest is JamGuestEngine) {
+      return ValueListenableBuilder<double?>(
+        valueListenable: guest.uploadProgress,
+        builder: (context, progress, _) => progress == null
+            ? const SizedBox.shrink()
+            : _ProgressLine(
                 value: progress,
-                minHeight: 3,
-                color: colors.accent,
-                backgroundColor: colors.surfaceMuted,
+                label: QueueSheetStrings.uploading,
               ),
+      );
+    }
+    if (job == null) return const SizedBox.shrink();
+    return ValueListenableBuilder<JamImportProgress>(
+      valueListenable: job.progress,
+      builder: (context, progress, _) => progress.isDone || progress.total == 0
+          ? const SizedBox.shrink()
+          : _ProgressLine(
+              value: progress.completed / progress.total,
+              label: QueueSheetStrings.importing,
             ),
+    );
+  }
+}
+
+class _ProgressLine extends StatelessWidget {
+  const _ProgressLine({required this.value, required this.label});
+
+  final double value;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.jamColors;
+    return Semantics(
+      liveRegion: true,
+      label: label,
+      child: LinearProgressIndicator(
+        value: value,
+        minHeight: 3,
+        color: colors.accent,
+        backgroundColor: colors.surfaceMuted,
+      ),
     );
   }
 }
@@ -535,7 +648,8 @@ class _QueueRow extends StatelessWidget {
     required this.animateIn,
     required this.canRemove,
     required this.onTap,
-    required this.onRemove,
+    required this.onRemoved,
+    this.onRetry,
     this.dragIndex,
     this.reserveHandle = false,
   });
@@ -552,7 +666,13 @@ class _QueueRow extends StatelessWidget {
   final bool animateIn;
   final bool canRemove;
   final VoidCallback? onTap;
-  final VoidCallback onRemove;
+
+  /// The swipe finished and the row has to leave the list now.
+  final VoidCallback onRemoved;
+
+  /// Fetches a track this guest gave up on again (failed, no retry
+  /// scheduled). Null on a host, which has every file already.
+  final VoidCallback? onRetry;
 
   /// Position in the reorderable list, or null when the queue is read-only.
   final int? dragIndex;
@@ -562,8 +682,10 @@ class _QueueRow extends StatelessWidget {
 
   /// Removes the track and says so — with a way back, since a swipe leaves
   /// nothing behind and a mis-swipe on someone else's phone is a track the
-  /// room just lost.
-  void _removeAndSay(BuildContext context) {
+  /// room just lost. Answers whether the removal went through; a refusal
+  /// (a guest whose host is asleep, a track that already left) is said out
+  /// loud by [JamSessionController.act] and the row stays.
+  Future<bool> _removeAndSay(BuildContext context) async {
     final title = jamDisplayTitle(item);
     final mediaId = item.mediaId;
     // Where it was, so Undo puts it back where it was rather than at the end.
@@ -572,7 +694,8 @@ class _QueueRow extends StatelessWidget {
     // Only the host can put a file back, and only while the bytes are still
     // on this device: offering an Undo that cannot run is worse than none.
     final undoable = index >= 0 && session.canReinsert(mediaId);
-    onRemove();
+    final removed = await session.act((e) => e.queueRemove(mediaId));
+    if (!removed) return false;
     // Through the controller's single notice channel, not straight at the
     // overlay: a swipe raises this from the row that is being removed, and by
     // the time the dismissal settles that row's context is on its way out.
@@ -585,6 +708,7 @@ class _QueueRow extends StatelessWidget {
           ? () => unawaited(session.reinsertItem(mediaId, index))
           : null,
     );
+    return true;
   }
 
   /// The accessible route to the same action as the swipe.
@@ -615,7 +739,7 @@ class _QueueRow extends StatelessWidget {
         ),
       ],
     );
-    if (chose == true && context.mounted) _removeAndSay(context);
+    if (chose == true && context.mounted) unawaited(_removeAndSay(context));
   }
 
   @override
@@ -623,7 +747,7 @@ class _QueueRow extends StatelessWidget {
     final colors = context.jamColors;
     // Everyone's contribution is credited, yours included: a solo-hosted room
     // with no faces at all was the review's "where are the people?".
-    final addedBy = engine.addedByLabel(item, peers);
+    final addedBy = jamAddedByLabel(engine, item);
     final guest = engine is JamGuestEngine ? engine as JamGuestEngine : null;
     final prefetch = guest?.prefetchStates.value[item.mediaId];
     final fetching = prefetch?.phase == JamPrefetchPhase.fetching;
@@ -671,6 +795,7 @@ class _QueueRow extends StatelessWidget {
           item: item,
           prefetch: prefetch,
           isGuest: guest != null,
+          onRetry: onRetry,
         ),
         // The 3×20 accent bar is flush to the *row's* left edge, and the row
         // is inset from the sheet by the page margin — otherwise the bar ran
@@ -685,7 +810,10 @@ class _QueueRow extends StatelessWidget {
         direction: DismissDirection.endToStart,
         dismissThresholds: const {DismissDirection.endToStart: 0.45},
         background: _RemoveBackground(colors: colors),
-        onDismissed: (_) => _removeAndSay(context),
+        // Decided before the row goes: a removal the room refused springs
+        // back instead of vanishing from this phone only.
+        confirmDismiss: (_) => _removeAndSay(context),
+        onDismissed: (_) => onRemoved(),
         child: row,
       );
     }
@@ -745,11 +873,15 @@ class _StatusSlot extends StatelessWidget {
     required this.item,
     required this.prefetch,
     required this.isGuest,
+    this.onRetry,
   });
 
   final MediaItem item;
   final JamPrefetchState? prefetch;
   final bool isGuest;
+
+  /// Offered on a fetch that gave up (failed, no retry scheduled).
+  final VoidCallback? onRetry;
 
   @override
   Widget build(BuildContext context) {
@@ -768,10 +900,23 @@ class _StatusSlot extends StatelessWidget {
             ),
           );
         case JamPrefetchPhase.failed:
-          return Icon(
-            Icons.error_outline_rounded,
-            size: 18,
+          final retry = onRetry;
+          // While a retry is scheduled the glyph is only a status; once the
+          // engine has given up it becomes the way to ask again — a red mark
+          // with nothing to do about it was a dead end.
+          if (prefetch!.willRetry || retry == null) {
+            return Icon(
+              Icons.error_outline_rounded,
+              size: 18,
+              color: colors.danger,
+            );
+          }
+          return IconButton(
+            icon: const Icon(Icons.refresh_rounded, size: 20),
             color: colors.danger,
+            tooltip: QueueSheetStrings.retry,
+            visualDensity: VisualDensity.compact,
+            onPressed: retry,
           );
         case _:
           break;

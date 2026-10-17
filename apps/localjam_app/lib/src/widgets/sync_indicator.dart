@@ -30,6 +30,10 @@ abstract final class JamSyncStrings {
   static const String syncing = 'Syncing…';
   static const String catchingUp = 'Catching up';
   static const String reconnecting = 'Reconnecting…';
+
+  /// The host said it is going to sleep (§3.5). Calm, not a warning: nothing
+  /// is broken, and "Reconnecting…" pulsing beside it would be a lie.
+  static const String hostAsleep = 'Host asleep';
   static const String offSync = 'Out of sync';
 
   /// The long-press affordance, announced rather than drawn.
@@ -70,6 +74,10 @@ enum JamSyncState {
   /// The transport dropped and is retrying.
   reconnecting,
 
+  /// The host announced it is going to sleep (§3.5) — whether or not the
+  /// link has dropped yet, the wait is the host's, not the network's.
+  hostAway,
+
   /// Within the engine's do-nothing band.
   inSync,
 
@@ -85,7 +93,9 @@ JamSyncState jamSyncState({
   required JamEngine engine,
   required JamConnectionState connection,
   required bool clockSynced,
+  bool hostAway = false,
 }) {
+  if (hostAway) return JamSyncState.hostAway;
   if (connection != JamConnectionState.connected) {
     return JamSyncState.reconnecting;
   }
@@ -210,6 +220,10 @@ class _JamSyncIndicatorState extends State<JamSyncIndicator>
         colors.warning,
       ),
       JamSyncState.offSync => (JamSyncStrings.offSync, colors.danger),
+      JamSyncState.hostAway => (
+        JamSyncStrings.hostAsleep,
+        colors.textSecondary,
+      ),
       JamSyncState.idle => (null, colors.textSecondary),
     };
 
@@ -284,12 +298,16 @@ class SyncIndicator extends StatefulWidget {
     required this.engine,
     required this.connection,
     required this.clockSynced,
+    this.hostAway = false,
     this.onShowDetails,
     this.height = _kTapTarget,
   });
 
   final JamEngine engine;
   final JamConnectionState connection;
+
+  /// Whether the host said it is going to sleep — see [JamSyncState.hostAway].
+  final bool hostAway;
 
   /// False only for a guest whose §4 clock burst has not landed.
   final bool clockSynced;
@@ -327,6 +345,7 @@ class _SyncIndicatorState extends State<SyncIndicator> {
       engine: widget.engine,
       connection: widget.connection,
       clockSynced: widget.clockSynced,
+      hostAway: widget.hostAway,
     ),
     onShowDetails: widget.onShowDetails,
     height: widget.height,

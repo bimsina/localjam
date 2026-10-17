@@ -292,6 +292,11 @@ class _JamButtonState extends State<JamButton> {
     );
 
     return Semantics(
+      // Its own node, always. Without it a button with no other actions near
+      // it was folded into the surrounding text: "Let back in" became part
+      // of one "Removed …" element (2026-10-17 run), so a screen reader read
+      // a paragraph instead of offering a button.
+      container: true,
       button: true,
       enabled: enabled,
       label: widget.semanticLabel ?? widget.label,

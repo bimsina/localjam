@@ -35,7 +35,9 @@ import '../widgets/avatar.dart';
 import '../widgets/buttons.dart';
 import '../widgets/diagnostics_sheet.dart';
 import '../widgets/drag_to_dismiss.dart';
+import '../router.dart' show HostSetupArgs;
 import '../widgets/queue_sheet.dart';
+import '../widgets/room_banner.dart';
 import '../widgets/room_sheet.dart';
 import '../widgets/sync_indicator.dart';
 import '../widgets/track_row.dart';
@@ -63,10 +65,28 @@ abstract final class JamRoomStrings {
   /// host's real name from the welcome frame; this is the fallback.
   static const String host = 'Host';
 
-  static const String reconnecting =
-      'Lost the host — still playing what you have.';
+  static const String reconnecting = JamRoomBannerStrings.reconnecting;
+
+  /// Under a transport the room has not taken away, but that cannot reach
+  /// the host right now — dimmed with a reason, never silently dead.
+  static const String waitForHost =
+      'Controls come back when the host’s phone wakes';
+  static const String waitForReconnect =
+      'Controls come back once you reconnect';
 
   static String fetching(int percent) => 'Getting this track — $percent%';
+  static const String fetchFailed = 'Couldn’t get this track';
+  static const String retry = 'Retry';
+
+  /// What "Retry" says to a screen reader, which hears it apart from the
+  /// line before it.
+  static const String retryFetch = 'Try getting this track again';
+  static const String importing = 'Adding your music…';
+  static String importingCount(int done, int total) =>
+      'Adding your music · $done of $total';
+
+  /// The host's play is held until every guest has the track (§6.3).
+  static const String awaitingReadiness = 'Waiting for everyone’s download';
   static String inTheRoom(int n) => n == 1 ? '1 in the room' : '$n in the room';
   static String queued(int n) => n == 1 ? '1 queued' : '$n queued';
   static String waiting(int n) => n == 1
@@ -77,16 +97,44 @@ abstract final class JamRoomStrings {
   static const String hostGoneBody = 'The host left or went out of range.';
   static const String kickedTitle = 'You were removed';
   static const String kickedBody = 'The host removed you from this room.';
-  static const String rejectedTitle = 'Could not rejoin';
+  // `rejected`, by the host's reason (JamSessionController.endRejectReason).
+  // A reason this version does not know — or none — keeps the generic pair,
+  // which names the likeliest cause without promising it.
+  static const String rejectedTitle = 'Could not get back in';
   static const String rejectedBody =
-      'The room restarted, so the old code no longer works.';
+      'The room turned this phone away. It may have restarted — ask the '
+      'host for a fresh code.';
+
+  /// `bad_token`: the room restarted under a new code. The old link can
+  /// never work again, so there is no "Try again".
+  static const String restartedTitle = 'The room restarted';
+  static const String restartedBody =
+      'The code this phone joined with no longer works. Ask the host for the '
+      'new one.';
+
+  /// `version`: no retry fixes this; an update does.
+  static const String versionTitle = 'An update is needed';
+  static const String versionBody = kJamVersionMismatch;
+
+  /// `full`: the one refusal that can turn into a yes on its own.
+  static const String fullTitle = 'The room is full';
+  static const String fullBody =
+      'Someone has to leave before this phone can get back in.';
+
+  /// Host only: the OS took the room's listening socket while the app was
+  /// away and it could not be reopened (listenerFailed).
+  static const String listenerFailedTitle =
+      'The room stopped letting people in';
+  static const String listenerFailedBody =
+      'Start a new one to keep going — your queue comes with you.';
+  static const String startNew = 'Start a new jam';
   static const String hostEndedTitle = 'The host ended the jam';
   static const String hostEndedBody =
       'The room is closed. Everyone heard the same last song.';
   static const String endedTitle = 'Jam ended';
   static const String endedBody = 'That is everyone home safely.';
   static const String tryAgain = 'Try again';
-  static const String rejoinFailed = 'Could not get back into that room.';
+  static const String rejoinFailed = kJamRejoinFailed;
 
   /// The docked panel's two tabs.
   static const String panelQueue = 'Queue';
@@ -172,6 +220,35 @@ class _RoomScreenState extends State<RoomScreen>
   bool _celebrating = false;
   Timer? _celebrationTimer;
 
+  /// Set once this screen, left without a room, asked to go home.
+  bool _leavingEmpty = false;
+
+  /// Leaves a room that no longer exists, after this frame (no navigation
+  /// from inside a build): the same way down as the chevron.
+  void _leaveEmptyRoom() {
+    if (_leavingEmpty) return;
+    _leavingEmpty = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || JamSession.read(context).hasRoom) {
+        _leavingEmpty = false;
+        return;
+      }
+      // Already on its way out (whoever ended the room navigated on, e.g.
+      // "Start a new jam" to host setup): leave the new top route alone.
+      if (ModalRoute.of(context)?.isCurrent == false) return;
+      // The app always has a router; a room shown on its own (a test, an
+      // embedding) just gets popped if it can be.
+      final router = GoRouter.maybeOf(context);
+      if (router == null) {
+        unawaited(Navigator.maybeOf(context)?.maybePop());
+      } else if (router.canPop()) {
+        router.pop();
+      } else {
+        router.go('/');
+      }
+    });
+  }
+
   @override
   void initState() {
     super.initState();
@@ -203,7 +280,9 @@ class _RoomScreenState extends State<RoomScreen>
     _subs
       ..add(engine.states.listen(refresh))
       ..add(engine.playlistUpdates.listen(refresh))
-      ..add(engine.permissionUpdates.listen(refresh));
+      ..add(engine.permissionUpdates.listen(refresh))
+      // The big button is "Resume audio" while this phone is silenced.
+      ..add(engine.outputSuspensionChanges.listen(refresh));
     if (engine is JamGuestEngine) {
       _subs.add(engine.peerEvents.listen(refresh));
     } else if (engine is JamHostEngine) {
@@ -266,13 +345,28 @@ class _RoomScreenState extends State<RoomScreen>
     if (mounted && _celebrating) setState(() => _celebrating = false);
   }
 
-  Future<void> _retry(JamSessionController session) async {
-    final rejoined = await session.rejoin();
+  /// "Try again": the controller keeps this room mounted for the whole
+  /// rejoin ([JamSessionController.rejoining]) and, if it fails, lands back
+  /// on the same ended screen with [JamSessionController.error] saying why —
+  /// so there is nothing to navigate here, in either outcome.
+  Future<void> _retry(JamSessionController session) => session.rejoin();
+
+  /// "Start a new jam" after the OS took the room away: host setup again,
+  /// same name, same queue.
+  Future<void> _startNew(JamSessionController session) async {
+    final args = session.restartArgs;
+    await session.acknowledgeEnd();
     if (!mounted) return;
-    if (!rejoined) {
-      session.notify(session.error ?? JamRoomStrings.rejoinFailed);
-      if (session.phase == JamSessionPhase.idle) context.go('/');
-    }
+    // Held by the controller as well as passed along: the route's `extra`
+    // is in-memory state a router rebuild does not promise to keep.
+    session.hostSetupDraft = args;
+    context.go('/');
+    context.push(
+      '/host',
+      extra: args == null
+          ? null
+          : HostSetupArgs(paths: args.paths, name: args.name),
+    );
   }
 
   @override
@@ -281,27 +375,45 @@ class _RoomScreenState extends State<RoomScreen>
     final engine = session.engine;
     final colors = context.jamColors;
 
-    if (session.phase == JamSessionPhase.ended) {
+    if (session.phase == JamSessionPhase.ended || session.rejoining) {
+      final reason = session.endReason;
+      final rejoining = session.rejoining;
       return JamSessionEndedView(
-        reason: session.endReason,
-        onDone: () async {
-          await session.acknowledgeEnd();
-          if (context.mounted) context.go('/');
-        },
+        reason: reason,
+        rejectReason: session.endRejectReason,
+        retrying: rejoining,
+        // Only a failed "Try again" leaves an error behind on this screen;
+        // anything older was cleared when the session started.
+        error: rejoining ? null : session.error,
+        onDone: rejoining
+            ? null
+            : () async {
+                await session.acknowledgeEnd();
+                if (context.mounted) context.go('/');
+              },
         // A host that suspended and came back is the documented graceful-death
         // path (DEVICE_TESTING §11), and the engine kept the URI that gets
         // you back in — the sha-keyed cache means the rejoin re-fetches
         // nothing. Not offered after a kick: §5.6 says never auto-rejoin,
-        // and a "try again" on a removal would just be rude.
+        // and a "try again" on a removal would just be rude. (The view also
+        // drops it for refusals no retry can fix.)
         onRetry:
-            session.lastJoinUri != null &&
-                session.endReason != JamSessionEndReason.kicked
+            session.lastJoinUri != null && reason != JamSessionEndReason.kicked
             ? () => unawaited(_retry(session))
+            : null,
+        onStartNew: reason == JamSessionEndReason.listenerFailed
+            ? () => unawaited(_startNew(session))
             : null,
       );
     }
     if (engine == null) {
-      // Router redirects cover this; the guard keeps a race from crashing.
+      // The room went away under this screen. The router's redirect only
+      // guards going TO /room — a room already pushed stays on the stack —
+      // and whoever ended it may not be around to send it home: ending a
+      // jam with a guest in it from the People sheet unwound the sheet
+      // while the room was still closing, and the host sat on this empty
+      // page (2026-10-17 run). Go home on our own.
+      if (!session.hasRoom) _leaveEmptyRoom();
       return const Scaffold(body: SizedBox.shrink());
     }
 
@@ -313,13 +425,7 @@ class _RoomScreenState extends State<RoomScreen>
     void minimise() => context.canPop() ? context.pop() : context.go('/');
 
     void openRoom() => unawaited(
-      showRoomSheet(
-        context,
-        engine,
-        selfName: _identity,
-        network: _network,
-        joinUri: session.joinUri,
-      ),
+      showRoomSheet(context, engine, selfName: _identity, network: _network),
     );
 
     return DragToDismiss(
@@ -393,6 +499,7 @@ class _RoomScreenState extends State<RoomScreen>
                                     engine: engine,
                                     connection: session.connection,
                                     clockSynced: guest?.clockSynced ?? true,
+                                    hostAway: session.hostAway,
                                     height: _kRoomSyncSlot,
                                     // The numbers live one long-press away — §6.1's
                                     // replacement for the "Sync details" menu item.
@@ -452,9 +559,23 @@ class _RoomScreenState extends State<RoomScreen>
                       top: false,
                       child: Column(
                         children: [
-                          if (session.connection !=
+                          // This phone's own sound first: it is the one strip
+                          // with something for the user to do.
+                          JamOutputBanner(engine: engine),
+                          // "Asleep" and "reconnecting" are different waits —
+                          // the first is the host's phone doing what iOS does
+                          // to a paused app, and needs nothing from anyone.
+                          if (session.hostAway)
+                            const JamRoomBanner(
+                              icon: Icons.bedtime_rounded,
+                              message: JamRoomBannerStrings.hostAsleep,
+                            )
+                          else if (session.connection !=
                               JamConnectionState.connected)
-                            _ReconnectBanner(connection: session.connection),
+                            const JamRoomBanner(
+                              busy: true,
+                              message: JamRoomBannerStrings.reconnecting,
+                            ),
                           Expanded(
                             child: Row(
                               children: [
@@ -478,7 +599,6 @@ class _RoomScreenState extends State<RoomScreen>
                                     engine: engine,
                                     selfName: _identity,
                                     network: _network,
-                                    joinUri: session.joinUri,
                                   ),
                               ],
                             ),
@@ -566,8 +686,7 @@ class _RoomBody extends StatelessWidget {
   List<String> get _roster => <String>[
     if (identity.isNotEmpty) identity,
     if (guest != null) _hostName,
-    for (final peer in engine.peers)
-      peer.clientName.isEmpty ? peer.peerId : peer.clientName,
+    for (final peer in engine.peers) jamPeerName(peer),
   ];
 
   /// The host, by name. Yours when you are hosting; otherwise the name the
@@ -583,23 +702,42 @@ class _RoomBody extends StatelessWidget {
     return LayoutBuilder(
       builder: (context, constraints) {
         final short = constraints.maxHeight < kRoomShortHeight;
+        final strip = _PeopleStrip(
+          roster: _roster,
+          hostName: _hostName,
+          selfName: identity,
+          isHost: session.isHost,
+          queueCount: engine.playlist.length,
+          ambient: ambient,
+          onPeople: onPeople,
+          onQueue: onQueue,
+        );
         final controls = _Controls(
           engine: engine,
           guest: guest,
           session: session,
           identity: identity,
-          roster: _roster,
-          hostName: _hostName,
-          ambient: ambient,
           compact: short,
-          onPeople: onPeople,
+          strip: short ? null : strip,
           onQueue: onQueue,
         );
 
         if (short) {
           // Landscape and short windows: the hero shrinks and moves beside
-          // the controls rather than squeezing them off the bottom. The
-          // column scrolls as the last resort, so nothing ever overflows.
+          // the controls rather than squeezing them off the bottom.
+          //
+          // The people strip is pinned to the foot of the column: it is the
+          // way to the queue and the people, and an Android phone on its
+          // side (a Pixel: ~255 dp of column under the status bar and the
+          // room's own bar) showed only the tops of its faces — the strip
+          // sat past the end of a scrolling column nobody thought to scroll
+          // (2026-10-17 run). The player takes what is left, centred in it,
+          // at tightened spacing that fits a phone held sideways. When even
+          // that is too tall (a guest without playback control has a line
+          // under the transport; every note at once; a large text size) it
+          // is scaled down to fit rather than scrolled: a play button cut in
+          // half by a scroll edge, or a reason nobody can see, is worse than
+          // the whole player a little smaller.
           final artSize = _clampArt(
             math.min(
               constraints.maxHeight - JamSpace.xxl,
@@ -624,12 +762,25 @@ class _RoomBody extends StatelessWidget {
                 ),
                 const SizedBox(width: JamSpace.xxl),
                 Expanded(
-                  child: SingleChildScrollView(
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [controls],
-                    ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Expanded(
+                        child: LayoutBuilder(
+                          builder: (context, box) => Center(
+                            child: FittedBox(
+                              fit: BoxFit.scaleDown,
+                              child: SizedBox(
+                                width: box.maxWidth,
+                                child: controls,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: JamSpace.sm),
+                      strip,
+                    ],
                   ),
                 ),
               ],
@@ -800,11 +951,8 @@ class _Controls extends StatelessWidget {
     required this.guest,
     required this.session,
     required this.identity,
-    required this.roster,
-    required this.hostName,
-    required this.ambient,
     required this.compact,
-    required this.onPeople,
+    required this.strip,
     required this.onQueue,
   });
 
@@ -812,25 +960,30 @@ class _Controls extends StatelessWidget {
   final JamGuestEngine? guest;
   final JamSessionController session;
   final String identity;
-  final List<String> roster;
 
-  /// The name to ring as the host in the strip.
-  final String hostName;
-
-  final Animation<double> ambient;
-
-  /// The short layout tightens every gap; nothing is dropped.
+  /// The short (side-on) layout tightens every gap; nothing is dropped.
   final bool compact;
 
-  final VoidCallback onPeople;
+  /// The people strip, at the foot of the column — or null when the layout
+  /// pins it somewhere of its own (side-on).
+  final Widget? strip;
+
+  /// Opens the queue — the empty room's "Add music".
   final VoidCallback onQueue;
 
   @override
   Widget build(BuildContext context) {
     final item = engine.currentItem;
     final canControl = engine.can(JamCapability.controlPlayback);
+    // The room lets you, but the host cannot hear you right now (asleep, or
+    // the link is down): seeking is as dead as the transport, and says so
+    // there.
+    final canSend = session.canSendCommands;
     final hasQueue = engine.playlist.isNotEmpty;
     final gap = compact ? JamSpace.md : JamSpace.xl;
+    final import = session.hostImport;
+    final importing = import != null && !import.progress.value.isDone;
+    final strip = this.strip;
 
     return Column(
       mainAxisSize: MainAxisSize.min,
@@ -840,42 +993,45 @@ class _Controls extends StatelessWidget {
           engine: engine,
           item: item,
           identity: identity,
+          importing: importing,
           onAdd: engine.can(JamCapability.addTracks) ? onQueue : null,
         ),
-        SizedBox(height: gap),
+        SizedBox(height: compact ? JamSpace.sm : gap),
         if (session.position case final ticker?)
+          // The length follows the loaded file as well as the clock: a track
+          // whose file lands while the room is paused (a Retry) has a
+          // position that does not move, and the old track's length used to
+          // stay on screen until something else redrew it.
           ValueListenableBuilder<int?>(
-            valueListenable: ticker,
-            builder: (context, positionUs, _) => JamScrubber(
-              positionUs: positionUs ?? 0,
-              durationUs: engine.loadedDurationUs.value ?? item?.durationUs,
-              enabled: canControl && item != null,
-              onSeek: canControl
-                  ? (us) => unawaited(engine.transportSeek(us))
-                  : null,
+            valueListenable: engine.loadedDurationUs,
+            builder: (context, loadedUs, _) => ValueListenableBuilder<int?>(
+              valueListenable: ticker,
+              builder: (context, positionUs, _) => JamScrubber(
+                positionUs: positionUs ?? 0,
+                durationUs: loadedUs ?? item?.durationUs,
+                enabled: canControl && canSend && item != null,
+                onSeek: canControl && canSend
+                    ? (us) => unawaited(session.act((e) => e.transportSeek(us)))
+                    : null,
+              ),
             ),
           ),
-        SizedBox(height: compact ? JamSpace.sm : JamSpace.md),
+        SizedBox(height: compact ? JamSpace.xs : JamSpace.md),
         _TransportArea(
           engine: engine,
           guest: guest,
+          session: session,
           canControl: canControl,
           hasQueue: hasQueue,
         ),
-        SizedBox(height: compact ? JamSpace.md : JamSpace.lg),
+        SizedBox(height: compact ? JamSpace.xs : JamSpace.lg),
         _ReadinessNote(engine: engine),
-        SizedBox(height: gap),
-        _PeopleStrip(
-          roster: roster,
-          hostName: hostName,
-          selfName: identity,
-          isHost: session.isHost,
-          queueCount: engine.playlist.length,
-          ambient: ambient,
-          onPeople: onPeople,
-          onQueue: onQueue,
-        ),
-        SizedBox(height: compact ? 0 : JamSpace.md),
+        if (import != null) _ImportNote(import: import),
+        if (strip != null) ...[
+          SizedBox(height: gap),
+          strip,
+          SizedBox(height: compact ? 0 : JamSpace.md),
+        ],
       ],
     );
   }
@@ -889,6 +1045,7 @@ class _TitleBlock extends StatelessWidget {
     required this.item,
     required this.identity,
     required this.onAdd,
+    this.importing = false,
   });
 
   final JamEngine engine;
@@ -898,16 +1055,26 @@ class _TitleBlock extends StatelessWidget {
   /// Offered instead of an artist line when the room is empty.
   final VoidCallback? onAdd;
 
+  /// The host's starting files are still being added. An empty room in that
+  /// moment is not "Nothing queued" — the music is on its way.
+  final bool importing;
+
   @override
   Widget build(BuildContext context) {
     final colors = context.jamColors;
     final current = item;
+    if (current == null && importing) {
+      return Text(
+        JamRoomStrings.importing,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: context.jamTrackTitle.copyWith(color: colors.textPrimary),
+      );
+    }
     // The credit is always shown, yours included. Hiding "added by You" left
     // a solo-hosted room with no people on it at all — and the room, not the
     // track, is what this screen is about.
-    final addedBy = current == null
-        ? null
-        : engine.addedByLabel(current, engine.peers);
+    final addedBy = current == null ? null : jamAddedByLabel(engine, current);
     final youAdded = addedBy == 'You';
     final credit = addedBy;
 
@@ -1024,18 +1191,48 @@ class _AddedBy extends StatelessWidget {
   );
 }
 
-/// The transport — or, for a guest whose current track is still coming down
-/// the wire, the same bar with a determinate ring where the play glyph goes.
+/// Where a guest's copy of the current track is, as far as the player cares.
+enum JamTrackFetch {
+  /// Local and playable — or not a guest's problem at all.
+  ready,
+
+  /// On its way (queued, in flight, or failed with a retry scheduled).
+  fetching,
+
+  /// Failed and the engine stopped retrying: only the user can ask again.
+  failed,
+}
+
+/// Classifies [state] for the player. A failure with a retry scheduled is
+/// still "on its way" — the engine has it in hand — and only a failure it
+/// gave up on turns into "Couldn't get this track · Retry".
+JamTrackFetch jamTrackFetchOf(JamPrefetchState? state) {
+  if (state == null || state.ready) return JamTrackFetch.ready;
+  if (state.phase == JamPrefetchPhase.failed && !state.willRetry) {
+    return JamTrackFetch.failed;
+  }
+  return JamTrackFetch.fetching;
+}
+
+/// The transport — and, for a guest whose current track is not on this
+/// phone yet, what is happening to it.
+///
+/// Anyone the room lets skip keeps the full transport whatever the fetch is
+/// doing: a track that will not come down is exactly when someone wants
+/// "next", and replacing the bar with a progress ring took that away. A
+/// guest who could not touch the transport anyway gets the ring instead.
 class _TransportArea extends StatelessWidget {
   const _TransportArea({
     required this.engine,
     required this.guest,
+    required this.session,
     required this.canControl,
     required this.hasQueue,
   });
 
   final JamEngine engine;
   final JamGuestEngine? guest;
+  final JamSessionController session;
   final bool canControl;
   final bool hasQueue;
 
@@ -1043,37 +1240,157 @@ class _TransportArea extends StatelessWidget {
   Widget build(BuildContext context) {
     final mediaId = engine.snapshot.mediaId;
     final fetcher = guest;
+    final canSend = session.canSendCommands;
+    final roomPlaying = engine.snapshot.status == PlaybackStatus.playing;
+    // While this phone's own sound is suspended (a call, another app,
+    // headphones out) the room plays on without it, and the big button is
+    // "Resume audio" — for everyone, since it touches only this phone. As
+    // "Pause" it stopped the whole room for someone who only wanted their
+    // own sound back. Mirrors the docked bar.
+    final suspended = engine.outputSuspension.value != null;
+    final playing = roomPlaying && !suspended;
+    final controls = canControl && canSend && hasQueue;
 
-    Widget bar() => JamTransport(
-      state: switch (engine.snapshot.status) {
-        PlaybackStatus.playing => JamPlaybackState.playing,
-        _ => JamPlaybackState.paused,
-      },
-      enabled: canControl && hasQueue,
-      // The bar is dimmed for two different reasons and they need two
-      // different sentences: a host with an empty room is not being told
-      // that somebody else is in charge.
-      gatedMessage: canControl
-          ? JamRoomStrings.nothingToPlay
-          : jamHostControlsPlayback,
-      onPlayPause: () => unawaited(
-        engine.snapshot.status == PlaybackStatus.playing
-            ? engine.transportPause()
-            : engine.transportPlay(),
-      ),
-      onPrevious: () => unawaited(engine.transportPrevious()),
-      onNext: () => unawaited(engine.transportNext()),
+    final bar = JamTransport(
+      state: playing ? JamPlaybackState.playing : JamPlaybackState.paused,
+      enabled: suspended || controls,
+      playLabel: suspended ? JamRoomBannerStrings.resume : null,
+      // The bar is dimmed for different reasons and each needs its own
+      // sentence: a host with an empty room is not being told that somebody
+      // else is in charge, and a guest whose host is asleep is not being
+      // told the rules changed.
+      gatedMessage: !canControl
+          ? jamHostControlsPlayback
+          : !canSend
+          ? (session.hostAway
+                ? JamRoomStrings.waitForHost
+                : JamRoomStrings.waitForReconnect)
+          : JamRoomStrings.nothingToPlay,
+      onPlayPause: suspended
+          ? () => unawaited(engine.resumeLocalOutput())
+          : () => unawaited(
+              session.act(
+                (e) => roomPlaying ? e.transportPause() : e.transportPlay(),
+              ),
+            ),
+      onPrevious: controls
+          ? () => unawaited(session.act((e) => e.transportPrevious()))
+          : null,
+      onNext: controls
+          ? () => unawaited(session.act((e) => e.transportNext()))
+          : null,
     );
 
-    if (fetcher == null || mediaId == null) return bar();
+    if (fetcher == null || mediaId == null) return bar;
+
+    void retry() {
+      // False when there is nothing left to retry (it landed, or is already
+      // being fetched again); the next state change redraws either way, but
+      // a tap that did nothing visible deserves a word.
+      if (!fetcher.retryFetch(mediaId)) session.notify(kJamIntentFailed);
+    }
 
     return ValueListenableBuilder<Map<String, JamPrefetchState>>(
       valueListenable: fetcher.prefetchStates,
       builder: (context, states, _) {
         final state = states[mediaId];
-        if (state == null || state.ready) return bar();
-        return _Fetching(progress: state.progress);
+        return switch (jamTrackFetchOf(state)) {
+          JamTrackFetch.ready => bar,
+          JamTrackFetch.fetching when canControl => Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              bar,
+              const SizedBox(height: JamSpace.sm),
+              _FetchCaption(progress: state!.progress),
+            ],
+          ),
+          JamTrackFetch.fetching => _Fetching(progress: state!.progress),
+          JamTrackFetch.failed when canControl => Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              bar,
+              const SizedBox(height: JamSpace.xs),
+              _FetchFailed(onRetry: retry, compact: true),
+            ],
+          ),
+          JamTrackFetch.failed => _FetchFailed(onRetry: retry),
+        };
       },
+    );
+  }
+}
+
+/// "Getting this track — 63%" under a transport that stays usable.
+class _FetchCaption extends StatelessWidget {
+  const _FetchCaption({required this.progress});
+
+  final double progress;
+
+  @override
+  Widget build(BuildContext context) {
+    final percent = (progress.clamp(0.0, 1.0) * 100).round();
+    return Text(
+      JamRoomStrings.fetching(percent),
+      textAlign: TextAlign.center,
+      style: context.jamCaption.copyWith(color: context.jamColors.warning),
+    );
+  }
+}
+
+/// "Couldn't get this track · Retry" — the end of the line for a fetch the
+/// engine gave up on, which used to sit on "Getting this track — 40%" with
+/// nothing moving and nothing to press.
+class _FetchFailed extends StatelessWidget {
+  const _FetchFailed({required this.onRetry, this.compact = false});
+
+  final VoidCallback onRetry;
+
+  /// One line under a live transport, rather than the 72 dp glyph that
+  /// stands in for one.
+  final bool compact;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.jamColors;
+    final line = Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Flexible(
+          child: Text(
+            JamRoomStrings.fetchFailed,
+            textAlign: TextAlign.center,
+            style: context.jamCaption.copyWith(color: colors.danger),
+          ),
+        ),
+        const SizedBox(width: JamSpace.xs),
+        JamButton.tertiary(
+          label: JamRoomStrings.retry,
+          semanticLabel: JamRoomStrings.retryFetch,
+          onPressed: onRetry,
+        ),
+      ],
+    );
+    if (compact) return Center(child: line);
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 72,
+          height: 72,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: colors.surfaceMuted,
+            shape: BoxShape.circle,
+          ),
+          child: Icon(
+            Icons.music_off_rounded,
+            size: 28,
+            color: colors.textSecondary,
+          ),
+        ),
+        const SizedBox(height: JamSpace.xs),
+        line,
+      ],
     );
   }
 }
@@ -1172,8 +1489,12 @@ class _PeopleStrip extends StatelessWidget {
       children: [
         Flexible(
           child: Semantics(
+            container: true,
             button: true,
             label: '${JamRoomStrings.people}, ${roster.length}',
+            // The InkWell's tap is excluded with its semantics; the action
+            // has to be declared here or a screen reader cannot press it.
+            onTap: onPeople,
             excludeSemantics: true,
             child: InkWell(
               onTap: onPeople,
@@ -1221,9 +1542,11 @@ class _PeopleStrip extends StatelessWidget {
         if (isHost)
           JamButton.tertiary(label: JamRoomStrings.invite, onPressed: onPeople),
         Semantics(
+          container: true,
           button: true,
           label:
               '${JamRoomStrings.queue}, ${JamRoomStrings.queued(queueCount)}',
+          onTap: onQueue,
           excludeSemantics: true,
           child: InkWell(
             onTap: onQueue,
@@ -1276,54 +1599,61 @@ class _ReadinessNote extends StatelessWidget {
         .values
         .where((s) => s != MediaReadiness.ready)
         .length;
-    if (waiting == 0) return const SizedBox.shrink();
-
-    return Text(
-      JamRoomStrings.waiting(waiting),
-      textAlign: TextAlign.center,
-      style: context.jamCaption.copyWith(color: colors.warning),
+    // The gate says why a play has not started yet; the count says who the
+    // room is waiting on otherwise. The gate goes first: a hold only exists
+    // while somebody is mid-download, so behind the count it could never be
+    // seen, and it is the answer to the play the host just pressed — the
+    // music will start by itself (§6.3). Listened to, not read: a hold that
+    // a guest's play request started comes with no broadcast to rebuild
+    // this screen.
+    return ValueListenableBuilder<bool>(
+      valueListenable: host.awaitingReadiness,
+      builder: (context, awaiting, _) {
+        final String? note = awaiting
+            ? JamRoomStrings.awaitingReadiness
+            : waiting > 0
+            ? JamRoomStrings.waiting(waiting)
+            : null;
+        if (note == null) return const SizedBox.shrink();
+        return Text(
+          note,
+          textAlign: TextAlign.center,
+          style: context.jamCaption.copyWith(color: colors.warning),
+        );
+      },
     );
   }
 }
 
-/// The transport dropped. Playback keeps running from cache, so this is
-/// informational, not an error — it says so, in apricot rather than red.
-class _ReconnectBanner extends StatelessWidget {
-  const _ReconnectBanner({required this.connection});
+/// "Adding your music · 3 of 12" while the host's starting files go in — in
+/// the room, which is already open, rather than behind a spinner on the
+/// button that opened it.
+class _ImportNote extends StatelessWidget {
+  const _ImportNote({required this.import});
 
-  final JamConnectionState connection;
+  final JamImport import;
 
   @override
-  Widget build(BuildContext context) {
-    final colors = context.jamColors;
-    return Container(
-      width: double.infinity,
-      height: 40,
-      color: colors.highlightSoft,
-      padding: const EdgeInsets.symmetric(horizontal: JamSpace.page),
-      child: Row(
-        children: [
-          SizedBox(
-            width: 14,
-            height: 14,
-            child: CircularProgressIndicator(
-              strokeWidth: 2,
-              color: colors.warning,
-            ),
-          ),
-          const SizedBox(width: JamSpace.md),
-          Expanded(
+  Widget build(BuildContext context) =>
+      ValueListenableBuilder<JamImportProgress>(
+        valueListenable: import.progress,
+        builder: (context, progress, _) {
+          // One file is in or not; a count only means something for several.
+          if (progress.isDone || progress.total < 2) {
+            return const SizedBox.shrink();
+          }
+          return Padding(
+            padding: const EdgeInsets.only(top: JamSpace.xs),
             child: Text(
-              JamRoomStrings.reconnecting,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: context.jamFootnote.copyWith(color: colors.warning),
+              JamRoomStrings.importingCount(progress.completed, progress.total),
+              textAlign: TextAlign.center,
+              style: context.jamCaption.copyWith(
+                color: context.jamColors.textSecondary,
+              ),
             ),
-          ),
-        ],
-      ),
-    );
-  }
+          );
+        },
+      );
 }
 
 /// The jam-started moment: the brand gradient, the room's name, 700 ms, gone.
@@ -1406,15 +1736,35 @@ class JamSessionEndedView extends StatelessWidget {
   const JamSessionEndedView({
     super.key,
     required this.reason,
+    this.rejectReason,
     required this.onDone,
     this.onRetry,
+    this.onStartNew,
+    this.retrying = false,
+    this.error,
   });
 
   final JamSessionEndReason? reason;
-  final VoidCallback onDone;
+
+  /// For [JamSessionEndReason.rejected]: what the host said (§3.1), which
+  /// picks the copy and whether a retry is offered ([jamRejectIsRetryable]).
+  final RejectReason? rejectReason;
+
+  /// Back to nearby. Null while a retry is in flight.
+  final VoidCallback? onDone;
 
   /// Rejoin the room this device came from, when there is one to rejoin.
   final VoidCallback? onRetry;
+
+  /// Host only: open host setup again on the room the OS took away.
+  final VoidCallback? onStartNew;
+
+  /// A "Try again" is running: its button spins in place.
+  final bool retrying;
+
+  /// Why the last "Try again" failed, said here rather than in a snackbar
+  /// over a screen that is about to be read anyway.
+  final String? error;
 
   @override
   Widget build(BuildContext context) {
@@ -1430,11 +1780,35 @@ class JamSessionEndedView extends StatelessWidget {
         JamRoomStrings.kickedTitle,
         JamRoomStrings.kickedBody,
       ),
-      JamSessionEndReason.rejected => (
-        Icons.lock_outline_rounded,
-        JamRoomStrings.rejectedTitle,
-        JamRoomStrings.rejectedBody,
-      ),
+      JamSessionEndReason.rejected => switch (rejectReason) {
+        RejectReason.badToken => (
+          Icons.lock_reset_rounded,
+          JamRoomStrings.restartedTitle,
+          JamRoomStrings.restartedBody,
+        ),
+        RejectReason.version => (
+          Icons.system_update_rounded,
+          JamRoomStrings.versionTitle,
+          JamRoomStrings.versionBody,
+        ),
+        RejectReason.full => (
+          Icons.groups_rounded,
+          JamRoomStrings.fullTitle,
+          JamRoomStrings.fullBody,
+        ),
+        // `kicked` arrives as its own end reason; it is here only so the
+        // switch is total.
+        RejectReason.kicked => (
+          Icons.person_remove_rounded,
+          JamRoomStrings.kickedTitle,
+          JamRoomStrings.kickedBody,
+        ),
+        RejectReason.unknown || null => (
+          Icons.lock_outline_rounded,
+          JamRoomStrings.rejectedTitle,
+          JamRoomStrings.rejectedBody,
+        ),
+      },
       // The host said goodbye on purpose (§3.4). Nothing to try again for —
       // the room they would rejoin does not exist any more.
       JamSessionEndReason.hostEnded => (
@@ -1444,20 +1818,75 @@ class JamSessionEndedView extends StatelessWidget {
         JamRoomStrings.hostEndedTitle,
         JamRoomStrings.hostEndedBody,
       ),
+      // The host's own room, gone without "End jam" being pressed.
+      JamSessionEndReason.listenerFailed => (
+        Icons.wifi_tethering_off_rounded,
+        JamRoomStrings.listenerFailedTitle,
+        JamRoomStrings.listenerFailedBody,
+      ),
       _ => (
         Icons.check_circle_outline_rounded,
         JamRoomStrings.endedTitle,
         JamRoomStrings.endedBody,
       ),
     };
-    // Only a room that might still be there is worth offering a way back
-    // into: hostGone (a phone that slept) and rejected (a stale code). A kick
-    // must never be undoable (§5.6), and a host who ended the jam deliberately
-    // has no room left to rejoin.
+    // Only a room that might still let you in is worth offering a way back
+    // into: hostGone (a phone that slept) and a refusal a retry could turn
+    // around (a full room). A restarted room or a version mismatch never
+    // lets the same link back in; a kick must never be undoable (§5.6); and
+    // a host who ended the jam deliberately has no room left to rejoin.
     final retry = switch (reason) {
-      JamSessionEndReason.hostGone || JamSessionEndReason.rejected => onRetry,
+      JamSessionEndReason.hostGone => onRetry,
+      JamSessionEndReason.rejected when jamRejectIsRetryable(rejectReason) =>
+        onRetry,
       _ => null,
     };
+    final startNew = reason == JamSessionEndReason.listenerFailed
+        ? onStartNew
+        : null;
+    final message = error;
+
+    // One primary per screen (§8 check 5): getting back in, or starting
+    // again, when either is possible; otherwise the way home.
+    final List<Widget> actions;
+    if (retry != null || retrying) {
+      actions = [
+        JamButton.primary(
+          label: JamRoomStrings.tryAgain,
+          onPressed: retrying ? null : retry,
+          loading: retrying,
+          expand: true,
+        ),
+        const SizedBox(height: JamSpace.md),
+        JamButton.secondary(
+          label: JamRoomStrings.back,
+          onPressed: onDone,
+          expand: true,
+        ),
+      ];
+    } else if (startNew != null) {
+      actions = [
+        JamButton.primary(
+          label: JamRoomStrings.startNew,
+          onPressed: startNew,
+          expand: true,
+        ),
+        const SizedBox(height: JamSpace.md),
+        JamButton.secondary(
+          label: JamRoomStrings.back,
+          onPressed: onDone,
+          expand: true,
+        ),
+      ];
+    } else {
+      actions = [
+        JamButton.primary(
+          label: JamRoomStrings.back,
+          onPressed: onDone,
+          expand: true,
+        ),
+      ];
+    }
 
     return Scaffold(
       backgroundColor: colors.canvas,
@@ -1494,25 +1923,21 @@ class JamSessionEndedView extends StatelessWidget {
                       color: colors.textSecondary,
                     ),
                   ),
-                  const SizedBox(height: JamSpace.xxxl),
-                  if (retry != null) ...[
-                    JamButton.primary(
-                      label: JamRoomStrings.tryAgain,
-                      onPressed: retry,
-                      expand: true,
-                    ),
+                  if (message != null) ...[
                     const SizedBox(height: JamSpace.md),
-                    JamButton.secondary(
-                      label: JamRoomStrings.back,
-                      onPressed: onDone,
-                      expand: true,
+                    Semantics(
+                      liveRegion: true,
+                      child: Text(
+                        message,
+                        textAlign: TextAlign.center,
+                        style: context.jamFootnote.copyWith(
+                          color: colors.danger,
+                        ),
+                      ),
                     ),
-                  ] else
-                    JamButton.primary(
-                      label: JamRoomStrings.back,
-                      onPressed: onDone,
-                      expand: true,
-                    ),
+                  ],
+                  const SizedBox(height: JamSpace.xxxl),
+                  ...actions,
                 ],
               ),
             ),
@@ -1533,13 +1958,11 @@ class _SidePanel extends StatefulWidget {
     required this.engine,
     required this.selfName,
     required this.network,
-    required this.joinUri,
   });
 
   final JamEngine engine;
   final String selfName;
   final JamNetworkStatus network;
-  final Uri? joinUri;
 
   @override
   State<_SidePanel> createState() => _SidePanelState();
@@ -1618,7 +2041,6 @@ class _SidePanelState extends State<_SidePanel> {
                     engine: widget.engine,
                     selfName: widget.selfName,
                     network: widget.network,
-                    joinUri: widget.joinUri,
                   ),
                 },
               ),
@@ -1645,9 +2067,11 @@ class _PanelTabButton extends StatelessWidget {
   Widget build(BuildContext context) {
     final colors = context.jamColors;
     return Semantics(
+      container: true,
       button: true,
       selected: selected,
       label: label,
+      onTap: onTap,
       excludeSemantics: true,
       child: InkWell(
         onTap: onTap,

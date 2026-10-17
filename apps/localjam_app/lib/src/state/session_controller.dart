@@ -25,7 +25,6 @@ import '../util/format.dart';
 import '../util/network.dart';
 import '../util/permissions.dart';
 import 'position_ticker.dart';
-import 'queue_actions.dart';
 
 /// Which side of the jam this device is on.
 enum JamSide {
@@ -85,19 +84,109 @@ const String kJamAlreadyQueued = 'Already in the queue';
 /// What the app says when a nearby room turns out to have gone.
 const String kJamRoomGone = 'That jam has ended';
 
+/// What a guest is told when the host said it is going to sleep (§3.5) — the
+/// one reason a request cannot go anywhere that is nobody's fault.
+const String kJamHostAsleep = 'The host’s phone is asleep';
+
+/// A tap that could not reach a sleeping host.
+const String kJamHostAsleepTryLater =
+    'The host’s phone is asleep. Try again when it wakes.';
+
+/// A tap that could not reach the host because the link is down.
+const String kJamNotConnected =
+    'Not connected to the host right now. Try again in a moment.';
+
+/// A tap the room refused for any other reason — an id that left the queue
+/// meanwhile, a room that ended under the finger.
+const String kJamIntentFailed = 'That didn’t go through. Try again.';
+
+/// A failed rejoin that the controller turned back into the ended screen.
+const String kJamRejoinFailed = 'Could not get back into that room.';
+
+/// This app and the host cannot talk: a different major protocol version
+/// (§2) — refused at the door, or reported by the host later.
+const String kJamVersionMismatch =
+    'This app and the host are on different versions of LocalJam. '
+    'One of you needs an update.';
+
+/// Whether asking the same room again could ever let this device back in
+/// after the host turned it away with [reason] (§3.1) — what decides whether
+/// an ended room offers "Try again".
+///
+/// A restarted room ([RejectReason.badToken]: the link's token is gone for
+/// good) and a version mismatch never let the same link in again, and a
+/// kick is the host's to undo (§5.6), not a retry's. A full room may have
+/// space once someone leaves; a reason from a newer host
+/// ([RejectReason.unknown]), or none at all, is not known to be hopeless —
+/// and a retry that fails says why.
+bool jamRejectIsRetryable(RejectReason? reason) => switch (reason) {
+  RejectReason.badToken || RejectReason.version || RejectReason.kicked => false,
+  RejectReason.full || RejectReason.unknown || null => true,
+};
+
+/// What [JamSessionController.restartArgs] carries: enough to open host
+/// setup on the room that just died, queue and all.
+typedef JamRestartArgs = ({String name, List<String> paths});
+
+/// What "Start a new jam" re-hosts after a room died: the [queue] as it
+/// stood (its order, its additions), then whatever of the original pick
+/// ([picked]) never made it into the queue — the import had not reached it,
+/// or it would not add — so nothing the host chose is silently dropped.
+/// Files that were queued once and removed ([everQueued] but not in
+/// [queue]) stay removed: that was the room's decision.
+List<String> jamRestartPaths({
+  required List<String> queue,
+  required List<String> picked,
+  required Iterable<String> everQueued,
+}) {
+  final seen = {...queue, ...everQueued};
+  return [
+    ...queue,
+    for (final path in picked)
+      if (seen.add(path)) path,
+  ];
+}
+
 /// One file that could not be added to the queue.
 @immutable
 class JamAddFailure {
-  const JamAddFailure(this.name, this.reason);
+  const JamAddFailure(this.name, this.reason, {this.why});
+
+  /// [error] from an add, as a failure for the file at [path].
+  factory JamAddFailure.of(String path, Object error) =>
+      JamAddFailure(_basename(path), '$error', why: jamAddFailureWhy(error));
 
   /// The file's display name — what the user actually recognises.
   final String name;
 
   /// Loggable detail. Never shown raw; see [JamSessionController.addFiles].
   final String reason;
+
+  /// Why, in a sentence a person can act on — or null when there is nothing
+  /// more useful to say than "could not add".
+  final String? why;
 }
 
-/// The app's single live-jam owner.
+/// What an upload the host refused means for the person who picked the file
+/// (§6.4), by HTTP status ([JamHttpStatusException]).
+///
+/// Everything else — a stall, a body the host cut off (anything over its
+/// 64 MB read limit arrives as a reset, not a 413), a socket error — is "could
+/// not add that track", and nothing more: none of them means the host is
+/// gone, and saying so would send people to rejoin a room that is fine.
+String? jamAddFailureWhy(Object error) => switch (error) {
+  JamHttpStatusException(statusCode: 507) =>
+    'The room\u2019s upload space is full.',
+  JamHttpStatusException(statusCode: 429) =>
+    'Wait for your other uploads to finish, then try again.',
+  JamHttpStatusException(statusCode: 403) =>
+    'This room is listen-only, or the host hasn\u2019t let you add tracks.',
+  JamHttpStatusException(statusCode: 413) => 'It\u2019s too big for the room.',
+  JamHttpStatusException(statusCode: 401) =>
+    'The invite is no longer valid. Ask the host for a fresh code.',
+  _ => null,
+};
+
 /// A join whose `host` candidates are not all on this network (§9).
 ///
 /// Not a transport failure: nothing was dialled. The link asked the app to
@@ -110,6 +199,7 @@ class JamOffNetworkException implements Exception {
   String toString() => 'JamOffNetworkException: the join URI is not local';
 }
 
+/// The app's single live-jam owner.
 class JamSessionController extends ChangeNotifier {
   JamSessionController() {
     // Identity can arrive late. `JamIdentity.displayName()` hands out an
@@ -127,6 +217,10 @@ class JamSessionController extends ChangeNotifier {
   JamSessionPhase _phase = JamSessionPhase.idle;
   String? _error;
   JamSessionEndReason? _endReason;
+
+  /// The host's reason when [_endReason] is a refusal — kept apart from the
+  /// engine, which a rejoin tears down, so the screen can keep saying it.
+  RejectReason? _endRejectReason;
   JamConnectionState _connection = JamConnectionState.connected;
   JamPositionTicker? _position;
   final List<StreamSubscription<Object?>> _subs = [];
@@ -136,6 +230,28 @@ class JamSessionController extends ChangeNotifier {
   String? _joiningName;
   Uri? _lastJoinUri;
   List<JamAddFailure> _addFailures = const [];
+
+  /// The last start/join failure itself, so a failed rejoin can tell a kick
+  /// (never retry) from a room that simply was not there.
+  Object? _lastFailure;
+
+  /// Set for the whole of a [rejoin] that started from the terminal screen:
+  /// the end it is trying to undo. While it is set the room stays mounted —
+  /// [hasRoom] holds — so "Try again" spins in place instead of the router
+  /// bouncing the user to home the moment the phase leaves `ended`.
+  JamSessionEndReason? _rejoinReason;
+
+  /// The host's background import of the files it started with.
+  JamImport? _import;
+
+  /// The room a host lost to [JamSessionEndReason.listenerFailed], for
+  /// "Start a new jam".
+  JamRestartArgs? _restartArgs;
+
+  /// Every file the hosted room was started with, in the order picked — so
+  /// "Start a new jam" can bring back what the import had not reached yet,
+  /// not only what made it into the queue.
+  List<String> _hostPick = const [];
 
   /// Guest display names by peerId, so a `peerLeft` event (which carries only
   /// an id) can still say who left.
@@ -220,7 +336,41 @@ class JamSessionController extends ChangeNotifier {
   /// Whether there is a room to show — live, or ended and not yet dismissed.
   /// The docked bar keys off this rather than [isLive] so a terminal state is
   /// reachable from wherever the user happened to be standing.
-  bool get hasRoom => isLive || _phase == JamSessionPhase.ended;
+  ///
+  /// A "Try again" in flight counts: the rejoin passes through `starting`,
+  /// and a room that vanished for that moment was unmounted by the router's
+  /// redirect — the button bounced the user to home instead of spinning.
+  bool get hasRoom =>
+      isLive || _phase == JamSessionPhase.ended || _rejoinReason != null;
+
+  /// Whether a "Try again" from the terminal screen is in flight.
+  bool get rejoining => _rejoinReason != null;
+
+  /// Whether the host said it is going to sleep (§3.5). Always false on a
+  /// host. Notifies when it changes.
+  bool get hostAway => guestEngine?.hostAway.value ?? false;
+
+  /// Whether a transport or queue intent can reach the room right now: a
+  /// host always can while live; a guest needs a live connection to a host
+  /// that is awake ([JamGuestEngine.canSendCommands]). Controls that send
+  /// should be disabled — with a reason — while this is false.
+  bool get canSendCommands => isLive && (guestEngine?.canSendCommands ?? true);
+
+  /// The host's background import of the files the room started with, or
+  /// null. Its [JamImport.progress] is live; the room is already open.
+  JamImport? get hostImport => _import;
+
+  /// Enough to reopen host setup on a room the OS took away
+  /// ([JamSessionEndReason.listenerFailed]); null otherwise.
+  JamRestartArgs? get restartArgs => _restartArgs;
+
+  /// What host setup opens with — "Host it again", "Start a new jam" — or
+  /// null for a blank one. Held here rather than only in the route's
+  /// `extra`, which is in-memory route state the router does not promise to
+  /// keep: a rebuild that lost it opened setup empty, the old queue gone.
+  /// Whoever pushes host setup sets it (null for a fresh start) first; a
+  /// start consumes it.
+  JamRestartArgs? hostSetupDraft;
 
   /// The last start/join failure, for the screen that attempted it.
   String? get error => _error;
@@ -260,8 +410,50 @@ class JamSessionController extends ChangeNotifier {
     );
   }
 
-  /// Why the session ended, once [phase] is [JamSessionPhase.ended].
-  JamSessionEndReason? get endReason => _endReason;
+  /// Why the session ended, once [phase] is [JamSessionPhase.ended] — and,
+  /// while a "Try again" runs, the end it is trying to undo.
+  JamSessionEndReason? get endReason => _endReason ?? _rejoinReason;
+
+  /// When [endReason] is [JamSessionEndReason.rejected], what the host said
+  /// (§3.1; [JamGuestEngine.lastRejectReason]) — a restarted room, a full
+  /// one, a version mismatch. It decides the copy, and whether "Try again"
+  /// is worth offering at all ([jamRejectIsRetryable]). Null for every
+  /// other end, and when the host gave no reason this app knows.
+  RejectReason? get endRejectReason =>
+      endReason == JamSessionEndReason.rejected ? _endRejectReason : null;
+
+  /// Runs one user-initiated transport or queue intent, and says so when it
+  /// did not land.
+  ///
+  /// The engine intents answer `false` instead of throwing — a guest whose
+  /// host is asleep, a link mid-reconnect, an id that left the queue — and a
+  /// button whose tap went nowhere with nothing said is the one failure mode
+  /// a person cannot tell from a broken app. Every control that acts on the
+  /// room goes through here so none of them can be silent.
+  Future<bool> act(Future<bool> Function(JamEngine engine) intent) async {
+    final engine = _engine;
+    if (engine == null || !isLive) return false;
+    bool ok;
+    try {
+      ok = await intent(engine);
+    } catch (e) {
+      // The intents are documented never to throw; one that does is a bug
+      // worth a log line, not a stack trace on screen.
+      debugPrint('localjam: intent failed: $e');
+      ok = false;
+    }
+    // A room that ended under the finger has its own screen saying so.
+    if (!ok && identical(engine, _engine) && isLive) notify(_whyNot());
+    return ok;
+  }
+
+  /// Why an intent did not land, in the room's own words.
+  String _whyNot() {
+    final guest = guestEngine;
+    if (guest != null && guest.hostAway.value) return kJamHostAsleepTryLater;
+    if (guest != null && !guest.canSendCommands) return kJamNotConnected;
+    return kJamIntentFailed;
+  }
 
   /// Transport connection state. Always [JamConnectionState.connected] on a
   /// host — its own clock and state are the session.
@@ -371,8 +563,12 @@ class JamSessionController extends ChangeNotifier {
   /// Hosts a room. Returns true when the session went live; on failure
   /// [error] carries the reason and the phase returns to idle.
   ///
-  /// [paths] are added after the room is up, so a host can start instantly
-  /// and let the queue fill in — and can keep adding once live.
+  /// [paths] are imported in the background once the room is up
+  /// ([JamHostEngine.importFiles]): the room opens at once and the first
+  /// track to land starts playing, rather than "Start the jam" spinning
+  /// through a probe, a tag read and a full sha256 of every file first.
+  /// Progress is on [hostImport]; files that would not add are reported as
+  /// one notice when the import finishes.
   Future<bool> startHost({
     required String sessionName,
     // The engine's own default, and the one the setup screen preselects:
@@ -383,6 +579,13 @@ class JamSessionController extends ChangeNotifier {
     List<String> paths = const [],
   }) async {
     if (!_claimStart()) return false;
+    // A new room of this device's own: the old one's way back (a guest's
+    // rejoin link, a dead room's restart) is not this one's, and a draft
+    // for host setup has been used.
+    _restartArgs = null;
+    _lastJoinUri = null;
+    hostSetupDraft = null;
+    _hostPick = List.unmodifiable(paths);
     try {
       // An `ended` session still holding an engine is closed on the way past,
       // so a terminal state never blocks the next one.
@@ -398,25 +601,15 @@ class JamSessionController extends ChangeNotifier {
         discoverable: discoverable,
       );
       _attach(engine, JamSide.host);
-      await addFiles(paths.map(File.new));
-      // Cue the first track. Without this the room reports "Nothing queued"
-      // while holding a full playlist, because nothing has been selected —
-      // the host has a queue but no current media.
-      if (engine.snapshot.mediaId == null && engine.playlist.isNotEmpty) {
-        engine.setMedia(engine.playlist.first.mediaId);
-      }
-      // ...and then start it. "Start the jam" (and "Host it again", which
-      // arrives down this same path with the old queue in `paths`) landed in
-      // a room paused at 00:00, so the promise of one tap to sound cost two
-      // taps and a hunt for the play button. Only the host does this: a
-      // guest's transport follows the host's authoritative state, and the
-      // room is silent until it says otherwise.
-      if (engine.playlist.isNotEmpty &&
-          engine.snapshot.status != PlaybackStatus.playing) {
-        engine.play();
-      }
+      // Cued and started by the import itself (cueFirst + autoPlay): "Start
+      // the jam" — and "Host it again", which arrives down this same path
+      // with the old queue in `paths` — used to land in a room paused at
+      // 00:00 holding a full playlist. Only the host does this: a guest's
+      // transport follows the host's authoritative state.
+      if (paths.isNotEmpty) _startImport(engine, paths);
       return true;
     } catch (e) {
+      _lastFailure = e;
       _error = _describe(e);
       _phase = JamSessionPhase.idle;
       unawaited(_resumeBrowsing());
@@ -436,6 +629,9 @@ class JamSessionController extends ChangeNotifier {
     String? clientName,
     String? roomName,
     @visibleForTesting Directory? mediaCacheDir,
+
+    /// The engine's own default; a test sets 0 to reach "gave up" at once.
+    @visibleForTesting int maxFetchRetries = 5,
   }) async {
     if (!_claimStart()) return false;
     _joiningUri = joinUri;
@@ -454,20 +650,31 @@ class JamSessionController extends ChangeNotifier {
       }
       await _teardown();
       await _stopBrowsing();
+      _restartArgs = null; // Not a host's room to restart any more.
       // See [startHost]: the backstop, not the usual path.
       await _requestSessionPermissions();
       final engine = await JamGuestEngine.join(
         joinUri,
         clientName: clientName,
         mediaCacheDir: mediaCacheDir,
+        maxFetchRetries: maxFetchRetries,
       );
       _lastJoinUri = joinUri;
       _attach(engine, JamSide.guest);
       return true;
     } catch (e) {
+      _lastFailure = e;
       _error = _describe(e);
+      // A join from an `ended` screen refused before the teardown above (the
+      // §9 check) must not leave the dead engine attached to an idle phase:
+      // it would hold the old room's token out of discovery and answer for
+      // a session nothing shows. A "Try again" is the exception — it lands
+      // back on that ended screen, which still reads the engine.
+      if (_rejoinReason == null) await _teardown();
       _phase = JamSessionPhase.idle;
-      unawaited(_resumeBrowsing());
+      // Likewise only when idle is where this ends: a failed "Try again"
+      // goes back to the ended screen, not to browsing behind it.
+      if (_rejoinReason == null) unawaited(_resumeBrowsing());
       notifyListeners();
       return false;
     } finally {
@@ -483,19 +690,52 @@ class JamSessionController extends ChangeNotifier {
   /// terminal end. The engine's retained `joinUri` is mirrored here so it
   /// survives the engine being torn down.
   ///
-  /// Returns false when there is nothing to rejoin.
+  /// Returns false when there is nothing to rejoin, or the rejoin failed.
+  ///
+  /// From the terminal screen the room stays on screen throughout ([hasRoom],
+  /// [rejoining]) and a failure lands back on it — same end, [error] saying
+  /// why — rather than in idle, which the router answered by unmounting the
+  /// room and dropping the user on home with a snackbar.
   Future<bool> rejoin({
     String? clientName,
     @visibleForTesting Directory? mediaCacheDir,
   }) async {
     final uri = _lastJoinUri;
-    if (uri == null) return false;
-    return join(
-      uri,
-      clientName: clientName,
-      roomName: _lastJoinName,
-      mediaCacheDir: mediaCacheDir,
-    );
+    if (uri == null || !canStart) return false;
+    final from = _phase == JamSessionPhase.ended ? _endReason : null;
+    _rejoinReason = from;
+    try {
+      final joined = await join(
+        uri,
+        clientName: clientName,
+        roomName: _lastJoinName,
+        mediaCacheDir: mediaCacheDir,
+      );
+      if (!joined && from != null && _phase == JamSessionPhase.idle) {
+        _phase = JamSessionPhase.ended;
+        final failure = _lastFailure;
+        if (failure is JamRejectedException) {
+          // The host answered, and said no (§3.1): that is the end now,
+          // whatever it was before. A device kicked meanwhile is out until
+          // it is let back in (§5.6); any other reason is a refusal, and
+          // its own copy says which — so the error line only has to say the
+          // retry did not work, and the screen stops offering one that
+          // never can ([jamRejectIsRetryable]).
+          _endReason = failure.reason == RejectReason.kicked
+              ? JamSessionEndReason.kicked
+              : JamSessionEndReason.rejected;
+          _endRejectReason = failure.reason;
+          _error = kJamRejoinFailed;
+        } else {
+          _endReason = from;
+          _error ??= kJamRejoinFailed;
+        }
+      }
+      return joined;
+    } finally {
+      _rejoinReason = null;
+      notifyListeners();
+    }
   }
 
   String? get _lastJoinName => _lastJoinUri?.queryParameters['name'];
@@ -519,6 +759,7 @@ class JamSessionController extends ChangeNotifier {
   bool _claimStart() {
     if (!canStart) return false;
     _error = null;
+    _lastFailure = null;
     _phase = JamSessionPhase.starting;
     notifyListeners();
     return true;
@@ -560,16 +801,30 @@ class JamSessionController extends ChangeNotifier {
     final engine = _engine;
     final failures = <JamAddFailure>[];
     if (engine == null) return failures;
+    // A guest that cannot reach the host would fail every file the same way
+    // and report "Could not add a, b, c" — true, and no help at all. Say
+    // why once instead, before reading a byte.
+    if (!canSendCommands) {
+      notify(_whyNot());
+      return failures;
+    }
     var attempted = 0;
     var duplicates = 0;
     for (final file in files) {
       attempted++;
       try {
-        final result = await jamAddFile(engine, file);
-        if (result != null && result.alreadyQueued) duplicates++;
+        final result = await engine.addMedia(file);
+        if (result.alreadyQueued) duplicates++;
+      } on JamNotConnectedException catch (e) {
+        // The link went (or the host went to sleep) mid-pick: the rest would
+        // fail identically, so stop and say why.
+        debugPrint('localjam: add stopped, host unreachable: $e');
+        _addFailures = const [];
+        notify(e.hostAway ? kJamHostAsleepTryLater : kJamNotConnected);
+        return failures;
       } catch (e) {
         debugPrint('localjam: could not add ${file.path}: $e');
-        failures.add(JamAddFailure(_basename(file.path), '$e'));
+        failures.add(JamAddFailure.of(file.path, e));
       }
     }
     _addFailures = List.unmodifiable(failures);
@@ -585,6 +840,32 @@ class JamSessionController extends ChangeNotifier {
       notify(kJamAlreadyQueued);
     }
     return _addFailures;
+  }
+
+  /// Starts the host's background import of [paths] — see [startHost].
+  void _startImport(JamHostEngine engine, List<String> paths) {
+    final job = engine.importFiles(paths.map(File.new), autoPlay: true);
+    _import = job;
+    unawaited(job.done.then((outcomes) => _onImportDone(job, outcomes)));
+  }
+
+  /// One notice for whatever would not add, once, when the import is done —
+  /// the host-setup path's equivalent of [addFiles]' summary.
+  void _onImportDone(JamImport job, List<JamImportOutcome> outcomes) {
+    // A newer session (or none) has nothing to do with this job any more.
+    if (!identical(job, _import) || !isLive) return;
+    final failures = <JamAddFailure>[
+      for (final outcome in outcomes)
+        if (outcome.error case final error?)
+          JamAddFailure.of(outcome.file.path, error),
+    ];
+    for (final failure in failures) {
+      debugPrint('localjam: could not add ${failure.name}: ${failure.reason}');
+    }
+    _addFailures = List.unmodifiable(failures);
+    if (failures.isNotEmpty) notify(describeAddFailures(failures));
+    // The room's "adding your music" state hangs off this.
+    notifyListeners();
   }
 
   // --- Queue undo ------------------------------------------------------------
@@ -672,6 +953,9 @@ class JamSessionController extends ChangeNotifier {
     await _teardown();
     _phase = JamSessionPhase.idle;
     _endReason = null;
+    _endRejectReason = null;
+    _restartArgs = null;
+    _hostPick = const [];
     _joiningUri = null;
     _joiningName = null;
     // Back to idle is back to looking around: the browse the session stopped
@@ -728,6 +1012,7 @@ class JamSessionController extends ChangeNotifier {
     _phase = JamSessionPhase.live;
     _connection = JamConnectionState.connected;
     _endReason = null;
+    _endRejectReason = null;
     _position = JamPositionTicker(engine);
     _lastMediaId = engine.snapshot.mediaId;
     // The room we are in is the one room we can never join. A host reads its
@@ -746,6 +1031,11 @@ class JamSessionController extends ChangeNotifier {
     // around to ask — see [_sourcePaths].
     _rememberPaths(engine.playlist);
     _subs.add(engine.playlistUpdates.listen(_rememberPaths));
+    // Both sides: a guest's room can end in four ways, and a host's can end
+    // without anyone pressing "End jam" — the OS reclaimed its listening
+    // socket and it could not be reopened (listenerFailed). A host that only
+    // a guest-side listener watched kept showing a QR nobody could use.
+    engine.sessionEnded.addListener(_onSessionEnded);
 
     final guest = guestEngine;
     if (guest != null) {
@@ -756,7 +1046,9 @@ class JamSessionController extends ChangeNotifier {
         // denied request or a vanished file was simply a button that did
         // nothing.
         ..add(guest.errors.listen(_onGuestError));
-      guest.sessionEnded.addListener(_onSessionEnded);
+      // "The host's phone is asleep" is a lifecycle fact about the room —
+      // it disables controls everywhere — so it rides this notifier.
+      guest.hostAway.addListener(_onHostAway);
     }
     final host = hostEngine;
     if (host != null) {
@@ -773,10 +1065,12 @@ class JamSessionController extends ChangeNotifier {
     JamKeepAlive.active.removeListener(_onKeepAlive);
     _keepAliveHeld = true;
     _lastPeerBuzz = null;
-    final guest = guestEngine;
-    if (guest != null) {
-      guest.sessionEnded.removeListener(_onSessionEnded);
-    }
+    // Before close(): the engine disposes these listenables on its way out.
+    _engine?.sessionEnded.removeListener(_onSessionEnded);
+    guestEngine?.hostAway.removeListener(_onHostAway);
+    // An import still running belongs to the room being left.
+    _import?.cancel();
+    _import = null;
     for (final sub in _subs) {
       unawaited(sub.cancel());
     }
@@ -843,9 +1137,10 @@ class JamSessionController extends ChangeNotifier {
       ErrorCode.mediaGone => 'That track is no longer in the room.',
       ErrorCode.internal => 'The host hit a problem with that.',
       ErrorCode.sessionFull => 'The room is full.',
-      ErrorCode.versionUnsupported =>
-        'This app and the host disagree on '
-            'versions. One of you needs an update.',
+      ErrorCode.versionUnsupported => kJamVersionMismatch,
+      // A code from a newer host (§2 tolerant decoding): nothing specific
+      // to say about it, and nothing to retry automatically either.
+      ErrorCode.unknown => 'The host couldn’t do that right now.',
       // kicked and badToken are fatal; sessionEnded owns the message.
       ErrorCode.kicked || ErrorCode.badToken => null,
     };
@@ -908,13 +1203,42 @@ class JamSessionController extends ChangeNotifier {
   }
 
   void _onSessionEnded() {
-    final reason = guestEngine?.sessionEnded.value;
+    final engine = _engine;
+    final reason = engine?.sessionEnded.value;
     // closedLocally is our own leave() unwinding; it is not a state to show.
-    if (reason == null || reason == JamSessionEndReason.closedLocally) return;
+    if (engine == null ||
+        reason == null ||
+        reason == JamSessionEndReason.closedLocally) {
+      return;
+    }
+    // The engine let go of the keep-alive on its way out: that is the end,
+    // already on screen, not "background playback may pause".
+    JamKeepAlive.active.removeListener(_onKeepAlive);
+    if (engine is JamHostEngine) {
+      // The room died under the host, not by their hand: keep what it took
+      // to start it, so "Start a new jam" is one tap and not a re-pick.
+      _restartArgs = (
+        name: engine.sessionName,
+        paths: jamRestartPaths(
+          queue: [
+            for (final item in engine.playlist) ?engine.localPathFor(item),
+          ],
+          picked: _hostPick,
+          everQueued: _sourcePaths.values,
+        ),
+      );
+    }
     _endReason = reason;
+    // Read before anything tears the engine down: which refusal it was is
+    // the difference between "ask for the new code" and "try again later".
+    _endRejectReason = engine is JamGuestEngine
+        ? engine.lastRejectReason
+        : null;
     _phase = JamSessionPhase.ended;
     notifyListeners();
   }
+
+  void _onHostAway() => notifyListeners();
 
   /// What to put in front of the user when a start or join fails.
   ///
@@ -923,13 +1247,18 @@ class JamSessionController extends ChangeNotifier {
   /// and detailed in the log.
   static String _describe(Object error) => switch (error) {
     JamRejectedException(:final reason) => switch (reason) {
-      RejectReason.version =>
-        'This app and the host are on different versions of LocalJam. '
-            'One of you needs an update.',
+      RejectReason.version => kJamVersionMismatch,
       RejectReason.full => 'That room is full right now.',
       RejectReason.badToken =>
         'That code no longer works — the room was restarted. Ask for a '
             'fresh one.',
+      // §5.6: the device stays out until the host lets it back in, so the
+      // sentence says whose call that is rather than inviting a retry.
+      RejectReason.kicked =>
+        'The host removed you from this room. They can let you back in.',
+      // A reason from a newer host: still a no, and still final.
+      RejectReason.unknown =>
+        'The room didn’t let you in. Ask the host for a fresh code.',
     },
     JamOffNetworkException() =>
       'That link points outside your network. A jam only runs between '
@@ -966,14 +1295,21 @@ String _basename(String path) => path.split(Platform.pathSeparator).last;
 /// One line for however many files failed to be added, naming the first few.
 ///
 /// Shared with the queue sheet's picker so both paths report the same way.
+///
+/// When every file failed for the same nameable reason (the room's upload
+/// space is full, the file is too big) that reason follows as a sentence;
+/// mixed or unexplained failures stay at the names.
 String describeAddFailures(List<JamAddFailure> failures) {
   if (failures.isEmpty) return '';
   final names = failures.take(3).map((f) => f.name).join(', ');
   final rest = failures.length - 3;
   final tail = rest > 0 ? '$names and $rest more' : names;
-  return failures.length == 1
+  final lead = failures.length == 1
       ? 'Could not add $tail'
       : "${failures.length} files couldn't be added: $tail";
+  final why = failures.first.why;
+  if (why == null || failures.any((f) => f.why != why)) return lead;
+  return '$lead. $why';
 }
 
 /// Provides the [JamSessionController] to the widget tree.

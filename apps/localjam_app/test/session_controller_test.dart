@@ -16,6 +16,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:localjam_app/src/state/session_controller.dart';
 import 'package:localjam_client/localjam_client.dart';
 
+import 'fixtures.dart';
 import 'harness.dart';
 
 /// Polls [condition] on the real clock. The engines work over actual sockets,
@@ -81,11 +82,9 @@ void main() {
     });
   });
 
-  /// Three real files, so the engine has something it can register and play.
-  List<String> media() => [
-    for (final name in ['track1.m4a', 'track2.m4a', 'track3.m4a'])
-      '../../test-media/$name',
-  ];
+  /// Three real files, generated per test, so the engine has something it
+  /// can register and play (see fixtures.dart — no gitignored media).
+  List<String> media() => makeTestTracks();
 
   testWidgets('starting a jam with a queue starts the music', (tester) async {
     // "Start the jam" landed in a room paused at 00:00 holding a full
@@ -99,6 +98,10 @@ void main() {
         paths: media(),
       );
       expect(started, isTrue);
+      // The room is open before the files are in: they import behind it.
+      expect(host.isLive, isTrue);
+      expect(host.hostImport, isNotNull);
+      await host.hostImport!.done;
       expect(host.engine!.playlist, hasLength(3));
       // Cued *and* running: the first track is selected and the transport is
       // playing, not idle and not paused.
@@ -134,6 +137,7 @@ void main() {
         discoverable: false,
         paths: media(),
       );
+      await host.hostImport!.done;
       final ids = [for (final i in host.engine!.playlist) i.mediaId];
       expect(ids, hasLength(3));
 
@@ -182,6 +186,7 @@ void main() {
         discoverable: false,
         paths: media(),
       );
+      await host.hostImport!.done;
       expect(await guest.join(host.joinUri!, mediaCacheDir: cache), isTrue);
       expect(await waitFor(() => guest.engine!.playlist.isNotEmpty), isTrue);
       final id = guest.engine!.playlist.first.mediaId;
@@ -252,6 +257,11 @@ void main() {
       // The terminal state stays reachable from wherever the user is.
       expect(guest.hasRoom, isTrue);
 
+      // Protocol 1.0 keeps a kicked DEVICE out (§5.6) until the host lets
+      // it back in; this test is about the app's phase, not the kick.
+      final hostEngine = host.hostEngine!;
+      hostEngine.unkickPeer(hostEngine.kickedPeers.single.peerId);
+
       // ...and the next join clears it instead of refusing.
       final again = await guest.join(host.joinUri!, mediaCacheDir: cache);
       expect(again, isTrue, reason: 'a new join must auto-acknowledge the end');
@@ -279,8 +289,11 @@ void main() {
       expect(await waitFor(() => guest.phase == JamSessionPhase.ended), isTrue);
 
       // The URI survives the engine being torn down — that is what makes
-      // "Try again" possible at all.
+      // "Try again" possible at all. (A kicked device stays out until the
+      // host lets it back in, §5.6.)
       expect(guest.lastJoinUri, isNotNull);
+      final hostEngine = host.hostEngine!;
+      hostEngine.unkickPeer(hostEngine.kickedPeers.single.peerId);
       expect(await guest.rejoin(mediaCacheDir: cache), isTrue);
       expect(guest.isLive, isTrue);
 
@@ -360,6 +373,8 @@ void main() {
         ],
       );
       expect(started, isTrue);
+      // The import runs behind the open room; its summary comes at the end.
+      await host.hostImport!.done;
       // Broadcast notices land a microtask later.
       await Future<void>.delayed(Duration.zero);
       expect(host.addFailures, hasLength(2));
@@ -506,6 +521,7 @@ void main() {
         discoverable: false,
         paths: [media().first],
       );
+      await host.hostImport!.done;
       expect(host.engine!.playlist, hasLength(1));
 
       final sub = host.notices.listen((n) => heard.add(n.message));
@@ -606,6 +622,79 @@ void main() {
     await tester.runAsync(host.leave);
   });
 
+  testWidgets('a refused reconnect keeps the host\'s reason, and a restarted '
+      'room is not offered a retry', (tester) async {
+    // JamSessionEndReason.rejected used to be all the app knew, so a room
+    // that restarted under a new code got "Try again" — a button that could
+    // never work with the old link.
+    final guest = testSession();
+    final cache = tempCache();
+
+    await tester.runAsync(() async {
+      final room = JamHostServer(sessionName: 'Restart Room');
+      await room.start(address: InternetAddress.loopbackIPv4);
+      final uri = room.joinUriFor(InternetAddress.loopbackIPv4);
+      expect(await guest.join(uri, mediaCacheDir: cache), isTrue);
+      expect(guest.endRejectReason, isNull);
+
+      // The host restarts on the same port, under a new token.
+      final port = room.port;
+      await room.close(announce: false);
+      final restarted = JamHostServer(sessionName: 'Restart Room');
+      await restarted.start(address: InternetAddress.loopbackIPv4, port: port);
+      addTearDown(restarted.close);
+
+      expect(
+        await waitFor(() => guest.phase == JamSessionPhase.ended),
+        isTrue,
+        reason: 'the refused reconnect should end the session',
+      );
+      expect(guest.endReason, JamSessionEndReason.rejected);
+      expect(guest.endRejectReason, RejectReason.badToken);
+      expect(jamRejectIsRetryable(guest.endRejectReason), isFalse);
+
+      await guest.leave();
+      expect(guest.endRejectReason, isNull);
+    });
+  });
+
+  testWidgets('a rejoin the host refuses becomes the end, with its reason', (
+    tester,
+  ) async {
+    // A "Try again" answered with a reject kept the old end on screen — the
+    // host-ended (or host-gone) copy, and for host-gone a retry button that
+    // the same refusal would answer every time.
+    final guest = testSession();
+    final cache = tempCache();
+
+    await tester.runAsync(() async {
+      final room = JamHostServer(sessionName: 'Short Room');
+      await room.start(address: InternetAddress.loopbackIPv4);
+      final uri = room.joinUriFor(InternetAddress.loopbackIPv4);
+      expect(await guest.join(uri, mediaCacheDir: cache), isTrue);
+
+      final port = room.port;
+      await room.close(); // "End jam", announced.
+      expect(await waitFor(() => guest.phase == JamSessionPhase.ended), isTrue);
+      expect(guest.endReason, JamSessionEndReason.hostEnded);
+      expect(guest.endRejectReason, isNull);
+
+      final another = JamHostServer(sessionName: 'Another Room');
+      await another.start(address: InternetAddress.loopbackIPv4, port: port);
+      addTearDown(another.close);
+
+      expect(await guest.rejoin(mediaCacheDir: cache), isFalse);
+      expect(guest.phase, JamSessionPhase.ended);
+      expect(guest.endReason, JamSessionEndReason.rejected);
+      expect(guest.endRejectReason, RejectReason.badToken);
+      // The screen's own copy names the cause; the error line only has to
+      // say the retry did not work.
+      expect(guest.error, kJamRejoinFailed);
+
+      await guest.leave();
+    });
+  });
+
   testWidgets('a guest hears the host say no', (tester) async {
     // JamGuestEngine.errors had no subscriber anywhere in the app, so a
     // request the host refused (§8 not_allowed) was a button that did
@@ -638,5 +727,159 @@ void main() {
       await guest.leave();
       await host.leave();
     });
+  });
+
+  group('after an end', () {
+    testWidgets('a join refused by the §9 check from the ended screen leaves '
+        'nothing of the dead room attached', (tester) async {
+      final host = testSession();
+      final guest = testSession(identity: 'Ana');
+      final cache = tempCache();
+      await tester.runAsync(() async {
+        await host.startHost(sessionName: 'Short Jam', discoverable: false);
+        expect(await guest.join(host.joinUri!, mediaCacheDir: cache), isTrue);
+        await host.leave();
+        expect(
+          await waitFor(() => guest.phase == JamSessionPhase.ended),
+          isTrue,
+        );
+        expect(guest.excludedToken, isNotNull);
+
+        // A link to somewhere routable, opened from the ended screen.
+        final joined = await guest.join(
+          Uri.parse('localjam://join?host=8.8.8.8&port=1234&token=abc&name=X'),
+        );
+        expect(joined, isFalse);
+      });
+      expect(guest.phase, JamSessionPhase.idle);
+      expect(guest.error, contains('outside your network'));
+      expect(guest.engine, isNull, reason: 'idle with a dead engine attached');
+      expect(guest.hasRoom, isFalse);
+      expect(
+        guest.excludedToken,
+        isNull,
+        reason: 'the old room is joinable from nearby again',
+      );
+      await tester.runAsync(guest.stopBrowsing);
+    });
+
+    testWidgets('a failed "Try again" does not start browsing behind the '
+        'ended screen', (tester) async {
+      final host = testSession();
+      final guest = testSession(identity: 'Ana');
+      final cache = tempCache();
+      await tester.runAsync(() async {
+        await guest.startBrowsing(); // Home wanted the nearby list.
+        await host.startHost(sessionName: 'Short Jam', discoverable: false);
+        expect(await guest.join(host.joinUri!, mediaCacheDir: cache), isTrue);
+        expect(guest.discovering, isFalse);
+        await host.leave();
+        expect(
+          await waitFor(() => guest.phase == JamSessionPhase.ended),
+          isTrue,
+        );
+
+        expect(await guest.rejoin(mediaCacheDir: cache), isFalse);
+        expect(guest.phase, JamSessionPhase.ended);
+        expect(
+          guest.discovering,
+          isFalse,
+          reason: 'the ended screen is still up; idle is where browsing is',
+        );
+
+        await guest.acknowledgeEnd();
+        expect(guest.discovering, isTrue, reason: 'and back on idle, it is');
+        await guest.stopBrowsing();
+      });
+    });
+
+    testWidgets('an end is not also "background playback may pause"', (
+      tester,
+    ) async {
+      // The engine lets go of its keep-alive when the room ends — on Android
+      // that flips the foreground service off, which the controller used to
+      // announce over the ended screen as if the jam were still running.
+      final host = testSession();
+      final guest = testSession(identity: 'Ana');
+      final cache = tempCache();
+      final messenger =
+          TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+      messenger.setMockMethodCallHandler(
+        JamKeepAlive.channel,
+        (call) async => call.method == 'acquire' ? true : null,
+      );
+      debugDefaultTargetPlatformOverride = TargetPlatform.android;
+      try {
+        await tester.runAsync(() async {
+          final heard = <String>[];
+          final sub = guest.notices.listen((n) => heard.add(n.message));
+          addTearDown(sub.cancel);
+          await host.startHost(sessionName: 'Short Jam', discoverable: false);
+          expect(await guest.join(host.joinUri!, mediaCacheDir: cache), isTrue);
+          expect(JamKeepAlive.active.value, isTrue);
+
+          await host.leave();
+          expect(
+            await waitFor(() => guest.phase == JamSessionPhase.ended),
+            isTrue,
+          );
+          expect(
+            await waitFor(() => !JamKeepAlive.active.value),
+            isTrue,
+            reason: 'the ended guest released it',
+          );
+          await pumpEventQueue();
+          expect(heard, isNot(contains(kJamKeepAliveLost)));
+          await guest.leave();
+        });
+      } finally {
+        debugDefaultTargetPlatformOverride = null;
+        messenger.setMockMethodCallHandler(JamKeepAlive.channel, null);
+        JamKeepAlive.active.value = false;
+      }
+    });
+
+    testWidgets('hosting from an ended guest room forgets its way back', (
+      tester,
+    ) async {
+      final host = testSession();
+      final guest = testSession(identity: 'Ana');
+      final cache = tempCache();
+      await tester.runAsync(() async {
+        await host.startHost(sessionName: 'Short Jam', discoverable: false);
+        expect(await guest.join(host.joinUri!, mediaCacheDir: cache), isTrue);
+        await host.leave();
+        expect(
+          await waitFor(() => guest.phase == JamSessionPhase.ended),
+          isTrue,
+        );
+        expect(guest.lastJoinUri, isNotNull);
+
+        expect(
+          await guest.startHost(sessionName: 'Mine', discoverable: false),
+          isTrue,
+        );
+        expect(guest.lastJoinUri, isNull, reason: 'no rejoin into that room');
+        expect(guest.restartArgs, isNull);
+        await guest.leave();
+      });
+    });
+  });
+
+  test('a restart brings back the queue, then whatever of the pick never '
+      'made it in — but not what the room removed', () {
+    expect(
+      jamRestartPaths(
+        queue: ['/b', '/a'], // Reordered in the room; /c was removed.
+        picked: ['/a', '/b', '/c', '/d', '/e'],
+        everQueued: ['/a', '/b', '/c'],
+      ),
+      ['/b', '/a', '/d', '/e'],
+    );
+    // Guests' additions ride along in the queue.
+    expect(
+      jamRestartPaths(queue: ['/a', '/up'], picked: ['/a'], everQueued: []),
+      ['/a', '/up'],
+    );
   });
 }

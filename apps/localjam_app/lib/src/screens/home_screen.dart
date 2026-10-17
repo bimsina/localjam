@@ -28,6 +28,7 @@ import '../state/session_controller.dart';
 import '../util/capabilities.dart';
 import '../util/network.dart';
 import 'history_screen.dart' show JamArtworkMosaic, jamRelativeTime;
+import '../widgets/session_gate.dart';
 import '../widgets/avatar.dart';
 import '../widgets/buttons.dart';
 import '../widgets/empty_state.dart';
@@ -268,7 +269,9 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _join(Uri joinUri, {String? roomName}) async {
     final session = JamSession.read(context);
-    if (session.isBusy) return;
+    // One jam at a time: a live one is ended (or left) first, on the user's
+    // say-so — the join used to be refused with nothing on screen.
+    if (!await jamReadyForNewSession(context, session) || !mounted) return;
     // The local-network and notification asks land here, on a still screen,
     // rather than behind the row's own joining spinner.
     await session.prepareForSession();
@@ -324,7 +327,10 @@ class _HomeScreenState extends State<HomeScreen> {
   /// before the button that spins even exists.
   Future<void> _host() async {
     final session = JamSession.read(context);
+    if (!await jamReadyForNewSession(context, session) || !mounted) return;
     await session.prepareForSession();
+    // A blank setup: nothing left over from a "Host it again" backed out of.
+    session.hostSetupDraft = null;
     if (mounted) context.push('/host');
   }
 

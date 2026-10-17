@@ -63,9 +63,15 @@ class JamTransport extends StatelessWidget {
     this.onNext,
     this.enabled = true,
     this.gatedMessage = jamHostControlsPlayback,
+    this.playLabel,
   });
 
   final JamPlaybackState state;
+
+  /// What the play button is called when it does something other than play
+  /// the room — "Resume audio" while this phone's own sound is suspended.
+  /// Null: "Play".
+  final String? playLabel;
 
   /// Toggles playback. Fires [JamHaptics.transport] before the callback.
   final VoidCallback onPlayPause;
@@ -98,6 +104,7 @@ class JamTransport extends StatelessWidget {
         _PlayButton(
           state: state,
           enabled: enabled,
+          playLabel: playLabel,
           onPressed: () {
             JamHaptics.transport();
             onPlayPause();
@@ -140,11 +147,13 @@ class _PlayButton extends StatefulWidget {
     required this.state,
     required this.enabled,
     required this.onPressed,
+    this.playLabel,
   });
 
   final JamPlaybackState state;
   final bool enabled;
   final VoidCallback onPressed;
+  final String? playLabel;
 
   @override
   State<_PlayButton> createState() => _PlayButtonState();
@@ -218,7 +227,9 @@ class _PlayButtonState extends State<_PlayButton> {
       enabled: widget.enabled && !loading,
       label: loading
           ? JamTransportStrings.loading
-          : (playing ? JamTransportStrings.pause : JamTransportStrings.play),
+          : (playing
+                ? JamTransportStrings.pause
+                : (widget.playLabel ?? JamTransportStrings.play)),
       onTap: widget.enabled && !loading ? widget.onPressed : null,
       excludeSemantics: true,
       child: AnimatedScale(

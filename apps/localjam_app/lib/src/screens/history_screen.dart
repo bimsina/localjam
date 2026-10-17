@@ -17,6 +17,8 @@ import '../design/tokens.dart';
 import '../design/typography.dart';
 import '../router.dart';
 import '../util/format.dart';
+import '../state/session_controller.dart';
+import '../widgets/session_gate.dart';
 import '../widgets/artwork.dart';
 import '../widgets/avatar.dart';
 import '../widgets/buttons.dart';
@@ -259,14 +261,18 @@ class _HistoryScreenState extends State<HistoryScreen> {
     await _load();
   }
 
-  void _hostAgain(JamHistoryRecord record) {
-    context.push(
-      '/host',
-      extra: HostSetupArgs(
-        paths: [for (final track in record.replayableTracks) track.localPath!],
-        name: record.sessionName,
-      ),
+  Future<void> _hostAgain(JamHistoryRecord record) async {
+    // A jam still running is ended first, on the user's say-so; "Host it
+    // again" used to open setup on a start that could only be refused.
+    final session = JamSession.read(context);
+    if (!await jamReadyForNewSession(context, session) || !mounted) return;
+    final args = HostSetupArgs(
+      paths: [for (final track in record.replayableTracks) track.localPath!],
+      name: record.sessionName,
     );
+    // Also held by the controller: route `extra` alone can be lost.
+    session.hostSetupDraft = (name: args.name, paths: args.paths);
+    context.push('/host', extra: args);
   }
 
   @override
@@ -331,7 +337,8 @@ class _HistoryScreenState extends State<HistoryScreen> {
                         record: records[index - 1],
                         selfName: _selfName,
                         onForget: () => unawaited(_forget(records[index - 1])),
-                        onHostAgain: () => _hostAgain(records[index - 1]),
+                        onHostAgain: () =>
+                            unawaited(_hostAgain(records[index - 1])),
                       ),
               ),
             },

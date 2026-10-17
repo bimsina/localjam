@@ -79,3 +79,21 @@ String stripAudioExtension(String name) {
 /// the extension.
 String jamDisplayTitle(MediaItem item) =>
     stripAudioExtension(item.displayTitle);
+
+/// What a person who shared no display name is called on screen.
+///
+/// Never their peer id: that is a wire token ("p-7f3a…"), and a roster or a
+/// credit that prints one is machine text on a page about people (§8 check 3).
+const String kJamUnnamedPeer = 'Guest';
+
+/// [peer]'s display name, or [kJamUnnamedPeer] when they shared none.
+String jamPeerName(PeerInfo peer) {
+  final name = peer.clientName.trim();
+  return name.isEmpty ? kJamUnnamedPeer : name;
+}
+
+/// [JamEngine.addedByLabel] against the engine's own roster, in the app's
+/// words for a contributor who shared no name — "added by Guest", never
+/// "added by p-7f3a".
+String? jamAddedByLabel(JamEngine engine, MediaItem item) =>
+    engine.addedByLabel(item, engine.peers, unnamedLabel: kJamUnnamedPeer);
