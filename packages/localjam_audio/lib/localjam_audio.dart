@@ -32,46 +32,143 @@ class NativeClockCalibration {
 
 /// What a [LocaljamAudioEvent] reports.
 enum LocaljamAudioEventKind {
-  /// The audio output route changed (headphones unplugged, Bluetooth
-  /// connected). [LocaljamAudioEvent.outputLatencyUs] carries the NEW
-  /// route's platform-reported output latency (§7).
+  /// The audio output route changed (headphones plugged/unplugged, Bluetooth
+  /// connected/disconnected, default output device switched).
+  ///
+  /// [LocaljamAudioEvent.outputLatencyUs] carries the NEW route's
+  /// platform-reported output latency (§7) when the platform knows it (null →
+  /// re-query [LocaljamAudio.outputLatencyUs]); [LocaljamAudioEvent.routeId]
+  /// identifies the new route.
+  ///
+  /// When [LocaljamAudioEvent.oldDeviceUnavailable] is true the previous
+  /// output went away (headphones unplugged, Bluetooth gone, Android
+  /// "becoming noisy", a desktop output device removed or dead): the native
+  /// side has ALREADY stopped its output, so audio never jumps to the
+  /// speaker, and it will not restart by itself. That holds whichever order
+  /// the OS reports the unplug and the engine reconfiguration it causes in:
+  /// no [engineRestarted] is emitted for a schedule lost that way.
+  /// Otherwise playback continues on the new route.
+  ///
+  /// Android also re-emits it (with `oldDeviceUnavailable`) for a
+  /// [LocaljamAudio.playAt] held back within ~2 s of an unplug, while the
+  /// reroute to the speaker is still pending: that `playAt` completes
+  /// normally without playing.
   routeChanged,
 
   /// The OS interrupted playback (phone call, Siri, another app took the
-  /// session). Playback is ducked/stopped until [interruptionEnded].
+  /// session / audio focus). The native side has stopped its output; it
+  /// stays stopped until the next [LocaljamAudio.playAt].
+  ///
+  /// Also emitted by EVERY [LocaljamAudio.playAt] the OS refuses to let play
+  /// (iOS: session activation refused; Android: audio focus refused or a
+  /// call owns the audio path) — one event per refused call, not per
+  /// interruption, so a client that retries learns again that nothing
+  /// plays. That `playAt` completes normally without playing. Such a refusal
+  /// may never be followed by [interruptionEnded]. macOS and desktop never
+  /// refuse.
+  ///
+  /// [LocaljamAudioEvent.shouldResume] `false` here means the interruption
+  /// is permanent — Android's permanent audio-focus loss (the user started
+  /// another player): no [interruptionEnded] will follow, and only a
+  /// [LocaljamAudio.playAt] (which asks for the audio back) ends it. It can
+  /// arrive while an interruption is already in progress, turning it
+  /// permanent. Absent (null) otherwise.
   interruptionBegan,
 
-  /// The OS interruption ended; the client should re-schedule from the
-  /// authoritative anchor.
+  /// The OS interruption ended. Native NEVER resumes by itself — the room
+  /// timeline moved on — so the client re-anchors with
+  /// [LocaljamAudio.playAt] if it wants sound again.
+  /// [LocaljamAudioEvent.shouldResume] is the OS's hint whether resuming is
+  /// appropriate (false e.g. when another app now owns the audio).
   interruptionEnded,
 
-  /// The native engine was restarted after a configuration change; any
-  /// schedule it held is gone and the client should re-schedule.
+  /// The native engine was restarted after a configuration change and a
+  /// schedule it held (playing or paused) is gone; the client should
+  /// re-schedule. Not emitted when nothing was scheduled, nor when the
+  /// change turned out to be a lost output (see [routeChanged]; iOS/macOS
+  /// hold this event ~200 ms to tell the two apart).
   engineRestarted,
 
   /// The scheduled segment played through to the end of the file.
   playbackFinished,
+
+  /// An unrecoverable failure off the method-call path (decoder or writer
+  /// thread died, engine could not restart). Output is stopped;
+  /// [LocaljamAudioEvent.code] / [LocaljamAudioEvent.message] say why. The
+  /// next [LocaljamAudio.playAt] starts from scratch. (A lost output device
+  /// is not an error: it is [routeChanged] with `oldDeviceUnavailable`.)
+  playbackError,
 }
 
 /// One event from the native audio engine (event channel
 /// `localjam_audio/events`).
+///
+/// Wire payload: a map with `type` (the [LocaljamAudioEventKind] name) plus
+/// the optional keys `outputLatencyUs` (int), `routeId` (String),
+/// `oldDeviceUnavailable` (bool), `shouldResume` (bool), `code` (String),
+/// `message` (String). Missing or mistyped keys decode to the defaults below.
 class LocaljamAudioEvent {
-  const LocaljamAudioEvent({required this.kind, this.outputLatencyUs});
+  const LocaljamAudioEvent({
+    required this.kind,
+    this.outputLatencyUs,
+    this.routeId,
+    this.oldDeviceUnavailable = false,
+    this.shouldResume,
+    this.code,
+    this.message,
+  });
 
   final LocaljamAudioEventKind kind;
 
   /// The current route's output latency (µs), when the event carries one
-  /// (today: [LocaljamAudioEventKind.routeChanged]).
+  /// (today: [LocaljamAudioEventKind.routeChanged] on iOS/Android/desktop).
   final int? outputLatencyUs;
 
+  /// [LocaljamAudioEventKind.routeChanged]: opaque, stable id of the NEW
+  /// output route — same as [LocaljamAudio.currentRouteId] would return.
+  /// Null when the platform cannot tell.
+  final String? routeId;
+
+  /// [LocaljamAudioEventKind.routeChanged]: the previous output device went
+  /// away and native output has been stopped (see the kind's docs).
+  final bool oldDeviceUnavailable;
+
+  /// [LocaljamAudioEventKind.interruptionEnded]: the OS's hint that resuming
+  /// is appropriate. Null when the platform did not say.
+  ///
+  /// [LocaljamAudioEventKind.interruptionBegan]: `false` when the
+  /// interruption is permanent (Android's permanent focus loss) and no
+  /// `interruptionEnded` will follow; null otherwise.
+  final bool? shouldResume;
+
+  /// [LocaljamAudioEventKind.playbackError]: stable machine-readable reason
+  /// (today `engine_start_failed` on iOS/macOS, `decode_failed` on Android
+  /// and desktop, `writer_failed` on Android; an open set — treat unknown
+  /// codes generically; no platform sends `device_lost`). Always non-null
+  /// for that kind (`unknown` if the native side sent none).
+  final String? code;
+
+  /// [LocaljamAudioEventKind.playbackError]: human-readable detail, for logs.
+  final String? message;
+
   @override
-  String toString() =>
-      'LocaljamAudioEvent(${kind.name}'
-      '${outputLatencyUs == null ? '' : ', outputLatencyUs: $outputLatencyUs'})';
+  String toString() {
+    final fields = <String>[
+      kind.name,
+      if (outputLatencyUs != null) 'outputLatencyUs: $outputLatencyUs',
+      if (routeId != null) 'routeId: $routeId',
+      if (oldDeviceUnavailable) 'oldDeviceUnavailable: true',
+      if (shouldResume != null) 'shouldResume: $shouldResume',
+      if (code != null) 'code: $code',
+      if (message != null) 'message: $message',
+    ];
+    return 'LocaljamAudioEvent(${fields.join(', ')})';
+  }
 }
 
 /// Scheduled audio player backed by the platform's audio engine
-/// (AVAudioEngine on iOS/macOS, ExoPlayer/Oboe on Android).
+/// (AVAudioEngine on iOS/macOS, AudioTrack + MediaCodec on Android, a shared
+/// miniaudio core on Windows/Linux).
 ///
 /// One instance = one loaded file at a time. All times are int microseconds.
 class LocaljamAudio {
@@ -93,8 +190,8 @@ class LocaljamAudio {
   Stream<LocaljamAudioEvent>? _events;
 
   /// Playback-interruption events from the native engine: route changes,
-  /// OS interruptions, engine restarts, end-of-file (see
-  /// [LocaljamAudioEventKind]).
+  /// OS interruptions, engine restarts, end-of-file, unrecoverable errors
+  /// (see [LocaljamAudioEventKind]).
   ///
   /// Broadcast; the native side is subscribed lazily on first listen.
   /// Unknown event types are ignored, so old Dart keeps working against a
@@ -111,17 +208,32 @@ class LocaljamAudio {
     'interruptionEnded': LocaljamAudioEventKind.interruptionEnded,
     'engineRestarted': LocaljamAudioEventKind.engineRestarted,
     'playbackFinished': LocaljamAudioEventKind.playbackFinished,
+    'playbackError': LocaljamAudioEventKind.playbackError,
   };
 
-  /// Decodes one native event map; null for anything unrecognized.
+  /// Decodes one native event map; null for anything unrecognized. Tolerant
+  /// by design: unknown types are dropped, unknown keys ignored, and a key
+  /// that is missing or of the wrong type decodes to its default — so an
+  /// older or newer native side never breaks this decoder.
   static LocaljamAudioEvent? _decodeEvent(Object? raw) {
     if (raw is! Map) return null;
     final kind = _eventKindsByType[raw['type']];
     if (kind == null) return null;
-    final latency = raw['outputLatencyUs'];
+    T? typed<T>(String key) {
+      final value = raw[key];
+      return value is T ? value : null;
+    }
+
     return LocaljamAudioEvent(
       kind: kind,
-      outputLatencyUs: latency is int ? latency : null,
+      outputLatencyUs: typed<int>('outputLatencyUs'),
+      routeId: typed<String>('routeId'),
+      oldDeviceUnavailable: typed<bool>('oldDeviceUnavailable') ?? false,
+      shouldResume: typed<bool>('shouldResume'),
+      code:
+          typed<String>('code') ??
+          (kind == LocaljamAudioEventKind.playbackError ? 'unknown' : null),
+      message: typed<String>('message'),
     );
   }
 
@@ -152,9 +264,44 @@ class LocaljamAudio {
   }
 
   /// Loads a local audio file; returns its duration in µs.
-  /// Replaces any previously loaded file (stops playback first).
+  /// Replaces any previously loaded file (stops playback first). If the new
+  /// file fails to load, nothing is loaded afterwards.
+  ///
+  /// Throws `PlatformException(load_failed)` for an unreadable file and for
+  /// one whose header is outside what any recording has — a sample rate
+  /// outside 4–384 kHz, no frames, or more than 2^37 frames (files are
+  /// untrusted: peers upload them) — the same limits on every platform;
+  /// `unsupported_format` on desktop for containers it cannot decode (m4a…).
   Future<int> load(String filePath) async =>
       (await _ch.invokeMethod<int>('load', {'path': filePath}))!;
+
+  /// Duration (µs) of the audio file at [filePath] — the same value [load]
+  /// would return — read from its headers/metadata without loading it. Null
+  /// when unknown: unreadable, or a file [load] would refuse.
+  ///
+  /// Does not touch the playback engine, the loaded file, the play state or
+  /// the audio session, so it is safe while playing and concurrently. Runs
+  /// off the platform's UI thread (header parsing can be O(file) for mp3).
+  Future<int?> probeDurationUs(String filePath) async {
+    try {
+      return await _ch.invokeMethod<int>('probeDuration', {'path': filePath});
+    } on MissingPluginException {
+      return null; // A native side without the method: duration unknown.
+    }
+  }
+
+  /// Opaque, stable id of the current audio output route: the same
+  /// headphones give the same id across sessions, a different device a
+  /// different id. Use it to key per-route state such as §7 output-latency
+  /// calibration. Null when the platform cannot tell. Only equality is
+  /// meaningful (desktop: `<backend>:<hash>` of the default output device).
+  Future<String?> currentRouteId() async {
+    try {
+      return await _ch.invokeMethod<String>('currentRouteId');
+    } on MissingPluginException {
+      return null;
+    }
+  }
 
   /// Schedules playback of the loaded file to be at media position
   /// [positionUs] exactly when the native clock reads [nativeTimeUs],
@@ -162,6 +309,32 @@ class LocaljamAudio {
   ///
   /// If [nativeTimeUs] is already in the past, starts immediately at the
   /// correspondingly advanced position (late join, §5.3).
+  ///
+  /// If the OS will not let the app play right now (iOS/Android, e.g. a
+  /// phone call holds the audio), this completes normally WITHOUT playing
+  /// and the native side emits [LocaljamAudioEventKind.interruptionBegan] —
+  /// on every refused call. Android likewise holds back a call made within
+  /// ~2 s of an unplug and re-emits
+  /// [LocaljamAudioEventKind.routeChanged] with `oldDeviceUnavailable`.
+  ///
+  /// [rate] must lie in [1/32, 32] and [nativeTimeUs] at most one hour ahead
+  /// of the native clock; otherwise a `PlatformException(bad_args)`. Android
+  /// may also answer `bad_args` for an in-range rate its output cannot
+  /// time-stretch to (API 36 emulator: 0.1–4 plays, ≤ 1/16 and ≥ 8 do not).
+  /// A start outside the file is `PlatformException(bad_position)`; before
+  /// [load], `no_file`.
+  ///
+  /// Engine failures (`PlatformException.code`, nothing scheduled; a later
+  /// `playAt` retries from scratch):
+  ///  * `engine_start_failed` — the audio engine / output device could not
+  ///    be started (all platforms).
+  ///  * `engine_not_running` (iOS/macOS) — the engine started but produced
+  ///    no render cycle within 1 s, or stopped (route change) before the
+  ///    schedule could be installed.
+  ///  * `engine_error` (iOS/macOS) — AVFoundation raised while scheduling or
+  ///    the graph could not be rebuilt; the engine is rebuilt on the next
+  ///    call.
+  ///  * `internal` (desktop) — out of memory / threads.
   Future<void> playAt({
     required int nativeTimeUs,
     required int positionUs,
@@ -184,7 +357,12 @@ class LocaljamAudio {
 
   /// Adjusts playback rate without re-anchoring (drift slew, §5.4).
   /// Implementations must keep pitch unaffected for small changes
-  /// (|rate - 1| <= 0.01) if the platform allows.
+  /// (|rate - 1| <= 0.01) if the platform allows. [rate] must lie in
+  /// [1/32, 32] (`PlatformException(bad_args)` otherwise). Android may keep
+  /// the previous rate when its output cannot play [rate] (see [playAt]):
+  /// `bad_args`, or silently on a low-latency track that cannot
+  /// time-stretch. [positionUs] stays true either way, so drift correction
+  /// sees the miss and can re-anchor with [playAt] instead.
   Future<void> setRate(double rate) =>
       _ch.invokeMethod<void>('setRate', {'rate': rate});
 

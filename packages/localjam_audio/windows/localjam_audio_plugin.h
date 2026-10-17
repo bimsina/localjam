@@ -11,6 +11,8 @@
 #include <deque>
 #include <memory>
 #include <mutex>
+#include <string>
+#include <utility>
 
 #include "localjam_audio_core.h"
 
@@ -38,10 +40,11 @@ class LocaljamAudioPlugin : public flutter::Plugin {
       std::unique_ptr<flutter::EventSink<flutter::EncodableValue>> sink);
 
   // Top-level window to post the drain message to; set at registration.
-  void SetEventWindow(HWND hwnd) { event_window_ = hwnd; }
+  void SetEventWindow(HWND hwnd);
 
-  // Drains queued engine events to Dart. MUST be called on the platform thread
-  // (it is, from the window-proc delegate).
+  // Drains queued engine events — and finished worker-thread queries — to
+  // Dart. MUST be called on the platform thread (it is, from the window-proc
+  // delegate).
   void DrainEvents();
 
  private:
@@ -49,12 +52,45 @@ class LocaljamAudioPlugin : public flutter::Plugin {
     lj_event_kind kind;
     int64_t latency_us;
     bool has_latency;
+    bool has_error;  // playbackError: code + message below
+    std::string code;
+    std::string message;
+    bool has_route_id;  // routeChanged: route_id below
+    std::string route_id;
+    bool old_device_unavailable;  // routeChanged
   };
 
+  using Result = std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>>;
+
+  // probeDuration / currentRouteId answers computed on a thread-pool thread,
+  // waiting to be sent from the platform thread (the only thread a
+  // MethodResult may answer on). Shared with the workers, so a worker that
+  // finishes after the plugin is gone finds `window` null and drops its
+  // result instead of touching a dead plugin.
+  struct Replies {
+    std::mutex mutex;
+    HWND window = nullptr;
+    std::deque<std::pair<Result, flutter::EncodableValue>> done;
+  };
+
+  // One query for the thread pool; owns the pending result.
+  struct Query {
+    std::shared_ptr<Replies> replies;
+    Result result;
+    bool route = false;  // currentRouteId; otherwise probeDuration of `path`
+    std::string path;
+  };
+
+  static flutter::EncodableValue RunQuery(bool route, const std::string& path);
+  static void CALLBACK QueryWork(PTP_CALLBACK_INSTANCE instance, void* context);
+  // Runs RunQuery off the platform thread and answers `result` later; runs it
+  // inline when there is no window to wake up (headless) or no pool thread.
+  void StartQuery(Result result, bool route, std::string path);
+
   // Engine event callback. Runs on the engine's monitor thread — never the
-  // audio thread, and never re-entrantly inside an lj_* call.
-  static void OnEngineEvent(void* user_data, lj_event_kind kind,
-                            int64_t output_latency_us, int has_latency);
+  // audio thread, and never re-entrantly inside an lj_* call. Copies the
+  // event's strings (they die with the callback).
+  static void OnEngineEvent(void* user_data, const lj_event* event);
 
   lj_engine* engine_ = nullptr;
 
@@ -65,6 +101,8 @@ class LocaljamAudioPlugin : public flutter::Plugin {
   std::mutex queue_mutex_;
   std::deque<QueuedEvent> queue_;
   HWND event_window_ = nullptr;
+
+  std::shared_ptr<Replies> replies_ = std::make_shared<Replies>();
 };
 
 }  // namespace localjam_audio

@@ -35,6 +35,7 @@
  */
 
 #include "../localjam_audio_core.h"
+#include "../localjam_audio_internal.h"
 #include "../localjam_audio_third_party.h"
 
 #include <algorithm>
@@ -139,13 +140,24 @@ struct Harness {
     std::printf("        | %s\n", message);
   }
 
-  static void Event(void* user, lj_event_kind kind, int64_t latency_us,
-                    int has_latency) {
+  static void Event(void* user, const lj_event* event) {
     auto* h = static_cast<Harness*>(user);
     std::lock_guard<std::mutex> lock(h->mtx);
-    std::string line = lj_event_type_name(kind);
-    if (has_latency != 0) {
-      line += "(outputLatencyUs=" + std::to_string(latency_us) + ")";
+    std::string line = lj_event_type_name(event->kind);
+    if (event->has_latency != 0) {
+      line += "(outputLatencyUs=" + std::to_string(event->output_latency_us) +
+              ")";
+    }
+    if (event->route_id != nullptr) {
+      line += "(routeId=" + std::string(event->route_id) + ")";
+    }
+    if (event->kind == LJ_EVENT_ROUTE_CHANGED) {
+      line += "(oldDeviceUnavailable=" +
+              std::to_string(event->old_device_unavailable) + ")";
+    }
+    if (event->code != nullptr) {
+      line += "(code=" + std::string(event->code) + ", message=" +
+              (event->message == nullptr ? "" : event->message) + ")";
     }
     h->events.push_back(line);
     std::printf("        * event %s\n", line.c_str());
@@ -194,7 +206,68 @@ struct Harness {
     }
     return false;
   }
+
+  // The first event starting with `name`, or "" (copied: events may grow).
+  std::string FirstEvent(const char* name) {
+    std::lock_guard<std::mutex> lock(mtx);
+    for (const std::string& e : events) {
+      if (e.rfind(name, 0) == 0) {
+        return e;
+      }
+    }
+    return "";
+  }
+
+  bool SawLog(const char* needle) {
+    std::lock_guard<std::mutex> lock(mtx);
+    for (const std::string& l : logs) {
+      if (l.find(needle) != std::string::npos) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  int CountLogs(const char* needle) {
+    std::lock_guard<std::mutex> lock(mtx);
+    int n = 0;
+    for (const std::string& l : logs) {
+      if (l.find(needle) != std::string::npos) {
+        ++n;
+      }
+    }
+    return n;
+  }
+
+  // Waits up to `timeout_ms` for an event starting with `name`.
+  bool AwaitEvent(const char* name, int timeout_ms);
 };
+
+bool Harness::AwaitEvent(const char* name, int timeout_ms) {
+  const int64_t deadline = lj_now_us() + static_cast<int64_t>(timeout_ms) * 1000;
+  while (lj_now_us() < deadline) {
+    if (SawEvent(name)) {
+      return true;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  }
+  return SawEvent(name);
+}
+
+// "<backend>:<16 lowercase hex digits>", the documented desktop route-id form.
+bool LooksLikeRouteId(const std::string& id) {
+  const size_t colon = id.rfind(':');
+  if (colon == std::string::npos || colon == 0 || id.size() - colon - 1 != 16) {
+    return false;
+  }
+  for (size_t i = colon + 1; i < id.size(); ++i) {
+    const char c = id[i];
+    if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) {
+      return false;
+    }
+  }
+  return true;
+}
 
 void SleepMs(int ms) {
   std::this_thread::sleep_for(std::chrono::milliseconds(ms));
@@ -419,6 +492,60 @@ int main(int argc, char** argv) {
           buf);
   }
 
+  // ------------------------------- probeDuration, route id, bad arguments
+  std::printf("\n=== 1b. probeDuration / currentRouteId / argument validation\n");
+  {
+    int64_t probed = 0;
+    err[0] = 0;
+    lj_status s = lj_probe_duration(fixture.c_str(), &probed, err, sizeof(err));
+    Check(s == LJ_OK && probed == duration_us,
+          "probeDuration = load's duration (" + std::to_string(probed) +
+              " us)");
+    s = lj_probe_duration((dir + "/does_not_exist.wav").c_str(), &probed, err,
+                          sizeof(err));
+    Check(s == LJ_ERR_LOAD_FAILED,
+          std::string("probe of a missing file -> ") + lj_status_code(s));
+    s = lj_probe_duration(nullptr, &probed, err, sizeof(err));
+    Check(s == LJ_ERR_BAD_ARGS,
+          std::string("probe without a path -> ") + lj_status_code(s));
+
+    char route[256] = {0};
+    const int have_route = lj_current_route_id(route, sizeof(route));
+    Check(have_route == 1 && LooksLikeRouteId(route),
+          std::string("currentRouteId (no engine, no device needed): ") +
+              route);
+    char again[256] = {0};
+    Check(lj_current_route_id(again, sizeof(again)) == 1 &&
+              std::strcmp(route, again) == 0,
+          "currentRouteId is stable across calls");
+
+    // Dart passes these straight through; none of them may reach undefined
+    // arithmetic (int64 overflow, llround of inf) — they must be refused.
+    const double bad_rates[] = {0.0, -1.0, NAN, INFINITY, 1e300, 64.0};
+    bool all_refused = true;
+    for (double rate : bad_rates) {
+      if (lj_play_at(engine, lj_now_us() + 300000, 0, rate, err,
+                     sizeof(err)) != LJ_ERR_BAD_ARGS ||
+          lj_set_rate(engine, rate, err, sizeof(err)) != LJ_ERR_BAD_ARGS) {
+        all_refused = false;
+      }
+    }
+    Check(all_refused, "out-of-range / non-finite rates -> bad_args");
+    s = lj_play_at(engine, INT64_MIN, 0, 1.0, err, sizeof(err));
+    Check(s == LJ_ERR_BAD_POSITION,
+          std::string("anchor INT64_MIN (position runs off the file) -> ") +
+              lj_status_code(s));
+    s = lj_play_at(engine, lj_now_us() + 300000, INT64_MAX, 1.0, err,
+                   sizeof(err));
+    Check(s == LJ_ERR_BAD_POSITION,
+          std::string("position INT64_MAX -> ") + lj_status_code(s));
+    s = lj_play_at(engine, INT64_MAX, 0, 1.0, err, sizeof(err));
+    Check(s == LJ_ERR_BAD_ARGS,
+          std::string("anchor INT64_MAX (beyond LJ_MAX_LEAD_US) -> ") +
+              lj_status_code(s));
+    lj_stop(engine);
+  }
+
   // ------------------------------------------------ unsupported format code
   std::printf("\n=== 2. unsupported format\n");
   {
@@ -436,6 +563,12 @@ int main(int argc, char** argv) {
               std::strcmp(lj_status_code(s), "unsupported_format") == 0,
           std::string("m4a -> unsupported_format (") + lj_status_code(s) + ")");
     std::printf("        message: %s\n", err);
+    int64_t probed = -1;
+    const lj_status ps = lj_probe_duration(m4a.c_str(), &probed, err,
+                                           sizeof(err));
+    Check(ps == LJ_ERR_UNSUPPORTED_FORMAT && probed == -1,
+          std::string("probeDuration of m4a -> ") + lj_status_code(ps) +
+              " (channel replies null)");
     // Reload the real fixture; the failed load cleared the engine's state.
     lj_load(engine, fixture.c_str(), &duration_us, err, sizeof(err));
   }
@@ -448,6 +581,19 @@ int main(int argc, char** argv) {
   st = lj_play_at(engine, anchor, 0, 1.0, err, sizeof(err));
   Check(st == LJ_OK, std::string("playAt returns LJ_OK (") +
                          lj_status_code(st) + ": " + err + ")");
+  {
+    // probeDuration must not disturb a live schedule (the position checks
+    // below would catch it) and must still answer.
+    int64_t probed = 0;
+    Check(lj_probe_duration(fixture.c_str(), &probed, err, sizeof(err)) ==
+                  LJ_OK &&
+              probed == duration_us,
+          "probeDuration while scheduled");
+    char route[256] = {0};
+    Check(lj_current_route_id(route, sizeof(route)) == 1 &&
+              LooksLikeRouteId(route),
+          std::string("currentRouteId while a device is open: ") + route);
+  }
   {
     const int64_t latency = lj_output_latency_us(engine);
     std::printf("        device: %u Hz, latency %lld frames / %lld us\n",
@@ -600,6 +746,163 @@ int main(int argc, char** argv) {
     int64_t pos = 0;
     Check(lj_position_us(engine, &pos) == 0,
           "positionUs is null once finished");
+  }
+
+  // ------------------------------------------------- decode failure (error)
+  // The file disappears between load and the decoder thread opening it. That
+  // used to be reported as engineRestarted, which made the Dart engine
+  // re-schedule — and fail the same way — forever. It is a playbackError.
+  std::printf("\n=== 10. decoder failure -> playbackError\n");
+  harness.Reset();
+  {
+    const std::string doomed = dir + "/doomed.wav";
+    const int copied =
+        std::system(("cp '" + fixture + "' '" + doomed + "'").c_str());
+    int64_t d = 0;
+    Check(copied == 0 &&
+              lj_load(engine, doomed.c_str(), &d, err, sizeof(err)) == LJ_OK,
+          "load a copy of the fixture");
+    std::remove(doomed.c_str());
+    st = lj_play_at(engine, lj_now_us() + 300000, 0, 1.0, err, sizeof(err));
+    Check(st == LJ_OK, "playAt is accepted (the decoder opens later)");
+    const int64_t deadline = lj_now_us() + 3000000;
+    while (lj_now_us() < deadline &&
+           !harness.SawEvent("playbackError(code=decode_failed")) {
+      SleepMs(50);
+    }
+    Check(harness.SawEvent("playbackError(code=decode_failed"),
+          "playbackError{code: decode_failed} fired");
+    Check(!harness.SawEvent("engineRestarted"), "and no engineRestarted");
+    int64_t pos = 0;
+    Check(lj_position_us(engine, &pos) == 0,
+          "positionUs is null after the failure (output stopped)");
+  }
+
+  // --------------------------------------------- output switch (WASAPI-like)
+  // The notification sequence miniaudio's WASAPI backend produces on EVERY
+  // default-output change — stopped, rerouted, started — replayed into the
+  // engine while it plays on the real device. It used to end the schedule with
+  // playbackError{device_lost}; it is a route change that keeps playing.
+  std::printf("\n=== 11. output switch (stop, reroute, start) keeps playing\n");
+  harness.Reset();
+  lj_load(engine, fixture.c_str(), &duration_us, err, sizeof(err));
+  {
+    anchor = lj_now_us() + 400000;
+    st = lj_play_at(engine, anchor, 0, 1.0, err, sizeof(err));
+    Check(st == LJ_OK, "playAt");
+    SleepMs(700);  // playing, and the engine has noted which output it is on
+    const int opened_before = harness.CountLogs("device: ");
+    lj_test_signal_device(engine, LJ_TEST_DEVICE_STOPPED);
+    lj_test_signal_device(engine, LJ_TEST_DEVICE_REROUTED);
+    lj_test_signal_device(engine, LJ_TEST_DEVICE_STARTED);
+    Check(harness.AwaitEvent("routeChanged", 2000), "routeChanged fired");
+    const std::string ev = harness.FirstEvent("routeChanged");
+    Check(ev.find("oldDeviceUnavailable=0") != std::string::npos &&
+              ev.find("outputLatencyUs=") != std::string::npos &&
+              ev.find("routeId=") != std::string::npos,
+          "  ...as a plain switch with the new latency and route id: " + ev);
+    SleepMs(300);
+    Check(!harness.SawEvent("playbackError"), "  ...and NOT playbackError");
+    Check(harness.SawLog("re-measuring the device clock"),
+          "  ...the device clock was re-measured");
+    Check(harness.CountLogs("device: ") == opened_before,
+          "  ...on the same open device (no re-open)");
+    PositionStats after = PollPosition(engine, anchor, 0, 1.0, 1000, 0);
+    char buf[256];
+    std::snprintf(buf, sizeof(buf),
+                  "  ...still playing on the anchor line: max |err| = %.3f ms "
+                  "over %d samples (budget 15.000 ms)",
+                  after.max_abs_error_us / 1000.0, after.samples);
+    Check(after.samples > 10 && after.max_abs_error_us < 15000.0, buf);
+    // Output is audible again once the switch is decided.
+    bool unmuted_media = false;
+    {
+      std::lock_guard<std::mutex> lock(harness.mtx);
+      for (auto it = harness.taps.rbegin(); it != harness.taps.rend(); ++it) {
+        if (it->first_media_out_frame >= 0) {
+          unmuted_media = it->muted == 0;
+          break;
+        }
+      }
+    }
+    Check(unmuted_media, "  ...and unmuted");
+    lj_stop(engine);
+  }
+
+  // ------------------------------------- unplugged, OS falls back to speaker
+  // Same sequence, but the output the device was on is no longer listed by the
+  // system: the headphones were unplugged and WASAPI rerouted to the speaker.
+  // The music must stop rather than come out of the speaker.
+  std::printf("\n=== 12. unplug with fallback (old output gone) stops\n");
+  harness.Reset();
+  {
+    st = lj_play_at(engine, lj_now_us() + 300000, 1000000, 1.0, err,
+                    sizeof(err));
+    Check(st == LJ_OK, "playAt");
+    SleepMs(500);
+    lj_test_signal_device(engine, LJ_TEST_FORGET_ROUTE);
+    lj_test_signal_device(engine, LJ_TEST_DEVICE_STOPPED);
+    lj_test_signal_device(engine, LJ_TEST_DEVICE_REROUTED);
+    lj_test_signal_device(engine, LJ_TEST_DEVICE_STARTED);
+    Check(harness.AwaitEvent("routeChanged", 2000), "routeChanged fired");
+    const std::string ev = harness.FirstEvent("routeChanged");
+    Check(ev.find("oldDeviceUnavailable=1") != std::string::npos,
+          "  ...with oldDeviceUnavailable: " + ev);
+    int64_t pos = 0;
+    Check(lj_position_us(engine, &pos) == 0, "  ...output stopped");
+    // Nothing that reached the device between the reroute and the decision
+    // was audible: every media callback after the stop signal was muted.
+    bool leaked = false;
+    {
+      std::lock_guard<std::mutex> lock(harness.mtx);
+      bool seen_mute = false;
+      for (const lj_tap_sample& t : harness.taps) {
+        seen_mute = seen_mute || t.muted != 0;
+        if (seen_mute && t.first_media_out_frame >= 0 && t.muted == 0) {
+          leaked = true;
+        }
+      }
+    }
+    Check(!leaked, "  ...no unmuted media after the stop signal");
+    SleepMs(300);
+    Check(!harness.SawEvent("playbackError"), "  ...no playbackError");
+    harness.Reset();
+    st = lj_play_at(engine, lj_now_us() + 300000, 0, 1.0, err, sizeof(err));
+    SleepMs(600);
+    Check(st == LJ_OK && lj_position_us(engine, &pos) == 1,
+          "  ...an explicit playAt plays again (on the fallback output)");
+    lj_stop(engine);
+  }
+
+  // ------------------------------------------ stopped, nothing to fall back to
+  std::printf("\n=== 13. output stopped and never restarted -> lost\n");
+  harness.Reset();
+  {
+    st = lj_play_at(engine, lj_now_us() + 300000, 0, 1.0, err, sizeof(err));
+    Check(st == LJ_OK, "playAt");
+    SleepMs(500);
+    const int64_t stopped_at = lj_now_us();
+    lj_test_signal_device(engine, LJ_TEST_DEVICE_STOPPED);
+    Check(harness.AwaitEvent("routeChanged", 2000), "routeChanged fired");
+    const int64_t waited_us = lj_now_us() - stopped_at;
+    const std::string ev = harness.FirstEvent("routeChanged");
+    Check(ev.find("oldDeviceUnavailable=1") != std::string::npos,
+          "  ...with oldDeviceUnavailable: " + ev);
+    Check(waited_us >= LJ_ROUTE_DEBOUNCE_US,
+          "  ...only after the reroute debounce (" +
+              std::to_string(waited_us / 1000) + " ms)");
+    int64_t pos = 0;
+    Check(lj_position_us(engine, &pos) == 0, "  ...output stopped");
+    SleepMs(300);
+    Check(!harness.SawEvent("playbackError"),
+          "  ...a route change, not playbackError{device_lost}");
+    const int opened_before = harness.CountLogs("device: ");
+    st = lj_play_at(engine, lj_now_us() + 300000, 0, 1.0, err, sizeof(err));
+    SleepMs(600);
+    Check(st == LJ_OK && lj_position_us(engine, &pos) == 1 &&
+              harness.CountLogs("device: ") == opened_before + 1,
+          "  ...the next playAt opens a fresh device and plays");
+    lj_stop(engine);
   }
 
   lj_destroy(engine);

@@ -25,7 +25,11 @@ plugins {
     id("com.android.library")
 }
 
-android {
+// The `android {}` accessor is typed with AGP's deprecated
+// com.android.build.gradle.LibraryExtension while the embedding app builds
+// with `android.newDsl=false` (Flutter's template); configuring the new DSL
+// interface directly works under both settings.
+extensions.configure<com.android.build.api.dsl.LibraryExtension> {
     namespace = "np.com.bibektimsina.localjam_audio"
 
     compileSdk = 36
@@ -37,10 +41,10 @@ android {
 
     sourceSets {
         getByName("main") {
-            java.srcDirs("src/main/kotlin")
+            java.directories.add("src/main/kotlin")
         }
         getByName("test") {
-            java.srcDirs("src/test/kotlin")
+            java.directories.add("src/test/kotlin")
         }
     }
 

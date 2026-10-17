@@ -1,12 +1,15 @@
 // Windows shell for the LocalJam scheduled-audio engine.
 //
-// BUILD-UNVERIFIED. This file has never been compiled: it was written on macOS,
-// where no Windows toolchain exists. It is deliberately kept as close as
-// possible to the stock `flutter create --template=plugin --platforms=windows`
-// output, and it contains no scheduling, decoding or timing logic at all — all
-// of that lives in ../src/localjam_audio_core.{h,cpp}, which IS compiled and run
-// against a real audio device by ../src/test/core_test.cpp. What remains here is
-// argument decoding and result encoding, which is the part a compiler catches.
+// NOT YET BUILT WITH MSVC. Written on macOS, where no Windows toolchain exists;
+// it (and the core) compile cleanly with MinGW-w64 GCC (-Wall -Wextra -Werror)
+// against the Flutter Windows embedder and C++ client-wrapper headers of the
+// engine this repo pins, which catches type/name/signature mistakes but is not
+// MSVC /W4 /WX and links nothing. It is deliberately kept as close as possible
+// to the stock `flutter create --template=plugin --platforms=windows` output,
+// and it contains no scheduling, decoding or timing logic at all — all of that
+// lives in ../src/localjam_audio_core.{h,cpp}, which IS compiled and run against
+// a real audio device by ../src/test/core_test.cpp. What remains here is
+// argument decoding, result encoding and thread hopping.
 //
 // FORMAT SUPPORT: wav, flac, mp3, ogg-vorbis. m4a/aac/alac are not decodable by
 // this backend and `load` fails with the "unsupported_format" error code — see
@@ -187,8 +190,87 @@ LocaljamAudioPlugin::LocaljamAudioPlugin() {
 }
 
 LocaljamAudioPlugin::~LocaljamAudioPlugin() {
+  {
+    // Late worker-thread queries drop their results from now on.
+    std::lock_guard<std::mutex> lock(replies_->mutex);
+    replies_->window = nullptr;
+    replies_->done.clear();
+  }
   lj_destroy(engine_);
   engine_ = nullptr;
+}
+
+void LocaljamAudioPlugin::SetEventWindow(HWND hwnd) {
+  event_window_ = hwnd;
+  std::lock_guard<std::mutex> lock(replies_->mutex);
+  replies_->window = hwnd;
+}
+
+// static
+flutter::EncodableValue LocaljamAudioPlugin::RunQuery(bool route,
+                                                      const std::string& path) {
+  if (route) {
+    char id[512] = {0};
+    if (lj_current_route_id(id, sizeof(id)) == 0) {
+      return flutter::EncodableValue();
+    }
+    return flutter::EncodableValue(std::string(id));
+  }
+  // Touches no engine state. Unreadable or unsupported (m4a...) -> null: the
+  // duration is unknown, which is not an error for the caller.
+  char err[kErrLen] = {0};
+  int64_t duration_us = 0;
+  if (lj_probe_duration(path.c_str(), &duration_us, err, sizeof(err)) !=
+      LJ_OK) {
+    return flutter::EncodableValue();
+  }
+  return flutter::EncodableValue(duration_us);
+}
+
+// static
+void CALLBACK LocaljamAudioPlugin::QueryWork(PTP_CALLBACK_INSTANCE instance,
+                                             void* context) {
+  (void)instance;
+  std::unique_ptr<Query> query(static_cast<Query*>(context));
+  flutter::EncodableValue value = RunQuery(query->route, query->path);
+  HWND window = nullptr;
+  {
+    std::lock_guard<std::mutex> lock(query->replies->mutex);
+    window = query->replies->window;
+    if (window == nullptr) {
+      return;  // the plugin is gone; the unanswered result is dropped
+    }
+    query->replies->done.emplace_back(std::move(query->result),
+                                      std::move(value));
+  }
+  ::PostMessageW(window, DrainEventsMessage(), 0, 0);
+}
+
+void LocaljamAudioPlugin::StartQuery(Result result, bool route,
+                                     std::string path) {
+  bool have_window = false;
+  {
+    std::lock_guard<std::mutex> lock(replies_->mutex);
+    have_window = replies_->window != nullptr;
+  }
+  if (have_window) {
+    auto* query = new (std::nothrow) Query();
+    if (query != nullptr) {
+      query->replies = replies_;
+      query->result = std::move(result);
+      query->route = route;
+      query->path = std::move(path);
+      if (::TrySubmitThreadpoolCallback(&LocaljamAudioPlugin::QueryWork, query,
+                                        nullptr)) {
+        return;
+      }
+      // No pool thread: take everything back and answer inline.
+      result = std::move(query->result);
+      path = std::move(query->path);
+      delete query;
+    }
+  }
+  result->Success(RunQuery(route, path));
 }
 
 void LocaljamAudioPlugin::SetEventSink(
@@ -197,11 +279,9 @@ void LocaljamAudioPlugin::SetEventSink(
 }
 
 // static
-void LocaljamAudioPlugin::OnEngineEvent(void* user_data, lj_event_kind kind,
-                                        int64_t output_latency_us,
-                                        int has_latency) {
+void LocaljamAudioPlugin::OnEngineEvent(void* user_data, const lj_event* event) {
   auto* self = static_cast<LocaljamAudioPlugin*>(user_data);
-  if (self == nullptr) {
+  if (self == nullptr || event == nullptr) {
     return;
   }
   {
@@ -211,8 +291,13 @@ void LocaljamAudioPlugin::OnEngineEvent(void* user_data, lj_event_kind kind,
     if (self->queue_.size() >= 64) {
       self->queue_.pop_front();
     }
-    self->queue_.push_back(
-        QueuedEvent{kind, output_latency_us, has_latency != 0});
+    self->queue_.push_back(QueuedEvent{
+        event->kind, event->output_latency_us, event->has_latency != 0,
+        event->code != nullptr, event->code == nullptr ? "" : event->code,
+        event->message == nullptr ? "" : event->message,
+        event->route_id != nullptr,
+        event->route_id == nullptr ? "" : event->route_id,
+        event->old_device_unavailable != 0});
   }
   if (self->event_window_ != nullptr) {
     ::PostMessageW(self->event_window_, DrainEventsMessage(), 0, 0);
@@ -220,6 +305,14 @@ void LocaljamAudioPlugin::OnEngineEvent(void* user_data, lj_event_kind kind,
 }
 
 void LocaljamAudioPlugin::DrainEvents() {
+  std::deque<std::pair<Result, flutter::EncodableValue>> answers;
+  {
+    std::lock_guard<std::mutex> lock(replies_->mutex);
+    answers.swap(replies_->done);
+  }
+  for (auto& answer : answers) {
+    answer.first->Success(answer.second);
+  }
   std::deque<QueuedEvent> drained;
   {
     std::lock_guard<std::mutex> lock(queue_mutex_);
@@ -237,6 +330,19 @@ void LocaljamAudioPlugin::DrainEvents() {
       payload[flutter::EncodableValue("outputLatencyUs")] =
           flutter::EncodableValue(e.latency_us);
     }
+    if (e.has_error) {
+      payload[flutter::EncodableValue("code")] = flutter::EncodableValue(e.code);
+      payload[flutter::EncodableValue("message")] =
+          flutter::EncodableValue(e.message);
+    }
+    if (e.kind == LJ_EVENT_ROUTE_CHANGED) {
+      if (e.has_route_id) {
+        payload[flutter::EncodableValue("routeId")] =
+            flutter::EncodableValue(e.route_id);
+      }
+      payload[flutter::EncodableValue("oldDeviceUnavailable")] =
+          flutter::EncodableValue(e.old_device_unavailable);
+    }
     sink_->Success(flutter::EncodableValue(payload));
   }
 }
@@ -244,21 +350,41 @@ void LocaljamAudioPlugin::DrainEvents() {
 void LocaljamAudioPlugin::HandleMethodCall(
     const flutter::MethodCall<flutter::EncodableValue>& method_call,
     std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result) {
-  // Everything runs synchronously on the platform thread. Every core call is
-  // microseconds except `load`, which for mp3 does one parse-only pass to count
-  // frames exactly (see localjam_audio_core.h); that is a brief hitch on a very
-  // long track, and it is preferred here over replying from a worker thread,
-  // which the Windows channel API does not allow.
+  // probeDuration and currentRouteId touch no engine but block on I/O (a file
+  // header — for mp3 a parse over every frame header — or the audio
+  // server), so they run on a thread-pool thread and are answered from the
+  // platform thread via the drain message (StartQuery). Everything else runs
+  // synchronously here: every core call is microseconds except `load`, which
+  // for mp3 does that same parse — and must replace the loaded file before
+  // the next call is handled, so it stays on this thread.
   const std::string& method = method_call.method_name();
-  if (engine_ == nullptr) {
-    result->Error("disposed", "the audio engine could not be created");
-    return;
-  }
   const flutter::EncodableMap* args = ArgumentsMap(method_call);
   char err[kErrLen] = {0};
 
+  // Engine-free methods first: they answer even if the engine could not be
+  // created.
   if (method == "nowUs") {
     result->Success(flutter::EncodableValue(lj_now_us()));
+    return;
+  }
+
+  if (method == "probeDuration") {
+    std::string path;
+    if (!GetString(args, "path", &path)) {
+      Fail(result, LJ_ERR_BAD_ARGS, "probeDuration requires {path: String}");
+      return;
+    }
+    StartQuery(std::move(result), /*route=*/false, std::move(path));
+    return;
+  }
+
+  if (method == "currentRouteId") {
+    StartQuery(std::move(result), /*route=*/true, std::string());
+    return;
+  }
+
+  if (engine_ == nullptr) {
+    result->Error("disposed", "the audio engine could not be created");
     return;
   }
 

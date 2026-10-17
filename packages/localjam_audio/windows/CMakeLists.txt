@@ -33,6 +33,7 @@ list(APPEND PLUGIN_SOURCES
   "localjam_audio_plugin.h"
   "${LOCALJAM_AUDIO_SRC}/localjam_audio_core.cpp"
   "${LOCALJAM_AUDIO_SRC}/localjam_audio_core.h"
+  "${LOCALJAM_AUDIO_SRC}/localjam_audio_internal.h"
   "${LOCALJAM_AUDIO_SRC}/localjam_audio_deps.c"
   "${LOCALJAM_AUDIO_SRC}/third_party/stb_vorbis.c"
 )

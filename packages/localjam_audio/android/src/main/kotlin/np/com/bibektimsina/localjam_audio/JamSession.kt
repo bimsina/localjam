@@ -253,6 +253,14 @@ internal object JamMediaSessionManager {
         session?.let { return it }
         return try {
             MediaSession(context, "localjam").apply {
+                // API 24-25 route headset/BT media buttons and transport
+                // controls to a session only when it opts in (26+ always do).
+                JamSessionPolicy.legacyMediaSessionFlags(Build.VERSION.SDK_INT)
+                    .takeIf { it != 0 }
+                    ?.let {
+                        @Suppress("DEPRECATION")
+                        setFlags(it)
+                    }
                 setCallback(object : MediaSession.Callback() {
                     override fun onPlay() = sendCommand("play")
                     override fun onPause() = sendCommand("pause")
@@ -477,6 +485,46 @@ internal object JamMediaSessionManager {
 }
 
 /**
+ * Version-dependent session choices, pure so they are unit-tested.
+ */
+internal object JamSessionPolicy {
+    /**
+     * MediaSession flags to set explicitly: API 24-25 deliver media buttons
+     * and transport controls only to sessions that set these (deprecated —
+     * and always on — from API 26). 0 = set nothing.
+     */
+    @Suppress("DEPRECATION")
+    fun legacyMediaSessionFlags(sdkInt: Int): Int =
+        if (sdkInt < Build.VERSION_CODES.O) {
+            MediaSession.FLAG_HANDLES_MEDIA_BUTTONS or MediaSession.FLAG_HANDLES_TRANSPORT_CONTROLS
+        } else {
+            0
+        }
+
+    /**
+     * Wi-Fi lock modes to hold for a session, strongest first.
+     *
+     *  * API 29+: WIFI_MODE_FULL_LOW_LATENCY. It only takes effect while the
+     *    app is foreground with the screen on.
+     *  * API 29-33: ALSO WIFI_MODE_FULL_HIGH_PERF — documented to take over
+     *    whenever LOW_LATENCY is inactive, i.e. exactly the screen-off,
+     *    backgrounded host this lock exists for (no power-save, so guests'
+     *    clock-sync pings are answered promptly).
+     *  * API 34+: HIGH_PERF is deprecated and silently becomes a LOW_LATENCY
+     *    lock, so holding it adds nothing.
+     *  * Below 29: HIGH_PERF, the only mode there is.
+     */
+    @Suppress("DEPRECATION")
+    fun wifiLockModes(sdkInt: Int): IntArray = when {
+        sdkInt >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE ->
+            intArrayOf(WifiManager.WIFI_MODE_FULL_LOW_LATENCY)
+        sdkInt >= Build.VERSION_CODES.Q ->
+            intArrayOf(WifiManager.WIFI_MODE_FULL_LOW_LATENCY, WifiManager.WIFI_MODE_FULL_HIGH_PERF)
+        else -> intArrayOf(WifiManager.WIFI_MODE_FULL_HIGH_PERF)
+    }
+}
+
+/**
  * The `mediaPlayback` foreground service keeping the app process — audio
  * playback and, on a host, the LocalJam server sockets — alive while the
  * app is backgrounded during an active jam session, holding a partial wake
@@ -490,7 +538,7 @@ internal object JamMediaSessionManager {
  */
 class JamSessionService : Service() {
     private var wakeLock: PowerManager.WakeLock? = null
-    private var wifiLock: WifiManager.WifiLock? = null
+    private val wifiLocks = ArrayList<WifiManager.WifiLock>()
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -518,8 +566,8 @@ class JamSessionService : Service() {
     override fun onDestroy() {
         wakeLock?.takeIf { it.isHeld }?.release()
         wakeLock = null
-        wifiLock?.takeIf { it.isHeld }?.release()
-        wifiLock = null
+        wifiLocks.forEach { lock -> lock.takeIf { it.isHeld }?.release() }
+        wifiLocks.clear()
         stopForeground(STOP_FOREGROUND_REMOVE)
         super.onDestroy()
     }
@@ -561,18 +609,29 @@ class JamSessionService : Service() {
 
     private fun acquireLocksOrThrow() {
         if (wakeLock == null) {
+            // Deliberately SESSION-long (acquire → release), not tied to
+            // playback state. The host is a server: while the jam is paused,
+            // with the screen off, it must keep answering guests' clock-sync
+            // pings and control traffic — a few seconds of host silence is
+            // the guests' host-gone timeout (PROTOCOL.md) and they drop out
+            // of a jam that is merely paused. Without a partial
+            // wake lock the CPU suspends between packets and the host goes
+            // dark. This is the "continue an ongoing user-initiated session"
+            // case the mediaPlayback foreground-service type is for; it is
+            // released the moment the session ends (release → onDestroy).
             val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
             wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "localjam:session").apply {
                 setReferenceCounted(false)
                 acquire()
             }
         }
-        if (wifiLock == null) {
+        if (wifiLocks.isEmpty()) {
             val wm = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
-            @Suppress("DEPRECATION") // HIGH_PERF: LOW_LATENCY only works foregrounded.
-            wifiLock = wm.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "localjam:session").apply {
-                setReferenceCounted(false)
-                acquire()
+            for (mode in JamSessionPolicy.wifiLockModes(Build.VERSION.SDK_INT)) {
+                wifiLocks += wm.createWifiLock(mode, "localjam:session:$mode").apply {
+                    setReferenceCounted(false)
+                    acquire()
+                }
             }
         }
     }

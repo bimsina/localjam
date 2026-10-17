@@ -7,6 +7,7 @@
 
 #include "localjam_audio_core.h"
 
+#include "localjam_audio_internal.h"
 #include "localjam_audio_third_party.h"
 
 #include <algorithm>
@@ -79,6 +80,21 @@ bool HasPrefix(const unsigned char* buf, size_t len, size_t at,
                const char* magic) {
   const size_t n = std::strlen(magic);
   return len >= at + n && std::memcmp(buf + at, magic, n) == 0;
+}
+
+const char* ContainerName(Codec codec) {
+  switch (codec) {
+    case Codec::kWav:
+      return "wav";
+    case Codec::kFlac:
+      return "flac";
+    case Codec::kMp3:
+      return "mp3";
+    case Codec::kVorbis:
+      return "ogg";
+    default:
+      return "unknown";
+  }
 }
 
 // Magic-byte sniffing first, extension only as a fallback: a mislabelled
@@ -221,6 +237,22 @@ class Decoder {
       Close();
       return false;
     }
+    // Header values are untrusted (peers upload files to a host): every size
+    // the engine derives from them — ring, decode chunk, resampler — must stay
+    // bounded. Same limits as iOS/macOS (see LJ_MIN_SAMPLE_RATE).
+    if (!lj_internal::SampleRateOk(sample_rate_)) {
+      *error = "unsupported sample rate (" + std::to_string(sample_rate_) +
+               " Hz; supported " + std::to_string(LJ_MIN_SAMPLE_RATE) + "-" +
+               std::to_string(LJ_MAX_SAMPLE_RATE) + " Hz)";
+      Close();
+      return false;
+    }
+    if (!lj_internal::FrameCountOk(total_frames_)) {
+      *error = "the stream declares an implausible length (" +
+               std::to_string(total_frames_) + " frames)";
+      Close();
+      return false;
+    }
     return true;
   }
 
@@ -357,9 +389,16 @@ class PcmRing {
   void SetEos() { eos_.store(true, std::memory_order_release); }
   bool eos() const { return eos_.load(std::memory_order_acquire); }
 
-  void SetError(const std::string& why) {
+  // Never throws: it is the decoder thread's last resort, including when the
+  // failure being reported is an allocation failure.
+  void SetError(const char* why) noexcept {
     if (!failed_.load(std::memory_order_acquire)) {
-      error_ = why;
+      try {
+        error_ = why;
+      } catch (...) {
+        // Out of memory even for the message: the flag alone still fails the
+        // schedule (as decode_failed with an empty message).
+      }
       failed_.store(true, std::memory_order_release);
     }
     SetEos();
@@ -415,8 +454,10 @@ struct Schedule {
   bool media_started = false;
   int64_t end_out_frame = -1;     // output index one past the last media frame
   int64_t underrun_frames = 0;
+  // Set on the audio thread, which must not allocate: `failure` is a string
+  // literal there, or NULL when the reason is the ring's own error message.
   bool failed = false;
-  std::string failure;
+  const char* failure = nullptr;
   bool start_error_logged = false;
 
   // Set by the audio thread, printed by the monitor thread: the callback must
@@ -511,7 +552,125 @@ struct PendingEvent {
   lj_event_kind kind;
   int64_t latency_us;
   int has_latency;
+  std::string code;     // playbackError only
+  std::string message;  // playbackError only
+  std::string route_id;  // routeChanged only; empty = unknown
+  int old_device_unavailable;  // routeChanged only
 };
+
+// One device notification, queued by the (lock-free) notification handler for
+// the monitor thread, which feeds it to the RouteWatch in arrival order.
+struct DeviceSignalRecord {
+  lj_internal::DeviceSignal signal;
+  int64_t at_us;
+  bool expected;    // stop_expected_pub at the time: we were closing it
+  uint64_t epoch;   // which opened device it came from
+};
+
+// The system's default playback device as seen at some instant, through a
+// private miniaudio context (see QuerySystemRoutes).
+struct RouteSnapshot {
+  bool valid = false;
+  std::string key;       // the backend's device id, else its name
+  std::string route_id;  // "<backend>:<hash(key)>"
+};
+
+// Identity of a device for the "is it still there" question and for route ids:
+// the backend's own id (WASAPI endpoint id, PulseAudio sink name, CoreAudio
+// UID, ALSA hw id) with the union's zero padding trimmed, so the key does not
+// depend on miniaudio's union size; the name only when a backend leaves the id
+// empty.
+std::string DeviceKey(const ma_device_info& info) {
+  const unsigned char* bytes = reinterpret_cast<const unsigned char*>(&info.id);
+  size_t n = sizeof(info.id);
+  while (n > 0 && bytes[n - 1] == 0) {
+    --n;
+  }
+  if (n > 0) {
+    return "id:" + std::string(reinterpret_cast<const char*>(bytes), n);
+  }
+  return std::string("name:") + info.name;
+}
+
+struct RouteEnumState {
+  const std::string* wanted = nullptr;
+  bool wanted_listed = false;
+  bool have_default = false;
+  ma_device_info default_info{};
+};
+
+ma_bool32 RouteEnumCallback(ma_context* context, ma_device_type type,
+                            const ma_device_info* info, void* user) {
+  (void)context;
+  auto* state = static_cast<RouteEnumState*>(user);
+  if (type != ma_device_type_playback || info == nullptr || state == nullptr) {
+    return MA_TRUE;
+  }
+  try {
+    if (state->wanted != nullptr && !state->wanted_listed &&
+        DeviceKey(*info) == *state->wanted) {
+      state->wanted_listed = true;
+    }
+  } catch (...) {
+    state->wanted_listed = true;  // could not tell: "still there"
+  }
+  if (info->isDefault && !state->have_default) {
+    state->default_info = *info;
+    state->have_default = true;
+  }
+  return MA_TRUE;
+}
+
+// Asks the audio server which playback device is the default and, when
+// `old_key` is given, whether that device is still among the active ones
+// (*old_listed; true when that cannot be determined). Uses a private,
+// throwaway miniaudio context: no engine or device is touched, so it is safe on
+// any thread — but it blocks on the server, so never on a UI thread and never
+// with the engine mutex held.
+RouteSnapshot QuerySystemRoutes(const std::string* old_key, bool* old_listed) {
+  RouteSnapshot snapshot;
+  if (old_listed != nullptr) {
+    *old_listed = true;
+  }
+  ma_context context;
+  if (ma_context_init(nullptr, 0, nullptr, &context) != MA_SUCCESS) {
+    return snapshot;
+  }
+  // Uninitialised on every way out, the exceptional ones included.
+  struct ContextGuard {
+    ma_context* context;
+    ~ContextGuard() { ma_context_uninit(context); }
+  } guard{&context};
+  try {
+    RouteEnumState state;
+    state.wanted = old_key;
+    const ma_result enumerated =
+        ma_context_enumerate_devices(&context, RouteEnumCallback, &state);
+    if (!state.have_default) {
+      ma_device_info info;
+      if (ma_context_get_device_info(&context, ma_device_type_playback,
+                                     nullptr, &info) == MA_SUCCESS &&
+          info.name[0] != '\0') {
+        state.default_info = info;
+        state.have_default = true;
+      }
+    }
+    if (state.have_default) {
+      snapshot.valid = true;
+      snapshot.key = DeviceKey(state.default_info);
+      snapshot.route_id =
+          std::string(ma_get_backend_name(context.backend)) + ":" +
+          lj_internal::StableHash(snapshot.key.data(), snapshot.key.size());
+    }
+    if (old_listed != nullptr && old_key != nullptr &&
+        enumerated == MA_SUCCESS) {
+      *old_listed = state.wanted_listed;
+    }
+  } catch (...) {
+    snapshot = RouteSnapshot();
+  }
+  return snapshot;
+}
 
 }  // namespace
 
@@ -545,27 +704,60 @@ struct lj_engine {
   int64_t out_frames_written = 0;  // 'W'
   ClockModel clock;
 
+  // Re-measuring the device clock after the output moved or resumed (see
+  // "Routes" in the header). The callback timeline has a gap there, so the old
+  // origin is stale; a fresh model matures alongside it and replaces it — with
+  // the new route's latency — once mature. Until then, a schedule still
+  // priming holds its silence instead of starting media on the stale mapping.
+  bool rebase_pending = false;
+  ClockModel rebase;
+  int64_t rebase_latency_frames = 0;
+
   std::unique_ptr<Schedule> sched;
   uint64_t generation = 0;
 
-  // The event queue has its OWN mutex, and the two facts the device
-  // notification handler needs are published as atomics. That is not tidiness:
+  // The event queue has its OWN mutex, and everything the device notification
+  // handler needs is published as an atomic. That is not tidiness:
   // ma_device_start/ma_device_uninit fire notifications SYNCHRONOUSLY on the
-  // calling thread, so a notification handler that took `mtx` would deadlock
-  // against the very lj_play_at that started the device. Lock order is always
+  // calling thread, and backends fire them from their own threads mid-reroute,
+  // so a notification handler that took `mtx` would deadlock against the very
+  // lj_play_at that started the device. Lock order is always
   // mtx -> events_mtx, never the reverse.
   std::mutex events_mtx;
   std::deque<PendingEvent> events;
-  std::atomic<int64_t> published_latency_us{0};
+  std::deque<DeviceSignalRecord> signals;  // guarded by events_mtx
   std::atomic<bool> published_playing{false};
   std::atomic<bool> stop_expected_pub{true};
+  // Which opened device notifications belong to; bumped per open.
+  std::atomic<uint64_t> device_epoch_pub{0};
+  // Silences the callback's output (it keeps consuming media, so the frame
+  // mapping is untouched) from the first unexpected stop/reroute notification
+  // until the monitor has decided what that change was. Set by the handler,
+  // cleared by the monitor under events_mtx (see UnmuteIfQuietLocked).
+  std::atomic<bool> route_mute{false};
+
+  // Route following, guarded by mtx (see "Routes" in the header).
+  lj_internal::RouteWatch route_watch;
+  uint64_t device_epoch = 0;
+  // The output was lost (latched): the device is not reused, and the next
+  // EnsureDevice opens a fresh one.
+  bool device_lost = false;
+  // A reroute verdict is being resolved outside the lock.
+  bool reroute_pending = false;
+  // The default output when this device was opened / last rerouted: the
+  // "previous device" a reroute is checked against.
+  RouteSnapshot route_snapshot;
+  uint64_t snapshot_epoch = 0;
 
   std::thread monitor;
   std::atomic<bool> monitor_stop{false};
   std::condition_variable monitor_cv;
 
   void Log(const char* fmt, ...);
-  void Emit(lj_event_kind kind, int64_t latency_us, int has_latency);
+  void Emit(lj_event_kind kind, int64_t latency_us, int has_latency,
+            const char* code = nullptr, const char* message = nullptr);
+  void EmitRouteChanged(bool old_device_unavailable, bool has_latency,
+                        int64_t latency_us, const RouteSnapshot& route);
   // Must hold mtx. Keeps the atomic mirror the notification handler reads in
   // step with `state`.
   void SetStateLocked(State next) {
@@ -575,6 +767,29 @@ struct lj_engine {
   void OnData(float* out, ma_uint32 frame_count);
   void OnNotification(const ma_device_notification* n);
   void MonitorMain();
+
+  // What a monitor tick must still do after releasing mtx (route queries block
+  // on the audio server, so they never run under the lock).
+  enum class RouteWork { kNone, kSnapshot, kDecideReroute, kReportLost };
+  RouteWork RouteTickLocked(int64_t now, std::unique_ptr<Schedule>* dead,
+                            uint64_t* work_epoch, std::string* old_key,
+                            bool* have_old);
+  void RouteWorkUnlocked(RouteWork work, uint64_t work_epoch,
+                         const std::string& old_key, bool have_old,
+                         std::unique_ptr<Schedule>* dead);
+  // Must hold mtx. Retires a playing/paused schedule because its output is
+  // gone; returns it for destruction outside the lock.
+  std::unique_ptr<Schedule> StopForLostOutputLocked();
+  // Must hold mtx. Starts re-measuring the device clock (see `rebase`).
+  void BeginClockRebaseLocked(int64_t new_latency_frames);
+  // Must hold mtx. miniaudio's visible buffer depth of the open device, in
+  // client-rate frames (§7; see "Output latency" in the header).
+  int64_t DeviceLatencyFramesLocked() const;
+  // Must hold mtx. Lifts route_mute once every queued notification has been
+  // through the watch, the watch has the output up and no reroute verdict is
+  // still being resolved. The handler queues and mutes under events_mtx, which
+  // this takes too, so a notification can never slip between check and lift.
+  void UnmuteIfQuietLocked();
 
   // Must hold mtx. Detaches the active schedule so the caller can join+free it
   // outside the lock.
@@ -647,12 +862,32 @@ void lj_engine::Log(const char* fmt, ...) {
   }
 }
 
-void lj_engine::Emit(lj_event_kind kind, int64_t latency_us, int has_latency) {
+void lj_engine::Emit(lj_event_kind kind, int64_t latency_us, int has_latency,
+                     const char* code, const char* message) {
   // Queued, never delivered inline: notifications can arrive on the audio
   // thread, on a backend thread, or synchronously inside an lj_* call, and none
   // of those may re-enter the caller. The monitor thread drains this.
-  std::lock_guard<std::mutex> lock(events_mtx);
-  events.push_back(PendingEvent{kind, latency_us, has_latency});
+  try {
+    std::lock_guard<std::mutex> lock(events_mtx);
+    events.push_back(PendingEvent{kind, latency_us, has_latency,
+                                  code == nullptr ? "" : code,
+                                  message == nullptr ? "" : message, "", 0});
+  } catch (...) {
+    // Out of memory: the event is lost, the process is not.
+  }
+}
+
+void lj_engine::EmitRouteChanged(bool old_device_unavailable, bool has_latency,
+                                 int64_t latency_us,
+                                 const RouteSnapshot& route) {
+  try {
+    std::lock_guard<std::mutex> lock(events_mtx);
+    events.push_back(PendingEvent{LJ_EVENT_ROUTE_CHANGED, latency_us,
+                                  has_latency ? 1 : 0, "", "",
+                                  route.valid ? route.route_id : "",
+                                  old_device_unavailable ? 1 : 0});
+  } catch (...) {
+  }
 }
 
 void lj_engine::OnData(float* out, ma_uint32 frame_count) {
@@ -665,22 +900,38 @@ void lj_engine::OnData(float* out, ma_uint32 frame_count) {
 
   const int64_t w = out_frames_written;
   clock.Observe(w, now, dev_rate);
+  if (rebase_pending) {
+    // The output moved or resumed: the old origin predates a gap in the
+    // callback timeline. Swap in the freshly measured model (and the new
+    // route's latency) once it is as mature as the original had to be.
+    rebase.Observe(w, now, dev_rate);
+    if (rebase.origin_valid && rebase.mature_samples >= LJ_MATURITY_CALLBACKS) {
+      clock = rebase;
+      latency_frames = rebase_latency_frames;
+      rebase_pending = false;
+    }
+  }
   out_frames_written = w + frame_count;
 
-  lj_tap_sample tap_sample{now, w, frame_count, -1, 0.0f};
+  lj_tap_sample tap_sample{now, w, frame_count, -1, 0.0f, 0};
 
   Schedule* s = sched.get();
   if (s == nullptr || state != State::kPlaying || s->failed) {
     if (tap != nullptr) {
+      tap_sample.muted = route_mute.load(std::memory_order_acquire) ? 1 : 0;
       tap(tap_user, &tap_sample);
     }
     return;
   }
 
+  // A schedule still priming must not start its media on a mapping that is
+  // being re-measured: hold the silence until the new model is in.
+  const bool hold_priming = rebase_pending && !s->skip_resolved;
+
   // Refine S against every fresh callback until media actually starts, exactly
   // like the Android priming loop refines against fresher HAL timestamps: the
   // first mature sample can be jittery, later ones are steadier.
-  if (!s->skip_resolved && clock.origin_valid) {
+  if (!s->skip_resolved && clock.origin_valid && !hold_priming) {
     const int64_t computed = std::max<int64_t>(
         0, RoundToI64(static_cast<double>(s->target_us - clock.origin_us) *
                           dev_rate / 1e6 -
@@ -694,7 +945,7 @@ void lj_engine::OnData(float* out, ma_uint32 frame_count) {
   }
 
   ma_uint32 done = 0;
-  if (s->silence_frames >= 0) {
+  if (s->silence_frames >= 0 && !hold_priming) {
     // ---- Phase 1: silence padding up to output frame S.
     const int64_t pad = s->silence_frames - w;
     if (pad > 0) {
@@ -725,8 +976,7 @@ void lj_engine::OnData(float* out, ma_uint32 frame_count) {
       while (done < frame_count && s->end_out_frame < 0 && ++guard < 4096) {
         if (s->feed_frames == 0) {
           if (s->ring->failed()) {
-            s->failed = true;
-            s->failure = s->ring->error();
+            s->failed = true;  // the ring holds the message
             break;
           }
           s->feed_frames = s->ring->Read(s->feed.data(), feed_cap);
@@ -785,35 +1035,60 @@ void lj_engine::OnData(float* out, ma_uint32 frame_count) {
     }
   }
 
+  if (route_mute.load(std::memory_order_acquire)) {
+    // The output is changing under us (see "Routes" in the header): keep the
+    // bookkeeping above, emit nothing audible.
+    std::memset(out, 0, static_cast<size_t>(frame_count) * channels *
+                            sizeof(float));
+    tap_sample.muted = 1;
+  }
+
   if (tap != nullptr) {
     tap(tap_user, &tap_sample);
   }
 }
 
 void lj_engine::OnNotification(const ma_device_notification* n) {
-  // Runs with NO engine lock — see the comment on events_mtx. Everything it
-  // reads is an atomic mirror.
+  // Runs with NO engine lock — see the comment on events_mtx — on whatever
+  // thread the backend notifies from. It only records what happened; the
+  // monitor thread decides what it means (RouteWatch) and acts under mtx.
+  lj_internal::DeviceSignal signal = lj_internal::DeviceSignal::kStarted;
   switch (n->type) {
+    case ma_device_notification_type_started:
+      signal = lj_internal::DeviceSignal::kStarted;
+      break;
+    case ma_device_notification_type_stopped:
+      signal = lj_internal::DeviceSignal::kStopped;
+      break;
     case ma_device_notification_type_rerouted:
-      Emit(LJ_EVENT_ROUTE_CHANGED,
-           published_latency_us.load(std::memory_order_acquire), 1);
+      signal = lj_internal::DeviceSignal::kRerouted;
       break;
     case ma_device_notification_type_interruption_began:
       Emit(LJ_EVENT_INTERRUPTION_BEGAN, 0, 0);
-      break;
+      return;
     case ma_device_notification_type_interruption_ended:
       Emit(LJ_EVENT_INTERRUPTION_ENDED, 0, 0);
-      break;
-    case ma_device_notification_type_stopped:
-      // An unexpected stop means the schedule the Dart side believes in is
-      // gone; that is exactly iOS's engine-restart semantics.
-      if (!stop_expected_pub.load(std::memory_order_acquire) &&
-          published_playing.load(std::memory_order_acquire)) {
-        Emit(LJ_EVENT_ENGINE_RESTARTED, 0, 0);
-      }
-      break;
+      return;
     default:
-      break;
+      return;
+  }
+  const bool expected = stop_expected_pub.load(std::memory_order_acquire);
+  try {
+    std::lock_guard<std::mutex> lock(events_mtx);
+    signals.push_back(DeviceSignalRecord{
+        signal, NowUs(), expected,
+        device_epoch_pub.load(std::memory_order_acquire)});
+    // A stop we did not ask for, or a reroute: whatever the device renders
+    // next may be on an output we are about to abandon (WASAPI falls back to
+    // the speaker when headphones are unplugged). Silent until the monitor has
+    // decided — usually within one 10 ms tick.
+    if (signal == lj_internal::DeviceSignal::kRerouted ||
+        (signal == lj_internal::DeviceSignal::kStopped && !expected)) {
+      route_mute.store(true, std::memory_order_release);
+    }
+  } catch (...) {
+    // Out of memory: a lost notification is caught by the state poll.
+    route_mute.store(true, std::memory_order_release);
   }
 }
 
@@ -842,12 +1117,16 @@ void lj_engine::CloseDevice() {
   {
     std::lock_guard<std::mutex> lock(mtx);
     device_started = false;
+    device_lost = false;
     dev_rate = 0;
     dev_channels = 0;
     latency_frames = 0;
-    published_latency_us.store(0, std::memory_order_release);
     out_frames_written = 0;
     clock.Reset();
+    rebase_pending = false;
+    route_watch.Reset();
+    reroute_pending = false;
+    route_mute.store(false, std::memory_order_release);
   }
 }
 
@@ -855,7 +1134,12 @@ bool lj_engine::EnsureDevice(const LoadedFile& file, char* err,
                             size_t err_len) {
   {
     std::lock_guard<std::mutex> lock(mtx);
-    if (device_open && dev_channels == file.channels) {
+    // A lost device is never reused: it would accept the schedule and then
+    // never call back, i.e. silently never play. A device that is merely DOWN
+    // (mid-reroute, inside the RouteWatch debounce) is reused: closing it
+    // would race miniaudio's own reroute of it, and if it does not come back
+    // the watch retires this schedule and reports the lost output.
+    if (device_open && dev_channels == file.channels && !device_lost) {
       return true;
     }
   }
@@ -882,23 +1166,19 @@ bool lj_engine::EnsureDevice(const LoadedFile& file, char* err,
   device_open = true;
   dev_rate = device.sampleRate;
   dev_channels = device.playback.channels;
-
-  // Output latency (§7): miniaudio's visible buffer depth, converted from the
-  // internal device rate to the client rate the callback works in. See the
-  // header for what this can and cannot see.
-  const uint32_t internal_rate = device.playback.internalSampleRate == 0
-                                     ? dev_rate
-                                     : device.playback.internalSampleRate;
-  const double buffer_frames =
-      static_cast<double>(device.playback.internalPeriodSizeInFrames) *
-      static_cast<double>(device.playback.internalPeriods);
-  latency_frames = RoundToI64(buffer_frames * dev_rate / internal_rate);
-  published_latency_us.store(
-      RoundToI64(static_cast<double>(latency_frames) * 1e6 / dev_rate),
-      std::memory_order_release);
+  latency_frames = DeviceLatencyFramesLocked();
 
   out_frames_written = 0;
   clock.Reset();
+  rebase_pending = false;
+  route_watch.Reset();
+  reroute_pending = false;
+  device_lost = false;
+  route_mute.store(false, std::memory_order_release);
+  // Notifications of this device from here on (the "started" below included)
+  // carry the new epoch; stragglers from a closed device are ignored.
+  ++device_epoch;
+  device_epoch_pub.store(device_epoch, std::memory_order_release);
 
   // ma_device_start fires the "started" notification synchronously on THIS
   // thread and may invoke the data callback before returning, so mtx is dropped
@@ -913,12 +1193,12 @@ bool lj_engine::EnsureDevice(const LoadedFile& file, char* err,
     // Roll the half-open device back, or the next lj_play_at would see
     // device_open and reuse a device that is not running. A failed start means
     // no audio thread ever began, so uninit here cannot block on a callback.
+    stop_expected_pub.store(true, std::memory_order_release);
     device_open = false;
     device_started = false;
     dev_rate = 0;
     dev_channels = 0;
     latency_frames = 0;
-    published_latency_us.store(0, std::memory_order_release);
     clock.Reset();
     ma_device_uninit(&device);
     SetErr(err, err_len, "could not start the audio output device");
@@ -927,12 +1207,174 @@ bool lj_engine::EnsureDevice(const LoadedFile& file, char* err,
   device_started = true;
   Log("device: %u Hz x%uch (internal %u Hz, %u frames x%u periods) -> "
       "latency %lld frames (%lld us)",
-      dev_rate, dev_channels, internal_rate,
+      dev_rate, dev_channels, device.playback.internalSampleRate,
       device.playback.internalPeriodSizeInFrames, device.playback.internalPeriods,
       static_cast<long long>(latency_frames),
       static_cast<long long>(RoundToI64(static_cast<double>(latency_frames) *
                                         1e6 / dev_rate)));
   return true;
+}
+
+int64_t lj_engine::DeviceLatencyFramesLocked() const {
+  // Output latency (§7): miniaudio's visible buffer depth, converted from the
+  // internal device rate to the client rate the callback works in. See the
+  // header for what this can and cannot see. Re-read after a reroute: the new
+  // device's buffer is not the old one's.
+  if (dev_rate == 0) {
+    return 0;
+  }
+  const uint32_t internal_rate = device.playback.internalSampleRate == 0
+                                     ? dev_rate
+                                     : device.playback.internalSampleRate;
+  const double buffer_frames =
+      static_cast<double>(device.playback.internalPeriodSizeInFrames) *
+      static_cast<double>(device.playback.internalPeriods);
+  return RoundToI64(buffer_frames * static_cast<double>(dev_rate) /
+                    static_cast<double>(internal_rate));
+}
+
+void lj_engine::BeginClockRebaseLocked(int64_t new_latency_frames) {
+  rebase.Reset();
+  rebase_latency_frames = new_latency_frames;
+  rebase_pending = true;
+}
+
+void lj_engine::UnmuteIfQuietLocked() {
+  if (route_watch.down() || reroute_pending) {
+    return;
+  }
+  std::lock_guard<std::mutex> lock(events_mtx);
+  if (signals.empty()) {
+    route_mute.store(false, std::memory_order_release);
+  }
+}
+
+std::unique_ptr<Schedule> lj_engine::StopForLostOutputLocked() {
+  if (!sched || (state != State::kPlaying && state != State::kPaused)) {
+    return nullptr;
+  }
+  std::unique_ptr<Schedule> dead = RetireLocked();
+  SetStateLocked(loaded.duration_us > 0 ? State::kLoaded : State::kIdle);
+  return dead;
+}
+
+lj_engine::RouteWork lj_engine::RouteTickLocked(int64_t now,
+                                                std::unique_ptr<Schedule>* dead,
+                                                uint64_t* work_epoch,
+                                                std::string* old_key,
+                                                bool* have_old) {
+  // Every notification since the last tick, in arrival order, into the watch.
+  {
+    std::lock_guard<std::mutex> lock(events_mtx);
+    for (const DeviceSignalRecord& r : signals) {
+      if (r.epoch == device_epoch) {
+        route_watch.OnSignal(r.signal, r.at_us, r.expected);
+      }
+    }
+    signals.clear();
+  }
+  if (!device_open || !device_started || device_lost || reroute_pending) {
+    return RouteWork::kNone;
+  }
+  *work_epoch = device_epoch;
+  // Reading the state under mtx is safe: CloseDevice clears device_open under
+  // mtx before uninit. It is an atomic inside miniaudio, so a backend thread
+  // mid-reroute is no race.
+  const bool started = ma_device_get_state(&device) == ma_device_state_started;
+  switch (route_watch.Poll(now, started)) {
+    case lj_internal::RouteVerdict::kNone:
+      break;
+    case lj_internal::RouteVerdict::kResumed:
+      Log("output resumed after a stop: re-measuring the device clock");
+      BeginClockRebaseLocked(DeviceLatencyFramesLocked());
+      break;
+    case lj_internal::RouteVerdict::kRerouted:
+      // Whether the previous device still exists decides between "user
+      // switched outputs" and "unplugged, the OS fell back to the speaker" —
+      // a question for the audio server, asked outside the lock. Stays muted
+      // meanwhile.
+      reroute_pending = true;
+      *have_old = route_snapshot.valid && snapshot_epoch == device_epoch;
+      if (*have_old) {
+        *old_key = route_snapshot.key;
+      }
+      return RouteWork::kDecideReroute;
+    case lj_internal::RouteVerdict::kOutputLost:
+      device_lost = true;
+      Log("output lost: the device stopped by itself and did not come back "
+          "within %lld us; stopping (the next playAt opens a new device)",
+          static_cast<long long>(LJ_ROUTE_DEBOUNCE_US));
+      *dead = StopForLostOutputLocked();
+      return RouteWork::kReportLost;
+  }
+  UnmuteIfQuietLocked();
+  if (snapshot_epoch != device_epoch) {
+    return RouteWork::kSnapshot;
+  }
+  return RouteWork::kNone;
+}
+
+void lj_engine::RouteWorkUnlocked(RouteWork work, uint64_t work_epoch,
+                                  const std::string& old_key, bool have_old,
+                                  std::unique_ptr<Schedule>* dead) {
+  switch (work) {
+    case RouteWork::kNone:
+      return;
+    case RouteWork::kSnapshot: {
+      // The device just opened: remember which output it is on, so a later
+      // reroute can tell whether that output is still there.
+      const RouteSnapshot now_route = QuerySystemRoutes(nullptr, nullptr);
+      std::lock_guard<std::mutex> lock(mtx);
+      if (device_open && device_epoch == work_epoch) {
+        route_snapshot = now_route;
+        snapshot_epoch = work_epoch;
+      }
+      return;
+    }
+    case RouteWork::kReportLost: {
+      // Already stopped under the lock; this only names where the system
+      // would play now (if anywhere) for the event.
+      EmitRouteChanged(true, false, 0, QuerySystemRoutes(nullptr, nullptr));
+      return;
+    }
+    case RouteWork::kDecideReroute: {
+      bool old_listed = true;
+      const RouteSnapshot now_route =
+          QuerySystemRoutes(have_old ? &old_key : nullptr, &old_listed);
+      const bool old_gone =
+          lj_internal::RerouteLostOldDevice(have_old, old_listed);
+      std::lock_guard<std::mutex> lock(mtx);
+      if (!device_open || device_epoch != work_epoch) {
+        return;  // closed or replaced meanwhile; the new device starts afresh
+      }
+      reroute_pending = false;
+      if (now_route.valid) {
+        route_snapshot = now_route;
+        snapshot_epoch = work_epoch;
+      }
+      if (old_gone) {
+        // Unplugged, and the backend already moved us to whatever was left
+        // (WASAPI: the speaker). Stop — whatever was scheduled, even a playAt
+        // that raced in meanwhile — and leave it stopped: the user decides.
+        Log("rerouted because the previous output went away: stopping");
+        *dead = StopForLostOutputLocked();
+        EmitRouteChanged(true, false, 0, now_route);
+      } else {
+        const int64_t new_latency = DeviceLatencyFramesLocked();
+        Log("rerouted to another output: re-measuring the device clock "
+            "(latency %lld frames)",
+            static_cast<long long>(new_latency));
+        BeginClockRebaseLocked(new_latency);
+        EmitRouteChanged(
+            false, true,
+            RoundToI64(static_cast<double>(new_latency) * 1e6 /
+                       static_cast<double>(dev_rate)),
+            now_route);
+      }
+      UnmuteIfQuietLocked();
+      return;
+    }
+  }
 }
 
 double lj_engine::PositionUsLocked(int64_t now) const {
@@ -958,15 +1400,24 @@ double lj_engine::PositionUsLocked(int64_t now) const {
 
 void lj_engine::MonitorMain() {
   // One thread for the whole engine: completion detection, the measured
-  // start-error log, failure handling, and event delivery. Nothing here runs on
-  // the audio thread.
+  // start-error log, failure handling, route following, and event delivery.
+  // Nothing here runs on the audio thread.
   while (!monitor_stop.load(std::memory_order_acquire)) {
     std::deque<PendingEvent> drained;
     std::unique_ptr<Schedule> dead;
-    {
+    std::unique_ptr<Schedule> dead_by_route;
+    RouteWork route_work = RouteWork::kNone;
+    uint64_t route_epoch = 0;
+    std::string old_route_key;
+    bool have_old_route = false;
+    try {
       std::unique_lock<std::mutex> lock(mtx);
       monitor_cv.wait_for(lock, std::chrono::milliseconds(10));
       const int64_t now = NowUs();
+      // Output route: device notifications and the polled device state (see
+      // "Routes" in the header).
+      route_work = RouteTickLocked(now, &dead_by_route, &route_epoch,
+                                   &old_route_key, &have_old_route);
       Schedule* s = sched.get();
       if (s != nullptr && state == State::kPlaying) {
         if (s->prime_pending) {
@@ -984,11 +1435,15 @@ void lj_engine::MonitorMain() {
                   std::llabs(s->silence_frames - s->prime_w)));
         }
         if (s->failed) {
-          Log("schedule failed: %s", s->failure.c_str());
+          // Not engineRestarted: re-scheduling the same file would fail the
+          // same way, and the Dart engine would re-apply forever.
+          const std::string why =
+              s->failure != nullptr ? std::string(s->failure) : s->ring->error();
+          Log("schedule failed: %s", why.c_str());
           dead = RetireLocked();
           SetStateLocked(loaded.duration_us > 0 ? State::kLoaded
                                               : State::kIdle);
-          Emit(LJ_EVENT_ENGINE_RESTARTED, 0, 0);
+          Emit(LJ_EVENT_PLAYBACK_ERROR, 0, 0, "decode_failed", why.c_str());
         } else {
           if (!s->start_error_logged && s->media_started && clock.origin_valid) {
             s->start_error_logged = true;
@@ -1028,15 +1483,44 @@ void lj_engine::MonitorMain() {
           }
         }
       }
+    } catch (...) {
+      // Out of memory for a log line or an event: skip this tick, never
+      // std::terminate the host app from a background thread.
+    }
+    // Outside the lock: route questions block on the audio server.
+    std::unique_ptr<Schedule> dead_by_reroute;
+    try {
+      RouteWorkUnlocked(route_work, route_epoch, old_route_key,
+                        have_old_route, &dead_by_reroute);
+    } catch (...) {
+      // Out of memory mid-decision: do not leave the watch parked on it.
+      std::lock_guard<std::mutex> lock(mtx);
+      if (device_epoch == route_epoch) {
+        reroute_pending = false;
+      }
     }
     {
       std::lock_guard<std::mutex> lock(events_mtx);
       drained.swap(events);
     }
     DestroySchedule(std::move(dead));
+    DestroySchedule(std::move(dead_by_route));
+    DestroySchedule(std::move(dead_by_reroute));
     for (const PendingEvent& e : drained) {
       if (event_cb != nullptr) {
-        event_cb(event_user, e.kind, e.latency_us, e.has_latency);
+        const lj_event event{
+            e.kind,
+            e.latency_us,
+            e.has_latency,
+            e.code.empty() ? nullptr : e.code.c_str(),
+            e.message.empty() ? nullptr : e.message.c_str(),
+            e.route_id.empty() ? nullptr : e.route_id.c_str(),
+            e.old_device_unavailable};
+        try {
+          event_cb(event_user, &event);
+        } catch (...) {
+          // A shell's callback must not take the monitor thread down.
+        }
       }
     }
   }
@@ -1046,16 +1530,60 @@ void lj_engine::MonitorMain() {
 
 namespace {
 
-void DecoderMain(lj_engine* engine, Schedule* s, LoadedFile file) {
-  // Produces the PCM for one schedule into its bounded ring. Owns a private
-  // decoder — no sharing across schedules, so a new lj_play_at never fights an
-  // old decoder over stream position. Exits the moment its schedule is retired,
-  // checking only an atomic (never the engine mutex), which is what lets the
-  // control path join it without touching anything the audio thread needs.
+// Identifies and opens `path` and reads its stream parameters into `out`, then
+// closes it again. The one place lj_load and lj_probe_duration share, so a
+// probe reports exactly the duration a load would.
+lj_status ProbeFile(const char* path, LoadedFile* out, char* err,
+                    size_t err_len) {
+  const Probe probe = SniffFile(path);
+  if (probe.codec == Codec::kUnsupported) {
+    SetErr(err, err_len,
+           "%s is a %s file; the Windows/Linux backend decodes wav, flac, mp3 "
+           "and ogg-vorbis only (no system codecs are used, so AAC/ALAC/WMA "
+           "cannot be played). Transcode the track to flac or ogg.",
+           path, probe.container);
+    return LJ_ERR_UNSUPPORTED_FORMAT;
+  }
+  if (probe.codec == Codec::kUnknown) {
+    SetErr(err, err_len,
+           "could not identify the audio format of %s (expected wav, flac, mp3 "
+           "or ogg-vorbis)",
+           path);
+    return LJ_ERR_UNSUPPORTED_FORMAT;
+  }
+
+  Decoder decoder;
+  std::string error;
+  if (!decoder.Open(path, probe.codec, &error)) {
+    SetErr(err, err_len, "Could not open audio file at %s: %s", path,
+           error.c_str());
+    return LJ_ERR_LOAD_FAILED;
+  }
+
+  out->path = path;
+  out->codec = probe.codec;
+  out->sample_rate = decoder.sample_rate();
+  out->channels = decoder.channels();
+  out->total_frames = decoder.total_frames();
+  // Duration is DECODER-derived and exact: every decoder here reports a true
+  // PCM frame count (dr_mp3 by parsing every frame header). Unlike the Android
+  // metadata-derived value there is no codec-frame slop, so position clamping
+  // and playAt range checks are exact.
+  out->duration_us = RoundToI64(static_cast<double>(out->total_frames) * 1e6 /
+                                out->sample_rate);
+  return LJ_OK;
+}
+
+// `rate` is accepted by playAt/setRate (see LJ_MIN_RATE in the header).
+bool RateOk(double rate) {
+  return std::isfinite(rate) && rate >= LJ_MIN_RATE && rate <= LJ_MAX_RATE;
+}
+
+void DecoderMainUnguarded(Schedule* s, const LoadedFile& file) {
   Decoder decoder;
   std::string error;
   if (!decoder.Open(file.path.c_str(), file.codec, &error)) {
-    s->ring->SetError("decoder open failed: " + error);
+    s->ring->SetError(("decoder open failed: " + error).c_str());
     return;
   }
   if (!decoder.Seek(s->start_frame)) {
@@ -1064,7 +1592,11 @@ void DecoderMain(lj_engine* engine, Schedule* s, LoadedFile file) {
   }
 
   const uint32_t channels = file.channels;
-  const size_t chunk_frames = std::max<size_t>(1024, file.sample_rate / 20);
+  // Never larger than half the ring: the loop below waits for room for a whole
+  // chunk, so a chunk that cannot fit would wait forever (see
+  // lj_internal::ComputeStreamSizing).
+  const size_t chunk_frames =
+      lj_internal::ComputeStreamSizing(file.sample_rate, channels).chunk_frames;
   std::vector<float> chunk(chunk_frames * channels);
 
   while (!s->retired.load(std::memory_order_acquire)) {
@@ -1092,7 +1624,176 @@ void DecoderMain(lj_engine* engine, Schedule* s, LoadedFile file) {
       return;
     }
   }
-  (void)engine;
+}
+
+void DecoderMain(Schedule* s, LoadedFile file) {
+  // Produces the PCM for one schedule into its bounded ring. Owns a private
+  // decoder — no sharing across schedules, so a new lj_play_at never fights an
+  // old decoder over stream position. Exits the moment its schedule is retired,
+  // checking only an atomic (never the engine mutex), which is what lets the
+  // control path join it without touching anything the audio thread needs.
+  //
+  // An exception escaping a std::thread is std::terminate, i.e. the whole host
+  // app; a decoder that cannot allocate fails its schedule (decode_failed).
+  try {
+    DecoderMainUnguarded(s, file);
+  } catch (...) {
+    s->ring->SetError("the decoder ran out of memory");
+  }
+}
+
+lj_status LoadUnguarded(lj_engine* engine, const char* path,
+                        int64_t* out_duration_us, char* err, size_t err_len) {
+  // Replace any previously loaded file; stop playback first (Dart contract).
+  std::unique_ptr<Schedule> dead;
+  {
+    std::lock_guard<std::mutex> lock(engine->mtx);
+    dead = engine->RetireLocked();
+    engine->SetStateLocked(State::kIdle);
+    engine->loaded = LoadedFile();
+  }
+  DestroySchedule(std::move(dead));
+
+  LoadedFile file;
+  const lj_status probed = ProbeFile(path, &file, err, err_len);
+  if (probed != LJ_OK) {
+    return probed;
+  }
+
+  {
+    std::lock_guard<std::mutex> lock(engine->mtx);
+    engine->loaded = file;
+    engine->SetStateLocked(State::kLoaded);
+  }
+  engine->Log("load: %s -> %lld us @ %u Hz x%uch (%llu frames, %s, streaming "
+              "decode)",
+              path, static_cast<long long>(file.duration_us), file.sample_rate,
+              file.channels,
+              static_cast<unsigned long long>(file.total_frames),
+              ContainerName(file.codec));
+  *out_duration_us = file.duration_us;
+  return LJ_OK;
+}
+
+lj_status PlayAtUnguarded(lj_engine* engine, int64_t native_time_us,
+                          int64_t position_us, double rate, char* err,
+                          size_t err_len) {
+  std::unique_ptr<Schedule> dead;
+  LoadedFile file;
+  {
+    std::lock_guard<std::mutex> lock(engine->mtx);
+    if (engine->state == State::kIdle || engine->loaded.sample_rate == 0) {
+      SetErr(err, err_len, "playAt before load");
+      return LJ_ERR_NO_FILE;
+    }
+    file = engine->loaded;
+    // Calling while already playing/scheduled retires the old schedule.
+    dead = engine->RetireLocked();
+    engine->SetStateLocked(State::kLoaded);
+  }
+  DestroySchedule(std::move(dead));
+
+  // Outside the lock: opening/starting the device blocks on the audio thread.
+  if (!engine->EnsureDevice(file, err, err_len)) {
+    return LJ_ERR_ENGINE_START_FAILED;
+  }
+
+  std::lock_guard<std::mutex> lock(engine->mtx);
+
+  // Never an uncontrolled "ASAP" start (same rationale as iOS and Android): a
+  // late anchor is re-anchored LJ_MIN_LEAD_US into the future with the position
+  // advanced at ×rate (§5.3 late join), so the priming loop lands the start
+  // precisely instead of inheriting an unpredictable spin-up delay that drift
+  // correction could never remove.
+  //
+  // Both inputs come straight from Dart, so the arithmetic is done in double
+  // and range-checked before anything is converted back: int64 subtraction or
+  // llround of an out-of-range value would be undefined behaviour.
+  const int64_t now = NowUs();
+  int64_t anchor_us = native_time_us;
+  double start_pos = static_cast<double>(position_us);
+  if (anchor_us < now + LJ_MIN_LEAD_US) {
+    start_pos += std::round((static_cast<double>(now + LJ_MIN_LEAD_US) -
+                             static_cast<double>(anchor_us)) *
+                            rate);
+    anchor_us = now + LJ_MIN_LEAD_US;
+  }
+
+  const double start_frame_exact =
+      std::round(start_pos * file.sample_rate / 1e6);
+  if (!std::isfinite(start_frame_exact) || start_frame_exact < 0.0 ||
+      start_frame_exact >= static_cast<double>(file.total_frames)) {
+    SetErr(err, err_len,
+           "start position %.0f us is outside the file (duration %lld us)",
+           start_pos, static_cast<long long>(file.duration_us));
+    return LJ_ERR_BAD_POSITION;
+  }
+  const int64_t start_frame = static_cast<int64_t>(start_frame_exact);
+  const int64_t start_pos_us = static_cast<int64_t>(start_pos);
+  // Keep the anchor frame-exact so the position formula carries no rounding
+  // bias (mirrors iOS segmentStartUs / Android anchorMediaUs).
+  const int64_t anchor_media_us =
+      RoundToI64(static_cast<double>(start_frame) * 1e6 / file.sample_rate);
+
+  auto s = std::unique_ptr<Schedule>(new Schedule());
+  s->generation = engine->generation;
+  s->target_us = anchor_us;
+  s->anchor_media_us = anchor_media_us;
+  s->start_frame = static_cast<uint64_t>(start_frame);
+  s->src_rate = file.sample_rate;
+  s->channels = file.channels;
+  s->rate = rate;
+
+  // Bounded by LJ_RING_MAX_BYTES whatever the file declares (see
+  // lj_internal::ComputeStreamSizing); the decoder thread derives its chunk
+  // from the same sizing.
+  const size_t ring_frames =
+      lj_internal::ComputeStreamSizing(file.sample_rate, file.channels)
+          .ring_frames;
+  s->ring.reset(new PcmRing(ring_frames, file.channels));
+  // Feed buffer sized generously above one device period so the callback never
+  // needs more than a couple of ring reads.
+  s->feed.assign(4096 * static_cast<size_t>(file.channels), 0.0f);
+
+  ma_resampler_config rc = ma_resampler_config_init(
+      ma_format_f32, file.channels, file.sample_rate, engine->dev_rate,
+      ma_resample_algorithm_linear);
+  if (ma_resampler_init(&rc, nullptr, &s->resampler) != MA_SUCCESS) {
+    SetErr(err, err_len, "could not initialise the resampler");
+    return LJ_ERR_ENGINE_START_FAILED;
+  }
+  s->resampler_ready = true;
+  // ratio = source frames consumed per output frame. This is where `rate` is
+  // realised (plain resample: pitch shifts by the ratio; ~9 cents at the ±0.5%
+  // §5.4 slews — see the header).
+  ma_resampler_set_rate_ratio(
+      &s->resampler,
+      static_cast<float>(RatioFor(rate, file.sample_rate, engine->dev_rate)));
+
+  Schedule* raw = s.get();
+  try {
+    raw->decoder_thread = std::thread([raw, file] { DecoderMain(raw, file); });
+  } catch (...) {
+    DestroySchedule(std::move(s));  // releases the resampler
+    SetErr(err, err_len, "could not start the decoder thread");
+    return LJ_ERR_INTERNAL;
+  }
+
+  engine->sched = std::move(s);
+  engine->SetStateLocked(State::kPlaying);
+  engine->Log(
+      "playAt: requested nativeTimeUs=%lld positionUs=%lld rate=%.6f -> "
+      "effective anchorUs=%lld startPosUs=%lld startFrame=%lld "
+      "anchorMediaUs=%lld (now=%lld leadUs=%lld, ringFrames=%zu, "
+      "clockMature=%d)",
+      static_cast<long long>(native_time_us),
+      static_cast<long long>(position_us), rate,
+      static_cast<long long>(anchor_us), static_cast<long long>(start_pos_us),
+      static_cast<long long>(start_frame),
+      static_cast<long long>(anchor_media_us), static_cast<long long>(now),
+      static_cast<long long>(anchor_us - now), ring_frames,
+      engine->clock.origin_valid ? 1 : 0);
+  return LJ_OK;
 }
 
 }  // namespace
@@ -1133,6 +1834,8 @@ const char* lj_event_type_name(lj_event_kind kind) {
       return "interruptionEnded";
     case LJ_EVENT_ENGINE_RESTARTED:
       return "engineRestarted";
+    case LJ_EVENT_PLAYBACK_ERROR:
+      return "playbackError";
     case LJ_EVENT_PLAYBACK_FINISHED:
       break;
   }
@@ -1162,7 +1865,13 @@ lj_status lj_create(lj_engine** out_engine, lj_event_cb event_cb,
   engine->event_user = event_user_data;
   engine->log_cb = log_cb;
   engine->log_user = log_user_data;
-  engine->monitor = std::thread([engine] { engine->MonitorMain(); });
+  try {
+    engine->monitor = std::thread([engine] { engine->MonitorMain(); });
+  } catch (...) {
+    delete engine;
+    SetErr(err, err_len, "could not start the engine's monitor thread");
+    return LJ_ERR_INTERNAL;
+  }
   *out_engine = engine;
   return LJ_OK;
 }
@@ -1194,69 +1903,12 @@ lj_status lj_load(lj_engine* engine, const char* path, int64_t* out_duration_us,
     SetErr(err, err_len, "load requires {path: String}");
     return LJ_ERR_BAD_ARGS;
   }
-
-  // Replace any previously loaded file; stop playback first (Dart contract).
-  std::unique_ptr<Schedule> dead;
-  {
-    std::lock_guard<std::mutex> lock(engine->mtx);
-    dead = engine->RetireLocked();
-    engine->SetStateLocked(State::kIdle);
-    engine->loaded = LoadedFile();
+  try {
+    return LoadUnguarded(engine, path, out_duration_us, err, err_len);
+  } catch (...) {
+    SetErr(err, err_len, "out of memory while loading %s", path);
+    return LJ_ERR_INTERNAL;
   }
-  DestroySchedule(std::move(dead));
-
-  const Probe probe = SniffFile(path);
-  if (probe.codec == Codec::kUnsupported) {
-    SetErr(err, err_len,
-           "%s is a %s file; the Windows/Linux backend decodes wav, flac, mp3 "
-           "and ogg-vorbis only (no system codecs are used, so AAC/ALAC/WMA "
-           "cannot be played). Transcode the track to flac or ogg.",
-           path, probe.container);
-    return LJ_ERR_UNSUPPORTED_FORMAT;
-  }
-  if (probe.codec == Codec::kUnknown) {
-    SetErr(err, err_len,
-           "could not identify the audio format of %s (expected wav, flac, mp3 "
-           "or ogg-vorbis)",
-           path);
-    return LJ_ERR_UNSUPPORTED_FORMAT;
-  }
-
-  Decoder decoder;
-  std::string error;
-  if (!decoder.Open(path, probe.codec, &error)) {
-    SetErr(err, err_len, "Could not open audio file at %s: %s", path,
-           error.c_str());
-    return LJ_ERR_LOAD_FAILED;
-  }
-
-  LoadedFile file;
-  file.path = path;
-  file.codec = probe.codec;
-  file.sample_rate = decoder.sample_rate();
-  file.channels = decoder.channels();
-  file.total_frames = decoder.total_frames();
-  // Duration is DECODER-derived and exact: every decoder here reports a true
-  // PCM frame count (dr_mp3 by parsing every frame header). Unlike the Android
-  // metadata-derived value there is no codec-frame slop, so position clamping
-  // and playAt range checks are exact.
-  file.duration_us = RoundToI64(static_cast<double>(file.total_frames) * 1e6 /
-                                file.sample_rate);
-  decoder.Close();
-
-  {
-    std::lock_guard<std::mutex> lock(engine->mtx);
-    engine->loaded = file;
-    engine->SetStateLocked(State::kLoaded);
-  }
-  engine->Log("load: %s -> %lld us @ %u Hz x%uch (%llu frames, %s, streaming "
-              "decode)",
-              path, static_cast<long long>(file.duration_us), file.sample_rate,
-              file.channels,
-              static_cast<unsigned long long>(file.total_frames),
-              probe.container);
-  *out_duration_us = file.duration_us;
-  return LJ_OK;
 }
 
 lj_status lj_play_at(lj_engine* engine, int64_t native_time_us,
@@ -1266,115 +1918,28 @@ lj_status lj_play_at(lj_engine* engine, int64_t native_time_us,
     SetErr(err, err_len, "playAt on a disposed engine");
     return LJ_ERR_BAD_ARGS;
   }
-  if (!(rate > 0.0) || !std::isfinite(rate)) {
-    SetErr(err, err_len, "playAt rate must be a positive finite number");
+  if (!RateOk(rate)) {
+    SetErr(err, err_len, "playAt rate must be within [%g, %g]", LJ_MIN_RATE,
+           LJ_MAX_RATE);
+    return LJ_ERR_BAD_ARGS;
+  }
+  if (static_cast<double>(native_time_us) - static_cast<double>(NowUs()) >
+      static_cast<double>(LJ_MAX_LEAD_US)) {
+    SetErr(err, err_len,
+           "playAt nativeTimeUs is more than %lld s ahead of the native clock",
+           static_cast<long long>(LJ_MAX_LEAD_US / 1000000));
     return LJ_ERR_BAD_ARGS;
   }
 
-  std::unique_ptr<Schedule> dead;
-  std::unique_ptr<Schedule> fresh;
-  LoadedFile file;
-  {
-    std::lock_guard<std::mutex> lock(engine->mtx);
-    if (engine->state == State::kIdle || engine->loaded.sample_rate == 0) {
-      SetErr(err, err_len, "playAt before load");
-      return LJ_ERR_NO_FILE;
-    }
-    file = engine->loaded;
-    // Calling while already playing/scheduled retires the old schedule.
-    dead = engine->RetireLocked();
-    engine->SetStateLocked(State::kLoaded);
+  try {
+    return PlayAtUnguarded(engine, native_time_us, position_us, rate, err,
+                           err_len);
+  } catch (...) {
+    // Out of memory, or no thread for the decoder: refuse this schedule
+    // rather than std::terminate the host app.
+    SetErr(err, err_len, "could not set up playback (out of resources)");
+    return LJ_ERR_INTERNAL;
   }
-  DestroySchedule(std::move(dead));
-
-  // Outside the lock: opening/starting the device blocks on the audio thread.
-  if (!engine->EnsureDevice(file, err, err_len)) {
-    return LJ_ERR_ENGINE_START_FAILED;
-  }
-
-  std::lock_guard<std::mutex> lock(engine->mtx);
-
-  // Never an uncontrolled "ASAP" start (same rationale as iOS and Android): a
-  // late anchor is re-anchored LJ_MIN_LEAD_US into the future with the position
-  // advanced at ×rate (§5.3 late join), so the priming loop lands the start
-  // precisely instead of inheriting an unpredictable spin-up delay that drift
-  // correction could never remove.
-  const int64_t now = NowUs();
-  int64_t anchor_us = native_time_us;
-  int64_t start_pos_us = position_us;
-  if (anchor_us < now + LJ_MIN_LEAD_US) {
-    start_pos_us += RoundToI64(
-        static_cast<double>(now + LJ_MIN_LEAD_US - anchor_us) * rate);
-    anchor_us = now + LJ_MIN_LEAD_US;
-  }
-
-  const int64_t start_frame = RoundToI64(static_cast<double>(start_pos_us) *
-                                         file.sample_rate / 1e6);
-  if (start_frame < 0 ||
-      start_frame >= static_cast<int64_t>(file.total_frames)) {
-    SetErr(err, err_len,
-           "start position %lld us is outside the file (duration %lld us)",
-           static_cast<long long>(start_pos_us),
-           static_cast<long long>(file.duration_us));
-    return LJ_ERR_BAD_POSITION;
-  }
-  // Keep the anchor frame-exact so the position formula carries no rounding
-  // bias (mirrors iOS segmentStartUs / Android anchorMediaUs).
-  const int64_t anchor_media_us =
-      RoundToI64(static_cast<double>(start_frame) * 1e6 / file.sample_rate);
-
-  auto s = std::unique_ptr<Schedule>(new Schedule());
-  s->generation = engine->generation;
-  s->target_us = anchor_us;
-  s->anchor_media_us = anchor_media_us;
-  s->start_frame = static_cast<uint64_t>(start_frame);
-  s->src_rate = file.sample_rate;
-  s->channels = file.channels;
-  s->rate = rate;
-
-  const size_t bytes_per_frame = file.channels * sizeof(float);
-  const size_t ring_frames = std::min<size_t>(
-      static_cast<size_t>(LJ_RING_SECONDS) * file.sample_rate,
-      LJ_RING_MAX_BYTES / bytes_per_frame);
-  s->ring.reset(new PcmRing(ring_frames, file.channels));
-  // Feed buffer sized generously above one device period so the callback never
-  // needs more than a couple of ring reads.
-  s->feed.assign(4096 * static_cast<size_t>(file.channels), 0.0f);
-
-  ma_resampler_config rc = ma_resampler_config_init(
-      ma_format_f32, file.channels, file.sample_rate, engine->dev_rate,
-      ma_resample_algorithm_linear);
-  if (ma_resampler_init(&rc, nullptr, &s->resampler) != MA_SUCCESS) {
-    SetErr(err, err_len, "could not initialise the resampler");
-    return LJ_ERR_ENGINE_START_FAILED;
-  }
-  s->resampler_ready = true;
-  // ratio = source frames consumed per output frame. This is where `rate` is
-  // realised (plain resample: pitch shifts by the ratio; ~9 cents at the ±0.5%
-  // §5.4 slews — see the header).
-  ma_resampler_set_rate_ratio(
-      &s->resampler,
-      static_cast<float>(RatioFor(rate, file.sample_rate, engine->dev_rate)));
-
-  Schedule* raw = s.get();
-  raw->decoder_thread =
-      std::thread([engine, raw, file] { DecoderMain(engine, raw, file); });
-
-  engine->sched = std::move(s);
-  engine->SetStateLocked(State::kPlaying);
-  engine->Log(
-      "playAt: requested nativeTimeUs=%lld positionUs=%lld rate=%.6f -> "
-      "effective anchorUs=%lld startPosUs=%lld startFrame=%lld "
-      "anchorMediaUs=%lld (now=%lld leadUs=%lld, ringFrames=%zu, "
-      "clockMature=%d)",
-      static_cast<long long>(native_time_us),
-      static_cast<long long>(position_us), rate,
-      static_cast<long long>(anchor_us), static_cast<long long>(start_pos_us),
-      static_cast<long long>(start_frame),
-      static_cast<long long>(anchor_media_us), static_cast<long long>(now),
-      static_cast<long long>(anchor_us - now), ring_frames,
-      engine->clock.origin_valid ? 1 : 0);
-  return LJ_OK;
 }
 
 lj_status lj_pause(lj_engine* engine) {
@@ -1423,8 +1988,9 @@ int lj_position_us(lj_engine* engine, int64_t* out_us) {
 
 lj_status lj_set_rate(lj_engine* engine, double rate, char* err,
                       size_t err_len) {
-  if (engine == nullptr || !(rate > 0.0) || !std::isfinite(rate)) {
-    SetErr(err, err_len, "setRate requires {rate: positive double}");
+  if (engine == nullptr || !RateOk(rate)) {
+    SetErr(err, err_len, "setRate requires {rate: double within [%g, %g]}",
+           LJ_MIN_RATE, LJ_MAX_RATE);
     return LJ_ERR_BAD_ARGS;
   }
   const int64_t now = NowUs();
@@ -1474,6 +2040,42 @@ int64_t lj_output_latency_us(lj_engine* engine) {
                     engine->dev_rate);
 }
 
+lj_status lj_probe_duration(const char* path, int64_t* out_duration_us,
+                            char* err, size_t err_len) {
+  if (path == nullptr || out_duration_us == nullptr) {
+    SetErr(err, err_len, "probeDuration requires {path: String}");
+    return LJ_ERR_BAD_ARGS;
+  }
+  try {
+    LoadedFile file;
+    const lj_status status = ProbeFile(path, &file, err, err_len);
+    if (status == LJ_OK) {
+      *out_duration_us = file.duration_us;
+    }
+    return status;
+  } catch (...) {
+    SetErr(err, err_len, "out of memory while probing %s", path);
+    return LJ_ERR_INTERNAL;
+  }
+}
+
+int lj_current_route_id(char* out, size_t out_len) {
+  if (out == nullptr || out_len == 0) {
+    return 0;
+  }
+  out[0] = '\0';
+  // The system default output: the open device follows it (miniaudio
+  // auto-routing), so it is also where an open device plays — and asking for
+  // it needs no engine, which is what lets the plugins run this off the UI
+  // thread without racing dispose.
+  const RouteSnapshot route = QuerySystemRoutes(nullptr, nullptr);
+  if (!route.valid) {
+    return 0;
+  }
+  std::snprintf(out, out_len, "%s", route.route_id.c_str());
+  return 1;
+}
+
 void lj_set_tap(lj_engine* engine, lj_tap_cb tap, void* user_data) {
   if (engine == nullptr) {
     return;
@@ -1497,6 +2099,40 @@ int64_t lj_device_latency_frames(lj_engine* engine) {
   }
   std::lock_guard<std::mutex> lock(engine->mtx);
   return engine->latency_frames;
+}
+
+void lj_test_signal_device(lj_engine* engine, lj_test_signal signal) {
+  if (engine == nullptr) {
+    return;
+  }
+  if (signal == LJ_TEST_FORGET_ROUTE) {
+    std::lock_guard<std::mutex> lock(engine->mtx);
+    if (engine->device_open && engine->route_snapshot.valid) {
+      engine->route_snapshot.key = "id:localjam-test-unplugged-device";
+    }
+    return;
+  }
+  {
+    std::lock_guard<std::mutex> lock(engine->mtx);
+    if (!engine->device_open) {
+      return;
+    }
+  }
+  ma_device_notification n;
+  std::memset(&n, 0, sizeof(n));
+  n.pDevice = &engine->device;
+  switch (signal) {
+    case LJ_TEST_DEVICE_STARTED:
+      n.type = ma_device_notification_type_started;
+      break;
+    case LJ_TEST_DEVICE_STOPPED:
+      n.type = ma_device_notification_type_stopped;
+      break;
+    default:
+      n.type = ma_device_notification_type_rerouted;
+      break;
+  }
+  engine->OnNotification(&n);
 }
 
 }  // extern "C"

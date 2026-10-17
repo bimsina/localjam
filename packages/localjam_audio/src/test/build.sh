@@ -3,8 +3,12 @@
 # Builds and runs the shared-core verification harness (src/test/core_test.cpp)
 # on the current machine, against its real default output device.
 #
-#   ./src/test/build.sh          build and run
+#   ./src/test/build.sh          build, run the unit checks, then the device test
+#   ./src/test/build.sh --unit   build, run only the device-free unit checks
 #   ./src/test/build.sh --build  build only
+#
+# core_unit_test needs no audio device (route state machine, stream sizing,
+# crafted files); core_test plays ~30 s of quiet audio on the default device.
 #
 # The core is platform-independent C++17 on top of miniaudio, so this is the same
 # code the Windows and Linux plugins compile — the only thing that differs is
@@ -63,7 +67,12 @@ echo "==> compiling the core"
 "$cxx" -std=c++17 -O2 -g "${warn[@]}" -c "$src/localjam_audio_core.cpp" \
   -o "$out/localjam_audio_core.o"
 
-echo "==> compiling and linking the test"
+echo "==> compiling and linking the unit test (no audio device needed)"
+"$cxx" -std=c++17 -O2 -g "${warn[@]}" "$here/core_unit_test.cpp" \
+  "$out/localjam_audio_core.o" "$out/localjam_audio_deps.o" \
+  "$out/stb_vorbis.o" "${link_flags[@]}" -o "$out/core_unit_test"
+
+echo "==> compiling and linking the device test"
 "$cxx" -std=c++17 -O2 -g "${warn[@]}" "$here/core_test.cpp" \
   "$out/localjam_audio_core.o" "$out/localjam_audio_deps.o" \
   "$out/stb_vorbis.o" "${link_flags[@]}" -o "$out/core_test"
@@ -78,9 +87,14 @@ echo "==> compiling the overshoot-trim variant"
   "$out/localjam_audio_core_trim.o" "$out/localjam_audio_deps.o" \
   "$out/stb_vorbis.o" "${link_flags[@]}" -o "$out/core_test_trim"
 
-echo "==> built $out/core_test and $out/core_test_trim"
+echo "==> built $out/core_unit_test, $out/core_test and $out/core_test_trim"
 if [ "${1:-}" != "--build" ]; then
-  echo "==> running (this plays ~25 s of quiet audio on the default device)"
+  echo "==> running the unit checks"
+  "$out/core_unit_test"
+fi
+if [ "${1:-}" != "--build" ] && [ "${1:-}" != "--unit" ]; then
+  echo
+  echo "==> running (this plays ~30 s of quiet audio on the default device)"
   "$out/core_test"
   echo
   echo "==> running the overshoot-trim variant"

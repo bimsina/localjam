@@ -116,6 +116,68 @@ void main() {
     expect(await audio.outputLatencyUs(), 0);
   });
 
+  group('probeDurationUs', () {
+    test('sends the path and maps the duration', () async {
+      mockChannel({'probeDuration': 215000000});
+      final audio = LocaljamAudio();
+      expect(await audio.probeDurationUs('/music/a.flac'), 215000000);
+      expect(log, [
+        isMethodCall('probeDuration', arguments: {'path': '/music/a.flac'}),
+      ]);
+    });
+
+    test('passes null (unknown duration) through', () async {
+      mockChannel({'probeDuration': null});
+      expect(await LocaljamAudio().probeDurationUs('/music/a.m4a'), isNull);
+    });
+
+    test(
+      'a native side without the method means unknown, not a crash',
+      () async {
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(channel, (call) async {
+              throw MissingPluginException();
+            });
+        expect(await LocaljamAudio().probeDurationUs('/music/a.flac'), isNull);
+      },
+    );
+
+    test('bad-argument errors still surface', () async {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, (call) async {
+            throw PlatformException(code: 'bad_args');
+          });
+      expect(
+        LocaljamAudio().probeDurationUs(''),
+        throwsA(
+          isA<PlatformException>().having((e) => e.code, 'code', 'bad_args'),
+        ),
+      );
+    });
+  });
+
+  group('currentRouteId', () {
+    test('sends a bare call and maps the id', () async {
+      mockChannel({'currentRouteId': 'Headphones:0123456789abcdef'});
+      final audio = LocaljamAudio();
+      expect(await audio.currentRouteId(), 'Headphones:0123456789abcdef');
+      expect(log, [isMethodCall('currentRouteId', arguments: null)]);
+    });
+
+    test('passes null through', () async {
+      mockChannel({'currentRouteId': null});
+      expect(await LocaljamAudio().currentRouteId(), isNull);
+    });
+
+    test('a native side without the method means unknown', () async {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, (call) async {
+            throw MissingPluginException();
+          });
+      expect(await LocaljamAudio().currentRouteId(), isNull);
+    });
+  });
+
   group('events', () {
     const eventChannel = EventChannel('localjam_audio/events');
 
@@ -148,6 +210,7 @@ void main() {
         {'type': 'interruptionEnded'},
         {'type': 'engineRestarted'},
         {'type': 'playbackFinished'},
+        {'type': 'playbackError', 'code': 'device_lost', 'message': 'gone'},
       ]);
       final audio = LocaljamAudio();
       final events = await audio.events.toList();
@@ -157,7 +220,142 @@ void main() {
         LocaljamAudioEventKind.interruptionEnded,
         LocaljamAudioEventKind.engineRestarted,
         LocaljamAudioEventKind.playbackFinished,
+        LocaljamAudioEventKind.playbackError,
       ]);
+      // Every kind on the wire is decodable: nothing native can send is lost.
+      expect(events, hasLength(LocaljamAudioEventKind.values.length));
+    });
+
+    test('routeChanged carries routeId and oldDeviceUnavailable', () async {
+      mockEvents(const [
+        {
+          'type': 'routeChanged',
+          'outputLatencyUs': 4000,
+          'routeId': 'Speaker:00000000deadbeef',
+          'oldDeviceUnavailable': true,
+        },
+        {
+          'type': 'routeChanged',
+          'routeId': 'BluetoothA2DPOutput:0123456789abcdef',
+          'oldDeviceUnavailable': false,
+        },
+      ]);
+      final events = await LocaljamAudio().events.toList();
+      expect(events[0].routeId, 'Speaker:00000000deadbeef');
+      expect(events[0].oldDeviceUnavailable, isTrue);
+      expect(events[0].outputLatencyUs, 4000);
+      expect(events[1].routeId, 'BluetoothA2DPOutput:0123456789abcdef');
+      expect(events[1].oldDeviceUnavailable, isFalse);
+      expect(events[1].outputLatencyUs, isNull);
+    });
+
+    test('interruptionEnded carries shouldResume', () async {
+      mockEvents(const [
+        {'type': 'interruptionEnded', 'shouldResume': true},
+        {'type': 'interruptionEnded', 'shouldResume': false},
+      ]);
+      final events = await LocaljamAudio().events.toList();
+      expect(events.map((e) => e.shouldResume), [true, false]);
+    });
+
+    test('interruptionBegan carries shouldResume: false for a permanent '
+        'focus loss, and none otherwise', () async {
+      // Android's permanent AUDIOFOCUS_LOSS: no interruptionEnded follows,
+      // and the client maps it to "another app is playing".
+      mockEvents(const [
+        {'type': 'interruptionBegan', 'shouldResume': false},
+        {'type': 'interruptionBegan'},
+      ]);
+      final events = await LocaljamAudio().events.toList();
+      expect(events.map((e) => e.kind), [
+        LocaljamAudioEventKind.interruptionBegan,
+        LocaljamAudioEventKind.interruptionBegan,
+      ]);
+      expect(events.map((e) => e.shouldResume), [false, null]);
+    });
+
+    test('playbackError carries code and message', () async {
+      mockEvents(const [
+        {
+          'type': 'playbackError',
+          'code': 'engine_start_failed',
+          'message': 'AVAudioEngine could not restart',
+        },
+      ]);
+      final event = (await LocaljamAudio().events.toList()).single;
+      expect(event.kind, LocaljamAudioEventKind.playbackError);
+      expect(event.code, 'engine_start_failed');
+      expect(event.message, 'AVAudioEngine could not restart');
+    });
+
+    test('playbackError without a code decodes to the generic code', () async {
+      mockEvents(const [
+        {'type': 'playbackError'},
+        {'type': 'playbackError', 'code': 7, 'message': 8},
+      ]);
+      final events = await LocaljamAudio().events.toList();
+      expect(events.map((e) => e.code), ['unknown', 'unknown']);
+      expect(events.map((e) => e.message), [null, null]);
+    });
+
+    test(
+      'old-native payloads without the new keys decode to defaults',
+      () async {
+        mockEvents(const [
+          {'type': 'routeChanged', 'outputLatencyUs': 120000},
+          {'type': 'interruptionEnded'},
+          {'type': 'interruptionBegan'},
+        ]);
+        final events = await LocaljamAudio().events.toList();
+        for (final event in events) {
+          expect(event.routeId, isNull);
+          expect(event.oldDeviceUnavailable, isFalse);
+          expect(event.shouldResume, isNull);
+          expect(event.code, isNull);
+          expect(event.message, isNull);
+        }
+        expect(events.first.outputLatencyUs, 120000);
+      },
+    );
+
+    test('mistyped new keys decode to defaults instead of throwing', () async {
+      mockEvents(const [
+        {
+          'type': 'routeChanged',
+          'routeId': 42,
+          'oldDeviceUnavailable': 'yes',
+          'outputLatencyUs': 1.5,
+        },
+        {'type': 'interruptionEnded', 'shouldResume': 1},
+      ]);
+      final events = await LocaljamAudio().events.toList();
+      expect(events, hasLength(2));
+      expect(events[0].routeId, isNull);
+      expect(events[0].oldDeviceUnavailable, isFalse);
+      expect(events[0].outputLatencyUs, isNull);
+      expect(events[1].shouldResume, isNull);
+    });
+
+    test('non-error kinds pass a stray code through untouched', () async {
+      mockEvents(const [
+        {'type': 'engineRestarted', 'code': 'x'},
+        {'type': 'playbackFinished'},
+      ]);
+      final events = await LocaljamAudio().events.toList();
+      expect(events[0].code, 'x');
+      expect(events[1].code, isNull);
+    });
+
+    test('toString names the populated fields', () {
+      expect(
+        const LocaljamAudioEvent(
+          kind: LocaljamAudioEventKind.routeChanged,
+          routeId: 'r',
+          oldDeviceUnavailable: true,
+        ).toString(),
+        'LocaljamAudioEvent(routeChanged, routeId: r, '
+        'oldDeviceUnavailable: true)',
+      );
     });
 
     test(

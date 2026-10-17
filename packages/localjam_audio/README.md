@@ -8,6 +8,85 @@ The Dart API is in `lib/localjam_audio.dart`; it is one method channel
 (`localjam_audio`) plus one event channel (`localjam_audio/events`), implemented
 identically on every platform.
 
+## API at a glance
+
+| Dart (`LocaljamAudio`) | Channel method | Notes |
+| --- | --- | --- |
+| `nativeNowUs()` / `calibrate()` | `nowUs` | native monotonic clock, µs |
+| `load(path)` → `int` µs | `load {path}` | replaces the loaded file; a failed load leaves none. Refuses (`load_failed`) sample rates outside 4–384 kHz, empty files and more than 2^37 frames |
+| `probeDurationUs(path)` → `int?` µs | `probeDuration {path}` | what `load` would report; null if `load` would refuse the file. Touches no engine, file, play state or session — safe while playing and concurrently; answered off the UI thread |
+| `playAt(nativeTimeUs, positionUs, rate)` | `playAt {…}` | rate ∈ [1/32, 32]; anchor ≤ 1 h ahead. If the OS refuses audio (call in progress) it completes without playing and emits `interruptionBegan` — on every refused call. See [Platform differences](#platform-differences) |
+| `pause()` / `stop()` / `positionUs()` / `setRate(rate)` | same names | `positionUs` is null unless playing/scheduled |
+| `outputLatencyUs()` | `outputLatencyUs` | 0 when unknown |
+| `currentRouteId()` → `String?` | `currentRouteId` | opaque, stable per output device (key per-route calibration with it); answered off the UI thread |
+| `dispose()` | `dispose` | |
+
+Error codes (`PlatformException.code`): `bad_args`, `no_file`, `load_failed`,
+`unsupported_format` (desktop), `bad_position`, `engine_start_failed` (the
+engine / output device would not start), `engine_not_running` (Apple: no render
+cycle within 1 s, or the engine stopped mid-schedule), `engine_error` (Apple:
+AVFoundation raised; the engine is rebuilt on the next call), `internal`
+(desktop: out of memory or threads), `disposed`. A failed `playAt` leaves
+nothing scheduled; the next one starts from scratch.
+
+### Untrusted files
+
+Hosts serve files that peers upload, so every header value is treated as
+hostile. `load` and `probeDuration` refuse a sample rate outside
+[4000, 384000] Hz, a stream without frames and one declaring more than 2^37
+frames (99 h even at 384 kHz) — the same limits on iOS/macOS, Android and
+desktop, so a file plays everywhere or nowhere. A ~1 KB CAF can declare 2^62 frames; it used
+to make `playAt` queue 2^32 segments (hang, then out of memory). On desktop no
+buffer is ever sized from a header alone (ring ≤ 4 MB, decode chunk ≤ half the
+ring), and no allocation or thread failure can `std::terminate` the app.
+
+## Events
+
+`LocaljamAudio.events` decodes maps `{type, …}`; unknown types and keys are
+ignored, missing keys take defaults, so either side may be newer.
+
+| `type` | Payload | Meaning |
+| --- | --- | --- |
+| `routeChanged` | `outputLatencyUs?`, `routeId?`, `oldDeviceUnavailable` (default false) | Output route changed. If `oldDeviceUnavailable`, the old output went away (unplugged, Bluetooth gone, Android "becoming noisy", a desktop device removed or dead): native **already stopped** its output and will not restart it — audio never jumps to the speaker. Otherwise playback continues on the new route |
+| `interruptionBegan` | `shouldResume?` | Call / Siri / audio focus lost: native stopped its output. Also sent by **every** `playAt` the OS refuses (iOS, Android) — per call, not per interruption — which may never get an `interruptionEnded`. `shouldResume: false` (Android) = **permanent** focus loss (the user started another player): no `interruptionEnded` will follow, only a `playAt` ends it; it may arrive mid-interruption (a transient loss or call turned permanent), and every refused `playAt` repeats it while that loss stands. Absent otherwise |
+| `interruptionEnded` | `shouldResume?` | Native **never** auto-resumes (the room moved on); re-anchor with `playAt` if wanted. `shouldResume` is the OS hint |
+| `engineRestarted` | — | A playing/paused schedule was dropped by an engine reconfiguration; re-schedule. Not sent when nothing was scheduled, nor for a schedule lost to an unplug (that is `routeChanged{oldDeviceUnavailable}` only — iOS/macOS hold this event 200 ms because the OS does not order the two notifications). Never sent by the desktop core |
+| `playbackFinished` | — | The schedule reached end of file |
+| `playbackError` | `code`, `message` | Unrecoverable failure off the method-call path; output stopped, next `playAt` starts over. Codes: `engine_start_failed` (Apple), `decode_failed` (Android, desktop), `writer_failed` (Android); treat unknown codes generically. A lost output device is a `routeChanged`, not an error: no platform sends `device_lost` |
+
+### Platform differences
+
+| | iOS | macOS | Android | Windows / Linux |
+| --- | --- | --- | --- | --- |
+| `playAt` refused by the OS (completes, no sound, `interruptionBegan` on every refused call) | session activation refused (call, higher-priority session) | never | audio focus refused, or a call owns the audio path | never |
+| `playAt` within ~2 s of an unplug | — | — | held the same way, re-emitting `routeChanged{oldDeviceUnavailable: true}` (the reroute to the speaker is still pending) | — |
+| In-range rate refused (`bad_args`) | never | never | when the output cannot time-stretch it (API 36 emulator: 0.1–4 plays, ≤ 1/16 and ≥ 8 do not); `setRate` then keeps the old rate — silently on a low-latency track — and `positionUs` stays true | never |
+| Rate change | time-stretch, pitch kept | same | `PlaybackParams` speed, pitch kept | resample, pitch shifts (~9 cents at ±0.5 %) |
+| `engineRestarted` | engine reconfigured; held 200 ms, dropped for an unplug | same | AudioTrack died | never |
+| `playbackError` codes | `engine_start_failed` | `engine_start_failed` | `decode_failed`, `writer_failed` | `decode_failed` |
+| File limits (4–384 kHz, ≤ 2^37 frames) | yes | yes | yes | yes |
+
+Route ids: iOS `<portType>:<hash(uid)>` per output port, macOS
+`<transport>[/<dataSource>]:<hash(uid)>` of the default output device, desktop
+`<backend>:<hash(device id)>` of the default output device, Android
+`<typeTag>:<hash(type|name|address)>`. Hashes are FNV-1a 64 (16 hex digits);
+UIDs/addresses are hashed because Bluetooth ones embed a MAC address. Treat the
+id as opaque: only equality is meaningful.
+
+Output-loss coverage: iOS route reasons; macOS default-device removal and the
+headphone-jack data source of a built-in device (Intel Macs); Android "becoming
+noisy" + device callbacks; desktop whatever miniaudio reports — a WASAPI
+endpoint unplug (with or without a fallback device), a PulseAudio stream moved
+off a removed sink, a device that stops and does not come back within 200 ms.
+Not visible on desktop: PulseAudio/PipeWire *port* switches inside one sink
+(headphone jack vs speaker on the same card), where the stream never moves.
+
+Apple specifics: AVFoundation calls that raise `NSException` run inside a small
+Objective-C catcher (`localjam_audio_objc` target), and an engine that raised is
+rebuilt on the next `playAt`, so a bad file or an unlucky route change surfaces
+as an error, never a crash. The plugin's `PrivacyInfo.xcprivacy` declares
+`mach_absolute_time` (System boot time, reason `35F9.1`).
+
 ## Platforms
 
 | Platform | Engine | Formats |
@@ -56,23 +135,50 @@ reports `unsupported_format` rather than `load_failed`.
   slews that is ~9 cents — inaudible. It is not a time-stretcher.
 - **Output latency**: miniaudio's visible buffer depth. Hardware latency below
   that is invisible to any portable API and is what §7 calibration and the manual
-  nudge exist for.
+  nudge exist for. Re-read after every reroute.
+- **Routes**: backends reroute by stopping the stream, re-opening it on the new
+  device and starting it again, so a "stopped" notification alone is not a dead
+  device. A pure state machine (`src/localjam_audio_internal.h`, `RouteWatch`)
+  turns the notification sequence into one verdict: an output switch keeps
+  playing (clock and latency re-measured, `routeChanged`); a reroute whose
+  previous device the system no longer lists, or a stop with no restart within
+  200 ms, stops playback (`routeChanged{oldDeviceUnavailable: true}`). Output is
+  muted from the first unexpected notification until that verdict, so nothing
+  is heard on a device about to be abandoned.
+- **Threads**: `probeDuration` and `currentRouteId` touch no engine and run on a
+  worker thread in both shells (GLib task pool / Windows thread pool), answered
+  on the platform thread.
 
 ## Verifying the core
 
-The Windows and Linux plugin sources are thin channel translators and cannot be
-compiled on a macOS development machine. The engine they delegate to can:
+The Windows and Linux plugin sources are thin channel translators that cannot
+be compiled on a macOS development machine (Linux: verified with
+`flutter build linux` and the example's integration tests in an Ubuntu 24.04
+container; Windows: compiled with MinGW-w64 against the Flutter Windows
+headers, not yet with MSVC). The engine they delegate to can be built and run
+anywhere:
 
 ```sh
-./src/test/build.sh
+./src/test/build.sh          # unit checks, then the device test
+./src/test/build.sh --unit   # device-free unit checks only
 ```
 
-builds and runs `src/test/core_test.cpp` against the machine's real default
-output device (CoreAudio on macOS, PulseAudio/ALSA on Linux). It measures start
-error, position error against the §5.4 anchor formula, rate slope, the
-overshoot-trim path, and — using a fixture whose channel 0 is a linear ramp
-encoding its own frame index — audits the audio actually being emitted against
-what the position formula claims, which is a check the clock model cannot fake.
+`src/test/core_unit_test.cpp` needs no audio device: it replays the
+notification orderings backends produce (WASAPI default switch, unplug with and
+without a fallback, PulseAudio suspend and stream move, silent device death)
+through the route state machine, checks stream sizing at every rate, and feeds
+crafted files (absurd sample rates and lengths) to `load`/`probeDuration`.
+
+`src/test/core_test.cpp` runs against the machine's real default output device
+(CoreAudio on macOS, PulseAudio/ALSA on Linux). It measures start error,
+position error against the §5.4 anchor formula, rate slope, the overshoot-trim
+path, and — using a fixture whose channel 0 is a linear ramp encoding its own
+frame index — audits the audio actually being emitted against what the position
+formula claims, which is a check the clock model cannot fake. It also replays
+route-change notification sequences into the live engine
+(`lj_test_signal_device`): an output switch must keep playing on the anchor
+line, an unplug must stop with `routeChanged{oldDeviceUnavailable}` and no
+audible output in between, and nothing may be a `playbackError`.
 
 Measured on macOS 15 / CoreAudio (44.1 kHz, 441-frame periods): start error
 ≤ 0.01 ms, position error ≤ 0.01 ms, rate slope within 0.0001 % of target,

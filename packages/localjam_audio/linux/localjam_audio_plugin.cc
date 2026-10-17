@@ -1,13 +1,14 @@
 // Linux shell for the LocalJam scheduled-audio engine.
 //
-// BUILD-UNVERIFIED. This file has never been compiled: it was written on macOS,
-// where the flutter_linux/GTK headers do not exist. It is deliberately kept as
+// Verified by `flutter build linux` (-Wall -Werror) and the example's
+// integration tests, run headless in an Ubuntu 24.04 arm64 container with no
+// sound card; not yet on real Linux audio hardware. It is deliberately kept as
 // close as possible to the stock
 // `flutter create --template=plugin --platforms=linux` output, and it contains
 // no scheduling, decoding or timing logic at all — all of that lives in
 // ../src/localjam_audio_core.{h,cpp}, which IS compiled and run against a real
 // audio device by ../src/test/core_test.cpp. What remains here is argument
-// decoding and result encoding, which is the part a compiler catches.
+// decoding, result encoding and thread hopping.
 //
 // miniaudio picks its backend at runtime: PulseAudio if a server is reachable,
 // otherwise ALSA, otherwise JACK. Nothing needs to be linked for that (it is all
@@ -53,6 +54,10 @@ typedef struct {
   lj_event_kind kind;
   gint64 output_latency_us;
   gboolean has_latency;
+  gchar* code;      // owned; non-null for playbackError
+  gchar* message;   // owned; non-null for playbackError
+  gchar* route_id;  // owned; routeChanged, null when unknown
+  gboolean old_device_unavailable;  // routeChanged
 } LocaljamAudioEvent;
 
 static gboolean localjam_audio_emit_event(gpointer user_data) {
@@ -66,22 +71,46 @@ static gboolean localjam_audio_emit_event(gpointer user_data) {
       fl_value_set_string_take(payload, "outputLatencyUs",
                                fl_value_new_int(event->output_latency_us));
     }
+    if (event->code != nullptr) {
+      fl_value_set_string_take(payload, "code", fl_value_new_string(event->code));
+      fl_value_set_string_take(
+          payload, "message",
+          fl_value_new_string(event->message != nullptr ? event->message : ""));
+    }
+    if (event->kind == LJ_EVENT_ROUTE_CHANGED) {
+      if (event->route_id != nullptr) {
+        fl_value_set_string_take(payload, "routeId",
+                                 fl_value_new_string(event->route_id));
+      }
+      fl_value_set_string_take(
+          payload, "oldDeviceUnavailable",
+          fl_value_new_bool(event->old_device_unavailable));
+    }
     fl_event_channel_send(self->event_channel, payload, nullptr, nullptr);
   }
   g_object_unref(self);
+  g_free(event->code);
+  g_free(event->message);
+  g_free(event->route_id);
   g_free(event);
   return G_SOURCE_REMOVE;
 }
 
-static void localjam_audio_on_engine_event(void* user_data, lj_event_kind kind,
-                                           int64_t output_latency_us,
-                                           int has_latency) {
+// The event's strings only live for the duration of this callback, so they
+// are copied into the queued payload.
+static void localjam_audio_on_engine_event(void* user_data,
+                                           const lj_event* engine_event) {
   LocaljamAudioPlugin* self = LOCALJAM_AUDIO_PLUGIN(user_data);
   LocaljamAudioEvent* event = g_new0(LocaljamAudioEvent, 1);
   event->self = LOCALJAM_AUDIO_PLUGIN(g_object_ref(self));
-  event->kind = kind;
-  event->output_latency_us = output_latency_us;
-  event->has_latency = has_latency != 0 ? TRUE : FALSE;
+  event->kind = engine_event->kind;
+  event->output_latency_us = engine_event->output_latency_us;
+  event->has_latency = engine_event->has_latency != 0 ? TRUE : FALSE;
+  event->code = g_strdup(engine_event->code);        // g_strdup(NULL) == NULL
+  event->message = g_strdup(engine_event->message);
+  event->route_id = g_strdup(engine_event->route_id);
+  event->old_device_unavailable =
+      engine_event->old_device_unavailable != 0 ? TRUE : FALSE;
   g_idle_add(localjam_audio_emit_event, event);
 }
 
@@ -167,26 +196,119 @@ static FlMethodResponse* localjam_audio_ok_int(int64_t value) {
   return FL_METHOD_RESPONSE(fl_method_success_response_new(result));
 }
 
+// ------------------------------------------------- off-main-loop queries
+
+// probeDuration and currentRouteId touch no engine but block on I/O — a file
+// header (mp3: a parse over every frame header), the audio server — so they
+// run on GLib's worker pool and answer from the main loop: GTask delivers its
+// callback in the main context it was created in. The task holds a reference
+// to the plugin and to the method call until then.
+typedef struct {
+  gchar* path;  // probeDuration; null for currentRouteId
+} LocaljamAudioQuery;
+
+static void localjam_audio_value_free(gpointer value) {
+  fl_value_unref(static_cast<FlValue*>(value));
+}
+
+static void localjam_audio_query_free(gpointer data) {
+  LocaljamAudioQuery* query = static_cast<LocaljamAudioQuery*>(data);
+  g_free(query->path);
+  g_free(query);
+}
+
+static void localjam_audio_query_thread(GTask* task, gpointer source_object,
+                                        gpointer task_data,
+                                        GCancellable* cancellable) {
+  (void)source_object;
+  (void)cancellable;
+  LocaljamAudioQuery* query = static_cast<LocaljamAudioQuery*>(task_data);
+  FlValue* result = nullptr;
+  if (query->path != nullptr) {
+    // Unreadable or unsupported (m4a...) -> null: the duration is unknown,
+    // which is not an error for the caller.
+    char err[LOCALJAM_AUDIO_ERR_LEN] = {0};
+    int64_t duration_us = 0;
+    result = lj_probe_duration(query->path, &duration_us, err, sizeof(err)) ==
+                     LJ_OK
+                 ? fl_value_new_int(duration_us)
+                 : fl_value_new_null();
+  } else {
+    char route[512] = {0};
+    result = lj_current_route_id(route, sizeof(route)) != 0
+                 ? fl_value_new_string(route)
+                 : fl_value_new_null();
+  }
+  g_task_return_pointer(task, result, localjam_audio_value_free);
+}
+
+static void localjam_audio_query_done(GObject* source_object,
+                                      GAsyncResult* async_result,
+                                      gpointer user_data) {
+  (void)source_object;
+  FlMethodCall* method_call = FL_METHOD_CALL(user_data);
+  g_autoptr(FlValue) result = static_cast<FlValue*>(
+      g_task_propagate_pointer(G_TASK(async_result), nullptr));
+  g_autoptr(FlValue) null_value = fl_value_new_null();
+  g_autoptr(FlMethodResponse) response = FL_METHOD_RESPONSE(
+      fl_method_success_response_new(result != nullptr ? result : null_value));
+  g_autoptr(GError) error = nullptr;
+  if (!fl_method_call_respond(method_call, response, &error)) {
+    g_warning("localjam_audio: failed to send response: %s", error->message);
+  }
+  g_object_unref(method_call);
+}
+
+static void localjam_audio_run_query(LocaljamAudioPlugin* self,
+                                     FlMethodCall* method_call,
+                                     const gchar* path) {
+  LocaljamAudioQuery* query = g_new0(LocaljamAudioQuery, 1);
+  query->path = g_strdup(path);  // g_strdup(NULL) == NULL: currentRouteId
+  GTask* task = g_task_new(self, nullptr, localjam_audio_query_done,
+                           g_object_ref(method_call));
+  g_task_set_task_data(task, query, localjam_audio_query_free);
+  g_task_run_in_thread(task, localjam_audio_query_thread);
+  g_object_unref(task);
+}
+
 // --------------------------------------------------------- method channel
 
+// Returns the response, or null when the call is answered later (a query
+// running on a worker thread).
 static FlMethodResponse* localjam_audio_handle(LocaljamAudioPlugin* self,
                                                FlMethodCall* method_call) {
-  // Everything runs synchronously on the main loop. Every core call is
-  // microseconds except `load`, which for mp3 does one parse-only pass to count
-  // frames exactly (see localjam_audio_core.h); that is a brief hitch on a very
-  // long track, and it is preferred over replying from a worker thread, which
-  // the GLib channel API does not allow.
+  // Everything else runs synchronously on the main loop: every core call is
+  // microseconds except `load`, which for mp3 does one parse-only pass to
+  // count frames exactly (see localjam_audio_core.h) — and must replace the
+  // loaded file before the next call is handled, so it stays here.
   const gchar* method = fl_method_call_get_name(method_call);
   FlValue* args = fl_method_call_get_args(method_call);
   char err[LOCALJAM_AUDIO_ERR_LEN] = {0};
 
+  // Engine-free methods first: they answer even if the engine could not be
+  // created.
+  if (strcmp(method, "nowUs") == 0) {
+    return localjam_audio_ok_int(lj_now_us());
+  }
+
+  if (strcmp(method, "probeDuration") == 0) {
+    const gchar* path = localjam_audio_get_string(args, "path");
+    if (path == nullptr) {
+      return localjam_audio_fail(LJ_ERR_BAD_ARGS,
+                                 "probeDuration requires {path: String}");
+    }
+    localjam_audio_run_query(self, method_call, path);
+    return nullptr;
+  }
+
+  if (strcmp(method, "currentRouteId") == 0) {
+    localjam_audio_run_query(self, method_call, nullptr);
+    return nullptr;
+  }
+
   if (self->engine == nullptr) {
     return FL_METHOD_RESPONSE(fl_method_error_response_new(
         "disposed", "the audio engine could not be created", nullptr));
-  }
-
-  if (strcmp(method, "nowUs") == 0) {
-    return localjam_audio_ok_int(lj_now_us());
   }
 
   if (strcmp(method, "load") == 0) {
@@ -280,6 +402,9 @@ static void method_call_cb(FlMethodChannel* channel, FlMethodCall* method_call,
   (void)channel;
   LocaljamAudioPlugin* self = LOCALJAM_AUDIO_PLUGIN(user_data);
   g_autoptr(FlMethodResponse) response = localjam_audio_handle(self, method_call);
+  if (response == nullptr) {
+    return;  // answered from the main loop once the worker is done
+  }
   g_autoptr(GError) error = nullptr;
   if (!fl_method_call_respond(method_call, response, &error)) {
     g_warning("localjam_audio: failed to send response: %s", error->message);

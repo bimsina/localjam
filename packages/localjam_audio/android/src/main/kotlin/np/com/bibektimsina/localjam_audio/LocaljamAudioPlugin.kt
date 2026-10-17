@@ -1,6 +1,9 @@
 package np.com.bibektimsina.localjam_audio
 
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.media.AudioAttributes
 import android.media.AudioDeviceCallback
 import android.media.AudioDeviceInfo
@@ -12,8 +15,6 @@ import android.media.AudioTrack
 import android.media.MediaCodec
 import android.media.MediaExtractor
 import android.media.MediaFormat
-import android.media.MediaMetadataRetriever
-import android.media.PlaybackParams
 import android.os.Build
 import android.os.Handler
 import android.os.HandlerThread
@@ -27,6 +28,9 @@ import io.flutter.plugin.common.MethodChannel.MethodCallHandler
 import io.flutter.plugin.common.MethodChannel.Result
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.util.concurrent.Executor
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToLong
@@ -68,6 +72,9 @@ private const val TRACK_DRAIN_WAIT_NS = 200_000_000L
  * the other way round, and nothing running inside [use] takes the plugin lock.
  */
 internal class AudioTrackGate(private val track: AudioTrack) {
+    // java.lang.Object, not kotlin.Any: the monitor needs wait()/notifyAll(),
+    // which Any does not expose (same for the plugin's other two monitors).
+    @Suppress("PLATFORM_CLASS_MAPPED_TO_KOTLIN")
     private val gate = Object()
     private var released = false
     private var users = 0
@@ -263,8 +270,17 @@ internal class AudioTrackGate(private val track: AudioTrack) {
  * holds decoded audio when the writer reaches the media phase. Pause = the
  * writer parks, the queue fills, the decoder blocks on the full queue
  * (natural backpressure) — resume is playAt (a new generation retires BOTH
- * threads). A decode error mid-track surfaces as engineRestarted + stop,
- * identical to an unrecoverable track error.
+ * threads).
+ *
+ * ## Failures off the method-call path ([ScheduleFailure])
+ * A decode error (extractor/codec exception, a stalled decoder, a format
+ * change) stops output and reports `playbackError{decode_failed}`: a new
+ * schedule would decode the same bytes and fail again, and engineRestarted
+ * would make the Dart engine re-apply in a loop. Only a track that died
+ * under a healthy schedule (dead handle, ERROR_DEAD_OBJECT) is
+ * engineRestarted — a fresh track fixes that — and only until it happens
+ * several times in a row without any media playing in between. Every other
+ * writer failure is `playbackError{writer_failed}`.
  *
  * ## outputLatencyUs
  * Android has no public output-latency API; we best-effort the hidden
@@ -274,9 +290,34 @@ internal class AudioTrackGate(private val track: AudioTrack) {
  * *presented at the output*), so this value is only the §7 calibration
  * starting point for the UI nudge.
  *
+ * ## Interruptions, unplugs and routes (localjam_audio contract items 2–5)
+ * Native output is only ever STOPPED by the OS-driven paths — audio focus
+ * loss, a call taking the audio mode, ACTION_AUDIO_BECOMING_NOISY / removal
+ * of the active output, a writer failure — and never restarted: the room
+ * timeline moved on meanwhile, so Dart re-anchors with playAt. Each path
+ * stops output FIRST and only then emits its event. The decisions live in
+ * pure, unit-tested classes ([PlaybackSupervisor] over [AudioFocusPolicy]
+ * and [RouteChangeTracker]); this class only feeds them platform signals and
+ * applies their effects. playAt itself is gated: no play during a call,
+ * without audio focus, or in the ~1 s between "becoming noisy" and the
+ * reroute to the speaker — each refusal completes playAt normally and
+ * re-emits the event that explains it — and a playAt overtaken by any of
+ * those stops mid-flight (generation check) completes without playing.
+ * Focus is requested only when not already held (re-requesting would hand
+ * a ducking navigation prompt AUDIOFOCUS_LOSS).
+ *
+ * After `dispose` the plugin is dormant — platform listeners unregistered,
+ * nothing emitted — until the next method call re-arms it (a new
+ * LocaljamAudio on the same channel).
+ *
+ * `probeDuration` reads the same metadata chain as 'load' ([DurationProbe])
+ * on its own small executor, never touching the engine, and answers null
+ * for exactly the files 'load' would refuse on metadata grounds.
+ *
  * ## Threading
- * Method-channel handlers run serialized on one background HandlerThread;
- * every handler posts its result back to the main thread exactly once.
+ * Method-channel handlers run serialized on one background HandlerThread
+ * (except `probeDuration`, see above); every handler posts its result back
+ * to the main thread exactly once.
  * The writer thread AND the decoder thread (one pair per schedule, both
  * tagged with a generation counter à la iOS scheduleGeneration) are separate.
  * All shared state is guarded by [lock]; the PCM queue has its own internal
@@ -302,6 +343,12 @@ class LocaljamAudioPlugin :
          */
         const val MIN_LEAD_US = 150_000L
 
+        /**
+         * Track volume while another app holds "may duck" focus (API 24–25;
+         * API 26+ ducks for us). −14 dB: clearly under a navigation prompt.
+         */
+        const val DUCK_VOLUME = 0.2f
+
         /** Give getTimestamp this long to become valid before falling back. */
         const val TIMESTAMP_WARMUP_NS = 1_000_000_000L
 
@@ -323,17 +370,22 @@ class LocaljamAudioPlugin :
 
     /**
      * A loaded (probed, NOT decoded) file — see "Streaming decode" in the
-     * class doc. [sampleRate]/[channels] are the decoder's true OUTPUT format
-     * (probed), [durationUs] is metadata-derived (accuracy contract in the
-     * class doc).
+     * class doc. [sampleRate]/[srcChannels] are the decoder's true OUTPUT
+     * format (probed), [durationUs] is metadata-derived (accuracy contract in
+     * the class doc). [channels] is what the AudioTrack plays: the decoder's
+     * channels, except that >2 are folded down to stereo ([StereoFolder]).
      */
     private class LoadedAudio(
         val path: String,
         val mime: String,
         val sampleRate: Int,
-        val channels: Int,
+        val srcChannels: Int,
+        /** Decoder output KEY_CHANNEL_MASK when it reported one. */
+        val srcChannelMask: Int?,
         val durationUs: Long
     ) {
+        val channels get() = min(srcChannels, 2)
+
         val bytesPerFrame get() = 2 * channels
 
         /** Metadata-derived frame count; range checks only, never EOS. */
@@ -354,6 +406,7 @@ class LocaljamAudioPlugin :
             const val POP_RETIRED = -3
         }
 
+        @Suppress("PLATFORM_CLASS_MAPPED_TO_KOTLIN") // wait()/notifyAll() monitor
         private val qlock = Object()
         private val chunks = ArrayDeque<ByteArray>()
         private var bytes = 0
@@ -389,7 +442,11 @@ class LocaljamAudioPlugin :
             }
         }
 
-        /** Producer failed; the writer surfaces this as engineRestarted. */
+        /**
+         * Producer failed. The decoder reports the failure itself
+         * (playbackError{decode_failed}); this only makes sure a writer that
+         * pops first stops instead of playing out the buffered tail.
+         */
         fun fail(msg: String) {
             synchronized(qlock) {
                 if (error == null) error = msg
@@ -487,8 +544,11 @@ class LocaljamAudioPlugin :
         /** Decoder → writer PCM hand-off (bounded; see class doc). */
         val queue: PcmQueue,
         var rate: Double,
-        /** Total silence frames 'S'; −1 until the priming timestamp lands. */
-        var silenceFrames: Long = -1L,
+        /**
+         * Total silence frames 'S' — meaningful once [refValid] (the priming
+         * timestamp landed). Can be NEGATIVE: see [PlaybackLimits.silenceFrames].
+         */
+        var silenceFrames: Long = 0L,
         /** Freshest source-frame ↔ CLOCK_MONOTONIC mapping for extrapolation. */
         var refFrame: Double = 0.0,
         var refNanos: Long = 0L,
@@ -526,20 +586,54 @@ class LocaljamAudioPlugin :
     private var eventSink: EventChannel.EventSink? = null
 
     /** Guards every field below (and Schedule mutables). */
+    @Suppress("PLATFORM_CLASS_MAPPED_TO_KOTLIN") // wait()/notifyAll() monitor
     private val lock = Object()
     private var state = State.IDLE
     private var loaded: LoadedAudio? = null
     private var schedule: Schedule? = null
 
     /**
-     * Bumped on every (re)schedule/stop/load/dispose so stale writer AND
-     * decoder threads and their completion signals can be ignored (iOS
-     * scheduleGeneration).
+     * Schedule generations (bumped on every (re)schedule/stop/load/dispose and
+     * every OS-driven stop, so stale writer AND decoder threads, their
+     * completion signals and overtaken playAts are ignored — iOS
+     * scheduleGeneration), the interruption policy (contract item 4), route
+     * decisions (items 2–3) and failure reporting (item 5). Guarded by [lock].
      */
-    private var generation = 0L
+    private val supervisor = PlaybackSupervisor()
 
-    private var focusRequest: AudioFocusRequest? = null
+    /** Shorthand: the supervisor's focus policy (guarded by [lock]). */
+    private val focusPolicy get() = supervisor.focus
+
+    /**
+     * Learned once per process: this output's low-latency (FAST) tracks
+     * refuse a playback speed, so later tracks are created without asking
+     * for low latency (see [TrackSpeed]). Handler thread only.
+     */
+    @Volatile private var lowLatencyRefusesSpeed = false
+
+    @Volatile private var focusRequest: AudioFocusRequest? = null
+
+    /**
+     * True between `dispose` and the next method call: platform listeners are
+     * unregistered and [emit] drops everything (events after dispose).
+     */
+    @Volatile private var dormant = false
+
+    /** Guards the registration state of the three platform listeners below. */
+    private val listenerLock = Any()
+    private var listenersDetached = false
     private var deviceCallback: AudioDeviceCallback? = null
+    private var noisyReceiver: BroadcastReceiver? = null
+
+    /** AudioManager.OnModeChangedListener (API 31+), typed loosely for API 24. */
+    private var modeListener: Any? = null
+
+    /**
+     * Runs `probeDuration` calls — NOT the serialized handler thread, so a
+     * slow probe (packet scan of a long file) never delays playAt/positionUs,
+     * and probes run concurrently with each other and with playback.
+     */
+    private var probeExecutor: ExecutorService? = null
 
     // ---------------------------------------------------------------- plugin
 
@@ -555,7 +649,10 @@ class LocaljamAudioPlugin :
         thread.start()
         handlerThread = thread
         bgHandler = Handler(thread.looper)
-        registerRouteCallback()
+        probeExecutor = Executors.newFixedThreadPool(2) { runnable ->
+            Thread(runnable, "localjam_audio-probe").apply { isDaemon = true }
+        }
+        registerPlatformListeners()
 
         // Device music library (JamMediaLibrary.kt).
         mediaLibrary = JamMediaLibrary(binding.applicationContext, binding.binaryMessenger)
@@ -625,13 +722,19 @@ class LocaljamAudioPlugin :
         mediaLibrary?.dispose()
         mediaLibrary = null
         synchronized(lock) {
-            bumpGenerationLocked()
+            supervisor.onReleased()
+            lock.notifyAll()
             releaseTrackLocked()
             loaded = null
             state = State.IDLE
         }
         abandonFocus()
-        unregisterRouteCallback()
+        dormant = true
+        unregisterPlatformListeners(detaching = true)
+        // Probes still queued would never run: answer them, so no Dart
+        // future is left hanging (a running probe answers by itself).
+        probeExecutor?.shutdownNow()?.forEach { (it as? ProbeTask)?.reject() }
+        probeExecutor = null
         handlerThread?.quitSafely()
         handlerThread = null
         bgHandler = null
@@ -650,18 +753,20 @@ class LocaljamAudioPlugin :
     }
 
     /**
-     * Emits one event to Dart. Callable from any thread; delivery always on
-     * the main thread (the EventSink threading contract).
+     * Emits one event payload (built by [AudioEvents]) to Dart. Callable from
+     * any thread — including with [lock] held: it only posts. Delivery is
+     * always on the main thread (the EventSink threading contract), in post
+     * order.
      */
-    private fun emitEvent(type: String, outputLatencyUs: Long? = null) {
+    private fun emit(payload: Map<String, Any>) {
+        if (dormant) return // disposed: nobody asked for events any more
         mainHandler.post {
             val sink = eventSink ?: return@post
-            val payload = HashMap<String, Any>()
-            payload["type"] = type
-            if (outputLatencyUs != null) payload["outputLatencyUs"] = outputLatencyUs
             sink.success(payload)
         }
     }
+
+    private fun emitEvent(type: String) = emit(AudioEvents.simple(type))
 
     // --------------------------------------------------------- method channel
 
@@ -671,11 +776,21 @@ class LocaljamAudioPlugin :
             result.error("disposed", "plugin detached", null)
             return
         }
+        if (call.method == "probeDuration") {
+            // Deliberately NOT on the serialized handler thread (see
+            // probeExecutor): a probe must never queue behind, or delay, the
+            // playback calls.
+            handleProbeDuration(call, result)
+            return
+        }
         // All handlers run serialized on the background thread (like iOS's
         // serial queue); `reply` marshals back to the platform thread and is
         // called exactly once per invocation.
         handler.post {
             try {
+                // A call after `dispose` is a new LocaljamAudio on the same
+                // channel: re-arm the listeners and events dispose shut off.
+                if (dormant && call.method != "dispose") wake()
                 when (call.method) {
                     "nowUs" -> replySuccess(result, nowUs())
                     "load" -> handleLoad(call, result)
@@ -685,6 +800,7 @@ class LocaljamAudioPlugin :
                     "positionUs" -> handlePositionUs(result)
                     "setRate" -> handleSetRate(call, result)
                     "outputLatencyUs" -> replySuccess(result, currentOutputLatencyUs())
+                    "currentRouteId" -> replySuccess(result, currentRoute()?.id)
                     "dispose" -> handleDispose(result)
                     else -> mainHandler.post { result.notImplemented() }
                 }
@@ -705,15 +821,68 @@ class LocaljamAudioPlugin :
 
     // ---------------------------------------------------------------- handlers
 
+    /**
+     * `probeDuration {path}` → µs or null (contract item 1). The duration a
+     * `load` of the same file would return, read without touching the
+     * engine, the loaded file, the play state or audio focus — adding a track
+     * mid-song used to `load` it on the shared player, which stops playback.
+     */
+    private fun handleProbeDuration(call: MethodCall, result: Result) {
+        val path = call.argument<String>("path")
+        if (path == null) {
+            result.error("bad_args", "probeDuration requires {path: String}", null)
+            return
+        }
+        val executor = probeExecutor
+        if (executor == null) {
+            result.error("disposed", "plugin detached", null)
+            return
+        }
+        try {
+            executor.execute(ProbeTask(path, result))
+        } catch (e: Throwable) {
+            // RejectedExecutionException: detached while the call was in flight.
+            result.error("disposed", "plugin detached", null)
+        }
+    }
+
+    /**
+     * One `probeDuration` call. A named Runnable so that detaching, which
+     * drops queued tasks (`shutdownNow`), can still answer each of them.
+     * Answers exactly once either way.
+     */
+    private inner class ProbeTask(val path: String, val result: Result) : Runnable {
+        private val answered = java.util.concurrent.atomic.AtomicBoolean(false)
+
+        override fun run() {
+            runGuarded({
+                val us = DurationProbe.probeDurationUs(path)
+                if (answered.compareAndSet(false, true)) replySuccess(result, us)
+            }) {
+                // probeDurationUs never throws; if it ever did: "unknown".
+                if (answered.compareAndSet(false, true)) replySuccess(result, null)
+            }
+        }
+
+        fun reject() {
+            if (answered.compareAndSet(false, true)) {
+                replyError(result, "disposed", "plugin detached before the probe ran")
+            }
+        }
+    }
+
     private fun handleLoad(call: MethodCall, result: Result) {
         val path = call.argument<String>("path")
         if (path == null) {
             replyError(result, "bad_args", "load requires {path: String}")
             return
         }
-        // Replace any previously loaded file; stop playback first.
+        // Replace any previously loaded file; stop playback first, and forget
+        // the old file BEFORE probing the new one, so a failed load leaves
+        // nothing loaded (never the previous track under the new name).
         synchronized(lock) {
-            bumpGenerationLocked()
+            supervisor.onLoad()
+            lock.notifyAll()
             releaseTrackLocked()
             state = State.IDLE
             loaded = null
@@ -745,12 +914,15 @@ class LocaljamAudioPlugin :
             replyError(result, "bad_args", "playAt requires nativeTimeUs and positionUs")
             return
         }
-        if (rate <= 0.0 || !rate.isFinite()) {
-            replyError(result, "bad_args", "playAt rate must be a positive finite number")
+        // Same bounds as iOS/macOS/desktop ([PlaybackLimits]); refused before
+        // anything is stopped, like there.
+        PlaybackLimits.playAtArgsProblem(nativeTimeUs, rate, nowUs())?.let {
+            replyError(result, "bad_args", it)
             return
         }
 
         val audio: LoadedAudio
+        val ticket: PlaybackSupervisor.PlayAtTicket
         synchronized(lock) {
             val a = loaded
             if (a == null) {
@@ -761,7 +933,8 @@ class LocaljamAudioPlugin :
             // Calling while already playing/scheduled: retire the old schedule
             // (generation bump makes its writer AND decoder exit; release +
             // queue retire unblock them).
-            bumpGenerationLocked()
+            ticket = supervisor.beginPlayAt()
+            lock.notifyAll()
             releaseTrackLocked()
             state = State.LOADED // until the new schedule is installed below
         }
@@ -770,56 +943,94 @@ class LocaljamAudioPlugin :
         // minLead into the future with the position advanced at ×rate (§5.3
         // late join), so the priming loop lands the start precisely.
         val now = nowUs()
-        var anchorUs = nativeTimeUs
-        var startPosUs = positionUs
-        if (anchorUs < now + MIN_LEAD_US) {
-            startPosUs += ((now + MIN_LEAD_US - anchorUs) * rate).roundToLong()
-            anchorUs = now + MIN_LEAD_US
-        }
-
         val sr = audio.sampleRate
-        val startFrame = (startPosUs.toDouble() * sr / 1e6).roundToLong()
-        if (startFrame < 0 || startFrame >= audio.totalFrames) {
+        val plan = PlaybackLimits.planStart(
+            nativeTimeUs, positionUs, rate, now, MIN_LEAD_US, sr, audio.totalFrames
+        )
+        if (plan == null) {
             replyError(
                 result,
                 "bad_position",
-                "start position ${startPosUs}us is outside the file (duration ${audio.durationUs}us)"
+                "start position for positionUs=$positionUs at nativeTimeUs=$nativeTimeUs " +
+                    "is outside the file (duration ${audio.durationUs}us)"
             )
             return
         }
-        // Keep the anchor frame-exact so the position formula has no rounding
-        // bias (mirrors iOS segmentStartUs).
-        val anchorMediaUs = (startFrame.toDouble() * 1e6 / sr).roundToLong()
 
-        requestFocus()
+        // Gates that keep output off (contract items 3–4). Each completes
+        // playAt NORMALLY without playing and (re-)emits the event that says
+        // why — this playAt may be the user pressing resume, and Dart must
+        // not believe it plays. Dart re-anchors with playAt later.
+        val hold = synchronized(lock) { supervisor.playbackHold(System.nanoTime()) }
+        if (hold != null) {
+            // ACTION_AUDIO_BECOMING_NOISY just fired: the output is about to
+            // vanish and media would reroute to the speaker within ~1 s.
+            Log.i(TAG, "playAt held back: the output device is going away")
+            emit(AudioEvents.routeChanged(currentOutputLatencyUs(), hold.routeId, true))
+            replySuccess(result, null)
+            return
+        }
+        if (!negotiateFocusForPlay(ticket)) {
+            replySuccess(result, null)
+            return
+        }
 
-        val track: AudioTrack
+        val opened: TrackSpeed.Opened<AudioTrack>?
         try {
-            track = createTrack(audio)
+            opened = TrackSpeed.openAtRate(
+                rate,
+                preferLowLatency = !lowLatencyRefusesSpeed,
+                create = { lowLatency -> createTrack(audio, lowLatency, rate) },
+                applySpeed = TrackSpeed::apply,
+                isLowLatency = ::isLowLatencyTrack,
+                release = { t -> releaseQuietly(t) },
+            )
         } catch (e: Throwable) {
             replyError(result, "engine_start_failed", "AudioTrack creation failed: $e")
             return
         }
-        try {
-            track.playbackParams = PlaybackParams().setSpeed(rate.toFloat()).setPitch(1.0f)
-        } catch (e: Throwable) {
-            // Rate 1.0 never fails; an exotic rate falling back to 1.0 is a
-            // soft failure the §5.4 loop will notice and correct around.
-            Log.w(TAG, "setPlaybackParams(speed=$rate) failed, playing at 1.0", e)
+        if (opened == null) {
+            // Playing at 1.0 while the math assumed ×rate would silently
+            // mis-time the start and every position after it.
+            replyError(
+                result, "bad_args", "playAt rate $rate is not supported by this audio output"
+            )
+            return
         }
+        if (opened.lowLatencyRefusedSpeed) {
+            Log.w(TAG, "low-latency tracks refuse playback speed here; using normal tracks")
+            lowLatencyRefusesSpeed = true
+        }
+        val track = opened.track
 
         val queueCapBytes =
             min(QUEUE_TARGET_SECONDS * sr * audio.bytesPerFrame, QUEUE_MAX_BYTES)
         val sched: Schedule
         synchronized(lock) {
+            if (!supervisor.mayInstall(ticket)) {
+                // Something stopped output while this playAt was in flight
+                // (focus loss, call, noisy, session end — none of them run
+                // on this handler thread). Starting now would undo it; that
+                // path already emitted its event.
+                Log.i(TAG, "playAt superseded while starting (output was stopped); not playing")
+                releaseQuietly(track)
+                replySuccess(result, null)
+                return
+            }
+            if (focusPolicy.ducked) {
+                try {
+                    track.setVolume(DUCK_VOLUME)
+                } catch (_: Throwable) {
+                }
+            }
             sched = Schedule(
-                generation = generation,
+                generation = ticket.generation,
                 track = track,
                 sampleRate = sr,
                 channels = audio.channels,
-                targetNs = anchorUs * 1000,
-                anchorMediaUs = anchorMediaUs,
-                startFrame = startFrame,
+                targetNs = plan.anchorUs * 1000,
+                anchorMediaUs = plan.anchorMediaUs,
+                startFrame = plan.startFrame,
                 queue = PcmQueue(queueCapBytes),
                 rate = rate
             )
@@ -829,15 +1040,32 @@ class LocaljamAudioPlugin :
         Log.d(
             TAG,
             "playAt: requested nativeTimeUs=$nativeTimeUs positionUs=$positionUs rate=$rate " +
-                "-> effective anchorUs=$anchorUs startPosUs=$startPosUs startFrame=$startFrame " +
-                "anchorMediaUs=$anchorMediaUs (now=$now leadUs=${anchorUs - now})"
+                "-> effective anchorUs=${plan.anchorUs} startPosUs=${plan.startPosUs} " +
+                "startFrame=${plan.startFrame} anchorMediaUs=${plan.anchorMediaUs} " +
+                "(now=$now leadUs=${plan.anchorUs - now})"
         )
         // Decoder starts NOW, in parallel with the writer's silence priming
         // (≥ MIN_LEAD_US), so the queue holds PCM before the media phase.
         Thread({ decoderMain(sched, audio) }, "localjam_audio-decoder").start()
         Thread({ writerMain(sched, audio) }, "localjam_audio-writer").start()
+        // Remember where this output went: the reference an unplug or
+        // removal is compared against (RouteChangeTracker).
+        val route = currentRoute()
+        synchronized(lock) { supervisor.routes.observe(route) }
         replySuccess(result, null)
     }
+
+    private fun releaseQuietly(track: AudioTrack) {
+        try {
+            track.release()
+        } catch (_: Throwable) {
+        }
+    }
+
+    /** Whether [track] was actually granted the low-latency (FAST) path. */
+    private fun isLowLatencyTrack(track: AudioTrack): Boolean =
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
+            track.performanceMode == AudioTrack.PERFORMANCE_MODE_LOW_LATENCY
 
     private fun handlePause(result: Result) {
         synchronized(lock) {
@@ -873,7 +1101,7 @@ class LocaljamAudioPlugin :
             val sched = schedule
             if (state != State.PLAYING || sched == null) return@synchronized null
             val nowNs = System.nanoTime()
-            if (sched.silenceFrames < 0 || !sched.refValid) {
+            if (!sched.refValid) {
                 // Still priming: the anchor formula itself (identical line,
                 // just not yet expressed in frames). Extrapolates below the
                 // anchor position pre-start, like iOS's negative sampleTime.
@@ -904,47 +1132,70 @@ class LocaljamAudioPlugin :
 
     private fun handleSetRate(call: MethodCall, result: Result) {
         val rate = call.argument<Number>("rate")?.toDouble()
-        if (rate == null || rate <= 0.0 || !rate.isFinite()) {
-            replyError(result, "bad_args", "setRate requires {rate: positive double}")
+        if (rate == null || !PlaybackLimits.isValidRate(rate)) {
+            replyError(
+                result,
+                "bad_args",
+                "setRate requires {rate: double within " +
+                    "[${PlaybackLimits.MIN_RATE}, ${PlaybackLimits.MAX_RATE}]}"
+            )
             return
         }
-        synchronized(lock) {
-            val sched = schedule
-            if (sched != null) {
+        val refused: String? = synchronized(lock) {
+            val sched = schedule ?: return@synchronized null
+            val nowNs = System.nanoTime()
+            // Gated: a released track is a no-op (null), never a throw.
+            val applied = sched.useTrack { TrackSpeed.apply(it, rate) }
+            if (applied == false) {
+                // The track refused the speed. The math stays on the rate the
+                // track REALLY plays, so positions stay true. A low-latency
+                // track cannot time-stretch on many devices: not the caller's
+                // fault — the drift check re-anchors if it must, and that
+                // re-anchor's track is created without low latency. A normal
+                // track refusing means this output cannot play the rate.
+                Log.w(TAG, "setRate($rate) refused by the track; still playing at ${sched.rate}")
+                if (sched.useTrack(::isLowLatencyTrack) == true) {
+                    lowLatencyRefusesSpeed = true
+                    null
+                } else {
+                    "setRate $rate is not supported by this audio output"
+                }
+            } else {
                 // Re-anchor the extrapolation mapping AT the instant of the
-                // rate change: frames before this instant were consumed at the
-                // old rate, frames after at the new one. The media mapping
-                // (frame − S) needs no change (source-frame domain).
-                val nowNs = System.nanoTime()
+                // rate change: frames before this instant were consumed at
+                // the old rate, frames after at the new one. The media
+                // mapping (frame − S) needs no change (source-frame domain).
                 if (sched.refValid) {
                     sched.refFrame +=
                         (nowNs - sched.refNanos).toDouble() * sched.sampleRate * sched.rate / 1e9
                     sched.refNanos = nowNs
                 }
                 sched.rate = rate
-                try {
-                    // Gated: a released track is a no-op, never a throw.
-                    sched.useTrack {
-                        it.playbackParams =
-                            PlaybackParams().setSpeed(rate.toFloat()).setPitch(1.0f)
-                    }
-                } catch (e: Throwable) {
-                    Log.w(TAG, "setRate($rate) failed", e)
-                }
                 Log.d(TAG, "setRate: $rate (refFrame=${sched.refFrame} refNanos=${sched.refNanos})")
+                null
             }
         }
-        replySuccess(result, null)
+        if (refused != null) {
+            replyError(result, "bad_args", refused)
+        } else {
+            replySuccess(result, null)
+        }
     }
 
     private fun handleDispose(result: Result) {
         synchronized(lock) {
-            bumpGenerationLocked()
+            supervisor.onReleased()
+            lock.notifyAll()
             releaseTrackLocked()
             loaded = null
             state = State.IDLE
         }
         abandonFocus()
+        // Dormant until the next method call: no platform listener and no
+        // event outlives dispose (a disposed player used to keep reporting
+        // route changes).
+        dormant = true
+        unregisterPlatformListeners(detaching = false)
         replySuccess(result, null)
     }
 
@@ -957,18 +1208,34 @@ class LocaljamAudioPlugin :
      */
     private fun stopPlaybackForSessionEnd() {
         synchronized(lock) {
-            if (schedule == null) return
-            bumpGenerationLocked()
-            releaseTrackLocked()
-            state = if (loaded != null) State.LOADED else State.IDLE
+            supervisor.onReleased()
+            // Unconditional (idempotent): the generation bump also retires a
+            // playAt that is mid-flight on the handler thread right now.
+            stopOutputLocked()
         }
+        // The jam is over: hand audio focus back (a paused music app may
+        // resume) and cancel any pending delayed-focus request.
+        abandonFocus()
     }
 
     // ------------------------------------------------------------ shared state
 
+    /**
+     * Must hold [lock]. Stops native output — the schedule is retired and its
+     * track freed — keeping the loaded file. The one stop used by every path
+     * that is NOT a Dart call (focus loss, calls, unplug, writer failure,
+     * session end); it never restarts anything, Dart re-anchors with playAt.
+     * Idempotent.
+     */
+    private fun stopOutputLocked() {
+        bumpGenerationLocked()
+        releaseTrackLocked()
+        state = if (loaded != null) State.LOADED else State.IDLE
+    }
+
     /** Must hold [lock]. Retires all outstanding writers/decoders/completions. */
     private fun bumpGenerationLocked() {
-        generation += 1
+        supervisor.retire()
         lock.notifyAll() // wake any writer parked in PAUSED
     }
 
@@ -997,7 +1264,7 @@ class LocaljamAudioPlugin :
     }
 
     private fun isStale(sched: Schedule): Boolean =
-        synchronized(lock) { generation != sched.generation }
+        synchronized(lock) { !supervisor.isCurrent(sched.generation) }
 
     /**
      * Whether the writer must exit silently: its schedule was superseded, or
@@ -1019,8 +1286,18 @@ class LocaljamAudioPlugin :
      * means the track is gone (or died mid-call), which is either a normal
      * teardown — exit — or, if the schedule is still current, a real track
      * failure to report.
+     *
+     * Nothing may escape this thread: an uncaught throwable on an app thread
+     * kills the whole process on Android (the host's server with it). The
+     * expected failures above are classified ([ScheduleFailure]) and
+     * reported by [writerTrackFailure]; anything unexpected lands in
+     * [writerCrashed] → output stopped + `playbackError{writer_failed}`.
      */
     private fun writerMain(sched: Schedule, audio: LoadedAudio) {
+        runGuarded({ writerLoop(sched, audio) }) { t -> writerCrashed(sched, t) }
+    }
+
+    private fun writerLoop(sched: Schedule, audio: LoadedAudio) {
         val sr = sched.sampleRate
         val bpf = audio.bytesPerFrame
         val chunkFrames = max(sr / 100, 128) // ~10 ms
@@ -1030,11 +1307,13 @@ class LocaljamAudioPlugin :
         try {
             if (sched.useTrack { it.play() } == null) {
                 if (writerRetired(sched)) return
-                writerTrackFailure(sched, "play() threw on a dead track")
+                writerTrackFailure(
+                    sched, ScheduleFailure.TRACK_DEAD, "play() threw on a dead track"
+                )
                 return
             }
         } catch (e: Throwable) {
-            writerTrackFailure(sched, "play() failed: $e")
+            writerTrackFailure(sched, ScheduleFailure.WRITER, "play() failed: $e")
             return
         }
 
@@ -1059,11 +1338,15 @@ class LocaljamAudioPlugin :
             }
             if (n == null) {
                 if (writerRetired(sched)) return
-                writerTrackFailure(sched, "write threw on a dead track during priming")
+                writerTrackFailure(
+                    sched, ScheduleFailure.TRACK_DEAD, "write threw on a dead track during priming"
+                )
                 return
             }
             if (n < 0) {
-                writerTrackFailure(sched, "write returned $n during priming")
+                writerTrackFailure(
+                    sched, ScheduleFailure.ofWriteError(n), "write returned $n during priming"
+                )
                 return
             }
             written += n / bpf
@@ -1076,7 +1359,17 @@ class LocaljamAudioPlugin :
                 // that much); §7 calibration absorbs it. Logged loudly.
                 val head =
                     sched.useTrack { it.playbackHeadPosition.toLong() and 0xffffffffL }
-                        ?: return // track gone: teardown owns the outcome
+                if (head == null) {
+                    // Track gone: a teardown owns the outcome — unless the
+                    // schedule is still current, then the track died and Dart
+                    // must hear it (returning silently left Dart believing it
+                    // played).
+                    if (writerRetired(sched)) return
+                    writerTrackFailure(
+                        sched, ScheduleFailure.TRACK_DEAD, "track died during timestamp warm-up"
+                    )
+                    return
+                }
                 ts.framePosition = head
                 ts.nanoTime = System.nanoTime()
                 primed = true
@@ -1091,7 +1384,7 @@ class LocaljamAudioPlugin :
         // ---- Phase 2: compute S and pad/trim the silence to hit the target.
         var s: Long
         synchronized(lock) {
-            if (generation != sched.generation) return
+            if (!supervisor.isCurrent(sched.generation)) return
             s = computeSilenceFramesLocked(sched, ts)
             sched.silenceFrames = s
             sched.refFrame = ts.framePosition.toDouble()
@@ -1112,11 +1405,17 @@ class LocaljamAudioPlugin :
             }
             if (n == null) {
                 if (writerRetired(sched)) return
-                writerTrackFailure(sched, "write threw on a dead track during silence pad")
+                writerTrackFailure(
+                    sched,
+                    ScheduleFailure.TRACK_DEAD,
+                    "write threw on a dead track during silence pad"
+                )
                 return
             }
             if (n < 0) {
-                writerTrackFailure(sched, "write returned $n during silence pad")
+                writerTrackFailure(
+                    sched, ScheduleFailure.ofWriteError(n), "write returned $n during silence pad"
+                )
                 return
             }
             written += n / bpf
@@ -1126,7 +1425,7 @@ class LocaljamAudioPlugin :
             // and must never re-anchor the mapping.
             if (trackTimestamp(sched, ts) && ts.framePosition > 0) {
                 synchronized(lock) {
-                    if (generation != sched.generation) return
+                    if (!supervisor.isCurrent(sched.generation)) return
                     if (ts.nanoTime > sched.refNanos) {
                         sched.refFrame = ts.framePosition.toDouble()
                         sched.refNanos = ts.nanoTime
@@ -1185,7 +1484,7 @@ class LocaljamAudioPlugin :
         var eosReached = false
         while (!eosReached) {
             synchronized(lock) {
-                while (generation == sched.generation && state == State.PAUSED) {
+                while (supervisor.isCurrent(sched.generation) && state == State.PAUSED) {
                     // Writer parks while paused (the decoder then blocks on
                     // the full queue). There is no resume-in-place: the Dart
                     // side re-schedules via playAt (generation bump), which
@@ -1195,13 +1494,15 @@ class LocaljamAudioPlugin :
                     } catch (_: InterruptedException) {
                     }
                 }
-                if (generation != sched.generation) return
+                if (!supervisor.isCurrent(sched.generation)) return
             }
             val n = q.pop(buf, 100)
             when {
                 n == PcmQueue.POP_RETIRED -> return
                 n == PcmQueue.POP_ERROR -> {
-                    writerTrackFailure(sched, "decoder failed: ${q.error}")
+                    // Normally already reported by the decoder itself (then
+                    // this schedule is stale and this stays silent).
+                    writerTrackFailure(sched, ScheduleFailure.DECODE, "decoder failed: ${q.error}")
                     return
                 }
                 n == PcmQueue.POP_EOS -> eosReached = true
@@ -1231,21 +1532,33 @@ class LocaljamAudioPlugin :
                         if (w == null) {
                             if (writerRetired(sched)) return
                             writerTrackFailure(
-                                sched, "write threw on a dead track during media stream"
+                                sched,
+                                ScheduleFailure.TRACK_DEAD,
+                                "write threw on a dead track during media stream"
                             )
                             return
                         }
                         if (w < 0) {
-                            writerTrackFailure(sched, "write returned $w during media stream")
+                            writerTrackFailure(
+                                sched,
+                                ScheduleFailure.ofWriteError(w),
+                                "write returned $w during media stream"
+                            )
                             return
                         }
                         off += w
                         len -= w
+                        if (mediaBytesWritten == 0L && w > 0) {
+                            // Media reached the track: this schedule is
+                            // healthy, so earlier dead tracks were reroutes,
+                            // not a track that cannot play at all.
+                            synchronized(lock) { supervisor.onMediaStreaming(sched.generation) }
+                        }
                         mediaBytesWritten += w
                     }
                     if (trackTimestamp(sched, ts) && ts.framePosition > 0) {
                         synchronized(lock) {
-                            if (generation != sched.generation) return
+                            if (!supervisor.isCurrent(sched.generation)) return
                             if (ts.nanoTime > sched.refNanos) {
                                 sched.refFrame = ts.framePosition.toDouble()
                                 sched.refNanos = ts.nanoTime
@@ -1283,7 +1596,7 @@ class LocaljamAudioPlugin :
         // (mediaSkip) + media actually written.
         val endSourceFrame = s + mediaSkip + mediaBytesWritten / bpf
         val remainingUs = synchronized(lock) {
-            if (generation != sched.generation) return
+            if (!supervisor.isCurrent(sched.generation)) return
             val fNow = sched.refFrame +
                 (System.nanoTime() - sched.refNanos).toDouble() * sr * sched.rate / 1e9
             ((endSourceFrame - fNow) * 1e6 / (sr * sched.rate)).toLong()
@@ -1292,7 +1605,7 @@ class LocaljamAudioPlugin :
         while (true) {
             if (isStale(sched)) return
             val fNow = synchronized(lock) {
-                if (generation != sched.generation) return
+                if (!supervisor.isCurrent(sched.generation)) return
                 if (trackTimestamp(sched, ts) && ts.framePosition > 0 &&
                     ts.nanoTime > sched.refNanos
                 ) {
@@ -1313,7 +1626,7 @@ class LocaljamAudioPlugin :
             }
         }
         synchronized(lock) {
-            if (generation != sched.generation) return
+            if (!supervisor.isCurrent(sched.generation)) return
             state = State.FINISHED
             schedule = null
             sched.queue.retire() // decoder already exited at EOS; belt-and-braces
@@ -1322,19 +1635,16 @@ class LocaljamAudioPlugin :
             sched.releaseTrack()
         }
         Log.d(TAG, "playbackFinished (generation=${sched.generation})")
-        emitEvent("playbackFinished")
+        emitEvent(AudioEvents.PLAYBACK_FINISHED)
     }
 
     /**
-     * Must hold [lock]. Source-frame index presented exactly at the target:
-     * S = F_ts + (targetNs − T_ts) × sr × rate / 1e9, clamped ≥ 0.
+     * Must hold [lock]. Source-frame index presented exactly at the target —
+     * NOT clamped at 0 (see [PlaybackLimits.silenceFrames]).
      */
     private fun computeSilenceFramesLocked(sched: Schedule, ts: AudioTimestamp): Long =
-        max(
-            0L,
-            ts.framePosition +
-                ((sched.targetNs - ts.nanoTime).toDouble() * sched.sampleRate * sched.rate / 1e9)
-                    .roundToLong()
+        PlaybackLimits.silenceFrames(
+            ts.framePosition, ts.nanoTime, sched.targetNs, sched.sampleRate, sched.rate
         )
 
     /**
@@ -1351,20 +1661,46 @@ class LocaljamAudioPlugin :
         } ?: false
 
     /**
-     * A track (or decoder) error the schedule cannot survive: drop the
-     * schedule and tell Dart the engine restarted (its schedule is gone;
-     * re-schedule from the authoritative anchor) — iOS's configuration-change
-     * semantics.
+     * A track or decoder failure the schedule cannot survive: unless the
+     * schedule was already superseded (then stay silent — whoever retired it
+     * owns the outcome), stop output FIRST and report what the supervisor
+     * decides — engineRestarted for a dead track (re-schedule from the
+     * authoritative anchor, iOS's configuration-change semantics), else
+     * playbackError ([ScheduleFailure]).
      */
-    private fun writerTrackFailure(sched: Schedule, why: String) {
-        synchronized(lock) {
-            if (generation != sched.generation) return // superseded; stay silent
-            Log.w(TAG, "writer: unrecoverable track error: $why")
-            bumpGenerationLocked()
-            releaseTrackLocked()
-            state = if (loaded != null) State.LOADED else State.IDLE
+    private fun writerTrackFailure(sched: Schedule, failure: ScheduleFailure, why: String) {
+        val event = synchronized(lock) {
+            supervisor.onScheduleFailure(sched.generation, failure, why)
+                ?.also {
+                    Log.w(TAG, "schedule failed ($failure): $why")
+                    lock.notifyAll()
+                    releaseTrackLocked()
+                    state = if (loaded != null) State.LOADED else State.IDLE
+                }
+        } ?: return
+        emit(event)
+    }
+
+    /**
+     * The writer threw something unexpected (a bug, OOM, a HAL surprise).
+     * Stop output and free the track — releaseTrack is idempotent and the
+     * gate waits for nothing here, since this thread has already left every
+     * useTrack — then tell Dart with `playbackError` (contract item 5). A
+     * superseded writer (stale generation) stays silent: whoever bumped the
+     * generation already released its track.
+     */
+    private fun writerCrashed(sched: Schedule, t: Throwable) {
+        val current = synchronized(lock) { supervisor.isCurrent(sched.generation) }
+        if (!current) {
+            Log.w(TAG, "writer (superseded) threw; ignoring", t)
+            return
         }
-        emitEvent("engineRestarted")
+        Log.e(TAG, "writer thread failed; output stopped", t)
+        writerTrackFailure(
+            sched,
+            ScheduleFailure.WRITER,
+            "audio writer failed: ${t.javaClass.simpleName}: ${t.message}"
+        )
     }
 
     // ------------------------------------------------------------ decoder thread
@@ -1380,18 +1716,47 @@ class LocaljamAudioPlugin :
      * the first output buffer's presentationTimeUs says where decode actually
      * resumed; exactly startFrame − round(pts·sr/1e6) frames are dropped so
      * the FIRST queued frame is media frame startFrame.
+     *
+     * Files with more than two channels are folded down to stereo here
+     * ([StereoFolder]) before queueing, so the writer and the AudioTrack only
+     * ever see mono or stereo.
      */
     private fun decoderMain(sched: Schedule, audio: LoadedAudio) {
+        // Same rule as the writer: nothing escapes this thread.
+        runGuarded({ decoderLoop(sched, audio) }) { t ->
+            Log.e(TAG, "decoder thread failed", t)
+            decoderFailed(sched, "decoder thread failed: $t")
+        }
+    }
+
+    /**
+     * The decoder cannot go on: playbackError{decode_failed}, reported HERE
+     * rather than when the writer reaches the failure in the queue — the
+     * writer may still be priming (or parked in a pause) and would report it
+     * late, or never. The queue is failed too so a writer that pops first
+     * stops instead of playing out the buffered tail. A superseded schedule
+     * stays silent.
+     */
+    private fun decoderFailed(sched: Schedule, why: String) {
+        sched.queue.fail(why)
+        writerTrackFailure(sched, ScheduleFailure.DECODE, why)
+    }
+
+    private fun decoderLoop(sched: Schedule, audio: LoadedAudio) {
         val q = sched.queue
         val sr = audio.sampleRate
-        val bpf = audio.bytesPerFrame
+        val bpf = audio.bytesPerFrame // OUTPUT (≤ stereo) frame size
+        val srcBpf = 2 * audio.srcChannels // decoded frame size
+        var folder: StereoFolder? =
+            if (audio.srcChannels > 2) StereoFolder(audio.srcChannels, audio.srcChannelMask) else null
         var extractor: MediaExtractor? = null
         var codec: MediaCodec? = null
         try {
             val ex = MediaExtractor()
             extractor = ex
             ex.setDataSource(audio.path)
-            val (trackIndex, trackFormat) = findAudioTrack(ex)
+            val (trackIndex, trackFormat) = DurationProbe.findAudioTrack(ex)
+                ?: throw IllegalArgumentException("no audio track in file")
             ex.selectTrack(trackIndex)
             ex.seekTo(sched.anchorMediaUs, MediaExtractor.SEEK_TO_PREVIOUS_SYNC)
             val c = MediaCodec.createDecoderByType(audio.mime)
@@ -1437,14 +1802,25 @@ class LocaljamAudioPlugin :
                         } else {
                             AudioFormat.ENCODING_PCM_16BIT
                         }
-                        if (newSr != sr || newCh != audio.channels) {
+                        if (newSr != sr || newCh != audio.srcChannels) {
                             // The AudioTrack was created from the load-probed
                             // format; a mid-stream change cannot be honored.
-                            q.fail(
+                            decoderFailed(
+                                sched,
                                 "decoder output format $newSr Hz x${newCh}ch != " +
-                                    "probed $sr Hz x${audio.channels}ch"
+                                    "probed $sr Hz x${audio.srcChannels}ch"
                             )
                             return
+                        }
+                        if (newCh > 2) {
+                            // This decoder's own mask is the authority on the
+                            // interleave order of what it is about to emit.
+                            val mask = if (f.containsKey(MediaFormat.KEY_CHANNEL_MASK)) {
+                                f.getInteger(MediaFormat.KEY_CHANNEL_MASK)
+                            } else {
+                                audio.srcChannelMask
+                            }
+                            folder = StereoFolder(newCh, mask)
                         }
                     }
                     outIdx >= 0 -> {
@@ -1474,9 +1850,16 @@ class LocaljamAudioPlugin :
                                 }
                             }
                             carry?.let { chunk = it + chunk; carry = null }
-                            val alignedBytes = chunk.size - chunk.size % bpf
+                            var alignedBytes = chunk.size - chunk.size % srcBpf
                             if (alignedBytes != chunk.size) {
                                 carry = chunk.copyOfRange(alignedBytes, chunk.size)
+                            }
+                            folder?.let {
+                                // >2 channels: fold the whole decoded frames
+                                // to stereo; frame count is unchanged, so the
+                                // drop math below is layout-independent.
+                                chunk = it.fold(chunk, 0, alignedBytes)
+                                alignedBytes = chunk.size
                             }
                             val frames = (alignedBytes / bpf).toLong()
                             val drop = min(framesToDrop, frames)
@@ -1505,13 +1888,13 @@ class LocaljamAudioPlugin :
                 }
                 idleSpins = if (progressed) 0 else idleSpins + 1
                 if (idleSpins > 500) { // ~10 s of no progress: codec wedged
-                    q.fail("decoder made no progress (stalled)")
+                    decoderFailed(sched, "decoder made no progress (stalled)")
                     return
                 }
             }
         } catch (e: Throwable) {
             if (!isStale(sched)) Log.w(TAG, "decoder: error", e)
-            q.fail("decoder exception: $e")
+            decoderFailed(sched, "decoder exception: $e")
         } finally {
             try {
                 codec?.stop()
@@ -1530,7 +1913,13 @@ class LocaljamAudioPlugin :
 
     // ------------------------------------------------------------- AudioTrack
 
-    private fun createTrack(audio: LoadedAudio): AudioTrack {
+    /**
+     * A fresh MODE_STREAM track for [audio] that can play at [rate];
+     * [lowLatency] asks for PERFORMANCE_MODE_LOW_LATENCY (API 26+), which
+     * some outputs grant as a FAST track that cannot change speed (see
+     * [TrackSpeed]).
+     */
+    private fun createTrack(audio: LoadedAudio, lowLatency: Boolean, rate: Double): AudioTrack {
         val channelMask = when (audio.channels) {
             1 -> AudioFormat.CHANNEL_OUT_MONO
             2 -> AudioFormat.CHANNEL_OUT_STEREO
@@ -1542,15 +1931,11 @@ class LocaljamAudioPlugin :
         require(minBuf > 0) { "getMinBufferSize failed: $minBuf" }
         // 3× the minimum: underrun headroom for the blocking writer without
         // bloating the pipeline (scheduling precision is timestamp-based and
-        // unaffected by buffer depth).
-        val bufBytes = minBuf * 3
+        // unaffected by buffer depth) — more for fast rates, which AudioTrack
+        // otherwise refuses ("buffer size"): see [TrackSpeed.bufferFactor].
+        val bufBytes = minBuf * TrackSpeed.bufferFactor(rate)
         val builder = AudioTrack.Builder()
-            .setAudioAttributes(
-                AudioAttributes.Builder()
-                    .setUsage(AudioAttributes.USAGE_MEDIA)
-                    .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
-                    .build()
-            )
+            .setAudioAttributes(mediaAttributes)
             .setAudioFormat(
                 AudioFormat.Builder()
                     .setSampleRate(audio.sampleRate)
@@ -1560,7 +1945,7 @@ class LocaljamAudioPlugin :
             )
             .setTransferMode(AudioTrack.MODE_STREAM)
             .setBufferSizeInBytes(bufBytes)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        if (lowLatency && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             builder.setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY)
         }
         val track = builder.build()
@@ -1573,16 +1958,6 @@ class LocaljamAudioPlugin :
 
     // ------------------------------------------------------------------ probe
 
-    /** First audio track of [extractor], else throws. */
-    private fun findAudioTrack(extractor: MediaExtractor): Pair<Int, MediaFormat> {
-        for (i in 0 until extractor.trackCount) {
-            val f = extractor.getTrackFormat(i)
-            val mime = f.getString(MediaFormat.KEY_MIME) ?: continue
-            if (mime.startsWith("audio/")) return i to f
-        }
-        throw IllegalArgumentException("no audio track in file")
-    }
-
     /**
      * Opens [path] and probes it WITHOUT decoding the file: duration from
      * metadata (accuracy contract in the class doc) and the decoder's true
@@ -1594,31 +1969,33 @@ class LocaljamAudioPlugin :
         val extractor = MediaExtractor()
         try {
             extractor.setDataSource(path)
-            val (trackIndex, trackFormat) = findAudioTrack(extractor)
+            val (trackIndex, trackFormat) = DurationProbe.findAudioTrack(extractor)
+                ?: throw IllegalArgumentException("no audio track in file")
             extractor.selectTrack(trackIndex)
             val mime = trackFormat.getString(MediaFormat.KEY_MIME)!!
 
-            // Duration: KEY_DURATION → MediaMetadataRetriever → compressed
-            // packet scan (still no decode). A full decode-count is
-            // deliberately avoided (that is the O(file) cost 'load' sheds).
-            var durationUs = if (trackFormat.containsKey(MediaFormat.KEY_DURATION)) {
-                trackFormat.getLong(MediaFormat.KEY_DURATION)
-            } else {
-                -1L
-            }
-            if (durationUs <= 0) durationUs = retrieverDurationUs(path)
-            if (durationUs <= 0) {
-                Log.w(TAG, "load: no duration metadata for $path; scanning packet pts")
-                durationUs = scanDurationUs(extractor)
-                extractor.seekTo(0, MediaExtractor.SEEK_TO_PREVIOUS_SYNC)
-            }
+            // Duration: the SAME metadata chain probeDuration uses (so a
+            // probed playlist and a loaded track agree to the µs).
+            val durationUs = DurationProbe.durationUs(extractor, trackFormat, path)
             if (durationUs <= 0) {
                 throw IllegalArgumentException("could not determine duration")
+            }
+            // Container-level limits first (no codec spun up for a 1 Hz
+            // header); the decoder's real output format is checked below.
+            if (trackFormat.containsKey(MediaFormat.KEY_SAMPLE_RATE) &&
+                trackFormat.containsKey(MediaFormat.KEY_CHANNEL_COUNT)
+            ) {
+                PlaybackLimits.fileProblem(
+                    trackFormat.getInteger(MediaFormat.KEY_SAMPLE_RATE),
+                    trackFormat.getInteger(MediaFormat.KEY_CHANNEL_COUNT),
+                    durationUs
+                )?.let { throw IllegalArgumentException(it) }
             }
 
             // Bounded format probe: decode until the first output buffer.
             var sampleRate = trackFormat.getInteger(MediaFormat.KEY_SAMPLE_RATE)
             var channels = trackFormat.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
+            var channelMask: Int? = trackFormat.channelMaskOrNull()
             val codec = MediaCodec.createDecoderByType(mime)
             try {
                 codec.configure(trackFormat, null, null, 0)
@@ -1653,6 +2030,7 @@ class LocaljamAudioPlugin :
                             val f = codec.outputFormat
                             sampleRate = f.getInteger(MediaFormat.KEY_SAMPLE_RATE)
                             channels = f.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
+                            channelMask = f.channelMaskOrNull()
                         }
                         outIdx >= 0 -> {
                             progressed = true
@@ -1678,53 +2056,25 @@ class LocaljamAudioPlugin :
                 }
                 codec.release()
             }
-            if (channels !in 1..2) {
-                throw IllegalArgumentException("unsupported channel count $channels")
-            }
-            return LoadedAudio(path, mime, sampleRate, channels, durationUs)
+            // >2 channels are folded down to stereo while decoding
+            // (StereoFolder) rather than rejected. Same limits as
+            // probeDuration (and iOS/desktop): a 0-frame file, an absurd
+            // sample rate or a crafted duration is load_failed here, not a
+            // bad_position on every playAt or an AudioTrack that never builds.
+            PlaybackLimits.fileProblem(sampleRate, channels, durationUs)
+                ?.let { throw IllegalArgumentException(it) }
+            return LoadedAudio(path, mime, sampleRate, channels, channelMask, durationUs)
         } finally {
             extractor.release()
         }
     }
 
-    /** Duration via MediaMetadataRetriever (ms metadata), −1 when unknown. */
-    private fun retrieverDurationUs(path: String): Long {
-        val r = MediaMetadataRetriever()
-        return try {
-            r.setDataSource(path)
-            val ms = r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
-                ?.toLongOrNull() ?: -1L
-            if (ms > 0) ms * 1000 else -1L
-        } catch (_: Throwable) {
-            -1L
-        } finally {
-            try {
-                r.release()
-            } catch (_: Throwable) {
-            }
+    private fun MediaFormat.channelMaskOrNull(): Int? =
+        if (containsKey(MediaFormat.KEY_CHANNEL_MASK)) {
+            getInteger(MediaFormat.KEY_CHANNEL_MASK).takeIf { it != 0 }
+        } else {
+            null
         }
-    }
-
-    /**
-     * Last-resort duration: walk the remaining compressed packets (sampleTime
-     * + advance — no decode, no sample reads) and estimate duration as the
-     * last pts plus one inter-packet gap.
-     */
-    private fun scanDurationUs(extractor: MediaExtractor): Long {
-        var prev = -1L
-        var last = -1L
-        while (true) {
-            val t = extractor.sampleTime
-            if (t < 0) break
-            if (t > last) {
-                prev = last
-                last = t
-            }
-            if (!extractor.advance()) break
-        }
-        if (last < 0) return -1
-        return last + if (prev in 0 until last) last - prev else 0
-    }
 
     /** One decoder output buffer as interleaved 16-bit LE PCM bytes. */
     private fun pcm16Bytes(buf: ByteBuffer, encoding: Int): ByteArray = when (encoding) {
@@ -1744,42 +2094,94 @@ class LocaljamAudioPlugin :
         else -> throw IllegalArgumentException("unsupported decoder PCM encoding $encoding")
     }
 
-    // ------------------------------------------------- focus / route / latency
+    // --------------------------------------------------- focus / interruptions
+
+    /** Media attributes shared by the track, the focus request and route queries. */
+    private val mediaAttributes: AudioAttributes by lazy {
+        AudioAttributes.Builder()
+            .setUsage(AudioAttributes.USAGE_MEDIA)
+            .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+            .build()
+    }
 
     private val focusListener = AudioManager.OnAudioFocusChangeListener { change ->
-        when (change) {
-            AudioManager.AUDIOFOCUS_LOSS, AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> {
-                // Mirror iOS: the OS interruption stops playback until
-                // interruptionEnded; the Dart side re-schedules from the anchor.
-                synchronized(lock) {
-                    if (state == State.PLAYING) {
-                        try {
-                            schedule?.useTrack { it.pause() }
-                        } catch (_: Throwable) {
-                        }
-                        state = State.PAUSED
-                        lock.notifyAll()
-                    }
-                }
-                emitEvent("interruptionBegan")
+        runGuarded({
+            val inCall = isInCallMode()
+            val effects = synchronized(lock) {
+                supervisor.onFocusChange(change, inCall).also { applyFocusEffectsLocked(it) }
             }
-            AudioManager.AUDIOFOCUS_GAIN -> emitEvent("interruptionEnded")
-            // AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK: keep playing at full volume;
-            // staying in sync matters more than ducking etiquette for LocalJam.
+            Log.d(TAG, "audio focus change $change -> $effects")
+            if (AudioFocusPolicy.Effect.ABANDON_FOCUS in effects) abandonFocus()
+        }) { t -> Log.e(TAG, "audio focus callback failed", t) }
+    }
+
+    /**
+     * Must hold [lock]. Applies the focus policy's effects in order — STOP
+     * always precedes the event that reports it. ABANDON_FOCUS is left to the
+     * caller (outside the lock).
+     */
+    private fun applyFocusEffectsLocked(effects: List<AudioFocusPolicy.Effect>) {
+        for (effect in effects) {
+            when (effect) {
+                AudioFocusPolicy.Effect.STOP_OUTPUT -> stopOutputLocked()
+                AudioFocusPolicy.Effect.EMIT_BEGAN -> emit(AudioEvents.interruptionBegan())
+                AudioFocusPolicy.Effect.EMIT_BEGAN_NO_RESUME ->
+                    emit(AudioEvents.interruptionBegan(shouldResume = false))
+                AudioFocusPolicy.Effect.EMIT_ENDED_SHOULD_RESUME ->
+                    emit(AudioEvents.interruptionEnded(shouldResume = true))
+                AudioFocusPolicy.Effect.DUCK -> schedule?.useTrack { it.setVolume(DUCK_VOLUME) }
+                AudioFocusPolicy.Effect.UNDUCK -> schedule?.useTrack { it.setVolume(1.0f) }
+                AudioFocusPolicy.Effect.ABANDON_FOCUS -> Unit
+            }
         }
     }
 
-    /** Requests audio focus for playback (playAt). Denial is non-fatal. */
-    private fun requestFocus() {
-        val am = audioManager ?: return
-        val granted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+    /**
+     * playAt's focus gate (contract item 4): no focus request at all while a
+     * call owns audio, nor while focus is already held (re-requesting would
+     * hand a navigation prompt that is ducking us AUDIOFOCUS_LOSS); else
+     * request it. The request runs outside [lock] — focus callbacks land on
+     * the main thread meanwhile, and the [ticket] fences them (see
+     * [AudioFocusPolicy.onPlayRequested]). False = do not play; the policy
+     * has emitted interruptionBegan and playAt completes normally.
+     */
+    private fun negotiateFocusForPlay(ticket: PlaybackSupervisor.PlayAtTicket): Boolean {
+        val inCall = isInCallMode()
+        val focus = if (!inCall && ticket.focus.requestFocus) requestFocus() else null
+        val decision = synchronized(lock) {
+            supervisor.negotiateFocus(ticket, inCall, focus)
+                .also { applyFocusEffectsLocked(it.effects) }
+        }
+        if (!decision.play) {
+            Log.i(
+                TAG,
+                when {
+                    inCall -> "playAt refused: a call owns the audio path (mode ${audioManager?.mode})"
+                    focus == null -> "playAt refused: interrupted while starting (focus held)"
+                    else -> "playAt refused: audio focus $focus"
+                }
+            )
+        }
+        return decision.play
+    }
+
+    /** Whether a call (cellular, VoIP, ringing, screening) owns audio now. */
+    private fun isInCallMode(): Boolean = try {
+        audioManager?.mode?.let(::isCallAudioMode) ?: false
+    } catch (_: Throwable) {
+        false
+    }
+
+    /** Requests media audio focus for playAt (only when not already held). */
+    private fun requestFocus(): FocusRequestResult {
+        val am = audioManager ?: return FocusRequestResult.GRANTED
+        val code = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val request = focusRequest ?: AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
-                .setAudioAttributes(
-                    AudioAttributes.Builder()
-                        .setUsage(AudioAttributes.USAGE_MEDIA)
-                        .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
-                        .build()
-                )
+                .setAudioAttributes(mediaAttributes)
+                // A cellular call holds focus LOCKED: queue behind it
+                // (DELAYED, then GAIN when it ends = interruptionEnded)
+                // rather than fail and never hear about the call ending.
+                .setAcceptsDelayedFocusGain(true)
                 .setOnAudioFocusChangeListener(focusListener, mainHandler)
                 .build()
                 .also { focusRequest = it }
@@ -1790,42 +2192,198 @@ class LocaljamAudioPlugin :
                 focusListener, AudioManager.STREAM_MUSIC, AudioManager.AUDIOFOCUS_GAIN
             )
         }
-        if (granted != AudioManager.AUDIOFOCUS_REQUEST_GRANTED) {
-            Log.w(TAG, "audio focus not granted ($granted); playing anyway")
+        return FocusRequestResult.of(code)
+    }
+
+    /** Releases focus, also cancelling a pending delayed request. Idempotent. */
+    private fun abandonFocus() {
+        val am = audioManager ?: return
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                focusRequest?.let { am.abandonAudioFocusRequest(it) }
+            } else {
+                @Suppress("DEPRECATION")
+                am.abandonAudioFocus(focusListener)
+            }
+        } catch (e: Throwable) {
+            Log.w(TAG, "abandonAudioFocus failed", e)
         }
     }
 
-    private fun abandonFocus() {
-        val am = audioManager ?: return
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            focusRequest?.let { am.abandonAudioFocusRequest(it) }
-        } else {
-            @Suppress("DEPRECATION")
-            am.abandonAudioFocus(focusListener)
+    // --------------------------------------------------- platform listeners
+
+    /**
+     * Registers the device callback, the becoming-noisy receiver and the
+     * mode listener (each once). At attach, and again on the first method
+     * call after a `dispose` ([wake]). Never after detach.
+     */
+    private fun registerPlatformListeners() {
+        synchronized(listenerLock) {
+            if (listenersDetached) return
+            val context = appContext ?: return
+            if (deviceCallback == null) registerRouteCallback()
+            if (noisyReceiver == null) registerNoisyReceiver(context)
+            if (modeListener == null) registerModeListener()
         }
+    }
+
+    /** Unregisters all three; [detaching] also forbids registering again. */
+    private fun unregisterPlatformListeners(detaching: Boolean) {
+        synchronized(listenerLock) {
+            if (detaching) listenersDetached = true
+            unregisterRouteCallback()
+            unregisterNoisyReceiver()
+            unregisterModeListener()
+        }
+    }
+
+    /** First method call after `dispose`: events and listeners come back. */
+    private fun wake() {
+        dormant = false
+        registerPlatformListeners()
+    }
+
+    /**
+     * API 31+: calls that do not go through audio focus (a VoIP app that only
+     * switches the mode) still interrupt us, and the end of a call we were
+     * refused for is observable. Below 31 the in-call check at playAt plus
+     * the focus callbacks are all there is.
+     */
+    private fun registerModeListener() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return
+        val am = audioManager ?: return
+        val listener = AudioManager.OnModeChangedListener { mode ->
+            runGuarded({
+                val effects = synchronized(lock) {
+                    supervisor.onModeChanged(isCallAudioMode(mode))
+                        .also { applyFocusEffectsLocked(it) }
+                }
+                if (effects.isNotEmpty()) Log.d(TAG, "audio mode $mode -> $effects")
+            }) { t -> Log.e(TAG, "audio mode callback failed", t) }
+        }
+        try {
+            am.addOnModeChangedListener(Executor { mainHandler.post(it) }, listener)
+            modeListener = listener
+        } catch (e: Throwable) {
+            Log.w(TAG, "audio mode listener unavailable", e)
+        }
+    }
+
+    private fun unregisterModeListener() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return
+        val listener = modeListener as? AudioManager.OnModeChangedListener ?: return
+        try {
+            audioManager?.removeOnModeChangedListener(listener)
+        } catch (_: Throwable) {
+        }
+        modeListener = null
+    }
+
+    // ----------------------------------------------------------------- routes
+
+    /**
+     * ACTION_AUDIO_BECOMING_NOISY: headphones are being unplugged / the BT
+     * sink is dropping. AudioService sends it BEFORE rerouting so a player
+     * can stop before audio blares from the speaker — so output stops FIRST,
+     * then Dart hears routeChanged{oldDeviceUnavailable: true}. Nothing is
+     * restarted natively. Dynamically registered: it is a protected system
+     * broadcast (manifest receivers for it are not delivered, and nothing
+     * but the system can send it — adb included).
+     */
+    private fun registerNoisyReceiver(context: Context) {
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(ctx: Context?, intent: Intent?) {
+                if (intent?.action != AudioManager.ACTION_AUDIO_BECOMING_NOISY) return
+                runGuarded({ onBecomingNoisy() }) { t ->
+                    Log.e(TAG, "becoming-noisy handling failed", t)
+                }
+            }
+        }
+        val filter = IntentFilter(AudioManager.ACTION_AUDIO_BECOMING_NOISY)
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                // NOT_EXPORTED still receives system broadcasts.
+                context.registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
+            } else {
+                context.registerReceiver(receiver, filter)
+            }
+            noisyReceiver = receiver
+        } catch (e: Throwable) {
+            Log.w(TAG, "could not register the becoming-noisy receiver", e)
+        }
+    }
+
+    private fun unregisterNoisyReceiver() {
+        val receiver = noisyReceiver ?: return
+        noisyReceiver = null
+        try {
+            appContext?.unregisterReceiver(receiver)
+        } catch (_: Throwable) {
+        }
+    }
+
+    private fun onBecomingNoisy() {
+        // Still routed to the departing device; guess where media lands next
+        // (the removal callback that follows reports the real new route).
+        val going = currentRoute()
+        val next = currentRoute(exclude = setOfNotNull(going?.id))
+        val latencyUs = currentOutputLatencyUs()
+        val decision = synchronized(lock) {
+            supervisor.onBecomingNoisy(System.nanoTime(), going?.id, next?.id)
+                .also { if (it.stopOutput) stopOutputLocked() }
+        }
+        Log.i(TAG, "audio becoming noisy: output stopped (route ${going?.id} -> ${next?.id})")
+        emit(AudioEvents.routeChanged(latencyUs, decision.routeId, decision.oldDeviceUnavailable))
     }
 
     private fun registerRouteCallback() {
         val am = audioManager ?: return
         val callback = object : AudioDeviceCallback() {
             // Registration immediately fires onAudioDevicesAdded with the
-            // CURRENT device list; skip it so no spurious routeChanged lands.
+            // CURRENT device list; it only primes the route tracker, so no
+            // spurious routeChanged lands.
             private var initial = true
 
             override fun onAudioDevicesAdded(added: Array<out AudioDeviceInfo>) {
-                if (initial) {
-                    initial = false
-                    return
-                }
-                if (added.any { it.isSink }) {
-                    emitEvent("routeChanged", currentOutputLatencyUs())
-                }
+                runGuarded({
+                    if (initial) {
+                        initial = false
+                        val route = currentRoute()
+                        synchronized(lock) { supervisor.routes.observe(route) }
+                        return@runGuarded
+                    }
+                    val sinks = added
+                        .filter { it.isSink && AudioRoutes.isMediaOutput(it.type) }
+                        .map(::deviceOf)
+                    if (sinks.isEmpty()) return@runGuarded
+                    val route = routeAfterAddition(sinks.map { it.id }.toSet())
+                    val latencyUs = currentOutputLatencyUs()
+                    val decision = synchronized(lock) { supervisor.onDevicesAdded(route) }
+                    emit(AudioEvents.routeChanged(latencyUs, decision.routeId, false))
+                }) { t -> Log.e(TAG, "route (added) callback failed", t) }
             }
 
             override fun onAudioDevicesRemoved(removed: Array<out AudioDeviceInfo>) {
-                if (removed.any { it.isSink }) {
-                    emitEvent("routeChanged", currentOutputLatencyUs())
-                }
+                runGuarded({
+                    val sinks = removed
+                        .filter { it.isSink && AudioRoutes.isMediaOutput(it.type) }
+                        .map(::deviceOf)
+                    if (sinks.isEmpty()) return@runGuarded
+                    val route = currentRoute(exclude = sinks.map { it.id }.toSet())
+                    val latencyUs = currentOutputLatencyUs()
+                    val decision = synchronized(lock) {
+                        supervisor.onDevicesRemoved(System.nanoTime(), sinks, route)
+                            .also { if (it.stopOutput) stopOutputLocked() } // FIRST
+                    }
+                    if (decision.oldDeviceUnavailable) {
+                        Log.i(TAG, "active output removed: output stopped (now ${decision.routeId})")
+                    }
+                    emit(
+                        AudioEvents.routeChanged(
+                            latencyUs, decision.routeId, decision.oldDeviceUnavailable
+                        )
+                    )
+                }) { t -> Log.e(TAG, "route (removed) callback failed", t) }
             }
         }
         am.registerAudioDeviceCallback(callback, mainHandler)
@@ -1836,6 +2394,71 @@ class LocaljamAudioPlugin :
         deviceCallback?.let { audioManager?.unregisterAudioDeviceCallback(it) }
         deviceCallback = null
     }
+
+    private fun deviceOf(info: AudioDeviceInfo): RouteDevice = RouteDevice(
+        type = info.type,
+        productName = info.productName?.toString().orEmpty(),
+        address = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            info.address.orEmpty()
+        } else {
+            ""
+        },
+    )
+
+    /**
+     * The device media plays on (or would play on) right now, skipping ids
+     * in [exclude] — `currentRouteId` (contract item 2). Most exact source
+     * first: a live track's routed device, then API 33's audio-policy answer
+     * for media attributes, then a static AOSP-like priority guess.
+     */
+    private fun currentRoute(exclude: Set<String> = emptySet()): RouteDevice? {
+        val am = audioManager ?: return null
+        return try {
+            liveRoute()?.takeIf { it.id !in exclude }
+                ?: policyRoute(am, exclude)
+                ?: AudioRoutes.pickMediaRoute(outputDevices(am), exclude)
+        } catch (e: Throwable) {
+            Log.w(TAG, "route query failed", e)
+            null
+        }
+    }
+
+    /**
+     * The route right after outputs with ids [added] appeared — NOT
+     * [currentRoute], whose first source (the live track) has not been
+     * moved yet at this point: see [AudioRoutes.routeAfterAddition].
+     */
+    private fun routeAfterAddition(added: Set<String>): RouteDevice? {
+        val am = audioManager ?: return null
+        return try {
+            AudioRoutes.routeAfterAddition(
+                policyRoute(am, emptySet()), liveRoute(), added, outputDevices(am)
+            )
+        } catch (e: Throwable) {
+            Log.w(TAG, "route query failed", e)
+            null
+        }
+    }
+
+    /** The live track's routed device (exact, once the track is playing). */
+    private fun liveRoute(): RouteDevice? {
+        val sched = synchronized(lock) { schedule }
+        return sched?.useTrack { it.routedDevice }
+            ?.takeIf { it.isSink && AudioRoutes.isMediaOutput(it.type) }
+            ?.let(::deviceOf)
+    }
+
+    /** API 33+: the audio policy's own answer for media attributes. */
+    private fun policyRoute(am: AudioManager, exclude: Set<String>): RouteDevice? {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return null
+        return am.getAudioDevicesForAttributes(mediaAttributes)
+            .filter { it.isSink && AudioRoutes.isMediaOutput(it.type) }
+            .map(::deviceOf)
+            .firstOrNull { it.id !in exclude }
+    }
+
+    private fun outputDevices(am: AudioManager): List<RouteDevice> =
+        am.getDevices(AudioManager.GET_DEVICES_OUTPUTS).map(::deviceOf)
 
     /**
      * Best-effort platform output latency (§7). Android has no public API;

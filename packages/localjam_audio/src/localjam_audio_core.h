@@ -24,6 +24,8 @@
  *   positionUs       -> lj_position_us
  *   setRate          -> lj_set_rate
  *   outputLatencyUs  -> lj_output_latency_us
+ *   probeDuration    -> lj_probe_duration   (no engine involved at all)
+ *   currentRouteId   -> lj_current_route_id
  *   dispose          -> lj_destroy
  *   events channel   -> lj_event_cb
  *
@@ -173,16 +175,62 @@
  *
  * THREADS
  * -------
- *  - Caller thread(s): all lj_* calls. They are internally serialised by a
- *    mutex; none of them block on audio I/O.
+ *  - Caller thread: all lj_* calls that take an engine, from ONE control
+ *    thread (the plugins' platform thread). Engine state is guarded by a
+ *    mutex, but device open/close (inside lj_play_at / lj_load / lj_destroy)
+ *    rely on not racing each other. None of them block on audio I/O.
+ *    lj_probe_duration and lj_current_route_id touch no engine at all and may
+ *    run on any thread, concurrently; both can block on file or audio-server
+ *    I/O, so the plugins run them on a worker thread, never the UI thread.
  *  - Device callback (audio thread, owned by miniaudio): drains the ring,
  *    records clock samples. Takes the same mutex, but only ever for a few
  *    microseconds of arithmetic — no allocation, no I/O, no waiting.
  *  - One decoder thread per schedule, generation-tagged exactly like the
  *    Android writer/decoder pair so a superseded thread exits silently.
  *  - One monitor thread for the whole engine: emits playbackFinished when the
- *    last media frame has been presented, and logs the measured start error.
+ *    last media frame has been presented, logs the measured start error,
+ *    follows the output route (see "Routes"), and delivers every event.
  *    Events NEVER fire on the audio thread.
+ *
+ * ROUTES (output device changes)
+ * ------------------------------
+ * The device follows the system default output (miniaudio auto-routing). A
+ * backend reroutes by STOPPING the stream, re-opening it on the new device and
+ * starting it again — so a "stopped" notification is not, by itself, a dead
+ * device. The pure state machine lj_internal::RouteWatch
+ * (localjam_audio_internal.h) turns the notification sequence plus the polled
+ * device state into one verdict per change:
+ *   - stopped, then started again within LJ_ROUTE_DEBOUNCE_US, rerouted: the
+ *     output moved. If the PREVIOUS device is still listed by the system the
+ *     user switched outputs: keep playing, re-measure the device clock and its
+ *     latency, emit routeChanged{outputLatencyUs, routeId}. If it is gone it
+ *     was unplugged and the OS fell back to another output: stop (the audio
+ *     must never jump to the speaker) and emit routeChanged
+ *     {oldDeviceUnavailable: true, routeId}.
+ *   - stopped and NOT restarted within the debounce (unplugged with nothing
+ *     to fall back to, or the driver died — including the backends that skip
+ *     the "stopped" notification): stop, emit routeChanged
+ *     {oldDeviceUnavailable: true}. Never restarted by itself; the next
+ *     lj_play_at opens a fresh device.
+ *   - stopped and resumed with no reroute (PulseAudio suspend): re-measure
+ *     the clock, no event.
+ * From the first unexpected notification until that verdict, the callback's
+ * output is muted, so nothing is heard on a device we are about to abandon.
+ * Not visible to any backend: PulseAudio/PipeWire PORT switches on one sink
+ * (headphone jack vs speaker on the same card) — the stream never moves.
+ *
+ * FAILURES
+ * --------
+ * A failure off the method-call path that leaves output stopped is reported
+ * as playbackError{code, message} and the schedule is retired:
+ *   decode_failed  the decoder/resampler for the schedule failed (e.g. the
+ *                  file vanished after load) — re-scheduling would fail the
+ *                  same way, so this is NOT engineRestarted.
+ * A lost output device is a route change, not an error (see "Routes").
+ *
+ * No C++ exception leaves this API: allocation or thread-creation failures
+ * become LJ_ERR_INTERNAL (or decode_failed inside a decoder thread) rather
+ * than std::terminate.
  *
  * Licence: same as the LocalJam repo. Vendored third-party code in
  * src/third_party (public domain / MIT-0) — see third_party/LICENSES.md.
@@ -224,6 +272,17 @@ extern "C" {
 #define LJ_MATURITY_SPAN_US 15000
 #endif
 
+/*
+ * Stream limits applied at load/probe (LJ_ERR_LOAD_FAILED outside them). The
+ * same bounds as the iOS/macOS plugin, so a file plays on every platform or on
+ * none. They also cap every size derived from a file header (see
+ * lj_internal::ComputeStreamSizing).
+ */
+#define LJ_MIN_SAMPLE_RATE 4000u
+#define LJ_MAX_SAMPLE_RATE 384000u
+/* 2^37 frames: 99 h even at 384 kHz; anything longer is a crafted header. */
+#define LJ_MAX_FRAMES (1ULL << 37)
+
 /* Bounded PCM ring sizing — peak decoded memory per schedule. */
 #ifndef LJ_RING_SECONDS
 #define LJ_RING_SECONDS 8
@@ -254,6 +313,17 @@ typedef enum {
   LJ_ERR_INTERNAL
 } lj_status;
 
+/* Accepted playback rates (playAt / setRate). The ±0.5 % §5.4 slews sit deep
+ * inside; the bounds match what AVAudioUnitTimePitch can realise on Apple
+ * platforms and keep the resampler ratio arithmetic finite. */
+#define LJ_MIN_RATE (1.0 / 32.0)
+#define LJ_MAX_RATE 32.0
+
+/* Furthest-ahead anchor lj_play_at accepts (1 h). Anything beyond is a caller
+ * bug (an uncalibrated clock), refused with LJ_ERR_BAD_ARGS rather than
+ * scheduled hours of silence ahead. Same bound on iOS/macOS. */
+#define LJ_MAX_LEAD_US 3600000000LL
+
 /* Stable string code for `status`, matching the codes the iOS/Android plugins
  * put in FlutterError/MethodChannel.Result.error. Never NULL. */
 const char* lj_status_code(lj_status status);
@@ -266,36 +336,53 @@ const char* lj_status_code(lj_status status);
  *
  * Availability on this backend:
  *   playbackFinished    always (the scheduled segment reached end of file)
- *   engineRestarted     device error / decoder failure — the schedule is gone
- *   routeChanged        miniaudio ma_device_notification_type_rerouted, where
- *                       the backend reports it (WASAPI default-device change;
- *                       PulseAudio server events). Carries the new route's
- *                       output latency.
+ *   engineRestarted     never (nothing here restarts by itself)
+ *   routeChanged        see "Routes" above: a reroute the backend reports
+ *                       (WASAPI default-device change; PulseAudio stream
+ *                       move) carries the new route's output latency and id;
+ *                       a lost output carries oldDeviceUnavailable.
  *   interruptionBegan   ma_device_notification_type_interruption_began /
- *   interruptionEnded   ..._ended, plus an unexpected device stop.
+ *   interruptionEnded   ..._ended.
+ *   playbackError       decode_failed (see "Failures" above).
  */
 typedef enum {
   LJ_EVENT_ROUTE_CHANGED = 0,
   LJ_EVENT_INTERRUPTION_BEGAN,
   LJ_EVENT_INTERRUPTION_ENDED,
   LJ_EVENT_ENGINE_RESTARTED,
-  LJ_EVENT_PLAYBACK_FINISHED
+  LJ_EVENT_PLAYBACK_FINISHED,
+  LJ_EVENT_PLAYBACK_ERROR
 } lj_event_kind;
 
 const char* lj_event_type_name(lj_event_kind kind);
 
 /*
- * One event for the `localjam_audio/events` EventChannel. `has_latency` is 1
- * when `output_latency_us` should be included as the payload's
- * "outputLatencyUs" key (today: routeChanged only), 0 otherwise.
- *
- * NEVER invoked from the audio callback; safe to hop to a UI thread inside.
- * Also never invoked re-entrantly from inside an lj_* call.
+ * One event for the `localjam_audio/events` EventChannel; the shells turn it
+ * into the payload map:
+ *   type                  lj_event_type_name(kind)
+ *   outputLatencyUs       output_latency_us, when has_latency (routeChanged)
+ *   routeId               route_id, when non-NULL (routeChanged)
+ *   oldDeviceUnavailable  old_device_unavailable != 0 (routeChanged; always
+ *                         sent for that kind)
+ *   code, message         when non-NULL (playbackError; both always set there)
+ * The strings are only valid for the duration of the callback.
  */
-typedef void (*lj_event_cb)(void* user_data,
-                            lj_event_kind kind,
-                            int64_t output_latency_us,
-                            int has_latency);
+typedef struct {
+  lj_event_kind kind;
+  int64_t output_latency_us;
+  int has_latency;
+  const char* code;
+  const char* message;
+  const char* route_id;
+  int old_device_unavailable;
+} lj_event;
+
+/*
+ * NEVER invoked from the audio callback; safe to hop to a UI thread inside
+ * (copy the strings). Also never invoked re-entrantly from inside an lj_*
+ * call.
+ */
+typedef void (*lj_event_cb)(void* user_data, const lj_event* event);
 
 /*
  * Diagnostic log sink. Receives the scheduling traces this engine emits —
@@ -336,9 +423,11 @@ void lj_destroy(lj_engine* engine);
 
 /*
  * Loads (probes) a local audio file and returns its duration in µs.
- * Replaces any previously loaded file, stopping playback first. O(1) in file
- * length for wav/flac/ogg; mp3 needs one parse-only pass to count frames
- * exactly (no decoding).
+ * Replaces any previously loaded file, stopping playback first; a failed load
+ * leaves nothing loaded. O(1) in file length for wav/flac/ogg; mp3 needs one
+ * parse-only pass to count frames exactly (no decoding). Files outside
+ * [LJ_MIN_SAMPLE_RATE, LJ_MAX_SAMPLE_RATE], with more than LJ_MAX_FRAMES
+ * frames, no frames, or more than two channels fail with LJ_ERR_LOAD_FAILED.
  */
 lj_status lj_load(lj_engine* engine,
                   const char* path,
@@ -351,7 +440,8 @@ lj_status lj_load(lj_engine* engine,
  * exactly when the native clock reads `native_time_us`, at `rate`.
  * An anchor closer than LJ_MIN_LEAD_US (or in the past) is re-anchored forward
  * with the position advanced at ×rate — never an uncontrolled ASAP start.
- * Calling while playing retires the previous schedule.
+ * Calling while playing retires the previous schedule. `rate` must lie in
+ * [LJ_MIN_RATE, LJ_MAX_RATE]; `native_time_us` at most LJ_MAX_LEAD_US ahead.
  */
 lj_status lj_play_at(lj_engine* engine,
                      int64_t native_time_us,
@@ -380,6 +470,34 @@ lj_status lj_set_rate(lj_engine* engine, double rate, char* err, size_t err_len)
 /* Output latency of the current route (µs); 0 when no device is open. */
 int64_t lj_output_latency_us(lj_engine* engine);
 
+/*
+ * Duration (µs) of the file at `path` — exactly what lj_load would report —
+ * from a private decoder that is opened and closed again. Touches no engine,
+ * so it is safe while playing and from any thread. Returns LJ_OK, or the
+ * status lj_load would have failed with (the channel replies null then).
+ * O(1) for wav/flac/ogg; mp3 needs one parse-only pass over frame headers.
+ */
+lj_status lj_probe_duration(const char* path,
+                            int64_t* out_duration_us,
+                            char* err,
+                            size_t err_len);
+
+/*
+ * Writes the id of the current output route — the system default playback
+ * device, which the open device follows — into `out` and returns 1, or
+ * returns 0 when no output device can be identified. Format
+ * "<miniaudio backend>:<16 hex digits>", the digits an FNV-1a 64 hash of the
+ * backend's device id (WASAPI endpoint id, PulseAudio sink name, ...) or, when
+ * the backend has none, of the device name: stable for one device across
+ * sessions, opaque like the other platforms' route ids.
+ *
+ * Touches no engine: it asks the audio server through a private, throwaway
+ * miniaudio context, so it is safe from any thread, concurrently — but it
+ * BLOCKS on that server (milliseconds; longer if it is wedged), so never call
+ * it on a UI thread.
+ */
+int lj_current_route_id(char* out, size_t out_len);
+
 /* ------------------------------------------------------ test instrumentation */
 
 /*
@@ -397,7 +515,8 @@ typedef struct {
   uint32_t frame_count;      /* frames requested */
   int64_t first_media_out_frame; /* output index of the first media frame in
                                     this callback, or -1 if all silence */
-  float first_media_sample; /* channel-0 value of that frame */
+  float first_media_sample; /* channel-0 value of that frame (before muting) */
+  int muted; /* the callback's output was silenced (route change pending) */
 } lj_tap_sample;
 
 typedef void (*lj_tap_cb)(void* user_data, const lj_tap_sample* sample);
@@ -406,6 +525,23 @@ void lj_set_tap(lj_engine* engine, lj_tap_cb tap, void* user_data);
 /* Device parameters of the active schedule (0 when none) — for test asserts. */
 uint32_t lj_device_sample_rate(lj_engine* engine);
 int64_t lj_device_latency_frames(lj_engine* engine);
+
+/*
+ * Replays a device notification into the engine exactly as if the backend had
+ * sent it for the open device, so src/test/core_test.cpp can drive the route
+ * logic (see "Routes") end to end on a real device without unplugging
+ * anything. LJ_TEST_FORGET_ROUTE instead makes the engine's record of the
+ * device's output name one the system does not list, so the next reroute reads
+ * as "the previous output was unplugged". No effect without an open device.
+ * Not used in production.
+ */
+typedef enum {
+  LJ_TEST_DEVICE_STARTED = 0,
+  LJ_TEST_DEVICE_STOPPED,
+  LJ_TEST_DEVICE_REROUTED,
+  LJ_TEST_FORGET_ROUTE
+} lj_test_signal;
+void lj_test_signal_device(lj_engine* engine, lj_test_signal signal);
 
 #if defined(__cplusplus)
 } /* extern "C" */
