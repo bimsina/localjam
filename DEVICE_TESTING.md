@@ -31,7 +31,9 @@ devices, iOS + Android).
    Playback should recover and re-anchor by itself (audio events →
    recalibrate). A brief gap is fine; staying desynced is a bug.
 4. **Interruption** — call the guest phone mid-jam, hang up. Playback should
-   resume in sync without touching the app.
+   resume in sync without touching the app. During the call, press play in
+   the app twice: nothing may play either time (each refused `playAt`
+   re-reports the interruption, iOS and Android alike).
 5. **Screen lock / background** — lock both phones mid-playback. Audio must
    continue on both (iOS background audio mode; Android foreground service
    notification should appear). Unlock: still in sync (resume re-verify).
@@ -90,6 +92,27 @@ devices, iOS + Android).
     playback and with the queue and people sheets open. Nothing may clip or
     overflow; the transport stays reachable; rotating back restores the same
     scroll position.
+18. **QR scan with a real camera** — guest scans the host's Invite QR on iOS
+    and Android, in bright light and on a dimmed host screen. The join confirm
+    must appear and the guest land in the room. Simulators have no camera; the
+    2026-10-17 run only decoded the QR from a screenshot.
+19. **Nearby on Android over real Wi-Fi** — the Android emulator sits behind
+    NAT and never sees a room; on a real phone the host must appear under
+    Nearby and join in one tap (and the host must not see its own room).
+20. **Host asleep (§3.5) on a real iPhone** — host pauses, locks for 1–2 min,
+    unlocks. Guests must say "The host's phone is asleep" (controls dimmed,
+    "You can add music when it wakes" in the queue), not "Reconnecting…", and
+    recover to "In sync" on unlock. Then leave it locked > 10 min: guests
+    should end on the room-closed screen. (Simulators never suspend the app.)
+21. **Guest uploads heard on the host** — after the fix for the 2026-10-17
+    finding, a guest adds a track: it must be *audible on the host phone* and
+    the host's timer must show that track's own length. Then kill and relaunch
+    the guest app, rejoin, and remove that track from the guest's queue.
+22. **Low-end Android smoothness** — on a budget Android phone, leave Home
+    and the room open for 10 min: no "isn't responding" dialog, no audible
+    restarts. (The emulator on software rendering pegged the raster thread
+    and hit ANRs plus a hard resync every 1–5 s.) Also scrub by tapping the
+    track on an iPhone — XCUITest taps did not seek there.
 
 ## Reading the telemetry
 
@@ -104,12 +127,14 @@ devices, iOS + Android).
 - **macOS**: live-verified (app joined a session at −0.4 ms drift). Full
   format support via AVAudioEngine.
 - **Linux**: `flutter build linux --debug` verified in an Ubuntu 24.04
-  (arm64) container — plugin glue compiles clean under -Wall -Werror.
+  (arm64) container — plugin glue compiles clean under -Wall -Werror — and
+  the localjam_audio example's integration tests pass there.
   Runtime audio (PulseAudio/ALSA) still needs a real machine with a sound
   device: run the app, join a session, check the same telemetry as mobile.
 - **Windows**: shared miniaudio core (measured ≤0.01 ms start error on
-  CoreAudio); plugin glue **build-unverified** — first task on a Windows
-  machine is `flutter build windows`, then the mobile checks. Desktop v1 formats: mp3/flac/wav/ogg
+  CoreAudio); plugin glue compiles with MinGW-w64 against the Flutter
+  Windows headers, **MSVC unverified** — first task on a Windows machine is
+  `flutter build windows`, then the mobile checks. Desktop v1 formats: mp3/flac/wav/ogg
   (m4a/AAC returns unsupported_format; OS-codec decode is a later add).
 
 ## Simulator/emulator run — 2026-08-29 (pre-device baseline)
@@ -192,3 +217,86 @@ nothing, while the host's registration is visible to `dns-sd` on the Mac), so
 guest 1 joined by link; and the Android emulator lost its default route
 mid-run, so guest 2 joined through `adb reverse` + `127.0.0.1` after an
 earlier direct `10.0.2.2` join had worked.
+
+
+## Simulator/emulator run — 2026-10-17 (after the protocol 1.0 hardening)
+
+Ran live on two iOS 27.0 simulators (iPhone 18 Pro = host "Nimble Toucan",
+iPhone 18 Pro Max = guest 1 "Electric Mongoose") and the Pixel_9_Pro_2
+emulator (API 36, guest 2 "Silky Narwhal"), all fresh-installed from debug
+builds (Flutter 3.47.5, Xcode 27.1). Driven by Maestro 1.36 (iOS, XCUITest)
+and adb/uiautomator (Android); test tracks were 30–300 s tagged MP3/M4A plus
+14 large WAVs (1.2 GB) for the import check. Numbers are from the in-app
+Sync sheet. The Mac was heavily loaded (load average 25–40, other agents
+running test suites) — that matters for the Android rows, see the caveats.
+
+| # | Check | iOS host | iOS guest | Android guest | Notes |
+|---|-------|----------|-----------|---------------|-------|
+| 1 | Sync quality | ✅ | ✅ | ✅ | Guest 1 +0.1…+0.3 ms, "none", steady. Guest 2 −12…+12.7 ms, all "none", 0 resyncs in 82 s (emulator on `-gpu host`). Shared-machine clock: weak proxy. See caveat on software rendering |
+| 2 | Bluetooth latency | ⬜ | ⬜ | ⬜ | needs hardware |
+| 3 | Route change | ⬜ | ⬜ | ⬜ | needs hardware |
+| 4 | Interruption (call) | ⬜ | ⬜ | ⬜ | needs hardware |
+| 5 | Screen lock / background | ✅ | ✅ | ✅ | All three backgrounded 43 s mid-play; two end-of-media advances happened while away; on return all on the same track, iOS "In sync", Android "Catching up" → "In sync" |
+| 6 | Wi-Fi blip | ⬜ | ⬜ | ⬜ | needs hardware. (An emulator crash and an emulator restart acted as hard drops: the host roster lost the guest, the rejoin was clean, no phantom) |
+| 7 | Host walks away | ✅ | ✅ | ✅ | `simctl terminate` → both guests "Reconnecting… · Lost the host — still playing what you have" within 8 s, cached playback continued; still reconnecting at t+85 s; "The room closed" with Try again + Back to nearby at t+100 s. Try again against the relaunched host's new room stays on the ended screen with "Could not reach that room…" |
+| 8 | Battery/thermal | ⬜ | ⬜ | ⬜ | needs hardware |
+| 9 | Lock-screen media card | ⚠️ | ⚠️ | ✅ | Android shade card: LocalJam mark, title, artist, placeholder art, live progress, **no transport** for a playback-gated guest. iOS simulator still has no Now Playing UI |
+| 10 | Headset/watch/car transport | ⬜ | ⬜ | ⬜ | needs hardware |
+| 11 | iOS host paused + locked | ⬜ | — | — | needs hardware; the §3.5 "host asleep" path itself was exercised by backgrounding (row H below) |
+| 12 | Deliberate end of jam | ✅ | ✅ | ✅ | iOS guest on "The host ended the jam" at once, Back to nearby only. Android was backgrounded at the time and showed the same screen on return. Host on home with "Jam ended · 7 tracks, 3 people" |
+| 13 | Kick, then rejoin | ✅ | ✅ | ✅ | "You were removed" with Back to nearby only. Rejoin from Nearby was refused with "The host removed you from this room. They can let you back in." (no Try again). Host's people sheet listed them under Removed with **Let back in**; after it the rejoin worked and both rosters settled at exactly 3 real names. Android kill/relaunch/rejoin also left no phantom |
+| 14 | Permission rationale sheets | ✅ | ✅ | ✅ | iOS local-network sheet before the first host and the first join, not repeated on the second host. Android local network → notifications → system prompt. Android media library sheet → Don't allow twice → "LocalJam cannot see your music… Open settings"; re-granted outside the app → Library worked **without a restart** |
+| 15 | iOS Files app | — | ✅ | — | Guest "Add" → document picker → On My iPhone → LocalJam → the seeded file uploaded. The picker opened on Recents/Browse, not straight in the LocalJam folder |
+| 16 | Android media card branding | — | — | ✅ | Mark, title and placeholder art in the shade; the compact Quick Settings player shows the artist tag on line 2 and the room name as sub-text — by design in `JamSession.kt` (the checklist's "room name as the subtitle" predates that). Lock screen / theme switch not exercised |
+| 17 | Landscape | ⬜ | ⬜ | ✅ (after fix) | Android phone landscape: the run found the bottom people/queue strip **clipped**; fixed the same day (strip pinned to the foot, player scales to fit) and re-verified on Pixel_9_Pro_2 incl. a playback-gated guest. iOS has no rotation control in the harness |
+
+New behaviours from the hardening:
+
+| # | Behaviour | Result | Notes |
+|---|-----------|--------|-------|
+| A | Room opens while files import | ✅ | 18 files (1.2 GB): the room was up and playing at 00:00 right after the jam-started overlay, showing "Adding your music · 3 of 18 → 6 → 12" with the queue count climbing |
+| B | QR / link / Nearby join | ✅ | Deep link joined both guests (confirm dialog each time). The QR decoded from a host screenshot is byte-for-byte the same link. **mDNS browsing now works in the iOS 27 Simulator** — guest 1 joined from Nearby; the Android emulator still sees nothing (NAT) |
+| C | All in sync, advance together | ✅ | All three switched tracks together on every auto-advance, ~0.75 s of silence between tracks (host engine restarts every 35.75 s for 35.0 s files). "Starting the queue over" on the wrap |
+| D | Guest upload plays everywhere | ❌ | Android (Library) and iOS (Files) uploads landed in every queue with the right "added by" and played on the *other* guests — **but the host never plays a guest upload** (no engine start for them in the host log, "AVAudioEngine: left running idle for 120 s"), and the host's timer shows the previous track's length (00:35 for a 30 s file) |
+| E | Remove own track after kill/relaunch | ❌ | The relaunched guest rejoins with a new peer id: its upload shows no owner on any device and cannot be swiped away. The co-host *role* did follow the device across a fresh rejoin |
+| F | Kick → refused → Let back in → rejoin | ✅ | See row 13 |
+| G | Host transport propagates | ✅ | Pause / play / drag-seek / next / previous reached both guests at the same position. A co-host Android finger tap on the scrubber seeks for everyone. XCUITest taps on the iOS scrubber did not seek (dragging did) |
+| H | Host backgrounded while paused | ✅ | Guest: "Host asleep" + "The host's phone is asleep" banner (not "lost the host"); queue says "You can add music when it wakes" with Add disabled. Foregrounding the host → "In sync" within 4 s |
+| I | Host ends the jam | ✅ | See row 12 |
+| J | Failed track → Retry | ✅ | Host file deleted + guest cache evicted: "Getting this track — 0%" for ~37 s (five backoff retries), then "Couldn't get this track · Retry"; the queue row shows a ⚠ "Could not be loaded". The host showed "Playback error · Resume audio" and "Waiting for 1 person to get this track". File restored → Retry fetched it → Play recovered all three |
+| K | Upload refusal copy | ✅ | Guest picked a file, host switched "Add music" off, guest confirmed: "Could not add hotel_guest.mp3. This room is listen-only, or the host hasn't let you add tracks." Add then disabled with "The host is running this queue" |
+
+Bugs this run turned up (details in the run report):
+
+- **Host is silent for every guest-uploaded track.** The host's player
+  resolves media only through paths it registered itself; uploads never get
+  one, so the load is skipped and the room plays on without the host.
+- **Track ownership does not survive a guest relaunch.** Ownership is by peer
+  id, and a fresh rejoin gets a new one (the co-host role, keyed by client
+  id, does survive).
+- **Tapping a queue row while playing stops the room** (selects the track
+  paused at 00:00 on every device) instead of playing it.
+- **Landscape clips the room's bottom strip** on an Android phone.
+- Smaller: the remove-guest confirm still says "They can come back with the
+  room code"; ending the jam with the room sheet open trips a debug
+  "ValueNotifier used after being disposed"; a track that cannot load shows
+  the previous track's length; "Next up" lists playlist order, not play
+  order, after a wrap; "Let back in" is not its own accessibility element.
+
+**All of the above were fixed the same day** (with regression tests) and the
+host-plays-guest-upload, landscape and play-order fixes re-verified on an
+iPhone 18 Pro simulator host + Pixel_9_Pro_2 guest: the host's engine starts
+for a guest's 5:00 upload, its timer runs against 05:00, drift +0.4 ms.
+Tapping a queue row while playing now plays it; re-picking the current track
+does nothing (restart = seek to 0). Ownership follows the device across a
+relaunch or a kick → let back in. Repeated drift-triggered hard resyncs now
+back off (2 → 4 → 8 → 10 s) instead of restarting audio every second.
+Checklist item 21 is still needed on real phones.
+
+Caveats specific to this rig: with the emulator on software rendering
+(`lavapipe`) and the Mac at load 25–40, the Android guest drifted −20…−190 ms
+and hard-resynced every 1–5 s (thousands of "device stall time corrected" /
+`pcm_writei failed` lines), and Home hit two "isn't responding" dialogs with
+the raster thread at 118 % CPU. Relaunched on `-gpu host -no-window`, the
+same guest held ±13 ms with no resyncs. The emulator also crashed once under the
+load ("hanging thread"), which is how row 6 got its unplanned drop.
