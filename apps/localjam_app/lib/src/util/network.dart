@@ -72,3 +72,158 @@ Future<JamNetworkStatus> currentNetwork() async {
     return JamNetworkStatus.offline;
   }
 }
+
+// --- Join-link safety --------------------------------------------------------
+
+/// Whether [address] is an IP literal that can only mean "on this network":
+/// RFC1918 private space, IPv4/IPv6 link-local, loopback, or an IPv6
+/// unique-local address.
+///
+/// A `localjam://` link is a bare instruction to open a socket, and links
+/// arrive from anywhere — a chat message, a web page, a QR sticker on a wall.
+/// LocalJam is a LAN product by construction, so a link pointing at a routable
+/// public address is never a jam; it is the app being used as someone else's
+/// HTTP client. Hostnames are refused for the same reason: what a name
+/// resolves to is not knowable from the link.
+bool isLocalNetworkAddress(String address) {
+  // A zone id (`fe80::1%en0`) names the interface, not the host, and is not
+  // part of the address the rule is about — mDNS hands them out routinely.
+  final trimmed = address.trim().split('%').first;
+  if (trimmed.isEmpty) return false;
+  final InternetAddress parsed;
+  try {
+    parsed = InternetAddress(trimmed);
+  } catch (_) {
+    return false; // Not an IP literal — a hostname could resolve anywhere.
+  }
+  if (parsed.isLoopback) return true;
+  if (parsed.type == InternetAddressType.IPv4) {
+    final octets = parsed.rawAddress;
+    if (octets.length != 4) return false;
+    final [a, b, ...] = octets;
+    if (a == 10) return true; // 10.0.0.0/8
+    if (a == 172 && b >= 16 && b <= 31) return true; // 172.16.0.0/12
+    if (a == 192 && b == 168) return true; // 192.168.0.0/16
+    if (a == 169 && b == 254) return true; // 169.254.0.0/16 link-local
+    return false;
+  }
+  final bytes = parsed.rawAddress;
+  if (bytes.length != 16) return false;
+  if ((bytes[0] & 0xfe) == 0xfc) return true; // fc00::/7 unique-local
+  if (bytes[0] == 0xfe && (bytes[1] & 0xc0) == 0x80) return true; // fe80::/10
+  return false;
+}
+
+/// Resolves a host name to addresses. Injectable so tests never touch DNS.
+typedef JamHostLookup = Future<List<InternetAddress>> Function(String host);
+
+/// One `.local` label set: `phone.local`, `Bibeks-iPhone.local`.
+final RegExp _mdnsName = RegExp(
+  r'^([a-z0-9]([a-z0-9\-]{0,61}[a-z0-9])?\.)+local$',
+);
+
+/// Whether [host] — an IP literal *or* a name — can only mean "on this
+/// network", resolving it when that is the only way to know.
+///
+/// The literal case is [isLocalNetworkAddress] and needs no network. A name
+/// is refused outright, with one exception: `*.local` is multicast DNS, which
+/// by definition only ever answers from the local link, and it is what mDNS
+/// discovery and Apple platforms hand out. Even then the answer is checked —
+/// a resolver can be lied to, and a `.local` name that comes back pointing at
+/// a routable address is exactly the trick this gate exists to catch. Every
+/// resolved address must be local; no addresses at all is a refusal, and so
+/// is a lookup that throws.
+Future<bool> isLocalNetworkHost(String host, {JamHostLookup? lookup}) async {
+  final trimmed = host.trim();
+  if (trimmed.isEmpty) return false;
+  if (isLocalNetworkAddress(trimmed)) return true;
+  // A literal that failed the rule stays failed — never resolved as a name.
+  if (_isIpLiteral(trimmed)) return false;
+  final name = trimmed.endsWith('.')
+      ? trimmed.substring(0, trimmed.length - 1)
+      : trimmed;
+  if (name.length > 255 || !_mdnsName.hasMatch(name.toLowerCase())) {
+    return false;
+  }
+  try {
+    final resolved = await (lookup ?? InternetAddress.lookup)(name);
+    return resolved.isNotEmpty &&
+        resolved.every((a) => isLocalNetworkAddress(a.address));
+  } catch (_) {
+    return false; // Unresolvable is unvouchable.
+  }
+}
+
+bool _isIpLiteral(String value) {
+  try {
+    InternetAddress(value.split('%').first);
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+/// The `host` candidates a `localjam://join?...` URI carries, in order.
+List<String> joinUriHosts(Uri uri) => [
+  for (final host in (uri.queryParameters['host'] ?? '').split(','))
+    if (host.trim().isNotEmpty) host.trim(),
+];
+
+/// The room name a join URI advertises, if any.
+String? joinUriName(Uri uri) {
+  final name = uri.queryParameters['name']?.trim();
+  return (name == null || name.isEmpty) ? null : name;
+}
+
+/// Whether every candidate in [uri] is a local-network address — the check a
+/// link-sourced join must pass before it is offered to the user.
+///
+/// A URI with no candidates at all fails: there is nothing to vouch for.
+bool joinUriIsLocalOnly(Uri uri) {
+  final hosts = joinUriHosts(uri);
+  return hosts.isNotEmpty && hosts.every(isLocalNetworkAddress);
+}
+
+/// [joinUriIsLocalOnly], with `*.local` names resolved and re-checked — the
+/// gate every join passes through, whatever door it came in by. It lives in
+/// `JamSessionController.join`, so scans, pastes, deep links and nearby
+/// rooms all pass it and none of them can forget to.
+///
+/// Synchronous [joinUriIsLocalOnly] is the same rule minus the resolution: it
+/// refuses every name, including the `.local` ones mDNS deals in, so it is a
+/// pre-check and not the check.
+Future<bool> joinUriIsLocalOnlyResolved(
+  Uri uri, {
+  JamHostLookup? lookup,
+}) async {
+  final hosts = joinUriHosts(uri);
+  if (hosts.isEmpty) return false; // Nothing to vouch for.
+  for (final host in hosts) {
+    if (!await isLocalNetworkHost(host, lookup: lookup)) return false;
+  }
+  return true;
+}
+
+/// Parses text a user pasted into a `localjam://join?...` URI, or null when it
+/// is not one. Tolerates surrounding whitespace and the wrapping some chat
+/// apps add ("<localjam://…>").
+Uri? parseJoinUri(String text) {
+  var raw = text.trim();
+  if (raw.startsWith('<') && raw.endsWith('>')) {
+    raw = raw.substring(1, raw.length - 1).trim();
+  }
+  if (raw.isEmpty) return null;
+  final Uri uri;
+  try {
+    uri = Uri.parse(raw);
+  } catch (_) {
+    return null;
+  }
+  if (uri.scheme != 'localjam') return null;
+  // The three parameters JamGuestClient.connect requires; without them the
+  // join throws a FormatException deep in the transport instead of here.
+  final params = uri.queryParameters;
+  if (joinUriHosts(uri).isEmpty) return null;
+  if (params['port'] == null || params['token'] == null) return null;
+  return uri;
+}

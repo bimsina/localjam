@@ -1,5 +1,5 @@
 name: localjam_app
-description: "LocalJam — synchronized local-network audio playback."
+description: "Listen together, in sync, over local Wi-Fi — no internet, no accounts."
 publish_to: 'none'
 
 version: 1.0.0+1
@@ -30,11 +30,97 @@ dependencies:
   permission_handler: ^13.0.1
   mobile_scanner: ^7.4.0
 
+  # Share sheet for join links, and the brand mark rendered from assets/brand.
+  share_plus: ^13.3.0
+  flutter_svg: ^2.3.0
+
+  # Settings → About: the shipped version read from the build rather than a
+  # constant somebody has to remember to bump, and the repo link opened in a
+  # browser rather than copied to the clipboard.
+  package_info_plus: ^10.2.1
+  url_launcher: ^6.3.2
+
+# `bonsoir_darwin` 7.1.1's `broadcast.start` waits for the Bonjour daemon with a
+# synchronous `DNSServiceProcessResult` on the platform main thread, which on
+# Flutter's merged UI thread takes the whole app down when the daemon never
+# answers. The vendored copy schedules the registration on a background queue
+# instead — see packages/third_party/bonsoir_darwin/PATCHES.md. Overrides do not
+# propagate, so every consumer that builds for Apple platforms repeats this.
+dependency_overrides:
+  bonsoir_darwin:
+    path: ../../packages/third_party/bonsoir_darwin
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
 
   flutter_lints: ^6.0.0
 
+  # Brand asset generators — see README.md ("Brand assets").
+  flutter_launcher_icons: ^0.14.4
+  flutter_native_splash: ^2.4.8
+
 flutter:
   uses-material-design: true
+
+  assets:
+    - assets/brand/
+
+  # Plus Jakarta Sans (Tokotype, OFL 1.1) — see assets/fonts/OFL.txt. Roman
+  # weights only; the UI has no italics. Real tabular figures (`tnum`) ship in
+  # every weight, which is what keeps the room timer from jittering.
+  fonts:
+    - family: Plus Jakarta Sans
+      fonts:
+        - asset: assets/fonts/PlusJakartaSans-Regular.ttf
+          weight: 400
+        - asset: assets/fonts/PlusJakartaSans-Medium.ttf
+          weight: 500
+        - asset: assets/fonts/PlusJakartaSans-SemiBold.ttf
+          weight: 600
+        - asset: assets/fonts/PlusJakartaSans-Bold.ttf
+          weight: 700
+        - asset: assets/fonts/PlusJakartaSans-ExtraBold.ttf
+          weight: 800
+
+# App icon: the white headphones-and-mic mark on the raspberry gradient.
+#   dart run flutter_launcher_icons
+flutter_launcher_icons:
+  image_path: "assets/brand/icon_1024.png"
+
+  android: true
+  min_sdk_android: 24
+  adaptive_icon_background: "#D9366B"
+  adaptive_icon_foreground: "assets/brand/icon_foreground.png"
+  adaptive_icon_monochrome: "assets/brand/icon_monochrome.png"
+
+  # App Store rejects icons with an alpha channel.
+  ios: true
+  remove_alpha_ios: true
+
+  macos:
+    generate: true
+    image_path: "assets/brand/icon_1024.png"
+
+  windows:
+    generate: true
+    image_path: "assets/brand/icon_1024.png"
+    icon_size: 256
+
+# Launch screen: raspberry (light) / plum (dark) with the white mark centred.
+#   dart run flutter_native_splash:create
+flutter_native_splash:
+  color: "#E63B6F"
+  color_dark: "#2B1332"
+  image: assets/brand/splash_logo.png
+  image_dark: assets/brand/splash_logo.png
+
+  android: true
+  ios: true
+  web: false
+
+  android_12:
+    color: "#E63B6F"
+    color_dark: "#2B1332"
+    image: assets/brand/splash_logo_android12.png
+    image_dark: assets/brand/splash_logo_android12.png

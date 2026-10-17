@@ -56,6 +56,16 @@ void main() {
       await pumpInset(tester, session, build());
       await tester.pump();
 
+      // A page longer than the window scrolls, and scrolling content *past*
+      // the indicator is normal — what must never happen is content coming
+      // to rest under it. So run each page to the end of its scroll first,
+      // and measure where things actually settle.
+      final scrollable = find.byType(Scrollable);
+      if (scrollable.evaluate().isNotEmpty) {
+        await tester.drag(scrollable.first, const Offset(0, -2000));
+        await tester.pumpAndSettle();
+      }
+
       expect(
         find.byType(SafeArea),
         findsWidgets,

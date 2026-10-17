@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:localjam_app/src/widgets/peer_avatar.dart';
+import 'package:localjam_app/src/widgets/avatar.dart';
 
 void main() {
   group('identityColor', () {

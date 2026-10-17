@@ -43,10 +43,16 @@ Future<void> jamRemoveItem(JamEngine engine, String mediaId) async {
 
 /// Contributes [file] to the room. On a host this registers the file in
 /// place; on a guest it uploads (watch `JamGuestEngine.uploadProgress`).
-Future<MediaItem?> jamAddFile(JamEngine engine, File file) async {
+///
+/// [JamAddResult], not the bare [MediaItem]: media ids are content hashes, so
+/// re-adding the same bytes is a no-op the protocol answers with the item it
+/// already had (§6.4). That is indistinguishable from a silent failure to
+/// whoever just picked the file — the caller needs to be able to say
+/// "already in the queue".
+Future<JamAddResult?> jamAddFile(JamEngine engine, File file) async {
   return switch (engine) {
-    JamHostEngine() => engine.addMediaFile(file),
-    JamGuestEngine() => engine.addMediaFile(file),
+    JamHostEngine() => engine.addMedia(file),
+    JamGuestEngine() => engine.addMedia(file),
     _ => null,
   };
 }
