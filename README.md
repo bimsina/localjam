@@ -143,11 +143,11 @@ documented upgrade path, required before any future browser guest.
 
 ## Development
 
-Flutter **3.44.5** / Dart **3.12.2** (see `.github/workflows/ci.yml` for the
+Flutter **3.47.5** / Dart **3.13.4** (see `.github/workflows/ci.yml` for the
 pinned CI toolchain).
 
 ```sh
-cd packages/localjam_core   && dart test      # 141 tests — protocol, clock, anchors, permissions
+cd packages/localjam_core   && dart test      # protocol, clock, anchors, permissions
 cd packages/localjam_net    && dart test      #  99 tests — transport, robustness, integration
 cd packages/localjam_client && flutter test   #  91 tests — engines, discovery, history, lifecycle
 cd packages/localjam_audio  && flutter test   #  13 tests — plugin surface

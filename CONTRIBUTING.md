@@ -35,7 +35,7 @@ cd apps/localjam_cli        && dart test
 cd apps/localjam_app        && flutter test
 ```
 
-All of it runs offline and in seconds. Flutter 3.44.5 / Dart 3.12.2 is what CI
+All of it runs offline and in seconds. Flutter 3.47.5 / Dart 3.13.4 is what CI
 pins; anything newer on the same major should be fine.
 
 Things simulators cannot prove live in [`DEVICE_TESTING.md`](DEVICE_TESTING.md).
