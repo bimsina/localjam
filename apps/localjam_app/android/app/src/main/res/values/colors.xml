@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Adaptive-icon background (flutter_launcher_icons writes this one). -->
+    <color name="ic_launcher_background">#D9366B</color>
+    <!-- Brand palette. `launch_background` is the splash ground; `app_background`
+         is what the OS paints behind the Flutter surface once it is up — both
+         must be brand colours or the app flashes white on cold start. -->
+    <color name="launch_background">#E63B6F</color>
+    <color name="app_background">#FFF7F2</color>
+</resources>
