@@ -1,0 +1,109 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  FLUTTER_VERSION: 3.44.5
+
+jobs:
+  # Pure Dart: no Flutter SDK, no platform toolchain, so these are cheap.
+  dart:
+    name: dart · ${{ matrix.package }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        package:
+          - packages/localjam_core
+          - packages/localjam_net
+          - apps/localjam_cli
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dart-lang/setup-dart@v1
+        with:
+          sdk: stable
+      - run: dart pub get
+        working-directory: ${{ matrix.package }}
+      - run: dart format --output=none --set-exit-if-changed .
+        working-directory: ${{ matrix.package }}
+      - run: dart analyze
+        working-directory: ${{ matrix.package }}
+      - run: dart test
+        working-directory: ${{ matrix.package }}
+
+  # Flutter packages. macOS because localjam_audio and the app pull in Darwin
+  # plugin code (including the vendored bonsoir_darwin) that only resolves here.
+  flutter:
+    name: flutter · ${{ matrix.package }}
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        package:
+          - packages/localjam_client
+          - packages/localjam_audio
+          - apps/localjam_app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      - run: flutter pub get
+        working-directory: ${{ matrix.package }}
+      - run: dart format --output=none --set-exit-if-changed .
+        working-directory: ${{ matrix.package }}
+      - run: flutter analyze
+        working-directory: ${{ matrix.package }}
+      - run: flutter test
+        working-directory: ${{ matrix.package }}
+
+  build-apple:
+    name: build · android + ios simulator
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      - run: flutter pub get
+        working-directory: apps/localjam_app
+      # Debug, unsigned: release signing needs android/key.properties, which is
+      # git-ignored (see apps/localjam_app/README.md).
+      - run: flutter build apk --debug
+        working-directory: apps/localjam_app
+      - run: flutter build ios --simulator --no-codesign
+        working-directory: apps/localjam_app
+
+  build-linux:
+    name: build · linux
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # GTK is the only library the plugin links: miniaudio dlopen()s
+      # ALSA/PulseAudio/JACK at runtime, so no audio -dev package is needed to
+      # build (see packages/localjam_audio/linux/CMakeLists.txt).
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            clang cmake ninja-build pkg-config libgtk-3-dev
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      - run: flutter pub get
+        working-directory: apps/localjam_app
+      - run: flutter build linux --debug
+        working-directory: apps/localjam_app
