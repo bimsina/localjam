@@ -600,17 +600,316 @@ void main() {
         ),
         throwsA(isA<ProtocolException>()),
       );
-      expect(
-        () => codec.decode(
-          jsonEncode({
-            'v': 1,
-            'type': 'reject',
-            'seq': 1,
-            'payload': {'reason': 'meteor_strike'},
-          }),
-        ),
-        throwsA(isA<ProtocolException>()),
+    });
+
+    // Review 2026-10-17 (S1): any finite rate used to decode, and
+    // positionAt then threw on every guest's drift tick.
+    String stateFrame(String rate) =>
+        '{"v":1,"type":"state","seq":1,"payload":{"rev":1,'
+        '"status":"playing","anchor":{"hostTime":0,"positionUs":0},'
+        '"positionUs":0,"rate":$rate}}';
+
+    test('a state rate outside [1/32, 32] (or not finite) is malformed', () {
+      for (final rate in [
+        '1e308',
+        '-1e308',
+        '1e400', // jsonDecode: Infinity
+        '-2.0',
+        '0',
+        '0.03',
+        '32.5',
+      ]) {
+        expect(
+          () => codec.decode(stateFrame(rate)),
+          throwsA(isA<ProtocolException>()),
+          reason: 'rate $rate',
+        );
+      }
+      for (final rate in ['0.03125', '1', '1.0', '2.5', '32']) {
+        final snapshot =
+            (codec.decode(stateFrame(rate)).message as StateMessage).snapshot;
+        expect(snapshot.rate, double.parse(rate), reason: 'rate $rate');
+      }
+      // Absent still means 1.0.
+      final noRate = codec.decode(
+        '{"v":1,"type":"state","seq":1,"payload":{"rev":1,"status":"idle"}}',
       );
+      expect((noRate.message as StateMessage).snapshot.rate, 1.0);
+    });
+
+    test('positionAt saturates instead of throwing, whatever the snapshot '
+        'says', () {
+      PlaybackSnapshot playing(double rate, {int positionUs = 0}) =>
+          PlaybackSnapshot(
+            rev: 1,
+            status: PlaybackStatus.playing,
+            anchor: PlaybackAnchor(hostTimeUs: 0, positionUs: positionUs),
+            rate: rate,
+          );
+      const max = PlaybackSnapshot.maxPositionUs;
+      expect(playing(1e308).positionAt(1000000), max);
+      expect(playing(-1e308).positionAt(1000000), -max);
+      expect(playing(double.infinity).positionAt(1000000), max);
+      expect(playing(double.nan).positionAt(1000000), 0);
+      expect(
+        playing(1, positionUs: 0x7fffffffffffffff).positionAt(1000000),
+        max,
+      );
+      expect(playing(32).positionAt(0x7fffffffffffffff), max);
+      // Ordinary values are untouched.
+      expect(playing(1.0, positionUs: 5).positionAt(1000000), 1000005);
+      expect(playing(0.5).positionAt(1000001), 500001);
+    });
+  });
+
+  group('protocol 1 version gate (§2)', () {
+    test('a frame of another major version is not decoded past the '
+        'envelope', () {
+      final decoded = codec.decode(
+        jsonEncode({
+          'v': 2,
+          'type': 'welcome',
+          'seq': 3,
+          // A v2 welcome shape this codec must not try to read as v1.
+          'payload': {'room': 'whatever', 'you': 7},
+        }),
+      );
+      expect(decoded.v, 2);
+      expect(decoded.isSupportedVersion, isFalse);
+      expect(decoded.message, isA<UnknownMessage>());
+      expect(decoded.message.type, 'welcome');
+    });
+
+    test('only v and type are required of a foreign-version frame', () {
+      final decoded = codec.decode(jsonEncode({'v': 7, 'type': 'hello'}));
+      expect(decoded.isSupportedVersion, isFalse);
+      expect(decoded.message.type, 'hello');
+      expect(decoded.seq, 0);
+    });
+
+    test('v1 frames are supported', () {
+      final decoded = codec.decode(
+        codec.encode(const ClockPingMessage(t0: 1), seq: 1),
+      );
+      expect(decoded.isSupportedVersion, isTrue);
+      expect(MessageCodec.supportsVersion(1), isTrue);
+      expect(MessageCodec.supportsVersion(0), isFalse);
+      expect(MessageCodec.supportsVersion(2), isFalse);
+    });
+
+    test('reject carries the versions the host speaks', () {
+      final m = roundTrip(
+        const RejectMessage(reason: RejectReason.version, versions: [1]),
+      );
+      expect(m.reason, RejectReason.version);
+      expect(m.versions, [1]);
+      expect(const RejectMessage(reason: RejectReason.full).payloadToJson(), {
+        'reason': 'full',
+      });
+    });
+  });
+
+  group('tolerant decoding within protocol 1 (§2)', () {
+    test('an unknown reject reason is still a reject', () {
+      final decoded = codec.decode(
+        jsonEncode({
+          'v': 1,
+          'type': 'reject',
+          'seq': 1,
+          'payload': {'reason': 'meteor_strike'},
+        }),
+      );
+      expect((decoded.message as RejectMessage).reason, RejectReason.unknown);
+      expect(
+        RejectMessage.fromPayload(const {}).reason,
+        RejectReason.unknown,
+        reason: 'a reason-less reject still ends the join',
+      );
+      expect(RejectReason.fromWire('kicked'), RejectReason.kicked);
+    });
+
+    test('an unknown error code decodes to ErrorCode.unknown, fatal kept', () {
+      final decoded = codec.decode(
+        jsonEncode({
+          'v': 1,
+          'type': 'error',
+          'seq': 1,
+          'payload': {'code': 'solar_flare', 'message': 'x', 'fatal': true},
+        }),
+      );
+      final m = decoded.message as ErrorMessage;
+      expect(m.code, ErrorCode.unknown);
+      expect(m.fatal, isTrue);
+    });
+
+    test('playlist items of an unknown kind are dropped, the rest kept', () {
+      final decoded = codec.decode(
+        jsonEncode({
+          'v': 1,
+          'type': 'playlist',
+          'seq': 1,
+          'payload': {
+            'rev': 4,
+            'items': [
+              _itemJson('m_a', 'audio'),
+              _itemJson('m_h', 'hologram'),
+              {'kind': 'audio'}, // no mediaId: malformed, dropped too
+              'not even an object',
+              _itemJson('m_b', 'audio'),
+            ],
+          },
+        }),
+      );
+      final m = decoded.message as PlaylistMessage;
+      expect(m.rev, 4);
+      expect(m.items.map((i) => i.mediaId), ['m_a', 'm_b']);
+    });
+
+    test('an unknown playback status holds still instead of killing the '
+        'frame', () {
+      final decoded = codec.decode(
+        jsonEncode({
+          'v': 1,
+          'type': 'state',
+          'seq': 1,
+          'payload': {
+            'rev': 9,
+            'status': 'buffering',
+            'mediaId': 'm_a',
+            'anchor': null,
+            'positionUs': 1234,
+            'rate': 1.0,
+          },
+        }),
+      );
+      final snapshot = (decoded.message as StateMessage).snapshot;
+      expect(snapshot.status, PlaybackStatus.loading);
+      expect(snapshot.positionUs, 1234);
+      expect(PlaybackStatus.fromWire('paused'), PlaybackStatus.paused);
+    });
+
+    test('an unknown media_status state counts as not holding the file', () {
+      final decoded = codec.decode(
+        jsonEncode({
+          'v': 1,
+          'type': 'media_status',
+          'seq': 1,
+          'payload': {'mediaId': 'm_a', 'state': 'verifying'},
+        }),
+      );
+      expect(
+        (decoded.message as MediaStatusMessage).state,
+        MediaFetchState.none,
+      );
+    });
+
+    test('non-positive item durations decode as unknown (§5.5)', () {
+      expect(
+        MediaItem.fromJson({
+          ..._itemJson('m_a', 'audio'),
+          'durationUs': 0,
+        }).durationUs,
+        isNull,
+      );
+      expect(
+        MediaItem.fromJson({
+          ..._itemJson('m_a', 'audio'),
+          'durationUs': -5,
+        }).durationUs,
+        isNull,
+      );
+    });
+
+    test('a future 1.x welcome full of things this guest does not know still '
+        'admits it', () {
+      final decoded = codec.decode(
+        jsonEncode({
+          'v': 1,
+          'type': 'welcome',
+          'seq': 0,
+          'payload': {
+            'sessionId': 's_1',
+            'sessionName': 'Later',
+            'you': {'peerId': 'p_2', 'uploadKey': 'k_1', 'avatar': 'fox'},
+            'peers': [
+              {'peerId': 'p_1', 'clientName': 'A', 'clientKind': 'vr'},
+              {'clientName': 'no id'}, // malformed: dropped
+            ],
+            'snapshot': {
+              'rev': 2,
+              'status': 'crossfading',
+              'mediaId': 'm_a',
+              'anchor': null,
+              'positionUs': 0,
+              'rate': 1.0,
+              'crossfadeUs': 3000000,
+            },
+            'playlist': [
+              _itemJson('m_a', 'audio'),
+              _itemJson('m_v', 'spatial_audio'),
+            ],
+            'permissions': {
+              'rev': 1,
+              'policy': {'addTracks': true, 'reactions': true},
+              'cohosts': <String>[],
+              'overrides': {
+                'p_2': {'add_tracks': true, 'send_reactions': false},
+              },
+            },
+            'hostAway': false,
+            'roomTheme': 'sunset',
+          },
+        }),
+      );
+      final m = decoded.message as WelcomeMessage;
+      expect(m.selfPeerId, 'p_2');
+      expect(m.uploadKey, 'k_1');
+      expect(m.peers.map((p) => p.peerId), ['p_1']);
+      expect(m.snapshot.status, PlaybackStatus.loading);
+      expect(m.playlist.map((i) => i.mediaId), ['m_a']);
+      expect(m.permissions!.policy.addTracks, isTrue);
+      expect(m.hostAway, isFalse);
+    });
+
+    test('welcome carries the upload key and the away flag; both omitted '
+        'when unset', () {
+      final m = roundTrip(
+        const WelcomeMessage(
+          sessionId: 's',
+          sessionName: 'n',
+          selfPeerId: 'p_1',
+          snapshot: PlaybackSnapshot.initial,
+          uploadKey: 'secret',
+          hostAway: true,
+        ),
+      );
+      expect(m.uploadKey, 'secret');
+      expect(m.hostAway, isTrue);
+      final bare = const WelcomeMessage(
+        sessionId: 's',
+        sessionName: 'n',
+        selfPeerId: 'p_1',
+        snapshot: PlaybackSnapshot.initial,
+      ).payloadToJson();
+      expect(bare.containsKey('hostAway'), isFalse);
+      expect(bare['you'], {'peerId': 'p_1'});
+    });
+
+    test('host_status round-trips (§3.5)', () {
+      expect(roundTrip(const HostStatusMessage(away: true)).away, isTrue);
+      expect(roundTrip(const HostStatusMessage(away: false)).away, isFalse);
+      expect(HostStatusMessage.fromPayload(const {}).away, isFalse);
     });
   });
 }
+
+/// A well-formed §6.1 item JSON of [kind].
+Map<String, Object?> _itemJson(String mediaId, String kind) => {
+  'mediaId': mediaId,
+  'kind': kind,
+  'name': '$mediaId.bin',
+  'mime': 'application/octet-stream',
+  'sizeBytes': 10,
+  'durationUs': 1000,
+  'sha256': '00',
+};

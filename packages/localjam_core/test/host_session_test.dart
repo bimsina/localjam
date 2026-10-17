@@ -157,6 +157,32 @@ void main() {
       expect(() => s.setRate(-1, nowUs: 0), throwsArgumentError);
     });
 
+    test('setRate accepts exactly the rates a guest will decode', () {
+      // Review 2026-10-17 (N4): the host took any positive rate while
+      // guests refuse a snapshot outside [1/32, 32] — one setRate(64) and
+      // every state frame after it was dropped, and nobody could join.
+      final s = HostSession();
+      s.setMedia('m_1', nowUs: 0);
+      for (final rate in [
+        PlaybackSnapshot.maxRate * 2,
+        PlaybackSnapshot.minRate / 2,
+        double.infinity,
+        double.nan,
+      ]) {
+        expect(
+          () => s.setRate(rate, nowUs: 0),
+          throwsArgumentError,
+          reason: '$rate',
+        );
+      }
+      expect(s.snapshot.rate, 1.0, reason: 'a refused rate changes nothing');
+      for (final rate in [PlaybackSnapshot.minRate, PlaybackSnapshot.maxRate]) {
+        final snap = s.setRate(rate, nowUs: 0);
+        // What every guest does with it (§5.1): it must round-trip.
+        expect(PlaybackSnapshot.fromJson(snap.toJson()).rate, rate);
+      }
+    });
+
     test('every mutation increments rev by exactly 1', () {
       final s = HostSession();
       expect(s.snapshot.rev, 0);
@@ -336,6 +362,19 @@ void main() {
       expect(snap.anchor!.positionUs, 0);
     });
 
+    test('a non-positive duration is unknown, never "ended at once" '
+        '(§5.5)', () {
+      for (final bogus in [0, -1, -60000000]) {
+        final s = HostSession();
+        s.setMedia('m_1', nowUs: 0, durationUs: bogus);
+        expect(s.currentDurationUs, isNull, reason: '$bogus');
+        s.play(nowUs: 0);
+        expect(s.hasEnded(10_000_000), isFalse, reason: '$bogus');
+        // Clamping against a negative bound used to throw here.
+        expect(() => s.seek(5_000_000, nowUs: 0), returnsNormally);
+      }
+    });
+
     test('seek is unclamped when the duration is unknown', () {
       final s = playing(durationUs: null);
       final snap = s.seek(7_200_000_000, nowUs: lead + 1);
@@ -492,6 +531,18 @@ void main() {
       expect(s.allPeersReady('m_1'), isFalse);
       s.removePeer('p9');
       expect(s.allPeersReady('m_1'), isTrue);
+    });
+
+    test('peersFetching lists only peers mid-transfer of that item', () {
+      final s = HostSession()
+        ..upsertPeer('quiet')
+        ..setPeerMediaState('busy', 'm_1', MediaReadiness.fetching)
+        ..setPeerMediaState('done', 'm_1', MediaReadiness.ready)
+        ..setPeerMediaState('gaveUp', 'm_1', MediaReadiness.none)
+        ..setPeerMediaState('other', 'm_2', MediaReadiness.fetching);
+      expect(s.peersFetching('m_1'), {'busy'});
+      s.setPeerMediaState('busy', 'm_1', MediaReadiness.ready);
+      expect(s.peersFetching('m_1'), isEmpty);
     });
 
     test('readiness bookkeeping does not touch the snapshot rev', () {

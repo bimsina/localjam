@@ -25,10 +25,11 @@ enum JamConnectionState {
   closed,
 
   /// The session is over and no retry can bring it back: the host answered
-  /// with `reject` (e.g. `bad_token` after a host restart), kicked this
-  /// guest, or announced `session_ended` (§3.4). Terminal — see
-  /// [JamGuestSession.hostEnded] and [JamGuestSession.lastFatalError] for
-  /// which of the three it was.
+  /// with `reject` (e.g. `bad_token` after a host restart, `kicked`, or
+  /// `version`), kicked this guest, or announced `session_ended` (§3.4).
+  /// Terminal — see [JamGuestSession.hostEnded],
+  /// [JamGuestSession.lastFatalError] and [JamGuestSession.lastRejectReason]
+  /// for which it was.
   failed,
 }
 
@@ -87,6 +88,12 @@ class JamBackoff {
 /// session is gone (e.g. `bad_token` from a restarted host), so the session
 /// transitions to [JamConnectionState.failed] and stops.
 ///
+/// A connection that goes silent is dropped by the client's liveness
+/// watchdog (§3.3) and handled exactly like any other drop. Whether the host
+/// said it was going away first is [hostAway] — the difference between "the
+/// host's phone is asleep" and "the host is gone", which only the layer
+/// above can turn into a timeout.
+///
 /// The streams ([states], [playlistUpdates], [peerEvents]) are continuous
 /// across reconnects: each is one broadcast stream re-piped from every new
 /// client. On a successful resume the fresh `welcome` snapshot and playlist
@@ -103,8 +110,12 @@ class JamGuestSession {
     this._connectTimeout,
     this._backoff,
     this._clientId,
+    this._livenessTimeout,
+    this._mediaTimeout,
+    this._localClockUs,
     JamGuestClient client,
   ) {
+    _hostAway = client.hostAway;
     _adopt(client);
   }
 
@@ -113,8 +124,9 @@ class JamGuestSession {
   /// `SocketException`, ...) propagate to the caller unchanged.
   ///
   /// [backoff] shapes the reconnect schedule (defaults: 500 ms, ×2, cap 10 s,
-  /// jitter). The remaining parameters are forwarded to every
-  /// [JamGuestClient.connect], initial and reconnect alike.
+  /// jitter). The remaining parameters (`localClockUs` included) are
+  /// forwarded to every [JamGuestClient.connect], initial and reconnect
+  /// alike.
   static Future<JamGuestSession> connect(
     Uri joinUri, {
     String clientName = 'guest',
@@ -124,6 +136,9 @@ class JamGuestSession {
     Duration connectTimeout = const Duration(seconds: 5),
     JamBackoff? backoff,
     String? clientId,
+    Duration? livenessTimeout,
+    Duration mediaTimeout = const Duration(seconds: 10),
+    int Function()? localClockUs,
   }) async {
     final client = await JamGuestClient.connect(
       joinUri,
@@ -133,6 +148,9 @@ class JamGuestSession {
       pingInterval: pingInterval,
       connectTimeout: connectTimeout,
       clientId: clientId,
+      livenessTimeout: livenessTimeout,
+      mediaTimeout: mediaTimeout,
+      localClockUs: localClockUs,
     );
     return JamGuestSession._(
       joinUri,
@@ -143,6 +161,9 @@ class JamGuestSession {
       connectTimeout,
       backoff ?? JamBackoff(),
       clientId,
+      livenessTimeout,
+      mediaTimeout,
+      localClockUs,
       client,
     );
   }
@@ -155,9 +176,15 @@ class JamGuestSession {
   final Duration _connectTimeout;
   final JamBackoff _backoff;
   final String? _clientId;
+  final Duration? _livenessTimeout;
+  final Duration _mediaTimeout;
+  final int Function()? _localClockUs;
 
   late JamGuestClient _client;
   List<StreamSubscription<Object?>> _clientSubs = const [];
+
+  bool _hostAway = false;
+  RejectReason? _lastRejectReason;
 
   JamConnectionState _state = JamConnectionState.connected;
 
@@ -176,6 +203,8 @@ class JamGuestSession {
       StreamController<JamPermissions>.broadcast();
   final StreamController<ErrorMessage> _errors =
       StreamController<ErrorMessage>.broadcast();
+  final StreamController<bool> _hostAwayChanges =
+      StreamController<bool>.broadcast();
 
   // --- Connection state ------------------------------------------------------
 
@@ -251,11 +280,36 @@ class JamGuestSession {
   /// session lands in [JamConnectionState.failed] because of one (a kick).
   ErrorMessage? get lastFatalError => _client.lastFatalError;
 
+  /// The reason the host gave when it refused a reconnect (§3.1), if that is
+  /// what landed the session in [JamConnectionState.failed]: `bad_token`
+  /// after a host restart, `kicked` for a device kicked earlier, `version`,
+  /// `full`, or a reason from a later version (`unknown`). Null otherwise.
+  RejectReason? get lastRejectReason => _lastRejectReason;
+
+  /// Whether the host last said it is away (§3.5) — kept through a drop and
+  /// the reconnect attempts that follow, which is exactly when it matters:
+  /// a guest reconnecting to a host that announced a nap should wait for it
+  /// far longer than for one that simply vanished. Updated by every
+  /// `host_status` and by the `welcome` of each reconnect.
+  bool get hostAway => _hostAway;
+
+  /// Changes to [hostAway], continuous across reconnects (§3.5).
+  Stream<bool> get hostAwayChanges => _hostAwayChanges.stream;
+
   /// The CURRENT client's clock-offset estimator (§4). Replaced on every
   /// reconnect (a new connection re-runs the join burst).
   ClockSync get clock => _client.clock;
 
-  /// This guest's local monotonic clock (µs, arbitrary epoch).
+  /// Sends a fresh §4 ping burst on the current connection (see
+  /// [JamGuestClient.resyncClock]) — after a device sleep, say. A no-op
+  /// while not [JamConnectionState.connected]: every reconnect starts with
+  /// a burst of its own.
+  void resyncClock() {
+    if (_state == JamConnectionState.connected) _client.resyncClock();
+  }
+
+  /// This guest's local clock (µs, arbitrary epoch): monotonic unless
+  /// `connect(localClockUs:)` said otherwise.
   int get localNowUs => _client.localNowUs;
 
   /// The current session-clock time (§4). Throws [StateError] before the
@@ -283,8 +337,9 @@ class JamGuestSession {
     return _client.requestSeek(positionUs);
   }
 
-  /// Asks the host to select [mediaId] (§5.2). Throws [StateError] unless
-  /// connected.
+  /// Asks the host to select [mediaId] (§5.2): a playing room plays it from
+  /// its start, a paused one cues it, and the current item stays as it is.
+  /// Throws [StateError] unless connected.
   Future<void> requestSetMedia(String mediaId) {
     _ensureConnected();
     return _client.requestSetMedia(mediaId);
@@ -415,8 +470,16 @@ class JamGuestSession {
       client.peerEvents.listen(_peerEvents.add),
       client.permissionUpdates.listen(_permissionUpdates.add),
       client.errors.listen(_errors.add),
+      client.hostAwayChanges.listen(_setHostAway),
     ];
+    _setHostAway(client.hostAway);
     unawaited(client.done.then((_) => _onClientDone(client)));
+  }
+
+  void _setHostAway(bool away) {
+    if (away == _hostAway) return;
+    _hostAway = away;
+    if (!_hostAwayChanges.isClosed) _hostAwayChanges.add(away);
   }
 
   void _onClientDone(JamGuestClient client) {
@@ -458,11 +521,16 @@ class JamGuestSession {
           // welcome's peerId is adopted.
           resumePeerId: _client.selfPeerId,
           clientId: _clientId,
+          livenessTimeout: _livenessTimeout,
+          mediaTimeout: _mediaTimeout,
+          localClockUs: _localClockUs,
         );
-      } on JamRejectedException {
+      } on JamRejectedException catch (e) {
         // §3.1: a reject is authoritative — the session is gone (bad_token
-        // after a host restart, and full/version are equally final).
+        // after a host restart, kicked, version; full and reasons from a
+        // later version are equally final).
         if (_state == JamConnectionState.reconnecting) {
+          _lastRejectReason = e.reason;
           _transition(JamConnectionState.failed);
         }
         return;
@@ -548,5 +616,6 @@ class JamGuestSession {
     await _peerEvents.close();
     await _permissionUpdates.close();
     await _errors.close();
+    await _hostAwayChanges.close();
   }
 }

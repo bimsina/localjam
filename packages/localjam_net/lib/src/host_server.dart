@@ -13,6 +13,7 @@ import 'package:crypto/crypto.dart';
 import 'package:localjam_core/localjam_core.dart';
 import 'package:meta/meta.dart';
 
+import 'connection_guard.dart';
 import 'media_metadata.dart';
 import 'monotonic.dart';
 
@@ -26,7 +27,9 @@ enum JamEndPolicy {
   pause,
 
   /// Select the next playlist item (wrapping at the end of the playlist)
-  /// and immediately schedule playback.
+  /// and, if the room was playing, immediately schedule playback. A room
+  /// that reaches the end while paused (a seek to the end) moves on but
+  /// stays stopped, at the start of the next item.
   advance,
 
   /// Stop: back to idle with no media selected.
@@ -63,9 +66,12 @@ enum JamHostEventKind {
   requestDenied,
 
   /// A guest uploaded a new media item over the media plane (§6.4;
-  /// [JamHostEvent.mediaId] set, [JamHostEvent.peerId] set when the upload
-  /// carried `X-LocalJam-Peer-Id`). Emitted before the playlist broadcast the
-  /// upload produces. Idempotent re-uploads of existing content do not fire.
+  /// [JamHostEvent.mediaId] and [JamHostEvent.peerId] set — the peer the
+  /// item is credited to: the one whose upload key the request presented,
+  /// or the peerId that device rejoined under while the body was still
+  /// arriving, §5.6). Emitted before the playlist broadcast the upload
+  /// produces. Idempotent re-uploads of content still in the queue do not
+  /// fire; re-uploading an item that was removed puts it back, and does.
   mediaUploaded,
 
   /// The current item reached its end ([JamHostEvent.mediaId] set to the
@@ -119,11 +125,16 @@ class JamHostEvent {
 
 /// One connected (or connecting) guest socket.
 class _GuestConn {
-  _GuestConn(this.ws, {required int nowUs})
+  _GuestConn(this.ws, {required int nowUs, this.socket})
     : lastFrameUs = nowUs,
       openedUs = nowUs;
 
   final WebSocket ws;
+
+  /// The connection under [ws], holding it to its pre-hello byte budget
+  /// until a valid `hello` (§9.1). Null only if the connection was already
+  /// gone when the upgrade finished.
+  final GuardedSocket? socket;
 
   /// Assigned after a valid `hello`; null while the handshake is pending.
   String? peerId;
@@ -133,6 +144,21 @@ class _GuestConn {
   /// sent one. Two live sockets never share it: the newer supersedes the
   /// older, so one device is one peer.
   String? clientId;
+
+  /// [clientId] when it can recognise the device (§3.3), else null: a
+  /// socket that sent none, or an empty one, is no device in particular.
+  String? get device {
+    final id = clientId;
+    return id == null || id.isEmpty ? null : id;
+  }
+
+  /// This peer's upload credential (§6.4), issued in its `welcome`. Uploads
+  /// are accepted — and permission-checked as — the peer whose key they
+  /// present, only while that peer is joined when the request arrives; they
+  /// land only while it is still in the room when the body has arrived
+  /// (joined, or dropped and inside its §3.3 grace window), and are
+  /// credited to its device (§5.6).
+  String? uploadKey;
 
   /// Monotonic µs of the last received frame, for liveness (§3.3).
   int lastFrameUs;
@@ -171,13 +197,24 @@ class JamHostServer {
   ///
   /// The remaining knobs bound what an unfriendly LAN neighbour can spend of
   /// the host's memory, sockets and disk (§9 is an honest-guest model, but
-  /// "honest" should not mean "unbounded"): [maxPeers] and
-  /// [maxPendingConnections] cap joined and half-open sockets,
-  /// [maxControlFrameBytes] caps one control frame from a joined peer and
-  /// [maxPreHelloFrameBytes] one from a socket that has not said hello yet,
-  /// [helloTimeout] drops
-  /// sockets that never authenticate, and [restrictToLanRemotes] enforces
-  /// §9's "LAN interfaces only" at the request level.
+  /// "honest" should not mean "unbounded"; §9.1 has the table):
+  /// [maxConnections] and [maxConnectionsPerRemote] cap open TCP connections
+  /// of every kind, [maxRequestHeaderBytes] caps a request's header block,
+  /// [maxPeers] and [maxPendingConnections] cap joined and half-open
+  /// sockets, [maxControlFrameBytes] caps one control frame from a joined
+  /// peer and [maxPreHelloFrameBytes] what a socket may send before it has
+  /// said hello, [helloTimeout] drops connections that never authenticate
+  /// (and requests whose headers never finish), and [restrictToLanRemotes]
+  /// enforces §9's "LAN interfaces only" per connection and per request.
+  /// [uploadStallTimeout], [minUploadBytesPerSecond] and [maxUploadsPerPeer]
+  /// bound how long and how many uploads may hold their reservations
+  /// (§6.4). [maxArtworkBytes] caps the cover art the host will extract
+  /// from an upload and serve, and bounds what reading an upload's tags may
+  /// cost at all.
+  ///
+  /// [readinessWait] is the §6.3 readiness gate: how long starting a newly
+  /// selected track may wait for guests that are mid-transfer of it (zero
+  /// disables the gate).
   JamHostServer({
     required this.sessionName,
     this.hostName = '',
@@ -199,6 +236,15 @@ class JamHostServer {
     this.maxPreHelloFrameBytes = 16 * 1024,
     this.helloTimeout = const Duration(seconds: 10),
     this.restrictToLanRemotes = true,
+    this.maxArtworkBytes = defaultMaxArtworkBytes,
+    this.readinessWait = const Duration(milliseconds: 2500),
+    this.maxConnections = defaultMaxConnections,
+    this.maxConnectionsPerRemote = defaultMaxConnectionsPerRemote,
+    this.maxRequestHeaderBytes = 16 * 1024,
+    this.uploadStallTimeout = const Duration(seconds: 30),
+    this.minUploadBytesPerSecond = 32 * 1024,
+    this.maxUploadsPerPeer = 2,
+    this.admitLocalAddress,
   }) : token = token ?? _randomHex(16),
        sessionId = 's_${_randomHex(4)}',
        _permissions = JamPermissions.initial(policy: policy),
@@ -210,6 +256,14 @@ class JamHostServer {
   static const int defaultUploadBudgetBytes = 2 * 1024 * 1024 * 1024;
   static const int defaultMaxPlaylistLength = 500;
   static const int defaultMaxPeers = 32;
+  static const int defaultMaxArtworkBytes = 8 * 1024 * 1024;
+  static const int defaultMaxConnections = 128;
+  static const int defaultMaxConnectionsPerRemote = 32;
+
+  /// The longest `X-LocalJam-Duration-Us` an upload may declare (§6.4): a
+  /// week. Anything longer — or zero, or negative — is not a duration any
+  /// file has, so it is treated as unknown rather than trusted.
+  static const int maxPlausibleDurationUs = 7 * 24 * 60 * 60 * 1000000;
 
   /// Human-readable session name, shared in the join URI and `welcome`.
   final String sessionName;
@@ -278,44 +332,151 @@ class JamHostServer {
   /// What this bounds is parse-and-act cost, not buffering: `dart:io`'s
   /// WebSocket has no maximum-message option and reassembles a message
   /// completely before handing it over, so by the time the cap is applied the
-  /// bytes have already been received. (Counting raw bytes as they arrive
-  /// would mean framing the socket by hand — `WebSocketTransformer.upgrade`
-  /// offers no hook, and disabling compression does not help — which is out
-  /// of scope for a LAN host.) What it does buy is that nothing large is ever
-  /// JSON-parsed or dispatched, and that the sender does not get to do it
-  /// twice: the socket is closed with `policyViolation` (1008).
-  ///
-  /// [maxPreHelloFrameBytes] is the cap that bounds memory usefully, because
-  /// it applies to the sockets that have proved nothing.
+  /// bytes have already been received. What it does buy is that nothing
+  /// large is ever JSON-parsed or dispatched, and that the sender does not
+  /// get to do it twice: the socket is closed with `policyViolation` (1008).
+  /// A joined peer has proved the token, and within the room §9 trusts it
+  /// not to stream a gigabyte into one frame; the sockets that have proved
+  /// nothing are held to a raw byte count instead ([maxPreHelloFrameBytes]).
   final int maxControlFrameBytes;
 
-  /// Upper bound on one control frame from a socket that has not yet
-  /// completed the §3.1 handshake (default 16 KB).
+  /// Upper bound on what a control socket may send before it completes the
+  /// §3.1 handshake (default 16 KB): the cap on one pre-hello frame, and —
+  /// counted in raw bytes as they arrive, before `dart:io` reassembles
+  /// anything — on everything the socket sends until its `hello` is
+  /// accepted (plus [_preHelloFramingSlack] for WebSocket framing).
   ///
   /// A `hello` is a few hundred bytes — a token, a name, two short ids — so
   /// an unauthenticated socket has no honest reason to send anything near
-  /// this, and one that does loses the socket on the first frame instead of
-  /// getting [maxControlFrameBytes] of the host's memory per attempt.
+  /// this, and one that does loses the socket instead of getting the host's
+  /// memory.
   final int maxPreHelloFrameBytes;
 
-  /// How long a socket may stay open without a valid `hello` (§3.1) before
-  /// it is dropped. Unauthenticated sockets are the cheapest thing on the
-  /// LAN to open and the least entitled to stay.
+  /// How long a connection may go without proving the token before it is
+  /// dropped: a control socket without a valid `hello` (§3.1), and any
+  /// connection whose request headers have not all arrived. Unauthenticated
+  /// connections are the cheapest thing on the LAN to open and the least
+  /// entitled to stay.
   final Duration helloTimeout;
 
+  /// Upper bound on open TCP connections of every kind — control sockets,
+  /// media and artwork transfers, uploads, and connections nobody has
+  /// authenticated yet (§9.1, default [defaultMaxConnections]). Over-cap
+  /// connections are answered `503` and closed before a byte of them is
+  /// parsed. Together with [maxRequestHeaderBytes] and
+  /// [maxPreHelloFrameBytes] this is what bounds the memory unauthenticated
+  /// connections can hold.
+  ///
+  /// It is also what keeps the process inside its file-descriptor limit,
+  /// which Dart cannot read: Apple platforms start an app at a soft limit
+  /// of 256, a connection is one descriptor and a transfer holds a second
+  /// (the file) while it runs, and the app needs its own. The default of
+  /// 128 leaves that room; an embedder that raises `RLIMIT_NOFILE` natively
+  /// (`setrlimit` at launch) can raise this with it. At the limit, `accept`
+  /// fails and the host is unreachable to everyone — a cap only refuses
+  /// the newest connections.
+  final int maxConnections;
+
+  /// Upper bound on open TCP connections from one remote address (§9.1,
+  /// default [defaultMaxConnectionsPerRemote]), so one neighbour cannot take
+  /// every [maxConnections] slot. A guest needs a handful: its control
+  /// socket, a media fetch, an artwork fetch, an upload.
+  final int maxConnectionsPerRemote;
+
+  /// Upper bound on a request's request line plus headers, in bytes (§9.1,
+  /// default 16 KB; a LocalJam client sends a few hundred). Counted as they
+  /// arrive — `dart:io` buffers a header block whole, at eight bytes of
+  /// memory per byte, up to its own limit of 1 MiB — and a connection that
+  /// passes it is destroyed.
+  final int maxRequestHeaderBytes;
+
+  /// An upload is abandoned (`408`, reservation released, partial file
+  /// deleted) when, over any window this long, its body delivers less than
+  /// [minUploadBytesPerSecond] × the window — or nothing at all (§6.4).
+  /// Without it a client that declares 512 MB and then goes quiet, or
+  /// trickles a byte at a time, holds that much of [uploadBudgetBytes] and
+  /// a playlist slot forever.
+  final Duration uploadStallTimeout;
+
+  /// The slowest average an upload may sustain over each
+  /// [uploadStallTimeout] window (default 32 KB/s — a quarter of a 1 Mbit/s
+  /// link). A body that has less than that left to send owes only what is
+  /// left; zero means only total silence counts as a stall.
+  final int minUploadBytesPerSecond;
+
+  /// Upper bound on uploads one peer may have in flight at once (§6.4,
+  /// default 2). Further uploads are answered `429` until one finishes.
+  final int maxUploadsPerPeer;
+
+  /// Whether a connection that arrived on the host's local address `local`
+  /// may be served (§9). Null — the default — serves every interface the
+  /// listener is bound to.
+  ///
+  /// The remote filter ([restrictToLanRemotes]) cannot tell a neighbour on
+  /// the Wi-Fi from a stranger on the carrier's network: carriers hand out
+  /// RFC1918 addresses too. A host bound to the wildcard address — so a
+  /// hotspot that comes up later is served — also listens on its cellular
+  /// and tunnel interfaces, and an embedder that knows which local
+  /// addresses those are passes a predicate refusing them. Refused
+  /// connections are answered `403` before a byte of them is parsed.
+  /// Called once per connection: it must be synchronous and cheap (a
+  /// lookup in a set the embedder refreshes as interfaces change).
+  final bool Function(InternetAddress local)? admitLocalAddress;
+
   /// Whether requests from non-LAN remote addresses are refused with 403
-  /// (§9: "Host MUST bind to LAN interfaces only"). Binding a single LAN
+  /// (§9: off-LAN remotes are refused on both planes). Binding a single LAN
   /// interface is not always possible (a phone on Wi-Fi AND a hotspot needs
   /// one port on several interfaces), so the address filter is the enforced
   /// half of the rule and applies on both planes. Loopback always passes —
   /// tests, the CLI and the host's own UI live there.
   final bool restrictToLanRemotes;
 
+  /// Upper bound on embedded cover art taken from a guest upload (§6.5).
+  /// Larger art is dropped — the track still plays, it just has no cover —
+  /// so one upload cannot make the host store and serve an arbitrarily large
+  /// "image". Matches the guest-side cap (`JamGuestClient.maxArtworkBytes`).
+  final int maxArtworkBytes;
+
+  /// The §6.3 readiness gate. When [play] starts a freshly selected track
+  /// (the session is `loading`) while some joined guest is mid-transfer of
+  /// it — its latest `media_status` for the item is `fetching` — the start
+  /// is held for up to this long, and released early the moment no guest is
+  /// fetching it any more (each finished, gave up, or left). Guests that
+  /// never reported, reported `none`, or already hold the file are never
+  /// waited for, so a stalled or broken guest costs the room at most this
+  /// wait, once per track. Stragglers late-join per §5.3. [Duration.zero]
+  /// disables the gate.
+  final Duration readinessWait;
+
   final HostSession _session;
   JamPermissions _permissions;
   static const MessageCodec _codec = MessageCodec();
 
+  /// WebSocket framing a pre-hello socket may send on top of
+  /// [maxPreHelloFrameBytes]: a frame header is at most 14 bytes, so this
+  /// covers a hello split into many frames and nothing that matters.
+  static const int _preHelloFramingSlack = 1024;
+
+  /// How late an upload's stall check may run and still judge its window
+  /// (§6.4). Later than this, the host itself was not running — and not
+  /// reading what the client sent — so the window is extended instead.
+  static const int _stallCheckSlackUs = 100 * 1000;
+
   HttpServer? _server;
+
+  /// The listening socket under [_server]. `HttpServer.listenOn` never
+  /// closes the socket it was given, so [close], [restartListener] and
+  /// [debugKillListener] do.
+  ServerSocket? _listener;
+
+  /// Admission and pre-authentication byte accounting for every connection
+  /// [_listener] accepts (§9.1). Created in [start]; survives
+  /// [restartListener], so connections that outlive a listener stay counted.
+  ConnectionGuard? _guard;
+
+  /// A [restartListener] in progress, which concurrent callers share.
+  Future<void>? _restarting;
+
   Timer? _livenessTimer;
 
   /// The resolved upload directory (§6.4), set in [start].
@@ -324,6 +485,25 @@ class JamHostServer {
   /// Whether [_uploadDir] was created by this instance (and so is deleted on
   /// [close]).
   bool _ownsUploadDir = false;
+
+  /// Held for the lifetime of an owned [_uploadDir]: an exclusive lock on its
+  /// lock file, which is how a later host start tells a live room's
+  /// directory from one a killed process leaked (see [sweepStaleUploadDirs]).
+  RandomAccessFile? _uploadDirLock;
+
+  /// Completes when the current listening socket stops (see
+  /// [listenerDone]); replaced by [restartListener].
+  Completer<Object?> _listenerDone = Completer<Object?>();
+
+  /// Whether the host has announced it is away (§3.5).
+  bool _away = false;
+
+  /// A [play] held by the §6.3 readiness gate (see [readinessWait]).
+  Timer? _pendingStart;
+
+  /// When [_checkLiveness] last ran, to notice the host's OWN naps (see
+  /// [_checkLiveness]).
+  int? _lastLivenessTickUs;
 
   int _seq = 0;
   int _peerCounter = 0;
@@ -340,6 +520,9 @@ class JamHostServer {
   /// Playlist entries claimed by uploads that are still arriving, for the
   /// same reason as [_reservedBytes].
   int _pendingUploads = 0;
+
+  /// Uploads in flight per uploading peerId, against [maxUploadsPerPeer].
+  final Map<String, int> _uploadsInFlight = {};
 
   /// Bytes of guest uploads accepted this session (§6.4), against
   /// [uploadBudgetBytes]. Exposed for host UIs that want to show the
@@ -360,16 +543,29 @@ class JamHostServer {
   /// the peerId alone is claimable by anyone who watched someone drop, and
   /// permissions outlive the drop for the whole grace window (§5.6). The
   /// slot therefore remembers *which device* held it, and only that device
-  /// gets it back. A null clientId (a v0.1 client) is never resumable.
+  /// gets it back. A null clientId is never resumable.
   final Map<String, ({int untilUs, String? clientId})> _grace = {};
 
-  /// Media registry: mediaId → (playlist item, backing file).
-  final Map<String, ({MediaItem item, File file})> _media = {};
+  /// Media registry (§6.1): mediaId → the item, its backing file, and where
+  /// both came from. Never pruned during a session — a removed item's bytes
+  /// stay servable (see [removeMediaItem]).
+  final Map<String, _MediaEntry> _media = {};
   final List<MediaItem> _playlist = [];
 
   /// Artwork registry (§6.5): artworkId → (mime, backing file). Artwork ids
   /// are content-derived, so items sharing cover bytes share one entry.
   final Map<String, ({String mime, File file})> _artwork = {};
+
+  /// Moderation that outlives a peerId (§5.6), keyed by the stable
+  /// `hello.clientId`: a co-host whose phone napped past the grace window, or
+  /// a muted guest who rejoins from scratch, comes back as what the host
+  /// made them — not as a fresh guest with a clean slate. Kept for the whole
+  /// session; never broadcast (clientIds never leave the host).
+  final Map<String, _ClientModeration> _moderation = {};
+
+  /// Devices kicked this session (§5.6), by clientId, with the identity they
+  /// had when kicked — so the host UI can list them and [unkickPeer] them.
+  final Map<String, PeerInfo> _kicked = {};
 
   final StreamController<JamHostEvent> _events =
       StreamController<JamHostEvent>.broadcast();
@@ -377,12 +573,17 @@ class JamHostServer {
   /// Observability events (peer joined/left, media status, broadcasts).
   Stream<JamHostEvent> get events => _events.stream;
 
-  /// The bound port. Throws [StateError] before [start].
+  /// The bound port. Throws [StateError] before [start]; stays readable
+  /// after [close].
   int get port {
-    final server = _server;
-    if (server == null) throw StateError('JamHostServer is not started');
-    return server.port;
+    final bound = _bound;
+    if (bound == null) throw StateError('JamHostServer is not started');
+    return bound.port;
   }
+
+  /// What [start] bound, kept so [port] and [selfProbe] still work once the
+  /// listener is gone (a closed [HttpServer] no longer reports either).
+  ({InternetAddress address, int port})? _bound;
 
   /// The current authoritative playback snapshot (§5.1).
   PlaybackSnapshot get snapshot => _session.snapshot;
@@ -409,6 +610,31 @@ class JamHostServer {
 
   /// Whether every joined peer has reported `ready` for [mediaId] (§6.3).
   bool allPeersReady(String mediaId) => _session.allPeersReady(mediaId);
+
+  /// Whether a [play] is currently held by the §6.3 readiness gate — the
+  /// session is `loading` and will start on its own within [readinessWait].
+  bool get isAwaitingReadiness => _pendingStart != null;
+
+  /// Whether the host has announced it is away (§3.5, [announceAway]).
+  bool get isAway => _away;
+
+  /// Devices kicked this session and not yet let back in (§5.6), as they
+  /// were known when kicked (their peerId then, and display name). A kicked
+  /// device's `hello` is answered `reject { reason: "kicked" }`.
+  List<PeerInfo> get kickedPeers => List.unmodifiable(_kicked.values);
+
+  /// [kickedPeers] after every change to it — a kick ([kickPeer] without
+  /// `allowResume`) or an [unkickPeer] that let someone back — whoever made
+  /// it, so a host UI listing the kicked stays right when another layer
+  /// (or a test) kicks on the server directly.
+  Stream<List<PeerInfo>> get kickedPeersChanges => _kickedChanges.stream;
+
+  final StreamController<List<PeerInfo>> _kickedChanges =
+      StreamController<List<PeerInfo>>.broadcast();
+
+  void _emitKickedChanged() {
+    if (!_kickedChanges.isClosed) _kickedChanges.add(kickedPeers);
+  }
 
   /// The readiness [peerId] last reported for [mediaId] (§6.3;
   /// [MediaReadiness.none] if it never reported on that item).
@@ -500,8 +726,7 @@ class JamHostServer {
   /// remote address (the socket died mid-request) counts as untrusted.
   bool _remoteAllowed(InternetAddress? remote) {
     if (!restrictToLanRemotes) return true;
-    return remote != null &&
-        isLanAddress(remote, hostAddresses: _ownAddresses);
+    return remote != null && isLanAddress(remote, hostAddresses: _ownAddresses);
   }
 
   /// Length-independent-ish comparison for the session token: an early-exit
@@ -540,7 +765,7 @@ class JamHostServer {
       !id.contains('/') &&
       !id.contains(r'\') &&
       !id.contains('..') &&
-      !id.contains(' ');
+      !id.contains('\u0000');
 
   static String _randomHex(int bytes) {
     final rng = Random.secure();
@@ -561,36 +786,412 @@ class JamHostServer {
   /// [restrictToLanRemotes] enforces the rule per request whichever address
   /// is bound, so a caller that has to bind every interface (one port,
   /// several networks) still cannot serve the internet.
+  ///
+  /// With no [uploadDir], the per-instance temp directory is created under
+  /// the system temp dir and locked for the server's lifetime, and any
+  /// directories earlier hosts leaked there (a process killed mid-session
+  /// never reaches [close]) are swept in the background — see
+  /// [sweepStaleUploadDirs].
   Future<void> start({InternetAddress? address, int port = 0}) async {
     if (_server != null) throw StateError('JamHostServer already started');
     final configuredDir = uploadDir;
     if (configuredDir == null) {
-      _uploadDir = await Directory.systemTemp.createTemp('localjam_upload_');
+      final dir = await Directory.systemTemp.createTemp(_uploadDirPrefix);
+      _uploadDir = dir;
       _ownsUploadDir = true;
+      _uploadDirLock = await _lockUploadDir(dir);
+      unawaited(sweepStaleUploadDirs());
     } else {
       await configuredDir.create(recursive: true);
       _uploadDir = configuredDir;
     }
+    await _refreshOwnAddresses();
+    _guard = ConnectionGuard(
+      maxConnections: maxConnections,
+      maxConnectionsPerRemote: maxConnectionsPerRemote,
+      maxHeaderBytes: maxRequestHeaderBytes,
+      headerTimeout: helloTimeout,
+      admitRemote: _remoteAllowed,
+      admitLocal: admitLocalAddress,
+    );
+    final listener = await ServerSocket.bind(
+      address ?? InternetAddress.loopbackIPv4,
+      port,
+    );
+    _bound = (address: listener.address, port: listener.port);
+    _listen(listener);
+    _lastLivenessTickUs = _nowUs();
+    _livenessTimer = Timer.periodic(
+      livenessCheckInterval,
+      (_) => _checkLiveness(),
+    );
+  }
+
+  // --- Listener health ---------------------------------------------------------
+
+  /// Serves both planes on [listener], every connection admitted through
+  /// [_guard] first (§9.1).
+  void _listen(ServerSocket listener) {
+    final server = HttpServer.listenOn(_guard!.wrap(listener));
+    _listener = listener;
+    _server = server;
+    final done = _listenerDone;
+    server.listen(
+      _handleRequest,
+      onError: (Object error) => _onListenerError(done, error),
+      onDone: () => _onListenerDone(done),
+      cancelOnError: false,
+    );
+  }
+
+  /// Completes when the listening socket stops accepting connections: with
+  /// null after a deliberate [close], or with the error (a [StateError] when
+  /// the platform simply ended the listener) when it died underneath a live
+  /// room — e.g. iOS reclaiming a suspended app's listening socket. Joined
+  /// guests keep their own sockets, but nobody new can join or reconnect, so
+  /// a host UI that still shows the room as open is lying: it should
+  /// [restartListener] (or say so). Never completes with an error. After a
+  /// [restartListener] this is the NEW listener's future.
+  Future<Object?> get listenerDone => _listenerDone.future;
+
+  /// Re-opens the listening socket on the same address and port after it
+  /// died ([listenerDone] completed with an error, or [selfProbe] said so) —
+  /// without ending the room. The session, playlist, permissions and token
+  /// are untouched, joined guests keep their sockets, and the join link the
+  /// room handed out stays valid, so guests that dropped meanwhile simply
+  /// reconnect and resume (§3.3). Throws (a [SocketException]) if the port
+  /// cannot be bound again — another app took it — in which case only a new
+  /// room will do.
+  ///
+  /// With [address], the room moves to that address instead — e.g. a room
+  /// that started with no LAN, on loopback, rebinding once Wi-Fi or a
+  /// hotspot comes up. Same session, same token, and the same port when it
+  /// is free there; joined guests keep their sockets. A failed move leaves
+  /// the room listening where it was. The port changes only when
+  /// [allowNewPort] is true and the old one cannot be had: then [port] (and
+  /// so [joinUriFor]) reports the new one, every link and QR code handed
+  /// out before names a port nobody answers on, and a host UI must re-render
+  /// its invite — fine for a room nobody could reach yet, stranding for
+  /// one people had joined.
+  ///
+  /// Single-flight: a call made while a restart is already running (an app
+  /// resume hook and a [listenerDone] watcher both reacting to the same
+  /// death) shares that restart and its outcome instead of racing it for
+  /// the port. A call for a different [address] waits for the running one
+  /// and then moves.
+  Future<void> restartListener({
+    InternetAddress? address,
+    bool allowNewPort = false,
+  }) {
+    if (_bound == null || _closed) {
+      return Future.error(StateError('JamHostServer is not running'));
+    }
+    final running = _restarting;
+    if (running != null &&
+        (address == null || _sameAddress(address, _restartTarget))) {
+      return running;
+    }
+    final Future<void> next = (running ?? Future<void>.value())
+        .then<void>((_) {}, onError: (Object _) {})
+        .then((_) => _rebind(address, allowNewPort: allowNewPort));
+    _restarting = next;
+    _restartTarget = address;
+    return next.whenComplete(() {
+      if (identical(_restarting, next)) {
+        _restarting = null;
+        _restartTarget = null;
+      }
+    });
+  }
+
+  /// The address a running [restartListener] is moving to (null: staying).
+  InternetAddress? _restartTarget;
+
+  Future<void> _rebind(
+    InternetAddress? address, {
+    required bool allowNewPort,
+  }) async {
+    final bound = _bound;
+    if (bound == null || _closed) {
+      throw StateError('JamHostServer is not running');
+    }
+    final target = address ?? bound.address;
+    final moving = !_sameAddress(target, bound.address);
+    // Moving: open the new socket while the old one still serves, so a
+    // failure costs nothing. (It may clash with the old binding — the any-
+    // address and a specific one — in which case it is retried below, once
+    // the old one is closed.)
+    ServerSocket? fresh;
+    if (moving) {
+      try {
+        fresh = await ServerSocket.bind(target, bound.port);
+      } on SocketException {
+        fresh = null;
+      }
+    }
+    final old = _server;
+    final oldListener = _listener;
+    _server = null;
+    _listener = null;
+    _listenerFailed(StateError('listener restarted'));
+    try {
+      await old?.close();
+      await oldListener?.close();
+    } catch (_) {
+      // Already gone underneath us, which is why we are here.
+    }
+    try {
+      fresh ??= await _bindPort(target, bound.port, allowNewPort: allowNewPort);
+    } catch (_) {
+      if (moving && !_closed) {
+        // Stay where the room was rather than nowhere.
+        try {
+          final back = await ServerSocket.bind(bound.address, bound.port);
+          _listenerDone = Completer<Object?>();
+          _listen(back);
+        } catch (_) {
+          // The old address is gone too; [listenerDone] already says so.
+        }
+      }
+      rethrow;
+    }
+    if (_closed) {
+      await fresh.close();
+      return;
+    }
+    _bound = (address: fresh.address, port: fresh.port);
+    _listenerDone = Completer<Object?>();
+    _listen(fresh);
+    if (moving) await _refreshOwnAddresses();
+  }
+
+  static bool _sameAddress(InternetAddress a, InternetAddress? b) =>
+      b != null && a.type == b.type && a.address == b.address;
+
+  /// Binds [address]:[port], or — with [allowNewPort] — any free port there
+  /// when that one is taken.
+  static Future<ServerSocket> _bindPort(
+    InternetAddress address,
+    int port, {
+    required bool allowNewPort,
+  }) async {
+    try {
+      return await ServerSocket.bind(address, port);
+    } on SocketException {
+      if (!allowNewPort) rethrow;
+      return ServerSocket.bind(address, 0);
+    }
+  }
+
+  /// Re-reads [_ownAddresses] (see [isLanAddress]).
+  Future<void> _refreshOwnAddresses() async {
     try {
       _ownAddresses = [
-        for (final iface in await NetworkInterface.list(
-          includeLoopback: false,
-        ))
+        for (final iface in await NetworkInterface.list(includeLoopback: false))
           ...iface.addresses,
       ];
     } catch (_) {
       _ownAddresses = const []; // Enumeration refused: see [_ownAddresses].
     }
-    final server = await HttpServer.bind(
-      address ?? InternetAddress.loopbackIPv4,
-      port,
+  }
+
+  /// Whether the listening socket is believed alive: started, not closed,
+  /// and not failed. A suspended-then-resumed host should not take this on
+  /// faith — the OS may have reclaimed the socket without telling anyone;
+  /// see [selfProbe].
+  bool get isListening =>
+      _server != null && !_closed && !_listenerDone.isCompleted;
+
+  void _onListenerError(Completer<Object?> done, Object error) {
+    // An accept error can be transient (out of file descriptors for a
+    // moment), so it is only a death certificate if the listener also
+    // stopped answering. Ask it.
+    if (_closed || done.isCompleted || !identical(done, _listenerDone)) {
+      return;
+    }
+    unawaited(
+      selfProbe().then((alive) {
+        if (!alive && identical(done, _listenerDone)) {
+          _listenerFailed(error);
+        }
+      }),
     );
-    _server = server;
-    server.listen(_handleRequest, cancelOnError: false);
-    _livenessTimer = Timer.periodic(
-      livenessCheckInterval,
-      (_) => _checkLiveness(),
+  }
+
+  void _onListenerDone(Completer<Object?> done) {
+    if (done.isCompleted) return; // Already reported (a restart, a failure).
+    done.complete(
+      _closed ? null : StateError('the listening socket closed underneath us'),
     );
+  }
+
+  void _listenerFailed(Object error) {
+    if (!_listenerDone.isCompleted) _listenerDone.complete(error);
+  }
+
+  /// Checks, end to end, that this server still accepts connections: opens a
+  /// fresh connection to its own port and expects an HTTP answer (a plain
+  /// GET of `/ws` is answered 426). Cheap — call it when the host app returns from the
+  /// background, where a reclaimed listening socket can otherwise go
+  /// unnoticed (the listener's stream need not end when the OS takes the
+  /// socket). A failed probe also completes [listenerDone].
+  Future<bool> selfProbe({
+    Duration timeout = const Duration(seconds: 2),
+  }) async {
+    final bound = _bound;
+    if (bound == null || _closed) return false;
+    final target = bound.address.address == InternetAddress.anyIPv4.address
+        ? InternetAddress.loopbackIPv4
+        : bound.address.address == InternetAddress.anyIPv6.address
+        ? InternetAddress.loopbackIPv6
+        : bound.address;
+    final client = HttpClient()..connectionTimeout = timeout;
+    var alive = false;
+    try {
+      final request = await client
+          .getUrl(
+            Uri(
+              scheme: 'http',
+              host: target.address,
+              port: bound.port,
+              path: '/ws',
+            ),
+          )
+          .timeout(timeout);
+      final response = await request.close().timeout(timeout);
+      // Any answer at all proves the listener accepted and the server is
+      // serving (`/ws` normally says 426; a §9 address filter may say 403).
+      alive = true;
+      await response.drain<void>().timeout(timeout);
+    } catch (_) {
+      // Refused, reset, or silent: all mean nobody new gets in.
+    } finally {
+      client.close(force: true);
+    }
+    if (!alive && !_closed) {
+      _listenerFailed(
+        SocketException('self-probe of port ${bound.port} failed'),
+      );
+    }
+    return alive;
+  }
+
+  /// Stops the listening socket WITHOUT closing the room — what the OS does
+  /// to a suspended app — so tests can exercise [listenerDone] and
+  /// [selfProbe].
+  @visibleForTesting
+  Future<void> debugKillListener() async => _listener?.close();
+
+  /// TCP connections currently counted against [maxConnections] — so tests
+  /// can prove every way a connection ends gives its slot back.
+  @visibleForTesting
+  int get debugOpenConnections => _guard?.openConnections ?? 0;
+
+  /// Guest uploads (§6.4) whose request has been accepted and whose body is
+  /// still arriving — so tests can act while one is mid-flight.
+  @visibleForTesting
+  int get debugUploadsInFlight => _pendingUploads;
+
+  // --- Upload directory hygiene ------------------------------------------------
+
+  static const String _uploadDirPrefix = 'localjam_upload_';
+  static const String _uploadLockName = '.localjam.lock';
+
+  /// Creates and exclusively locks [dir]'s lock file, recording this
+  /// process's pid in it. The lock dies with the process — that is the
+  /// point: it is how [sweepStaleUploadDirs] knows the owner is gone.
+  ///
+  /// The lock is taken BLOCKING: another process's sweep may be probing
+  /// this very file at this moment (its probe holds the lock for an
+  /// instant), and a non-blocking attempt that lost that race would leave
+  /// a live room's directory unlocked — and so sweepable — for good.
+  static Future<RandomAccessFile?> _lockUploadDir(Directory dir) async {
+    try {
+      final raf = await File(
+        '${dir.path}/$_uploadLockName',
+      ).open(mode: FileMode.write);
+      await raf.lock(FileLock.blockingExclusive);
+      await raf.writeString('$pid');
+      await raf.flush();
+      return raf;
+    } catch (_) {
+      return null; // Locking unsupported: the dir is just never swept.
+    }
+  }
+
+  /// Deletes `localjam_upload_*` directories under [parent] (default: the
+  /// system temp dir) that a host which never reached [close] left behind —
+  /// an app killed while hosting, which on a phone is the normal way a jam
+  /// ends — and returns how many it removed. Best-effort and never throws.
+  ///
+  /// A directory is stale when the process that created it is gone: its
+  /// lock file is not held by anyone. Three rules keep a LIVE room's
+  /// directory safe. One recorded under this process's own pid is never
+  /// touched — record locks do not conflict within a process, so another
+  /// server in this process (another isolate, a test) would look abandoned.
+  /// One whose lock file is younger than [_sweepMinAge], or names no owner
+  /// yet, is left alone, since its host may be between creating the file
+  /// and locking it. And one with no lock file at all is only removed once
+  /// its directory is that old.
+  static Future<int> sweepStaleUploadDirs({Directory? parent}) async {
+    var removed = 0;
+    try {
+      final root = parent ?? Directory.systemTemp;
+      await for (final entity in root.list(followLinks: false)) {
+        if (entity is! Directory) continue;
+        final name = entity.uri.pathSegments.lastWhere(
+          (segment) => segment.isNotEmpty,
+          orElse: () => '',
+        );
+        if (!name.startsWith(_uploadDirPrefix)) continue;
+        if (!await _isAbandoned(entity)) continue;
+        try {
+          await entity.delete(recursive: true);
+          removed++;
+        } catch (_) {
+          // Raced another sweeper, or not ours to delete: leave it.
+        }
+      }
+    } catch (_) {
+      // Temp dir unlistable: nothing to sweep.
+    }
+    return removed;
+  }
+
+  /// How old an upload directory's lock file must be before a sweep will
+  /// even consider it (see [sweepStaleUploadDirs]).
+  static const Duration _sweepMinAge = Duration(minutes: 1);
+
+  static Future<bool> _isAbandoned(Directory dir) async {
+    final lockFile = File('${dir.path}/$_uploadLockName');
+    if (!await lockFile.exists()) {
+      final modified = (await dir.stat()).modified;
+      return DateTime.now().difference(modified) > const Duration(minutes: 10);
+    }
+    final String owner;
+    try {
+      if (DateTime.now().difference(await lockFile.lastModified()) <
+          _sweepMinAge) {
+        return false;
+      }
+      owner = (await lockFile.readAsString()).trim();
+    } catch (_) {
+      return false;
+    }
+    if (owner.isEmpty || owner == '$pid') return false;
+    RandomAccessFile? probe;
+    try {
+      probe = await lockFile.open(mode: FileMode.append);
+      // Non-blocking: throws while the owning process holds its lock.
+      await probe.lock(FileLock.exclusive);
+      return true;
+    } catch (_) {
+      return false;
+    } finally {
+      try {
+        await probe?.close(); // Also releases our probe lock.
+      } catch (_) {}
+    }
   }
 
   /// The `localjam://join?...` URI (§1 Discovery) for [iface], which should
@@ -628,6 +1229,8 @@ class JamHostServer {
     }
     _closed = true;
     _livenessTimer?.cancel();
+    _endTimer?.cancel();
+    _cancelPendingStart();
     for (final conn in List.of(_conns)) {
       unawaited(
         conn.ws.close(
@@ -638,6 +1241,16 @@ class JamHostServer {
     _conns.clear();
     _peers.clear();
     await _server?.close(force: true);
+    try {
+      await _listener?.close();
+    } catch (_) {
+      // Already reclaimed underneath us.
+    }
+    if (!_listenerDone.isCompleted) _listenerDone.complete(null);
+    try {
+      await _uploadDirLock?.close(); // Releases the lock with the handle.
+    } catch (_) {}
+    _uploadDirLock = null;
     if (_ownsUploadDir) {
       try {
         await _uploadDir?.delete(recursive: true);
@@ -646,21 +1259,40 @@ class JamHostServer {
       }
     }
     await _events.close();
+    await _kickedChanges.close();
   }
 
   // --- HTTP routing ----------------------------------------------------------
 
   Future<void> _handleRequest(HttpRequest req) async {
+    final path = req.uri.path;
+    final upgrade = path == '/ws' && WebSocketTransformer.isUpgradeRequest(req);
+    // Every handler but an upload's leaves the request body unread, and
+    // left alone `dart:io` drains an unread body before it sends a
+    // response's headers — so a request that declares a gigabyte and sends
+    // nothing would never be answered and would hold its connection for
+    // good. Its body is therefore subscribed to (and dropped) up front,
+    // held paused, and cancelled once the request is answered, which tears
+    // the connection down. An upload reads its own (see [_answer]).
+    final body = upgrade || path == '/media'
+        ? null
+        : (req.listen(null)..pause());
     try {
+      // §9.1: one request per connection. The connection guard counts the
+      // header bytes of a connection's FIRST request only — the bytes after
+      // it are a body or WebSocket frames, which it cannot tell apart from
+      // a second request without parsing HTTP itself — so a kept-alive
+      // connection would let an unauthenticated sender's next header block
+      // through uncounted. On a LAN a fresh TCP connection per transfer
+      // costs nothing. (A successful `/ws` upgrade is the one connection
+      // that outlives its request, and it is held to the pre-hello budget.)
+      if (!upgrade) req.response.persistentConnection = false;
       // §9, defense in depth: even when the socket had to be bound on every
       // interface (one port, several networks), nothing off-LAN is served.
       if (!_remoteAllowed(req.connectionInfo?.remoteAddress)) {
-        req.response.statusCode = HttpStatus.forbidden;
-        req.response.persistentConnection = false;
-        await req.response.close();
+        await _answer(req, HttpStatus.forbidden);
         return;
       }
-      final path = req.uri.path;
       if (path == '/ws') {
         await _handleWsUpgrade(req);
       } else if (path == '/media') {
@@ -674,9 +1306,11 @@ class JamHostServer {
         await req.response.close();
       }
     } catch (_) {
-      try {
-        await req.response.close();
-      } catch (_) {}
+      // A handler bug or a vanished client. Say so if nothing has been sent
+      // yet — an unexplained exception must not read as a `200`.
+      await _answer(req, HttpStatus.internalServerError);
+    } finally {
+      unawaited(body?.cancel());
     }
   }
 
@@ -691,23 +1325,62 @@ class JamHostServer {
     // §3.1), so the two things a pre-hello socket can spend — a socket slot
     // and the LAN's trust — are checked before it exists at all.
     if (!_remoteAllowed(req.connectionInfo?.remoteAddress)) {
+      req.response.persistentConnection = false;
       req.response.statusCode = HttpStatus.forbidden;
       await req.response.close();
       return;
     }
     final pending = _conns.where((c) => !c.joined).length;
     if (pending >= maxPendingConnections) {
+      req.response.persistentConnection = false;
       req.response.statusCode = HttpStatus.serviceUnavailable;
       await req.response.close();
       return;
     }
-    final ws = await WebSocketTransformer.upgrade(req);
-    final conn = _GuestConn(ws, nowUs: _nowUs());
-    _conns.add(conn);
+    // §9.1: until its `hello` is accepted, the socket may send this many raw
+    // bytes in all — counted as they arrive, because `dart:io` reassembles a
+    // whole WebSocket message before the per-frame cap in [_onFrame] can
+    // look at it.
+    // Past it the socket is closed with `policyViolation`, like an
+    // oversized pre-hello frame (the bytes stop being read either way).
+    _GuestConn? conn;
+    final socket = _guard?.socketFor(req.connectionInfo);
+    final withinBudget =
+        socket?.limitUntilTrusted(
+          maxPreHelloFrameBytes + _preHelloFramingSlack,
+          onExceeded: () {
+            final c = conn;
+            if (c == null) return; // Still upgrading: destroyed shortly.
+            unawaited(
+              c.ws.close(WebSocketStatus.policyViolation).catchError((_) {}),
+            );
+            _dropConn(c);
+          },
+        ) ??
+        true;
+    if (!withinBudget) {
+      // Frames that came in the same read as the upgrade request already
+      // break the budget, and `dart:io` would hand them to the WebSocket
+      // whole: the guard has destroyed the connection, so it is not
+      // upgraded. (Answering only lets `dart:io` finish the request.)
+      await _closeQuietly(req.response, HttpStatus.badRequest);
+      return;
+    }
+    // No permessage-deflate (§9.1): the frame caps are applied to messages
+    // after reassembly, so with compression on, the 16 KB pre-hello cap
+    // would be measured after inflation — a few hundred bytes on the wire
+    // from a socket that has proved nothing could inflate into megabytes
+    // before any cap looks at it. Control frames are small JSON anyway.
+    final ws = await WebSocketTransformer.upgrade(
+      req,
+      compression: CompressionOptions.compressionOff,
+    );
+    final opened = conn = _GuestConn(ws, nowUs: _nowUs(), socket: socket);
+    _conns.add(opened);
     ws.listen(
-      (data) => _onFrame(conn, data),
-      onDone: () => _dropConn(conn),
-      onError: (Object _) => _dropConn(conn),
+      (data) => _onFrame(opened, data),
+      onDone: () => _dropConn(opened),
+      onError: (Object _) => _dropConn(opened),
       cancelOnError: true,
     );
   }
@@ -826,25 +1499,44 @@ class JamHostServer {
   /// UI reads artwork from here instead of fetching over HTTP.
   File? artworkFile(String artworkId) => _artwork[artworkId]?.file;
 
+  /// The file this server stored for a guest upload of [mediaId] (§6.4) —
+  /// what the host's own player plays when the room selects a guest's
+  /// track: the host never fetches its own media plane, and the bytes are
+  /// already on its disk. Null when [mediaId] is not an upload (an item the
+  /// host registered with [addMedia] is backed by the caller's own file,
+  /// which the caller already knows — and one that replaced an upload with
+  /// the same content takes its place here too), when no such item was ever
+  /// stored, and once [close] has deleted the server's own upload directory.
+  ///
+  /// The file lives for the whole session, whatever happens to the item:
+  /// nothing deletes an upload before [close] — removing an item from the
+  /// playlist keeps its bytes servable (see [removeMediaItem]), and
+  /// [sweepStaleUploadDirs] never touches a live server's directory. A
+  /// caller that wants an upload to outlive the room (a history entry it
+  /// can replay later) must copy it before [close].
+  File? storedUploadFile(String mediaId) {
+    if (_closed && _ownsUploadDir) return null;
+    final entry = _media[mediaId];
+    return entry != null && entry.uploaded ? entry.file : null;
+  }
+
   // --- Guest uploads (§6.4) ------------------------------------------------------
 
   /// Handles `POST /media`: streams the raw body to disk while hashing
   /// incrementally (never buffering the file in memory), derives the mediaId
   /// from the host-computed sha256 exactly like [describeFile], registers the
   /// item via [addMedia], and answers 201 with the MediaItem JSON — or 200
-  /// with the existing item when the content was already uploaded
-  /// (idempotency, §6.4).
+  /// with the existing item when the content is already queued
+  /// (idempotency, §6.4). Content that was removed from the queue goes back
+  /// in, as a 201.
   Future<void> _handleUpload(HttpRequest req) async {
-    final res = req.response;
     // §6.4/§9: Authorization: Bearer <sessionToken> gates uploads too.
     if (!_bearerMatches(req.headers.value(HttpHeaders.authorizationHeader))) {
-      res.statusCode = HttpStatus.unauthorized;
-      await res.close();
+      await _refuseUpload(req, HttpStatus.unauthorized);
       return;
     }
     if (req.method != 'POST') {
-      res.statusCode = HttpStatus.methodNotAllowed;
-      await res.close();
+      await _refuseUpload(req, HttpStatus.methodNotAllowed);
       return;
     }
 
@@ -852,33 +1544,39 @@ class JamHostServer {
     try {
       kind = MediaKind.fromWire(req.headers.value('X-LocalJam-Kind') ?? '');
     } on FormatException {
-      res.statusCode = HttpStatus.badRequest;
-      await res.close();
+      await _refuseUpload(req, HttpStatus.badRequest);
       return;
     }
     final String? rawName = req.headers.value('X-LocalJam-Name');
     final String name;
     try {
-      // §6.4: the name header is percent-encoded UTF-8.
+      // §6.4: the name header is percent-encoded UTF-8. A bad escape
+      // (`%zz`) is an ArgumentError, a good escape of bytes that are not
+      // UTF-8 (`%FF`) a FormatException: both are a malformed header.
       name = rawName == null ? 'upload' : Uri.decodeComponent(rawName);
-    } on ArgumentError {
-      res.statusCode = HttpStatus.badRequest;
-      await res.close();
+    } on Object catch (e) {
+      if (e is! ArgumentError && e is! FormatException) rethrow;
+      await _refuseUpload(req, HttpStatus.badRequest);
       return;
     }
     final mime =
         req.headers.value('X-LocalJam-Mime') ?? 'application/octet-stream';
-    final durationUs = int.tryParse(
-      req.headers.value('X-LocalJam-Duration-Us') ?? '',
+    final durationUs = plausibleDurationUs(
+      int.tryParse(req.headers.value('X-LocalJam-Duration-Us') ?? ''),
     );
-    final peerId = req.headers.value('X-LocalJam-Peer-Id');
 
-    // §5.6: uploads need addTracks. Attribution rides the peer-id header —
-    // spoofable within the session, which §9's honest-guest model accepts;
-    // an absent header is judged as a plain guest under the room policy.
-    if (!_permissions.allows(peerId ?? '_anonymous', JamCapability.addTracks)) {
-      res.statusCode = HttpStatus.forbidden;
-      await res.close();
+    // §6.4/§5.6: WHO is uploading is proved by the per-peer upload key from
+    // that peer's `welcome`, never by a claim. The session token only proves
+    // the request comes from someone holding the invite — which, for a
+    // discoverable room, is everyone on the Wi-Fi — and a self-declared
+    // peer id let any of them upload under Listen-only, as anyone, or as
+    // the host ("host" holds every capability). A key belongs to a joined
+    // peer and is judged exactly as that peer.
+    final uploader = _uploaderFor(req.headers.value('X-LocalJam-Upload-Key'));
+    final peerId = uploader?.peerId;
+    if (peerId == null ||
+        !_permissions.allows(peerId, JamCapability.addTracks)) {
+      await _refuseUpload(req, HttpStatus.forbidden);
       return;
     }
 
@@ -890,15 +1588,11 @@ class JamHostServer {
     // unknown one exactly what is missing.
     final declared = req.contentLength;
     if (declared < 0) {
-      res.persistentConnection = false;
-      res.statusCode = HttpStatus.lengthRequired;
-      await res.close();
+      await _refuseUpload(req, HttpStatus.lengthRequired);
       return;
     }
     if (declared > maxUploadBytes) {
-      res.persistentConnection = false;
-      res.statusCode = HttpStatus.requestEntityTooLarge;
-      await res.close();
+      await _refuseUpload(req, HttpStatus.requestEntityTooLarge);
       return;
     }
     // Per-file limits bound one upload; these bound the session — a guest
@@ -912,18 +1606,25 @@ class JamHostServer {
     // guests uploaded at once.
     if (_playlist.length + _pendingUploads >= maxPlaylistLength ||
         _uploadedBytes + _reservedBytes + declared > uploadBudgetBytes) {
-      res.persistentConnection = false;
-      res.statusCode = HttpStatus.insufficientStorage;
-      await res.close();
+      await _refuseUpload(req, HttpStatus.insufficientStorage);
+      return;
+    }
+    // §6.4: one peer's uploads in flight are capped, so the time bound on
+    // each ([uploadStallTimeout]) is also a bound on how much of the room's
+    // budget one peer can hold at a time.
+    final inFlight = _uploadsInFlight[peerId] ?? 0;
+    if (inFlight >= maxUploadsPerPeer) {
+      await _refuseUpload(req, HttpStatus.tooManyRequests);
       return;
     }
 
-    // Reserved for the whole request and released on every exit — the 200,
-    // the 413, an over-long body, and the client that vanishes mid-body
-    // (which arrives here as an exception out of the body stream). A stored
-    // upload reconciles the reservation to the bytes it actually received.
+    // Reserved for the whole request and released on every exit — stored,
+    // idempotent, over a cap, stalled, or a client that vanished mid-body.
+    // A stored upload reconciles the reservation to the bytes it actually
+    // received.
     _reservedBytes += declared;
     _pendingUploads++;
+    _uploadsInFlight[peerId] = inFlight + 1;
     try {
       await _receiveUpload(
         req,
@@ -932,17 +1633,27 @@ class JamHostServer {
         name: name,
         mime: mime,
         durationUs: durationUs,
-        peerId: peerId,
+        uploader: uploader!,
       );
     } finally {
       _reservedBytes -= declared;
       _pendingUploads--;
+      final left = (_uploadsInFlight[peerId] ?? 1) - 1;
+      if (left <= 0) {
+        _uploadsInFlight.remove(peerId);
+      } else {
+        _uploadsInFlight[peerId] = left;
+      }
     }
   }
 
   /// The body half of [_handleUpload], from the first byte on: streams to
   /// disk while hashing, then stores, registers and answers. Runs inside the
   /// caller's budget reservation of [declared] bytes.
+  ///
+  /// The partial file is deleted on every path that does not store it —
+  /// it lives only inside that reservation, so one that outlived its
+  /// request would be disk the budget no longer counts (§6.4).
   Future<void> _receiveUpload(
     HttpRequest req, {
     required int declared,
@@ -950,120 +1661,428 @@ class JamHostServer {
     required String name,
     required String mime,
     required int? durationUs,
-    required String? peerId,
+    required _GuestConn uploader,
   }) async {
     final res = req.response;
     final dir = _uploadDir!;
     final tmp = File('${dir.path}/incoming_${_randomHex(8)}.part');
+    var stored = false;
+    try {
+      final outcome = await _receiveBody(req, tmp, declared: declared);
+      final failure = switch (outcome.end) {
+        _BodyEnd.complete => null,
+        _BodyEnd.overLimit => HttpStatus.requestEntityTooLarge,
+        _BodyEnd.overBudget => HttpStatus.insufficientStorage,
+        _BodyEnd.stalled => HttpStatus.requestTimeout,
+        // Most likely nobody is left to read it.
+        _BodyEnd.aborted => HttpStatus.badRequest,
+        _BodyEnd.writeFailed => HttpStatus.insufficientStorage,
+      };
+      if (failure != null) {
+        // A body cut off by a cap is read to its end first, within bounds,
+        // so the client gets to see why (see [_refuseUpload]). A stalled
+        // one would only make the host wait for what it is too slow to
+        // send, and a vanished one has nobody left to tell.
+        if (outcome.end != _BodyEnd.stalled &&
+            outcome.end != _BodyEnd.aborted) {
+          await _drainRefused(
+            outcome.body,
+            remaining: declared - outcome.received,
+          );
+        }
+        // Answered while the body is merely paused (or done), then let go:
+        // cancelling a request body destroys its connection on the spot,
+        // so the other order would hand the client a reset instead of the
+        // reason.
+        await _closeQuietly(res, failure);
+        unawaited(outcome.body.cancel());
+        return;
+      }
+      final digest = outcome.digest!;
+      final received = outcome.received;
+      final mediaId = 'm_${digest.substring(0, 12)}';
+
+      // §6.1/§6.5: the host extracts tags + artwork itself — one
+      // implementation for uploads and host files, and guests never need a
+      // tag parser — from the bytes as they arrived, before they are stored
+      // (see below). Content the room already has keeps its first upload's
+      // metadata (§6.4), so it is not read again.
+      var tags = const JamAudioTags();
+      String? artworkId;
+      if (kind == MediaKind.audio && !_media.containsKey(mediaId)) {
+        // Remote input: the parser is only let at what it can read within
+        // the artwork cap's budget (§6.5) — a crafted multi-hundred-megabyte
+        // "cover" or tag frame is skipped, not loaded.
+        tags = await readAudioTags(tmp, maxMetadataBytes: maxArtworkBytes);
+        final artworkBytes = tags.artworkBytes;
+        // Cover art is served to every guest (§6.5) and held whole in
+        // memory on each of them: an oversized "cover" is dropped, not
+        // stored.
+        if (tags.hasArtwork && artworkBytes!.length <= maxArtworkBytes) {
+          artworkId = await addArtwork(artworkBytes, mime: tags.artworkMime!);
+        }
+      }
+
+      // The landing. The headers were judged when the request arrived, but
+      // a body takes a while and the room moves on meanwhile (§6.4/§5.6):
+      // whether this may still be added, and as whose, is decided now —
+      // and from here until the registry holds the outcome nothing awaits,
+      // so neither can change again first.
+      final addedBy = _landingPeer(uploader);
+      if (addedBy == null) {
+        await _closeQuietly(res, HttpStatus.forbidden);
+        return;
+      }
+      final existing = _media[mediaId];
+      final MediaItem item;
+      final int status;
+      if (existing == null) {
+        // Synchronous so that the landing above holds (one metadata
+        // operation in the upload directory).
+        final file = tmp.renameSync('${dir.path}/$mediaId');
+        stored = true;
+        // Only new content spends the budget (§6.4).
+        _uploadedBytes += received;
+        item = MediaItem(
+          mediaId: mediaId,
+          kind: kind,
+          name: name,
+          mime: mime,
+          sizeBytes: received,
+          // The uploader's declared duration wins over the tag value (a
+          // decoder probe beats a tag claim).
+          durationUs: durationUs ?? plausibleDurationUs(tags.durationUs),
+          sha256: digest,
+          title: tags.title,
+          artist: tags.artist,
+          album: tags.album,
+          artworkId: artworkId,
+          addedBy: addedBy,
+        );
+        _addUpload(item, file, uploaded: true, device: uploader.device);
+        status = HttpStatus.created;
+      } else if (_playlist.any((i) => i.mediaId == mediaId)) {
+        // §6.4 idempotency: the mediaId is content-derived, so an existing
+        // id means the same bytes — answer 200 with the existing item, keep
+        // its original metadata, and broadcast nothing.
+        item = existing.item;
+        status = HttpStatus.ok;
+      } else {
+        // §6.4: the same bytes as an item removed from the queue. The
+        // registry still holds them (§5.6 removal keeps bytes servable),
+        // so nothing is stored or spent — but this is an add, and it is
+        // answered as one: back in the queue, credited to whoever put it
+        // back. A 200 would tell the guest "already queued" about a track
+        // that is not. Its permission and its playlist slot were judged
+        // and reserved like any upload's.
+        item = _creditedTo(existing.item, addedBy);
+        _addUpload(
+          item,
+          existing.file,
+          uploaded: existing.uploaded,
+          device: uploader.device,
+        );
+        status = HttpStatus.created;
+      }
+      res.statusCode = status;
+      res.headers.contentType = ContentType.json;
+      res.write(jsonEncode(item.toJson()));
+      await res.close();
+    } finally {
+      if (!stored) {
+        try {
+          await tmp.delete();
+        } catch (_) {
+          // Never created, or the room's directory is already gone.
+        }
+      }
+    }
+  }
+
+  /// Streams an upload body into [tmp] while hashing it — the file is never
+  /// held in memory — and says how it ended. Never throws.
+  ///
+  /// The body is held to [maxUploadBytes] and the session budget as it
+  /// arrives (a `Content-Length` is a claim, not a promise), and to the
+  /// stall rule of [uploadStallTimeout] / [minUploadBytesPerSecond]:
+  /// `dart:io` puts no time bound on a request body, so without one a
+  /// client that declares 512 MB and goes quiet holds its reservation, its
+  /// playlist slot and a file descriptor forever.
+  Future<
+    ({
+      _BodyEnd end,
+      int received,
+      String? digest,
+      StreamSubscription<Uint8List> body,
+    })
+  >
+  _receiveBody(HttpRequest req, File tmp, {required int declared}) async {
     final digestSink = _DigestSink();
     final hasher = sha256.startChunkedConversion(digestSink);
     final sink = tmp.openWrite();
+    final ended = Completer<_BodyEnd>();
     var received = 0;
-    var overLimit = false;
-    var overBudget = false;
-    try {
-      // Stream to disk while hashing — the file is never held in memory.
-      await for (final chunk in req) {
+    late final StreamSubscription<Uint8List> body;
+    void finish(_BodyEnd end) {
+      if (ended.isCompleted) return;
+      // Stop reading; the caller answers, then cancels.
+      if (end != _BodyEnd.complete) body.pause();
+      ended.complete(end);
+    }
+
+    // Handlers in place before the first byte: listening makes `dart:io`
+    // parse whatever body bytes arrived with the headers synchronously.
+    body = req.listen(
+      (chunk) {
+        if (ended.isCompleted) return;
         received += chunk.length;
-        // A declared Content-Length is a claim, not a promise: the body is
-        // held to both caps again as it arrives.
-        if (received > maxUploadBytes) {
-          overLimit = true;
-          break;
-        }
-        // A declared Content-Length is a claim: a body that outruns it is
-        // spending budget it never reserved (`_reservedBytes` already holds
-        // `declared` on this request's behalf, so it is discounted here).
+        if (received > maxUploadBytes) return finish(_BodyEnd.overLimit);
+        // A body that outruns its declared length is spending budget it
+        // never reserved (`_reservedBytes` already holds `declared` on this
+        // request's behalf, so it is discounted here).
         if (_uploadedBytes + _reservedBytes - declared + received >
             uploadBudgetBytes) {
-          overBudget = true;
-          break;
+          return finish(_BodyEnd.overBudget);
         }
         hasher.add(chunk);
         sink.add(chunk);
-      }
+      },
+      // The client vanished mid-body (reset, or the connection closed).
+      onError: (Object _) => finish(_BodyEnd.aborted),
+      onDone: () =>
+          finish(received == declared ? _BodyEnd.complete : _BodyEnd.aborted),
+    );
+
+    // The stall rule: each window must deliver what the minimum rate says
+    // for the time the host was listening, or everything that is left if
+    // that is less, and never nothing.
+    //
+    // Windows are measured, not assumed. A periodic timer keeps its grid,
+    // so a tick delayed by a host stall (a GC pause, a blocked isolate)
+    // shortened the next window while the full window's bytes were still
+    // owed — a false 408 for a guest sending well above the minimum. And a
+    // late tick judges nothing: whatever the client sent meanwhile is still
+    // in the socket buffer, unread, so the window is extended instead, and
+    // the time the host was away is not counted against the client.
+    final clock = Stopwatch()..start();
+    var windowStartUs = 0;
+    var hostAwayUs = 0;
+    var receivedAtWindowStart = 0;
+    Timer? watchdog;
+    void watch() {
+      final dueUs =
+          clock.elapsedMicroseconds + uploadStallTimeout.inMicroseconds;
+      watchdog = Timer(uploadStallTimeout, () {
+        if (ended.isCompleted) return;
+        final nowUs = clock.elapsedMicroseconds;
+        final lateUs = nowUs - dueUs;
+        if (lateUs > _stallCheckSlackUs) {
+          hostAwayUs += lateUs;
+          return watch();
+        }
+        final listenedUs = nowUs - lateUs - windowStartUs - hostAwayUs;
+        final dueBytes =
+            minUploadBytesPerSecond *
+            listenedUs ~/
+            Duration.microsecondsPerSecond;
+        final owed = max(1, min(declared - receivedAtWindowStart, dueBytes));
+        if (received - receivedAtWindowStart < owed) {
+          return finish(_BodyEnd.stalled);
+        }
+        windowStartUs = nowUs;
+        hostAwayUs = 0;
+        receivedAtWindowStart = received;
+        watch();
+      });
+    }
+
+    watch();
+    final end = await ended.future;
+    watchdog?.cancel();
+    var outcome = end;
+    try {
       await sink.flush();
-    } finally {
       await sink.close();
+    } catch (_) {
+      // Disk full or the directory gone: nothing was stored.
+      if (outcome == _BodyEnd.complete) outcome = _BodyEnd.writeFailed;
     }
     hasher.close();
-
-    if (overLimit || overBudget) {
-      try {
-        await tmp.delete();
-      } catch (_) {}
-      res.persistentConnection = false;
-      res.statusCode = overBudget
-          ? HttpStatus.insufficientStorage
-          : HttpStatus.requestEntityTooLarge;
-      await res.close();
-      return;
-    }
-
-    final digest = digestSink.value!.toString();
-    final mediaId = 'm_${digest.substring(0, 12)}';
-
-    final existing = _media[mediaId];
-    if (existing != null) {
-      // §6.4 idempotency: the mediaId is content-derived, so an existing id
-      // means the same bytes — answer 200 with the existing item, keep its
-      // original metadata, and broadcast nothing.
-      try {
-        await tmp.delete();
-      } catch (_) {}
-      res.statusCode = HttpStatus.ok;
-      res.headers.contentType = ContentType.json;
-      res.write(jsonEncode(existing.item.toJson()));
-      await res.close();
-      return;
-    }
-
-    final stored = await tmp.rename('${dir.path}/$mediaId');
-    // Only new content spends the budget: an idempotent re-upload returned
-    // above without storing anything.
-    _uploadedBytes += received;
-    // §6.1/§6.5: the host extracts tags + artwork itself — one implementation
-    // for uploads and host files, and guests never need a tag parser. The
-    // uploader's declared duration wins over the tag value (a decoder probe
-    // beats a tag claim); everything is best-effort.
-    var tags = const JamAudioTags();
-    String? artworkId;
-    if (kind == MediaKind.audio) {
-      tags = await readAudioTags(stored);
-      final artworkBytes = tags.artworkBytes;
-      if (tags.hasArtwork) {
-        artworkId = await addArtwork(artworkBytes!, mime: tags.artworkMime!);
-      }
-    }
-    final item = MediaItem(
-      mediaId: mediaId,
-      kind: kind,
-      name: name,
-      mime: mime,
-      sizeBytes: received,
-      durationUs: durationUs ?? tags.durationUs,
-      sha256: digest,
-      title: tags.title,
-      artist: tags.artist,
-      album: tags.album,
-      artworkId: artworkId,
-      addedBy: peerId,
+    return (
+      end: outcome,
+      received: received,
+      digest: outcome == _BodyEnd.complete
+          ? digestSink.value!.toString()
+          : null,
+      body: body,
     );
-    // §6.4: the upload event first, then addMedia's playlist broadcast
-    // (which also threads durationUs into the session per §5.5).
+  }
+
+  /// Answers a refused `POST /media` with [status], having first read and
+  /// dropped what is left of its body — when that is at most
+  /// [refusedUploadDrainBytes] and arrives within [helloTimeout].
+  ///
+  /// Most HTTP clients, `dart:io`'s among them, send a whole request body
+  /// before they read any response. A refusal sent mid-body never reaches
+  /// them: the host closing a connection with input still unread resets
+  /// it, and the guest sees a broken pipe where the `507` (or `429`, or
+  /// `403`) should have said why (§6.4). A body over the bound is not
+  /// worth the wait or the airtime, and one that does not arrive in time
+  /// holds its connection no longer than an unauthenticated one may
+  /// (§9.1): both are answered and cut off at once, as before.
+  Future<void> _refuseUpload(HttpRequest req, int status) async {
+    StreamSubscription<Uint8List>? body;
+    try {
+      body = req.listen(null);
+    } on StateError {
+      // Already being read; its reader lets it go.
+    }
+    if (body != null) {
+      await _drainRefused(body, remaining: req.contentLength);
+    }
+    await _closeQuietly(req.response, status);
+    unawaited(body?.cancel());
+  }
+
+  /// Reads and drops the [remaining] bytes of a refused request [body] if
+  /// that is at most [refusedUploadDrainBytes], until the body ends or
+  /// [helloTimeout] passes; [body] is left paused unless it ended. Nothing
+  /// is waited for when [remaining] is not positive: no body is left (a
+  /// body read to its end already), or none was declared.
+  Future<void> _drainRefused(
+    StreamSubscription<Uint8List> body, {
+    required int remaining,
+  }) async {
+    if (remaining <= 0 || remaining > refusedUploadDrainBytes) {
+      if (!body.isPaused) body.pause();
+      return;
+    }
+    final ended = Completer<void>();
+    void end() {
+      if (!ended.isCompleted) ended.complete();
+    }
+
+    body
+      ..onData(null)
+      ..onError((Object _) => end())
+      ..onDone(end);
+    if (body.isPaused) body.resume();
+    await ended.future.timeout(helloTimeout, onTimeout: () {});
+    if (!ended.isCompleted) body.pause();
+  }
+
+  /// The most of a refused upload's body the host reads, and drops, so
+  /// that its client sees the refusal (§6.4): 64 MB, a few seconds of a
+  /// good Wi-Fi link. A refusal of a larger body — a `413` always is one —
+  /// reaches a client that only reads its response after sending the whole
+  /// body as a connection error.
+  static const int refusedUploadDrainBytes = 64 * 1024 * 1024;
+
+  /// Answers [status] without reading what is left of [req]'s body — see
+  /// [_handleRequest] for why an unread body must be subscribed to first.
+  static Future<void> _answer(HttpRequest req, int status) async {
+    StreamSubscription<Uint8List>? unread;
+    try {
+      unread = req.listen(null)..pause();
+    } on StateError {
+      // Already being read; its reader lets it go.
+    }
+    await _closeQuietly(req.response, status);
+    unawaited(unread?.cancel());
+  }
+
+  /// Answers [status] and closes, for responses whose client may well be
+  /// gone already.
+  static Future<void> _closeQuietly(HttpResponse res, int status) async {
+    try {
+      res.persistentConnection = false;
+      res.statusCode = status;
+    } catch (_) {
+      // Headers already sent: all that is left to do is end it.
+    }
+    try {
+      await res.close();
+    } catch (_) {
+      // Nobody left to tell.
+    }
+  }
+
+  /// Who an upload whose body has just arrived is credited to — the
+  /// peerId its device holds now — or null when it must not land (`403`,
+  /// §6.4/§5.6).
+  ///
+  /// The request was judged at its headers as the peer whose key it
+  /// presented, but a body takes a while. A device kicked meanwhile is out
+  /// of the room, and so is what it was in the middle of adding: the kick
+  /// would otherwise be followed by its track arriving in the queue. A
+  /// device that rejoined fresh meanwhile (§3.3) is back under a new
+  /// peerId, and is credited there: crediting the old one would cost it the
+  /// right to remove its own track (§5.6).
+  ///
+  /// A peer that merely dropped is still in the room while its §3.3 grace
+  /// slot holds — its peerId, role and tracks are kept for it — so its
+  /// upload lands, credited to that peerId. The body rides on a connection
+  /// of its own: a Wi-Fi blip on the control socket must not throw away a
+  /// file that arrived whole. Only a peer gone for good, with its device not
+  /// back — kicked without a clientId for the kick check to recognise,
+  /// superseded, or past its grace window — is refused, like a request that
+  /// presented a dead key.
+  String? _landingPeer(_GuestConn uploader) {
+    final device = uploader.device;
+    if (device != null) {
+      if (_kicked.containsKey(device)) return null;
+      final rejoined = _joinedPeerOf(device);
+      if (rejoined != null) return rejoined;
+    }
+    final peerId = uploader.peerId;
+    if (peerId == null) return null;
+    if (identical(_peers[peerId], uploader)) return peerId;
+    // Dropped, not gone: the same expiry test a resume is held to (a slot
+    // outlives its window until the next liveness tick reaps it).
+    final slot = _grace[peerId];
+    return slot != null && slot.untilUs >= _nowUs() ? peerId : null;
+  }
+
+  /// Puts a guest upload's [item] in the registry and the queue: the
+  /// `mediaUploaded` event first, then [_addMedia]'s playlist broadcast
+  /// (which also threads durationUs into the session per §5.5).
+  void _addUpload(
+    MediaItem item,
+    File file, {
+    required bool uploaded,
+    required String? device,
+  }) {
     _emit(
       JamHostEvent._(
         JamHostEventKind.mediaUploaded,
-        peerId: peerId,
-        mediaId: mediaId,
+        peerId: item.addedBy,
+        mediaId: item.mediaId,
       ),
     );
-    addMedia(item, stored);
+    _addMedia(item, file, uploaded: uploaded, device: device);
+  }
 
-    res.statusCode = HttpStatus.created;
-    res.headers.contentType = ContentType.json;
-    res.write(jsonEncode(item.toJson()));
-    await res.close();
+  /// [durationUs] when it is a duration a real file could have — positive and
+  /// at most [maxPlausibleDurationUs] — else null (unknown). Durations from
+  /// the wire are claims (§6.4): a zero would end the track the moment it
+  /// started, a negative one breaks clamping (§5.5), and "unknown" is always
+  /// a safe answer.
+  static int? plausibleDurationUs(int? durationUs) =>
+      durationUs != null &&
+          durationUs > 0 &&
+          durationUs <= maxPlausibleDurationUs
+      ? durationUs
+      : null;
+
+  /// The joined peer that holds [key] as its upload credential (§6.4), or
+  /// null. Compared in constant time per peer, like the session token.
+  _GuestConn? _uploaderFor(String? key) {
+    if (key == null || key.isEmpty) return null;
+    for (final conn in _peers.values) {
+      final own = conn.uploadKey;
+      if (own != null && _secureEquals(own, key)) return conn;
+    }
+    return null;
   }
 
   /// Parses a single-range `Range` header against a resource of [size] bytes.
@@ -1081,14 +2100,17 @@ class JamHostServer {
     final rawEnd = match.group(2)!;
     if (rawStart.isEmpty && rawEnd.isEmpty) return null;
     const unsatisfiable = (start: 0, end: 0, satisfiable: false);
+    // Digits only, so the only way to fail parsing is to overflow int64 — a
+    // number past any file's size, which is what it is treated as.
+    int parse(String digits) => int.tryParse(digits) ?? (1 << 62);
     if (rawStart.isEmpty) {
       // Suffix range: last <rawEnd> bytes.
-      final suffix = int.parse(rawEnd);
+      final suffix = parse(rawEnd);
       if (suffix == 0 || size == 0) return unsatisfiable;
       return (start: max(0, size - suffix), end: size - 1, satisfiable: true);
     }
-    final start = int.parse(rawStart);
-    final end = rawEnd.isEmpty ? size - 1 : min(int.parse(rawEnd), size - 1);
+    final start = parse(rawStart);
+    final end = rawEnd.isEmpty ? size - 1 : min(parse(rawEnd), size - 1);
     if (start >= size || start > end) return unsatisfiable;
     return (start: start, end: end, satisfiable: true);
   }
@@ -1122,6 +2144,14 @@ class JamHostServer {
     }
 
     final message = decoded.message;
+    if (!decoded.isSupportedVersion) {
+      // §2: a `hello` of another major version gets a version reject; any
+      // other foreign-version frame is not ours to read.
+      if (!conn.joined && message.type == HelloMessage.wireType) {
+        _rejectVersion(conn, decoded.v);
+      }
+      return;
+    }
     if (!conn.joined) {
       if (message is HelloMessage) _onHello(conn, message);
       return; // Anything else before hello is ignored.
@@ -1163,16 +2193,43 @@ class JamHostServer {
     return false;
   }
 
+  /// Answers a `hello` of major version [helloV] (§2). The reject is the one
+  /// frame a host ever sends in a version it does not speak: it echoes the
+  /// hello's `v`, so the guest's own codec reads it, and names the versions
+  /// this host does speak. `hello`'s envelope and `reject { reason }` are
+  /// the part of the protocol every major version keeps for exactly this.
+  void _rejectVersion(_GuestConn conn, int helloV) {
+    _safeAdd(
+      conn.ws,
+      _codec.encode(
+        const RejectMessage(
+          reason: RejectReason.version,
+          versions: [MessageCodec.protocolVersion],
+        ),
+        seq: _seq++,
+        v: helloV,
+      ),
+    );
+    unawaited(
+      conn.ws.close(WebSocketStatus.policyViolation).catchError((_) {}),
+    );
+    _dropConn(conn); // Free the pending slot at once, like any reject.
+  }
+
   void _onHello(_GuestConn conn, HelloMessage hello) {
     if (!_secureEquals(hello.token, token)) {
-      _sendTo(conn.ws, const RejectMessage(reason: RejectReason.badToken));
-      unawaited(conn.ws.close(WebSocketStatus.policyViolation));
-      // A rejected socket is gone: dropping it now frees the pending slot it
-      // holds against [maxPendingConnections] immediately, instead of
-      // leaving it there until the close handshake finishes or the hello
-      // timeout expires — which is how a wrong-token flood would take the
-      // room's whole handshake capacity.
-      _dropConn(conn);
+      _reject(conn, RejectReason.badToken);
+      return;
+    }
+
+    final clientId = hello.clientId;
+    final hasClientId = clientId != null && clientId.isNotEmpty;
+    // §5.6: a kick lasts the session. The device is refused by its stable
+    // id until the host lets it back in ([unkickPeer]) — refused with a
+    // reject, which a guest treats as final, not with a closed socket it
+    // would read as a drop and retry forever.
+    if (hasClientId && _kicked.containsKey(clientId)) {
+      _reject(conn, RejectReason.kicked);
       return;
     }
 
@@ -1183,14 +2240,26 @@ class JamHostServer {
     // handed a ghost of ITSELF in `welcome.peers`, everyone sees a phantom
     // in the roster, and it lands in the session's history. The old socket
     // goes with no grace slot — the device is right here, on a new one.
-    final clientId = hello.clientId;
+    //
+    // Unless the new hello asks to resume exactly that socket's peerId: then
+    // it is not a second copy of the device but the same session noticing
+    // the drop first. A guest's watchdog (§3.3: three ping intervals, 6 s)
+    // fires well before the host's 10 s silence timeout, so a guest whose
+    // Wi-Fi blipped is back with `resumePeerId` while its old socket is still
+    // "live" here. Superseding that would hand it a fresh peerId — and with
+    // it lose everything keyed on the old one: its role and overrides, and
+    // the `addedBy` that lets it remove its own tracks (§5.6). So the old
+    // socket is dropped the way a silence timeout would drop it, grace slot
+    // and all, and the resume check below reclaims the slot at once.
     conn.clientId = clientId;
-    if (clientId != null && clientId.isNotEmpty) {
+    if (hasClientId) {
       for (final other in List.of(_conns)) {
         if (other == conn || other.clientId != clientId) continue;
         final supersededId = other.peerId;
-        _dropConn(other, allowResume: false);
-        if (supersededId != null) {
+        final takeover =
+            supersededId != null && supersededId == hello.resumePeerId;
+        _dropConn(other, allowResume: takeover);
+        if (supersededId != null && !takeover) {
           _setPermissions(_permissions.forgetPeer(supersededId));
         }
       }
@@ -1199,9 +2268,7 @@ class JamHostServer {
     // §3.1: a room has a size. A resuming peer (§3.3) competes for a slot
     // like anyone else — its old slot is not reserved, only its identity.
     if (_peers.length >= maxPeers) {
-      _sendTo(conn.ws, const RejectMessage(reason: RejectReason.full));
-      unawaited(conn.ws.close(WebSocketStatus.policyViolation));
-      _dropConn(conn); // As above: free the pending slot with the socket.
+      _reject(conn, RejectReason.full);
       return;
     }
 
@@ -1212,7 +2279,7 @@ class JamHostServer {
     // role and overrides the grace window is still holding (§5.6). An
     // unproven resume is not an error — it is simply a fresh join: a new
     // peerId, the room's default role, nothing carried over. A client that
-    // sends no clientId (v0.1) can therefore never resume.
+    // sends no clientId can therefore never resume.
     String peerId;
     final resumeId = hello.resumePeerId;
     final slot = resumeId == null ? null : _grace[resumeId];
@@ -1235,13 +2302,31 @@ class JamHostServer {
       clientName: hello.clientName,
       clientKind: hello.clientKind,
     );
+
+    // §5.6: what the host made this device (co-host, a revoked or granted
+    // capability) is keyed on its clientId and outlives the peerId — a
+    // fresh join after the grace window, or a supersede, would otherwise
+    // hand a co-host back a plain guest. Applied before the welcome so the
+    // joiner's own document already says so; the others get the broadcast.
+    if (hasClientId) {
+      _setPermissions(_withModeration(_permissions, peerId, clientId));
+    }
+
     conn.peerId = peerId;
     conn.info = info;
+    conn.uploadKey = _randomHex(16); // §6.4: a fresh credential per join.
+    conn.socket?.trust(); // §9.1: proved the token; no more byte budget.
     _peers[peerId] = conn;
     _session.upsertPeer(peerId);
 
+    // §5.6: a device that rejoined under a new peerId gets its own tracks
+    // back. Done before the welcome, so the joiner's playlist already says
+    // so; everyone else hears it after `peer_joined`, so the new id is a
+    // name they can print by the time a byline uses it.
+    final reattributed = hasClientId && _reattribute(clientId, peerId);
+
     // §3.1: welcome carries the full snapshot + playlist + permissions +
-    // existing peers.
+    // existing peers, this peer's upload key, and whether the host is away.
     _sendTo(
       conn.ws,
       WelcomeMessage(
@@ -1256,11 +2341,28 @@ class JamHostServer {
         playlist: playlist,
         permissions: _permissions,
         host: hostPeer,
+        uploadKey: conn.uploadKey,
+        hostAway: _away,
       ),
     );
     // §3.2: announce to everyone else.
     _broadcast(PeerJoinedMessage(peer: info), except: conn);
     _emit(JamHostEvent._(JamHostEventKind.peerJoined, peer: info));
+    // Only `addedBy` changed: no state broadcast, so playback is untouched.
+    if (reattributed) _broadcastPlaylist(except: conn);
+  }
+
+  /// Answers a `hello` with a reject (§3.1) and drops the socket. Dropping
+  /// it now frees the pending slot it holds against [maxPendingConnections]
+  /// immediately, instead of leaving it there until the close handshake
+  /// finishes or the hello timeout expires — which is how a wrong-token
+  /// flood would take the room's whole handshake capacity.
+  void _reject(_GuestConn conn, RejectReason reason) {
+    _sendTo(conn.ws, RejectMessage(reason: reason));
+    unawaited(
+      conn.ws.close(WebSocketStatus.policyViolation).catchError((_) {}),
+    );
+    _dropConn(conn);
   }
 
   void _onRequest(_GuestConn conn, RequestMessage request) {
@@ -1347,6 +2449,10 @@ class JamHostServer {
   }
 
   void _onMediaStatus(_GuestConn conn, MediaStatusMessage status) {
+    // §6.3: readiness is about media this host serves. A report on any
+    // other id is noise at best — and at worst a guest growing the host's
+    // per-peer readiness table without bound, one made-up id at a time.
+    if (!_media.containsKey(status.mediaId)) return;
     // §6.3: track readiness in the session state machine.
     final readiness = switch (status.state) {
       MediaFetchState.none => MediaReadiness.none,
@@ -1354,6 +2460,7 @@ class JamHostServer {
       MediaFetchState.ready => MediaReadiness.ready,
     };
     _session.setPeerMediaState(conn.peerId!, status.mediaId, readiness);
+    _releasePendingStartIfReady();
     _emit(
       JamHostEvent._(
         JamHostEventKind.peerMediaStatus,
@@ -1367,16 +2474,45 @@ class JamHostServer {
 
   // --- Host-initiated controls (§5) --------------------------------------------
 
-  /// Selects [mediaId] and broadcasts the new state (§5.1). The item's
-  /// playlist `durationUs` (when set) is threaded into the session so seeks
-  /// clamp to it and end of media is detectable (§5.5).
+  /// Selects [mediaId] — the §5.2 `set_media` request, and the host UI's
+  /// "play this one" — and broadcasts the new state (§5.1).
+  ///
+  /// Selecting keeps the room doing what it was doing. A room that is
+  /// playing, or starting (a start held by the §6.3 readiness gate), plays
+  /// the selected item from its start: it is selected, then started with a
+  /// fresh scheduled anchor (§5.3) through the readiness gate like any new
+  /// track — the same transition as [next]. A room that is not playing
+  /// cues it: `loading` at position 0, waiting for a [play]. (Selecting
+  /// alone used to leave a playing room at `loading`, so tapping a queue row
+  /// mid-song stopped the music for everyone.)
+  ///
+  /// Selecting the item that is already current changes nothing: a
+  /// double-tapped row, or a request repeated after a reconnect, must not
+  /// restart the song for the room — starting it over is a [seek] to 0.
+  ///
+  /// The item's playlist `durationUs` (when set) is threaded into the
+  /// session so seeks clamp to it and end of media is detectable (§5.5).
   ///
   /// Throws [ArgumentError] if [mediaId] is not in the media registry.
   void setMedia(String mediaId) {
+    if (!_media.containsKey(mediaId)) {
+      throw ArgumentError.value(mediaId, 'mediaId', 'unknown media id');
+    }
+    if (_session.snapshot.mediaId == mediaId) return;
+    final wasPlaying = _playingOrStarting;
+    _select(mediaId);
+    if (wasPlaying) play();
+  }
+
+  /// The selection half of every track change ([setMedia], skips, removing
+  /// the current item, the §5.5 advance policy): [mediaId] becomes current
+  /// at position 0, `loading`. Callers decide whether it then plays.
+  void _select(String mediaId) {
     final entry = _media[mediaId];
     if (entry == null) {
       throw ArgumentError.value(mediaId, 'mediaId', 'unknown media id');
     }
+    _cancelPendingStart(); // A start held for the previous item is moot.
     _apply(
       (now) => _session.setMedia(
         mediaId,
@@ -1387,10 +2523,59 @@ class JamHostServer {
   }
 
   /// Starts (or resumes) playback with a scheduled anchor (§5.3).
-  void play() => _apply((now) => _session.play(nowUs: now));
+  ///
+  /// Starting a freshly selected track (the session is `loading`) goes
+  /// through the §6.3 readiness gate: while some joined guest is
+  /// mid-transfer of it, the start is held — the room stays `loading` — for
+  /// at most [readinessWait], and goes out the moment nobody is fetching it
+  /// any more ([isAwaitingReadiness] says whether one is held). Resuming from
+  /// `paused` never waits. Throws [StateError] if no media is selected.
+  void play() {
+    if (_pendingStart != null) return; // Already on its way.
+    final snapshot = _session.snapshot;
+    final mediaId = snapshot.mediaId;
+    if (snapshot.status == PlaybackStatus.loading &&
+        mediaId != null &&
+        readinessWait > Duration.zero &&
+        _session.peersFetching(mediaId).isNotEmpty) {
+      _pendingStart = Timer(readinessWait, _startNow);
+      return;
+    }
+    _startNow();
+  }
 
-  /// Pauses playback, freezing the position (§5.1).
-  void pause() => _apply((now) => _session.pause(nowUs: now));
+  void _startNow() {
+    _cancelPendingStart();
+    _apply((now) => _session.play(nowUs: now));
+  }
+
+  void _cancelPendingStart() {
+    _pendingStart?.cancel();
+    _pendingStart = null;
+  }
+
+  /// Lets a held start go as soon as nobody is mid-transfer of the item any
+  /// more: everyone finished, gave up, or left (§6.3).
+  void _releasePendingStartIfReady() {
+    if (_pendingStart == null) return;
+    final mediaId = _session.snapshot.mediaId;
+    if (mediaId == null || _session.peersFetching(mediaId).isEmpty) {
+      _startNow();
+    }
+  }
+
+  /// Whether the room is playing or about to (a start held by the §6.3
+  /// gate) — what a skip or a removal must preserve.
+  bool get _playingOrStarting =>
+      _session.snapshot.status == PlaybackStatus.playing ||
+      _pendingStart != null;
+
+  /// Pauses playback, freezing the position (§5.1). Also cancels a start
+  /// held by the readiness gate.
+  void pause() {
+    _cancelPendingStart();
+    _apply((now) => _session.pause(nowUs: now));
+  }
 
   /// Seeks to [positionUs] (§5.1/§5.3), clamped to the current item's
   /// duration when known (§5.5).
@@ -1398,7 +2583,10 @@ class JamHostServer {
       _apply((now) => _session.seek(positionUs, nowUs: now));
 
   /// Stops playback: back to idle with no media selected (§5.5).
-  void stop() => _apply((now) => _session.stop(nowUs: now));
+  void stop() {
+    _cancelPendingStart();
+    _apply((now) => _session.stop(nowUs: now));
+  }
 
   /// Selects the next playlist item (wrapping) and keeps a playing session
   /// playing; no-op on an empty playlist.
@@ -1416,14 +2604,14 @@ class JamHostServer {
   /// "Next stopped the music".
   void _skipTo(int delta) {
     if (_playlist.isEmpty) return;
-    final wasPlaying = _session.snapshot.status == PlaybackStatus.playing;
+    final wasPlaying = _playingOrStarting;
     final index = _playlist.indexWhere(
       (i) => i.mediaId == _session.snapshot.mediaId,
     );
     final target = (index + delta) % _playlist.length;
-    setMedia(
-      _playlist[target < 0 ? target + _playlist.length : target].mediaId,
-    );
+    // [_select], not [setMedia]: a skip in a one-item playlist lands on the
+    // current item, and there it means "from the top".
+    _select(_playlist[target < 0 ? target + _playlist.length : target].mediaId);
     if (wasPlaying) play();
   }
 
@@ -1431,8 +2619,12 @@ class JamHostServer {
     final before = _session.snapshot.rev;
     final after = mutate(_nowUs());
     if (after.rev == before) return; // No-op: suppress redundant broadcast.
+    // A new anchor starts a new run towards an end (§5.5): whatever end was
+    // handled before is not this one's.
+    if (after.status == PlaybackStatus.playing) _endHandled = false;
     _broadcast(StateMessage(snapshot: after));
     _emit(JamHostEvent._(JamHostEventKind.stateBroadcast, snapshot: after));
+    _scheduleEndCheck();
   }
 
   // --- Media registry (§6.1) -----------------------------------------------------
@@ -1440,8 +2632,25 @@ class JamHostServer {
   /// Registers (or replaces) a playlist item backed by [file] and broadcasts
   /// the updated playlist (§6.1). The caller precomputes [item] — see
   /// [describeFile].
-  void addMedia(MediaItem item, File file) {
-    _media[item.mediaId] = (item: item, file: file);
+  ///
+  /// A [MediaItem.addedBy] naming a peer that is joined (or in its §3.3
+  /// grace window) ties the item to that peer's device, so the attribution
+  /// follows the device to the next peerId it joins under (§5.6).
+  void addMedia(MediaItem item, File file) =>
+      _addMedia(item, file, uploaded: false, device: _deviceOf(item.addedBy));
+
+  void _addMedia(
+    MediaItem item,
+    File file, {
+    required bool uploaded,
+    required String? device,
+  }) {
+    _media[item.mediaId] = _MediaEntry(
+      item,
+      file,
+      uploaded: uploaded,
+      device: device,
+    );
     final index = _playlist.indexWhere((i) => i.mediaId == item.mediaId);
     if (index >= 0) {
       _playlist[index] = item;
@@ -1476,7 +2685,7 @@ class JamHostServer {
       throw ArgumentError.value(mediaId, 'mediaId', 'not in the playlist');
     }
     final wasCurrent = _session.snapshot.mediaId == mediaId;
-    final wasPlaying = _session.snapshot.status == PlaybackStatus.playing;
+    final wasPlaying = _playingOrStarting;
     _playlist.removeAt(index);
     _broadcastPlaylist();
     if (!wasCurrent) return;
@@ -1486,17 +2695,81 @@ class JamHostServer {
     }
     // The item that slid into the removed slot (wrapping at the end) is the
     // natural "next".
-    setMedia(_playlist[index % _playlist.length].mediaId);
+    _select(_playlist[index % _playlist.length].mediaId);
     if (wasPlaying) play();
   }
 
-  void _broadcastPlaylist() {
+  void _broadcastPlaylist({_GuestConn? except}) {
     _playlistRev++;
-    _broadcast(PlaylistMessage(rev: _playlistRev, items: playlist));
+    _broadcast(
+      PlaylistMessage(rev: _playlistRev, items: playlist),
+      except: except,
+    );
     _emit(
       JamHostEvent._(JamHostEventKind.playlistBroadcast, playlist: playlist),
     );
   }
+
+  /// The clientId of the device [peerId] is — joined, or dropped and still
+  /// in its §3.3 grace window — or null (the host, a peer gone for good, or
+  /// one that sent no clientId).
+  String? _deviceOf(String? peerId) {
+    if (peerId == null) return null;
+    final clientId = _peers[peerId]?.clientId ?? _grace[peerId]?.clientId;
+    return clientId == null || clientId.isEmpty ? null : clientId;
+  }
+
+  /// The peerId [device] is joined under right now, or null.
+  String? _joinedPeerOf(String? device) {
+    if (device == null) return null;
+    for (final conn in _peers.values) {
+      if (conn.clientId == device) return conn.peerId;
+    }
+    return null;
+  }
+
+  /// §5.6, attribution follows the device: credits every item [device]
+  /// contributed this session to [peerId], the id it has just joined
+  /// under, and says whether the playlist changed.
+  ///
+  /// A phone that was killed and relaunched, or kicked and let back in,
+  /// joins fresh — with a new peerId (§3.3). Its tracks are still its own:
+  /// left on the old id, the `addedBy` byline would name a peer that no
+  /// longer exists and the device would lose the right to remove its own
+  /// contributions. Items of a device that never comes back keep the
+  /// peerId they were added under. Removed items are re-credited too: the
+  /// registry still serves them.
+  bool _reattribute(String device, String peerId) {
+    var playlistChanged = false;
+    for (final entry in _media.values) {
+      if (entry.device != device || entry.item.addedBy == peerId) continue;
+      entry.item = _creditedTo(entry.item, peerId);
+      final index = _playlist.indexWhere(
+        (i) => i.mediaId == entry.item.mediaId,
+      );
+      if (index >= 0) {
+        _playlist[index] = entry.item;
+        playlistChanged = true;
+      }
+    }
+    return playlistChanged;
+  }
+
+  /// [item] with `addedBy` set to [peerId] and nothing else changed.
+  static MediaItem _creditedTo(MediaItem item, String peerId) => MediaItem(
+    mediaId: item.mediaId,
+    kind: item.kind,
+    name: item.name,
+    mime: item.mime,
+    sizeBytes: item.sizeBytes,
+    durationUs: item.durationUs,
+    sha256: item.sha256,
+    title: item.title,
+    artist: item.artist,
+    album: item.album,
+    artworkId: item.artworkId,
+    addedBy: peerId,
+  );
 
   // --- Permissions & moderation (§5.6) --------------------------------------
 
@@ -1505,22 +2778,65 @@ class JamHostServer {
       _setPermissions(_permissions.withPolicy(policy));
 
   /// Promotes [peerId] to co-host and broadcasts. No-op if already one.
-  void promotePeer(String peerId) =>
-      _setPermissions(_permissions.promote(peerId));
+  ///
+  /// The role follows the DEVICE for the rest of the session (§5.6): a peer
+  /// that said hello with a clientId keeps it across a fresh rejoin, not
+  /// just a resume.
+  void promotePeer(String peerId) {
+    _moderationFor(peerId)?.cohost = true;
+    _setPermissions(_permissions.promote(peerId));
+  }
 
   /// Demotes [peerId] back to guest and broadcasts. No-op if not a co-host.
-  void demotePeer(String peerId) =>
-      _setPermissions(_permissions.demote(peerId));
+  void demotePeer(String peerId) {
+    _moderationFor(peerId)?.cohost = false;
+    _setPermissions(_permissions.demote(peerId));
+  }
 
   /// Sets (or clears, with `allowed: null`) one per-peer capability override
-  /// and broadcasts.
+  /// and broadcasts. Like a role, it follows the device (§5.6).
   void setCapabilityOverride(
     String peerId,
     JamCapability capability, {
     required bool? allowed,
-  }) => _setPermissions(
-    _permissions.withOverride(peerId, capability, allowed: allowed),
-  );
+  }) {
+    final record = _moderationFor(peerId);
+    if (record != null) {
+      if (allowed == null) {
+        record.overrides.remove(capability);
+      } else {
+        record.overrides[capability] = allowed;
+      }
+    }
+    _setPermissions(
+      _permissions.withOverride(peerId, capability, allowed: allowed),
+    );
+  }
+
+  /// The clientId-keyed moderation record for [peerId] — joined, or dropped
+  /// and still in its grace window — created on demand; null for a peer
+  /// without a clientId, whose moderation lives and dies with its peerId.
+  _ClientModeration? _moderationFor(String peerId) {
+    final clientId = _peers[peerId]?.clientId ?? _grace[peerId]?.clientId;
+    if (clientId == null || clientId.isEmpty) return null;
+    return _moderation.putIfAbsent(clientId, _ClientModeration.new);
+  }
+
+  /// [doc] with [clientId]'s recorded role and overrides applied to
+  /// [peerId] — `doc` itself when there is nothing to add.
+  JamPermissions _withModeration(
+    JamPermissions doc,
+    String peerId,
+    String clientId,
+  ) {
+    final record = _moderation[clientId];
+    if (record == null) return doc;
+    var next = record.cohost ? doc.promote(peerId) : doc;
+    for (final entry in record.overrides.entries) {
+      next = next.withOverride(peerId, entry.key, allowed: entry.value);
+    }
+    return next;
+  }
 
   void _setPermissions(JamPermissions next) {
     if (identical(next, _permissions)) return; // No-op mutation.
@@ -1571,12 +2887,62 @@ class JamHostServer {
     );
   }
 
+  // --- Host availability (§3.5) -------------------------------------------------
+
+  /// Tells every guest the host is about to stop answering (`away: true`) —
+  /// call it right before the app goes where the OS may suspend it (a phone
+  /// host moving to the background) — or that it is back (`away: false`, on
+  /// resume). Broadcasts `host_status` on a change and is carried in every
+  /// later `welcome`, so guests that drop and rejoin during the nap know
+  /// too. Guests still notice the silence within seconds (§3.3); what the
+  /// flag changes is that they read it as "the host's phone is asleep" and
+  /// wait much longer before calling the room dead.
+  ///
+  /// The returned future completes once the frame has been handed to every
+  /// socket, so a caller about to be suspended can await it.
+  Future<void> announceAway(bool away) async {
+    if (_closed || away == _away) return;
+    _away = away;
+    _broadcast(HostStatusMessage(away: away));
+    // One event-loop turn: the frame leaves the WebSocket sinks for the
+    // sockets before the caller lets the OS freeze this isolate.
+    await Future<void>.delayed(Duration.zero);
+  }
+
   // --- Liveness (§3.3) -----------------------------------------------------------
 
   void _checkLiveness() {
     final now = _nowUs();
     final silenceUs = silenceTimeout.inMicroseconds;
     final helloUs = helloTimeout.inMicroseconds;
+
+    // The host's OWN nap (an app suspended in the background, a debugger
+    // pause) shows up as a gap between these ticks. Every guest went
+    // "silent" during it only because nobody was listening, and their
+    // frames may still be waiting in the socket buffers — so the silence
+    // clock and the grace windows restart from now instead of passing
+    // judgement on time the host was not there for.
+    final lastTick = _lastLivenessTickUs;
+    _lastLivenessTickUs = now;
+    if (lastTick != null) {
+      final gapUs = now - lastTick;
+      // Well past any timer jitter, and short enough that a nap cannot
+      // push a guest's silence over the timeout before it is noticed.
+      final napThresholdUs = max(
+        silenceUs ~/ 2,
+        livenessCheckInterval.inMicroseconds * 4,
+      );
+      if (gapUs > napThresholdUs) {
+        for (final conn in _conns) {
+          conn.lastFrameUs = now;
+        }
+        _grace.updateAll(
+          (_, slot) => (untilUs: slot.untilUs + gapUs, clientId: slot.clientId),
+        );
+        return;
+      }
+    }
+
     for (final conn in List.of(_conns)) {
       if (now - conn.lastFrameUs > silenceUs) {
         _dropConn(conn);
@@ -1594,6 +2960,8 @@ class JamHostServer {
     ];
     for (final peerId in expired) {
       _grace.remove(peerId);
+      // The peerId is gone for good; the DEVICE's role is not — it is kept
+      // by clientId and re-applied if it joins again (§5.6).
       _setPermissions(_permissions.forgetPeer(peerId));
     }
     _checkEndOfMedia(now);
@@ -1602,10 +2970,42 @@ class JamHostServer {
   // --- End of media (§5.5) ---------------------------------------------------
 
   /// Set once the current track end has been handled; reset as soon as the
-  /// session is observed not-ended (new track, seek back, stop). Guards the
-  /// periodic check so [JamHostEventKind.mediaEnded] and the policy fire
-  /// exactly once per track end.
+  /// session is observed not-ended (new track, seek back, stop) or a new
+  /// anchor is broadcast. Guards the checks so [JamHostEventKind.mediaEnded]
+  /// and the policy fire exactly once per track end.
   bool _endHandled = false;
+
+  /// Fires [_checkEndOfMedia] at the instant the current item ends.
+  Timer? _endTimer;
+
+  /// Arms [_endTimer] for the current snapshot (§5.5). The liveness tick
+  /// would notice an end too, but up to a whole [livenessCheckInterval]
+  /// late — on top of the scheduled-start lead the next track then waits
+  /// for (§5.3), a second of dead air between tracks. With the timer the
+  /// end policy runs at the end instant, and the gap is the lead alone.
+  void _scheduleEndCheck() {
+    _endTimer?.cancel();
+    _endTimer = null;
+    if (_closed) return;
+    final snapshot = _session.snapshot;
+    final anchor = snapshot.anchor;
+    final durationUs = _session.currentDurationUs;
+    if (snapshot.status != PlaybackStatus.playing ||
+        anchor == null ||
+        durationUs == null) {
+      return;
+    }
+    final endAtUs =
+        anchor.hostTimeUs +
+        ((durationUs - anchor.positionUs) / snapshot.rate).ceil();
+    // A millisecond late rather than early: the position rounds.
+    final delayUs = max(0, endAtUs - _nowUs()) + 1000;
+    if (delayUs > maxPlausibleDurationUs) return; // The tick has it.
+    _endTimer = Timer(Duration(microseconds: delayUs), () {
+      _endTimer = null;
+      _checkEndOfMedia(_nowUs());
+    });
+  }
 
   void _checkEndOfMedia(int now) {
     if (!_session.hasEnded(now)) {
@@ -1615,7 +3015,49 @@ class JamHostServer {
     if (_endHandled) return;
     _endHandled = true;
 
-    final endedId = _session.snapshot.mediaId;
+    _applyEndPolicy(_session.snapshot.mediaId);
+  }
+
+  /// Tells the server the host's own player reached the end of [mediaId] —
+  /// the §5.5 end of media for an item whose playlist entry has no
+  /// `durationUs`, which the server cannot otherwise detect (the anchor
+  /// extrapolates forever and the queue would never move on). Applies the
+  /// [endPolicy] exactly as a duration-detected end does, [JamHostEventKind.mediaEnded]
+  /// included.
+  ///
+  /// Ignored unless [mediaId] is the current item and the room is playing
+  /// it. Pass the [snapshotRev] the player was following when it finished:
+  /// a report from before a later seek or re-anchor is stale and ignored.
+  /// When the item's duration IS known this is a cross-check — accepted
+  /// only within [hostFinishTolerance] of that duration, so it can bring a
+  /// slightly overlong declared duration forward but cannot cut a track
+  /// short on a glitch.
+  void reportHostPlaybackFinished(String mediaId, {int? snapshotRev}) {
+    if (_closed) return;
+    final snapshot = _session.snapshot;
+    if (snapshot.mediaId != mediaId ||
+        snapshot.status != PlaybackStatus.playing) {
+      return;
+    }
+    if (snapshotRev != null && snapshotRev != snapshot.rev) return;
+    final now = _nowUs();
+    final anchor = snapshot.anchor;
+    if (anchor != null && now < anchor.hostTimeUs) return; // Not started.
+    final durationUs = _session.currentDurationUs;
+    if (durationUs != null &&
+        snapshot.positionAt(now) <
+            durationUs - hostFinishTolerance.inMicroseconds) {
+      return;
+    }
+    _endHandled = true;
+    _applyEndPolicy(mediaId);
+  }
+
+  /// How far before a KNOWN duration [reportHostPlaybackFinished] is still
+  /// believed (§5.5).
+  static const Duration hostFinishTolerance = Duration(seconds: 5);
+
+  void _applyEndPolicy(String? endedId) {
     // §5.5: the end event first, then the policy's resulting state broadcast.
     _emit(JamHostEvent._(JamHostEventKind.mediaEnded, mediaId: endedId));
     switch (endPolicy) {
@@ -1626,8 +3068,12 @@ class JamHostServer {
         if (next == null) {
           pause(); // Empty playlist: nothing to advance to.
         } else {
-          setMedia(next);
-          play();
+          // A paused room is at the end because someone sought there; it
+          // moves on, but nothing starts playing that nobody started.
+          final wasPlaying = _session.snapshot.status == PlaybackStatus.playing;
+          // [_select]: advancing past the only item replays it.
+          _select(next);
+          if (wasPlaying) play();
         }
       case JamEndPolicy.stop:
         stop();
@@ -1648,7 +3094,10 @@ class JamHostServer {
   /// `error {code: kicked}` — so it knows the removal was deliberate and
   /// must not auto-rejoin — then its socket closes with `goingAway`,
   /// `peer_left` is broadcast (§3.2), no §3.3 grace slot is kept, and the
-  /// peer's role and overrides are forgotten.
+  /// peer's role is forgotten. The DEVICE stays out for the rest of the
+  /// session: a later `hello` with its clientId is answered
+  /// `reject { reason: "kicked" }` until [unkickPeer]. (A device that sends
+  /// no clientId cannot be recognised, so for it a kick is just a removal.)
   ///
   /// With `allowResume: true` this is instead a plain forced disconnect —
   /// exactly like a silence drop: no error is sent, the grace slot is kept,
@@ -1669,9 +3118,31 @@ class JamHostServer {
           fatal: true,
         ),
       );
+      final clientId = conn.clientId;
+      if (clientId != null && clientId.isNotEmpty) {
+        _kicked[clientId] = conn.info!;
+        // A kick is not a pause on a co-host's role: if the host lets the
+        // device back in, it returns as a guest. Restrictions stay.
+        _moderation[clientId]?.cohost = false;
+      }
     }
     _dropConn(conn, allowResume: allowResume);
-    if (!allowResume) _setPermissions(_permissions.forgetPeer(peerId));
+    if (!allowResume) {
+      _setPermissions(_permissions.forgetPeer(peerId));
+      if (conn.clientId?.isNotEmpty ?? false) _emitKickedChanged();
+    }
+  }
+
+  /// Lets a device kicked earlier this session join again (§5.6). [peerId]
+  /// is the id it had when kicked, as listed in [kickedPeers]. Returns
+  /// whether there was such a device. It rejoins as a new peer, through a
+  /// fresh join of its own — nothing reconnects it automatically.
+  bool unkickPeer(String peerId) {
+    final before = _kicked.length;
+    _kicked.removeWhere((_, info) => info.peerId == peerId);
+    final changed = _kicked.length != before;
+    if (changed) _emitKickedChanged();
+    return changed;
   }
 
   void _dropConn(_GuestConn conn, {bool allowResume = true}) {
@@ -1692,6 +3163,8 @@ class JamHostServer {
     }
     _broadcast(PeerLeftMessage(peerId: peerId));
     _emit(JamHostEvent._(JamHostEventKind.peerLeft, peerId: peerId));
+    // A held start may have been waiting on exactly this peer (§6.3).
+    _releasePendingStartIfReady();
   }
 
   // --- Wire helpers ----------------------------------------------------------------
@@ -1722,6 +3195,55 @@ class JamHostServer {
   void _emit(JamHostEvent event) {
     if (!_events.isClosed) _events.add(event);
   }
+}
+
+/// One media registry entry (§6.1). See `JamHostServer._media`.
+class _MediaEntry {
+  _MediaEntry(this.item, this.file, {required this.uploaded, this.device});
+
+  /// The item as the room knows it. Replaced (never mutated) when its
+  /// attribution moves to its device's new peerId (§5.6).
+  MediaItem item;
+
+  final File file;
+
+  /// Whether [file] is a guest upload this server stored (§6.4) — see
+  /// `JamHostServer.storedUploadFile`.
+  final bool uploaded;
+
+  /// The stable `hello.clientId` of the device [MediaItem.addedBy] names:
+  /// what lets a contribution follow its device to every peerId it joins
+  /// under this session (§5.6). Null for the host's own items and for a
+  /// peer that sent no clientId — attribution then stays with the peerId.
+  final String? device;
+}
+
+/// What the host made one device (§5.6), kept by its stable clientId so it
+/// outlives any one peerId. See `JamHostServer._moderation`.
+class _ClientModeration {
+  bool cohost = false;
+  final Map<JamCapability, bool> overrides = {};
+}
+
+/// How an upload body (§6.4) stopped arriving.
+enum _BodyEnd {
+  /// Every declared byte arrived.
+  complete,
+
+  /// Past [JamHostServer.maxUploadBytes].
+  overLimit,
+
+  /// Past the session's upload budget.
+  overBudget,
+
+  /// Too slow for [JamHostServer.uploadStallTimeout] (or silent).
+  stalled,
+
+  /// The client went away, or the body ended short of its declared length.
+  aborted,
+
+  /// The bytes could not be written to disk.
+  writeFailed,
 }
 
 /// Terminal sink for one chunked sha256 conversion (avoids a package:convert

@@ -52,13 +52,27 @@ class JamAudioTags {
 /// empty [JamAudioTags], and the caller falls back to filename-derived
 /// display metadata. Parsing runs in a short-lived isolate so a host app's
 /// UI isolate never blocks on tag I/O.
-Future<JamAudioTags> readAudioTags(File file) async {
+///
+/// [maxMetadataBytes] bounds what reading the file may cost, for files that
+/// are remote input (a guest upload, §6.4). The tag parser reads a frame —
+/// a cover, a text field — whole, at whatever size the file declares, so a
+/// crafted 200 MB "cover" costs 200 MB of the host's memory before any cap
+/// on the result can look at it. With a bound, no single read may exceed
+/// it (plus a little slack for a picture frame's own header) and all reads
+/// together may not exceed twice it plus 1 MB; past either, the parse is
+/// abandoned before the bytes are read. A file whose artwork is what broke
+/// the bound is read again without artwork, so it keeps its title; one
+/// whose other tags broke it keeps nothing. Null (the host's own library)
+/// reads everything.
+Future<JamAudioTags> readAudioTags(File file, {int? maxMetadataBytes}) async {
   try {
-    return await Isolate.run(() => readAudioTagsSync(file));
+    return await Isolate.run(
+      () => readAudioTagsSync(file, maxMetadataBytes: maxMetadataBytes),
+    );
   } catch (_) {
     // Isolate spawn unavailable (some embedders): degrade to inline parsing.
     try {
-      return readAudioTagsSync(file);
+      return readAudioTagsSync(file, maxMetadataBytes: maxMetadataBytes);
     } catch (_) {
       return const JamAudioTags();
     }
@@ -66,15 +80,21 @@ Future<JamAudioTags> readAudioTags(File file) async {
 }
 
 /// Synchronous body of [readAudioTags]; exposed for isolate-free callers.
-/// Unlike the async wrapper this throws on parser errors — callers other
+/// Unlike the async wrapper this may throw on I/O errors — callers other
 /// than [readAudioTags] must catch.
 @visibleForTesting
-JamAudioTags readAudioTagsSync(File file) {
+JamAudioTags readAudioTagsSync(File file, {int? maxMetadataBytes}) {
   final amr.AudioMetadata parsed;
-  try {
-    parsed = amr.readMetadata(file, getImage: true);
-  } catch (_) {
-    return const JamAudioTags();
+  if (maxMetadataBytes == null) {
+    try {
+      parsed = amr.readMetadata(file, getImage: true);
+    } catch (_) {
+      return const JamAudioTags();
+    }
+  } else {
+    final bounded = _readBounded(file, maxMetadataBytes);
+    if (bounded == null) return const JamAudioTags();
+    parsed = bounded;
   }
   amr.Picture? picture;
   for (final candidate in parsed.pictures) {
@@ -103,4 +123,143 @@ JamAudioTags readAudioTagsSync(File file) {
         ? null
         : (clean(picture.mimetype) ?? 'application/octet-stream'),
   );
+}
+
+/// What a picture frame may add on top of the image it carries (its MIME
+/// type, description and type byte), so a cover exactly at the cap still
+/// reads.
+const int _pictureFrameSlack = 64 * 1024;
+
+/// [readAudioTagsSync] under a read budget of [maxMetadataBytes] (see
+/// [readAudioTags]): with artwork if that fits, else without, else null.
+amr.AudioMetadata? _readBounded(File file, int maxMetadataBytes) {
+  for (final getImage in const [true, false]) {
+    final budget = _ReadBudget(
+      maxSingleRead: maxMetadataBytes + _pictureFrameSlack,
+      maxTotal: 2 * maxMetadataBytes + 1024 * 1024,
+    );
+    try {
+      return amr.readMetadata(_BudgetedFile(file, budget), getImage: getImage);
+    } catch (_) {
+      // Only a blown budget is worth a second try without artwork; any
+      // other failure would just fail again.
+      if (!budget.exceeded) return null;
+    }
+  }
+  return null;
+}
+
+/// Bytes a tag parse may still read; see [readAudioTags].
+class _ReadBudget {
+  _ReadBudget({required this.maxSingleRead, required this.maxTotal});
+
+  final int maxSingleRead;
+  final int maxTotal;
+  int _total = 0;
+
+  /// Whether a read was refused — the parse failed on the budget, not on
+  /// the file.
+  bool exceeded = false;
+
+  /// Refuses a read of [requested] bytes before it happens. Checked ahead
+  /// of the read, not after: the parser allocates its destination first,
+  /// and an allocation nobody writes to costs address space, not memory.
+  void checkRead(int requested) {
+    if (requested > maxSingleRead || _total >= maxTotal) _refuse();
+  }
+
+  /// Accounts [count] bytes actually read.
+  void spend(int count) {
+    _total += count;
+    if (_total > maxTotal) _refuse();
+  }
+
+  Never _refuse() {
+    exceeded = true;
+    throw const FileSystemException('tag read budget exceeded');
+  }
+}
+
+/// The file the tag parser is handed: the real one, opened through
+/// [_BudgetedReader]. The parser only ever opens it and keeps it for its
+/// error messages; anything else is not forwarded and fails the parse,
+/// which the caller treats as "no tags".
+class _BudgetedFile implements File {
+  _BudgetedFile(this._file, this._budget);
+
+  final File _file;
+  final _ReadBudget _budget;
+
+  @override
+  String get path => _file.path;
+
+  @override
+  RandomAccessFile openSync({FileMode mode = FileMode.read}) =>
+      _BudgetedReader(_file.openSync(mode: mode), _budget);
+
+  @override
+  String toString() => 'File: ${_file.path} (tag read budget)';
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
+/// A read-only [RandomAccessFile] whose reads are held to a [_ReadBudget].
+/// Only what a synchronous parser needs is forwarded.
+class _BudgetedReader implements RandomAccessFile {
+  _BudgetedReader(this._raf, this._budget);
+
+  final RandomAccessFile _raf;
+  final _ReadBudget _budget;
+
+  @override
+  String get path => _raf.path;
+
+  @override
+  int readByteSync() {
+    _budget.checkRead(1);
+    final byte = _raf.readByteSync();
+    if (byte >= 0) _budget.spend(1);
+    return byte;
+  }
+
+  @override
+  Uint8List readSync(int count) {
+    _budget.checkRead(count);
+    final bytes = _raf.readSync(count);
+    _budget.spend(bytes.length);
+    return bytes;
+  }
+
+  @override
+  int readIntoSync(List<int> buffer, [int start = 0, int? end]) {
+    _budget.checkRead((end ?? buffer.length) - start);
+    final count = _raf.readIntoSync(buffer, start, end);
+    _budget.spend(count);
+    return count;
+  }
+
+  @override
+  int positionSync() => _raf.positionSync();
+
+  @override
+  RandomAccessFile setPositionSync(int position) {
+    _raf.setPositionSync(position);
+    return this;
+  }
+
+  @override
+  int lengthSync() => _raf.lengthSync();
+
+  @override
+  void closeSync() => _raf.closeSync();
+
+  @override
+  Future<void> close() => _raf.close();
+
+  @override
+  String toString() => 'RandomAccessFile: ${_raf.path} (tag read budget)';
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }

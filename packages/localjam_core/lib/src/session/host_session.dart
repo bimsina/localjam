@@ -80,12 +80,16 @@ class HostSession {
   /// [durationUs] is the item's duration when known (§5.5, exposed as
   /// [currentDurationUs]); it bounds [seek] and enables [hasEnded]. It always
   /// replaces the previous item's duration — omitting it means "unknown".
+  ///
+  /// A non-positive [durationUs] is treated as unknown: a zero duration would
+  /// make the item "ended" the moment it was selected, and a negative one is
+  /// not a range anything can be clamped to.
   PlaybackSnapshot setMedia(
     String mediaId, {
     required int nowUs,
     int? durationUs,
   }) {
-    _durationUs = durationUs;
+    _durationUs = durationUs != null && durationUs > 0 ? durationUs : null;
     return _snapshot = _snapshot.copyWith(
       rev: _snapshot.rev + 1,
       status: PlaybackStatus.loading,
@@ -180,10 +184,20 @@ class HostSession {
   /// drift correction absorbs the tiny residual. While not playing, only the
   /// stored rate changes; the frozen position is untouched.
   ///
-  /// Throws [ArgumentError] if [rate] is not a positive finite number.
+  /// Throws [ArgumentError] if [rate] is not within
+  /// [[PlaybackSnapshot.minRate], [PlaybackSnapshot.maxRate]] (§5.1) — the
+  /// range guests accept. A snapshot outside it is one every guest refuses
+  /// to decode, so broadcasting it would leave the room unable to follow
+  /// the host, and nobody able to join.
   PlaybackSnapshot setRate(double rate, {required int nowUs}) {
-    if (!rate.isFinite || rate <= 0) {
-      throw ArgumentError.value(rate, 'rate', 'must be a positive number');
+    // Negated so that NaN fails too.
+    if (!(rate >= PlaybackSnapshot.minRate &&
+        rate <= PlaybackSnapshot.maxRate)) {
+      throw ArgumentError.value(
+        rate,
+        'rate',
+        'must be in [${PlaybackSnapshot.minRate}, ${PlaybackSnapshot.maxRate}]',
+      );
     }
     if (_snapshot.status == PlaybackStatus.playing) {
       final position = _clampedPositionAt(nowUs);
@@ -246,12 +260,21 @@ class HostSession {
     for (final peerId in _peers) peerId: peerMediaState(peerId, mediaId),
   };
 
+  /// Peers whose latest report on [mediaId] is `fetching` — the only ones a
+  /// readiness gate (§6.3) may wait for. A peer that never reported, gave up
+  /// (`none`) or already holds the file is not in the set: waiting on a peer
+  /// that is not actually transferring anything only delays everyone else.
+  Set<String> peersFetching(String mediaId) => {
+    for (final peerId in _peers)
+      if (peerMediaState(peerId, mediaId) == MediaReadiness.fetching) peerId,
+  };
+
   /// Whether every current peer has reported `ready` for [mediaId].
   ///
   /// Vacuously true when there are no peers (a solo host never waits).
   /// A peer that has never reported on [mediaId] counts as not ready; a
   /// report on a *different* media item neither helps nor hurts. The
-  /// wait-vs-timeout policy (§6.3 "all ready or 10 s") is the host app's job;
+  /// wait-vs-timeout policy (§6.3) is the host's job — see [peersFetching];
   /// this only answers the instantaneous question.
   bool allPeersReady(String mediaId) {
     for (final peerId in _peers) {

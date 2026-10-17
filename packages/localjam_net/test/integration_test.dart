@@ -46,6 +46,7 @@ Future<JamHostServer> startHost({
   int uploadBudgetBytes = 2 * 1024 * 1024 * 1024,
   int maxPlaylistLength = 500,
   int maxPeers = 32,
+  int maxUploadsPerPeer = 2,
 }) async {
   final host = JamHostServer(
     sessionName: sessionName,
@@ -60,6 +61,7 @@ Future<JamHostServer> startHost({
     uploadBudgetBytes: uploadBudgetBytes,
     maxPlaylistLength: maxPlaylistLength,
     maxPeers: maxPeers,
+    maxUploadsPerPeer: maxUploadsPerPeer,
   );
   await host.start(address: InternetAddress.loopbackIPv4);
   addTearDown(host.close);
@@ -514,6 +516,9 @@ void main() {
       final host = await startHost(
         maxUploadBytes: 4096,
         uploadBudgetBytes: 3000,
+        // All five from one guest at once: this is about the budget, not
+        // the per-peer concurrency cap (which would 429 three of them).
+        maxUploadsPerPeer: 5,
       );
       final guest = await joinGuest(host);
       final files = [
@@ -552,6 +557,7 @@ void main() {
         Uri.parse('http://127.0.0.1:${host.port}/media'),
       );
       req.headers.set(HttpHeaders.authorizationHeader, 'Bearer ${host.token}');
+      req.headers.set(JamGuestClient.uploadKeyHeader, guest.uploadKey!);
       req.headers.set('X-LocalJam-Kind', 'audio');
       req.contentLength = 2000;
       req.add(Uint8List(500));
@@ -596,12 +602,14 @@ void main() {
       // A chunked body cannot be checked against any cap before it is read,
       // so it is refused outright — every LocalJam client declares a length.
       final host = await startHost();
+      final guest = await joinGuest(host);
       final http = HttpClient();
       addTearDown(() => http.close(force: true));
       final req = await http.postUrl(
         Uri.parse('http://127.0.0.1:${host.port}/media'),
       );
       req.headers.set(HttpHeaders.authorizationHeader, 'Bearer ${host.token}');
+      req.headers.set(JamGuestClient.uploadKeyHeader, guest.uploadKey!);
       req.headers.set('X-LocalJam-Kind', 'audio');
       req.add(makeMediaBytes(64));
       final res = await req.close();
@@ -1277,11 +1285,9 @@ void main() {
         clientId: 'c_device_a',
       );
 
-      expect(
-        host.peers.map((p) => p.peerId),
-        [back.selfPeerId],
-        reason: 'the room is exactly {host, the returning guest}',
-      );
+      expect(host.peers.map((p) => p.peerId), [
+        back.selfPeerId,
+      ], reason: 'the room is exactly {host, the returning guest}');
       expect(
         back.peers,
         isEmpty,
@@ -1289,26 +1295,50 @@ void main() {
       );
     });
 
-    test('a kicked device that rejoins is one peer, not two', () async {
+    test('a kicked device stays out for the session; un-kicked, it rejoins '
+        'as one plain peer (§5.6)', () async {
       final host = await startHost(silenceTimeout: const Duration(seconds: 30));
       final first = await joinGuest(
         host,
         clientName: 'Quirky Toucan',
         clientId: 'c_device_a',
       );
-      host.promotePeer(first.selfPeerId);
-      host.kickPeer(first.selfPeerId);
+      final kickedId = first.selfPeerId;
+      host.promotePeer(kickedId);
+      host.kickPeer(kickedId);
       await waitFor(() => host.peers.isEmpty, reason: 'the kick to land');
+      expect(host.kickedPeers.map((p) => p.peerId), [kickedId]);
+      expect(host.kickedPeers.single.clientName, 'Quirky Toucan');
 
+      // Rejoining immediately is refused with a reject a guest treats as
+      // final — not a dropped socket it would retry forever.
+      await expectLater(
+        joinGuest(host, clientName: 'Quirky Toucan', clientId: 'c_device_a'),
+        throwsA(
+          isA<JamRejectedException>().having(
+            (e) => e.reason,
+            'reason',
+            RejectReason.kicked,
+          ),
+        ),
+      );
+      expect(host.peers, isEmpty);
+      // Other devices are unaffected.
+      final other = await joinGuest(host, clientId: 'c_device_b');
+      expect(host.peers.map((p) => p.peerId), [other.selfPeerId]);
+
+      expect(host.unkickPeer('p_unknown'), isFalse);
+      expect(host.unkickPeer(kickedId), isTrue);
+      expect(host.kickedPeers, isEmpty);
       final back = await joinGuest(
         host,
         clientName: 'Quirky Toucan',
         clientId: 'c_device_a',
       );
-      expect(host.peers.map((p) => p.peerId), [back.selfPeerId]);
-      expect(back.peers, isEmpty);
-      // §5.6: a kicked peer's role is forgotten; the new slot starts plain.
-      expect(host.permissions.cohosts, isNot(contains(back.selfPeerId)));
+      expect(host.peers, hasLength(2));
+      expect(back.peers.map((p) => p.peerId), [other.selfPeerId]);
+      // The kick took the co-host role with it.
+      expect(host.permissions.cohosts, isEmpty);
     });
 
     test('two different devices sharing a display name both stay', () async {
@@ -1761,29 +1791,43 @@ void main() {
       },
     );
 
-    test(
-      'is permissive about a mediaId outside the current playlist',
-      () async {
-        final host = await startHost();
-        final guest = await joinGuest(host);
+    test('the client sends any id; the host ignores ids it does not serve, '
+        'so the readiness table cannot be grown with made-up ids', () async {
+      final host = await startHost();
+      final file = await writeTempMedia(makeMediaBytes(512));
+      final item = await JamHostServer.describeFile(
+        file,
+        kind: MediaKind.audio,
+      );
+      host.addMedia(item, file);
+      final guest = await joinGuest(host);
 
-        final statusEvent = host.events
-            .firstWhere((e) => e.kind == JamHostEventKind.peerMediaStatus)
-            .timeout(const Duration(seconds: 5));
+      final events = <JamHostEvent>[];
+      host.events
+          .where((e) => e.kind == JamHostEventKind.peerMediaStatus)
+          .listen(events.add);
+      for (var i = 0; i < 50; i++) {
         guest.sendMediaStatus(
-          'm_not_in_playlist',
+          'm_made_up_$i',
           MediaFetchState.fetching,
           progress: 0.3,
         );
-        final event = await statusEvent;
-        expect(event.mediaId, 'm_not_in_playlist');
-        expect(event.progress, 0.3);
-        expect(
-          host.peerMediaState(guest.selfPeerId, 'm_not_in_playlist'),
-          MediaReadiness.fetching,
-        );
-      },
-    );
+      }
+      // Ordered after the junk on the same socket: once it lands, the junk
+      // has been processed too.
+      guest.sendMediaStatus(item.mediaId, MediaFetchState.ready);
+      await waitFor(() => events.isNotEmpty, reason: 'the real report');
+
+      expect(events.map((e) => e.mediaId), [item.mediaId]);
+      expect(
+        host.peerMediaState(guest.selfPeerId, 'm_made_up_0'),
+        MediaReadiness.none,
+      );
+      expect(
+        host.peerMediaState(guest.selfPeerId, item.mediaId),
+        MediaReadiness.ready,
+      );
+    });
   });
 
   test('guest.done completes when the host closes', () async {

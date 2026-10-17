@@ -17,20 +17,35 @@ import '../session/playback_state.dart';
 // ---------------------------------------------------------------------------
 
 /// Why the host rejected a join (PROTOCOL.md §3.1).
+///
+/// Every reject is terminal for the join it answers: a guest never retries
+/// the same `hello` against the same host (§3.1). That includes a reason
+/// this client does not know, which decodes to [unknown] instead of
+/// throwing — otherwise a reason added in a later 1.x would be dropped as a
+/// malformed frame and look like a host that never answered.
 enum RejectReason {
   badToken('bad_token'),
   full('full'),
-  version('version');
+
+  /// The guest's major protocol version is not one the host speaks (§2).
+  version('version'),
+
+  /// This device was kicked from the session and the host has not let it
+  /// back in (§5.6). Rejoining is the host's call, not a retry's.
+  kicked('kicked'),
+
+  /// A reason from a later protocol version. Still a reject, still final.
+  unknown('unknown');
 
   const RejectReason(this.wire);
 
   /// Wire string for this reason.
   final String wire;
 
-  static RejectReason fromWire(String wire) => values.firstWhere(
-    (r) => r.wire == wire,
-    orElse: () => throw FormatException('Unknown reject reason: "$wire"'),
-  );
+  /// The reason [wire] names, or [RejectReason.unknown] for anything this
+  /// version does not know (tolerant decoding, §2).
+  static RejectReason fromWire(String wire) =>
+      values.firstWhere((r) => r.wire == wire, orElse: () => unknown);
 }
 
 /// Error codes carried by the `error` message (PROTOCOL.md §8).
@@ -47,22 +62,26 @@ enum ErrorCode {
   /// The peer was removed from the session by the host (§5.6). Always
   /// fatal; the close follows and clients must not auto-rejoin.
   kicked('kicked'),
-  internal('internal');
+  internal('internal'),
+
+  /// A code from a later protocol version. The error's `fatal` flag still
+  /// says whether the connection is ending (§8).
+  unknown('unknown');
 
   const ErrorCode(this.wire);
 
   /// Wire string for this code.
   final String wire;
 
-  static ErrorCode fromWire(String wire) => values.firstWhere(
-    (c) => c.wire == wire,
-    orElse: () => throw FormatException('Unknown error code: "$wire"'),
-  );
+  /// The code [wire] names, or [ErrorCode.unknown] for anything this version
+  /// does not know (tolerant decoding, §2).
+  static ErrorCode fromWire(String wire) =>
+      values.firstWhere((c) => c.wire == wire, orElse: () => unknown);
 }
 
 /// Why a session ended, as carried by `session_ended` (PROTOCOL.md §3.4).
 enum SessionEndedReason {
-  /// The host deliberately ended the room (v0.2): "End jam", not a crash.
+  /// The host deliberately ended the room: "End jam", not a crash.
   hostEnded('host_ended'),
 
   /// A reason this client does not know. `session_ended` is terminal
@@ -93,10 +112,21 @@ enum MediaKind {
   /// Wire string for this kind.
   final String wire;
 
-  static MediaKind fromWire(String wire) => values.firstWhere(
-    (k) => k.wire == wire,
-    orElse: () => throw FormatException('Unknown media kind: "$wire"'),
-  );
+  /// The kind [wire] names. Throws [FormatException] for a kind this
+  /// version does not know — see [tryFromWire] for the tolerant form.
+  static MediaKind fromWire(String wire) =>
+      tryFromWire(wire) ??
+      (throw FormatException('Unknown media kind: "$wire"'));
+
+  /// The kind [wire] names, or null when this version does not know it. A
+  /// playlist item of an unknown kind is one this client cannot play, so
+  /// decoders drop the item rather than the whole playlist (§6.1).
+  static MediaKind? tryFromWire(String wire) {
+    for (final kind in values) {
+      if (kind.wire == wire) return kind;
+    }
+    return null;
+  }
 }
 
 /// A guest's local fetch state for one media item (PROTOCOL.md §6.3).
@@ -110,10 +140,11 @@ enum MediaFetchState {
   /// Wire string for this state.
   final String wire;
 
-  static MediaFetchState fromWire(String wire) => values.firstWhere(
-    (s) => s.wire == wire,
-    orElse: () => throw FormatException('Unknown media fetch state: "$wire"'),
-  );
+  /// The state [wire] names. A state this version does not know decodes as
+  /// [none]: whatever a later guest means by it, the host cannot count it as
+  /// possession, and the readiness gate (§6.3) must not wait on it.
+  static MediaFetchState fromWire(String wire) =>
+      values.firstWhere((s) => s.wire == wire, orElse: () => none);
 }
 
 /// Action a guest asks the host to apply (PROTOCOL.md §5.2).
@@ -173,6 +204,16 @@ class PeerInfo {
     clientName: (json['clientName'] as String?) ?? '',
     clientKind: (json['clientKind'] as String?) ?? '',
   );
+
+  /// [PeerInfo.fromJson], or null for an entry that does not fit the schema
+  /// — so one bad roster entry costs that entry, not the whole `welcome`.
+  static PeerInfo? tryFromJson(Map<String, Object?> json) {
+    try {
+      return PeerInfo.fromJson(json);
+    } catch (_) {
+      return null;
+    }
+  }
 
   @override
   bool operator ==(Object other) =>
@@ -287,20 +328,43 @@ class MediaItem {
     if (addedBy != null) 'addedBy': addedBy,
   };
 
-  factory MediaItem.fromJson(Map<String, Object?> json) => MediaItem(
-    mediaId: json['mediaId'] as String,
-    kind: MediaKind.fromWire(json['kind'] as String),
-    name: (json['name'] as String?) ?? '',
-    mime: (json['mime'] as String?) ?? '',
-    sizeBytes: (json['sizeBytes'] as int?) ?? 0,
-    durationUs: json['durationUs'] as int?,
-    sha256: (json['sha256'] as String?) ?? '',
-    title: json['title'] as String?,
-    artist: json['artist'] as String?,
-    album: json['album'] as String?,
-    artworkId: json['artworkId'] as String?,
-    addedBy: json['addedBy'] as String?,
-  );
+  /// Decodes one §6.1 item. Throws for an unknown `kind` or a field of the
+  /// wrong type; playlist decoders use [tryFromJson] instead.
+  ///
+  /// A non-positive `durationUs` decodes as null (unknown): no real item
+  /// lasts zero or negative time, and passing one on would make every
+  /// position "past the end" (§5.5).
+  factory MediaItem.fromJson(Map<String, Object?> json) {
+    final durationUs = json['durationUs'] as int?;
+    return MediaItem(
+      mediaId: json['mediaId'] as String,
+      kind: MediaKind.fromWire(json['kind'] as String),
+      name: (json['name'] as String?) ?? '',
+      mime: (json['mime'] as String?) ?? '',
+      sizeBytes: (json['sizeBytes'] as int?) ?? 0,
+      durationUs: durationUs != null && durationUs > 0 ? durationUs : null,
+      sha256: (json['sha256'] as String?) ?? '',
+      title: json['title'] as String?,
+      artist: json['artist'] as String?,
+      album: json['album'] as String?,
+      artworkId: json['artworkId'] as String?,
+      addedBy: json['addedBy'] as String?,
+    );
+  }
+
+  /// [MediaItem.fromJson], or null for an item this client cannot use: a
+  /// `kind` from a later protocol version, or an entry that does not fit the
+  /// schema. Playlists drop such items and keep the rest (§2, §6.1) — one
+  /// video item must never cost an audio-only guest the whole queue.
+  static MediaItem? tryFromJson(Map<String, Object?> json) {
+    final kind = json['kind'];
+    if (kind is! String || MediaKind.tryFromWire(kind) == null) return null;
+    try {
+      return MediaItem.fromJson(json);
+    } catch (_) {
+      return null;
+    }
+  }
 
   @override
   bool operator ==(Object other) =>
@@ -376,10 +440,10 @@ class HelloMessage extends Message {
   /// Omitted from the wire when null (fresh join).
   final String? resumePeerId;
 
-  /// Stable per-device id (v0.2, optional): one device is one peer slot, so
+  /// Stable per-device id (optional): one device is one peer slot, so
   /// a host replaces any peer already joined under this id instead of
   /// leaving a ghost of it in the roster (§3.3). Omitted when null — a
-  /// client without one behaves exactly as in v0.1.
+  /// client without one can never resume or keep a role across rejoins.
   final String? clientId;
 
   /// Capabilities, e.g. "audio", "video".
@@ -424,6 +488,8 @@ class WelcomeMessage extends Message {
     this.playlist = const [],
     this.permissions,
     this.host,
+    this.uploadKey,
+    this.hostAway = false,
   });
 
   static const wireType = 'welcome';
@@ -434,6 +500,17 @@ class WelcomeMessage extends Message {
   /// The joining guest's own peer id (wire shape: `you: {peerId}`).
   final String selfPeerId;
 
+  /// This peer's upload credential (wire: `you.uploadKey`, §6.4): an opaque
+  /// secret issued per join, presented as `X-LocalJam-Upload-Key` on
+  /// `POST /media`. It is how the host knows WHICH peer is uploading — the
+  /// session token only proves someone is in the room. Null from a host that
+  /// accepts no uploads from this peer.
+  final String? uploadKey;
+
+  /// Whether the host had announced it is away (§3.5) when this guest
+  /// joined. Omitted from the wire when false.
+  final bool hostAway;
+
   final List<PeerInfo> peers;
 
   /// Full current playback state, so late join is just convergence.
@@ -441,11 +518,11 @@ class WelcomeMessage extends Message {
 
   final List<MediaItem> playlist;
 
-  /// The room permission document (§5.6). Null only from a pre-v0.2 host;
+  /// The room permission document (§5.6). Null only from a host that omits it;
   /// clients then assume listen-only until a broadcast arrives.
   final JamPermissions? permissions;
 
-  /// The host itself as a person (v0.2, optional): peerId is the reserved
+  /// The host itself as a person (optional): peerId is the reserved
   /// [JamPermissions.hostPeerId] and `clientName` its display identity
   /// ("Silky Puffin"), so guests can name the host in a roster and in
   /// "added by" bylines instead of calling everyone's host "Host". NOT a
@@ -460,55 +537,76 @@ class WelcomeMessage extends Message {
   Map<String, Object?> payloadToJson() => {
     'sessionId': sessionId,
     'sessionName': sessionName,
-    'you': {'peerId': selfPeerId},
+    'you': {'peerId': selfPeerId, 'uploadKey': ?uploadKey},
     'peers': [for (final p in peers) p.toJson()],
     'snapshot': snapshot.toJson(),
     'playlist': [for (final i in playlist) i.toJson()],
     if (permissions != null) 'permissions': permissions!.toJson(),
     if (host != null) 'host': host!.toJson(),
+    if (hostAway) 'hostAway': true,
   };
 
   factory WelcomeMessage.fromPayload(Map<String, Object?> json) {
     final you = json['you'] as Map<String, Object?>? ?? const {};
     final rawPermissions = json['permissions'];
     final rawHost = json['host'];
+    final uploadKey = you['uploadKey'];
     return WelcomeMessage(
       sessionId: json['sessionId'] as String,
       sessionName: (json['sessionName'] as String?) ?? '',
       selfPeerId: you['peerId'] as String,
-      peers: [for (final p in _mapList(json['peers'])) PeerInfo.fromJson(p)],
+      peers: _tolerantList(json['peers'], PeerInfo.tryFromJson),
       snapshot: PlaybackSnapshot.fromJson(
         json['snapshot'] as Map<String, Object?>,
       ),
-      playlist: [
-        for (final i in _mapList(json['playlist'])) MediaItem.fromJson(i),
-      ],
+      playlist: _tolerantList(json['playlist'], MediaItem.tryFromJson),
       permissions: rawPermissions is Map
           ? JamPermissions.fromJson(rawPermissions.cast<String, Object?>())
           : null,
       host: rawHost is Map
-          ? PeerInfo.fromJson(rawHost.cast<String, Object?>())
+          ? PeerInfo.tryFromJson(rawHost.cast<String, Object?>())
           : null,
+      uploadKey: uploadKey is String && uploadKey.isNotEmpty ? uploadKey : null,
+      hostAway: json['hostAway'] == true,
     );
   }
 }
 
-/// H→G join rejection (PROTOCOL.md §3.1).
+/// H→G join rejection (PROTOCOL.md §3.1). Terminal for the join it answers.
 class RejectMessage extends Message {
-  const RejectMessage({required this.reason});
+  const RejectMessage({required this.reason, this.versions = const []});
 
   static const wireType = 'reject';
 
   final RejectReason reason;
 
+  /// For [RejectReason.version]: the major protocol versions the host does
+  /// speak (§2), so a guest can tell "update this app" from "the host's app
+  /// is the old one". Omitted from the wire when empty.
+  final List<int> versions;
+
   @override
   String get type => wireType;
 
   @override
-  Map<String, Object?> payloadToJson() => {'reason': reason.wire};
+  Map<String, Object?> payloadToJson() => {
+    'reason': reason.wire,
+    if (versions.isNotEmpty) 'versions': versions,
+  };
 
-  factory RejectMessage.fromPayload(Map<String, Object?> json) =>
-      RejectMessage(reason: RejectReason.fromWire(json['reason'] as String));
+  factory RejectMessage.fromPayload(Map<String, Object?> json) {
+    final rawVersions = json['versions'];
+    return RejectMessage(
+      // An absent reason is still a reject (§3.1): a guest that cannot say
+      // why it was refused must still stop asking.
+      reason: RejectReason.fromWire(
+        (json['reason'] as String?) ?? RejectReason.unknown.wire,
+      ),
+      versions: rawVersions is List
+          ? List.unmodifiable(rawVersions.whereType<int>())
+          : const [],
+    );
+  }
 }
 
 /// H→* presence: a peer joined (PROTOCOL.md §3.2).
@@ -576,6 +674,32 @@ class SessionEndedMessage extends Message {
           (json['reason'] as String?) ?? SessionEndedReason.unknown.wire,
         ),
       );
+}
+
+/// H→* the host's own availability (PROTOCOL.md §3.5).
+///
+/// `away: true` is sent just before the host expects to stop answering —
+/// typically a phone host going to the background, which the OS may suspend
+/// — and `away: false` when it is back. It turns the silence that follows
+/// from "the host died" into "the host's phone is asleep": guests still
+/// notice the dead connection quickly (§3.3) and keep reconnecting, but give
+/// up on the room only after a much longer wait. The latest value also rides
+/// `welcome.hostAway`, so a guest that (re)joins mid-nap is told too.
+class HostStatusMessage extends Message {
+  const HostStatusMessage({required this.away});
+
+  static const wireType = 'host_status';
+
+  final bool away;
+
+  @override
+  String get type => wireType;
+
+  @override
+  Map<String, Object?> payloadToJson() => {'away': away};
+
+  factory HostStatusMessage.fromPayload(Map<String, Object?> json) =>
+      HostStatusMessage(away: json['away'] == true);
 }
 
 /// G→H clock sync ping (PROTOCOL.md §4). Times are monotonic microseconds.
@@ -711,10 +835,12 @@ class PlaylistMessage extends Message {
     'items': [for (final i in items) i.toJson()],
   };
 
+  /// Items this client cannot use (an unknown `kind`, a malformed entry)
+  /// are dropped; the rest of the playlist stands (§2, §6.1).
   factory PlaylistMessage.fromPayload(Map<String, Object?> json) =>
       PlaylistMessage(
         rev: json['rev'] as int,
-        items: [for (final i in _mapList(json['items'])) MediaItem.fromJson(i)],
+        items: _tolerantList(json['items'], MediaItem.tryFromJson),
       );
 }
 
@@ -844,3 +970,10 @@ List<Map<String, Object?>> _mapList(Object? value) {
       if (e is Map) e.cast<String, Object?>(),
   ];
 }
+
+/// Decodes each object entry of [value] with [decode], keeping the ones it
+/// accepts: the list survives entries it cannot use (§2).
+List<T> _tolerantList<T>(
+  Object? value,
+  T? Function(Map<String, Object?> json) decode,
+) => [for (final e in _mapList(value)) ?decode(e)];

@@ -192,12 +192,10 @@ Future<int> _runLoop(JamHostServer server, StatusScreen screen) async {
             ),
           );
         case 'n':
-          final playlist = server.playlist;
-          if (playlist.isEmpty) break;
-          final index = playlist.indexWhere(
-            (i) => i.mediaId == server.snapshot.mediaId,
-          );
-          server.setMedia(playlist[(index + 1) % playlist.length].mediaId);
+          if (server.playlist.isEmpty) break;
+          // A skip, not a pick: setMedia on the current item is a no-op
+          // (§5.2), so a one-track playlist would never restart.
+          server.next();
         case 'q':
           finish(0);
         case '\x03': // Ctrl-C in raw-ish mode.

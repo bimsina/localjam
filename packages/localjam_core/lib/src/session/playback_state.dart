@@ -1,7 +1,25 @@
 import 'package:meta/meta.dart';
 
-/// Playback status as broadcast by the host (PROTOCOL.md §5.1).
-enum PlaybackStatus { idle, loading, playing, paused }
+/// Playback status as broadcast by the host (PROTOCOL.md §5.1). The wire
+/// string is the value's [name].
+enum PlaybackStatus {
+  idle,
+  loading,
+  playing,
+  paused;
+
+  /// The status [wire] names. A status from a later protocol version decodes
+  /// as [loading]: the host is doing something this guest cannot follow, so
+  /// it makes no sound, holds the frozen `positionUs`, and converges on the
+  /// next snapshot it does understand (§2) — instead of dropping the whole
+  /// `state` (or `welcome`) frame.
+  static PlaybackStatus fromWire(String wire) {
+    for (final status in values) {
+      if (status.name == wire) return status;
+    }
+    return loading;
+  }
+}
 
 /// The anchor ties a media position to an instant on the session clock:
 /// while playing, `position(t) = positionUs + (t - hostTimeUs) * rate`.
@@ -50,6 +68,19 @@ class PlaybackSnapshot {
 
   static const initial = PlaybackSnapshot(rev: 0, status: PlaybackStatus.idle);
 
+  /// The playback rates a snapshot may carry (§5.1): `[1/32, 32]`, the range
+  /// every audio engine behind the protocol accepts. [PlaybackSnapshot.fromJson]
+  /// refuses a rate outside it — a snapshot is the one thing every guest
+  /// computes from on every tick, so a hostile or broken `rate` must not get
+  /// past the decoder.
+  static const double minRate = 1 / 32;
+  static const double maxRate = 32;
+
+  /// Where [positionAt] saturates: 2^53 µs (~285 years), the largest span
+  /// a double still counts in whole microseconds. No real position comes
+  /// near it; it only bounds what an absurd anchor can make the formula say.
+  static const int maxPositionUs = 1 << 53;
+
   final int rev;
   final PlaybackStatus status;
   final String? mediaId;
@@ -64,12 +95,25 @@ class PlaybackSnapshot {
 
   /// Where playback should be at session-clock time [hostTimeUs].
   /// Clamps to the anchor position for times before a scheduled start.
+  ///
+  /// Total: saturates at ±[maxPositionUs] instead of throwing, whatever the
+  /// anchor and [rate] say. Guests call this on every drift tick (§5.4), so
+  /// a value that made it throw would stop every one of them at once.
   int positionAt(int hostTimeUs) {
     final a = anchor;
     if (status != PlaybackStatus.playing || a == null) return positionUs;
     final elapsed = hostTimeUs - a.hostTimeUs;
     if (elapsed <= 0) return a.positionUs;
-    return a.positionUs + (elapsed * rate).round();
+    final delta = elapsed * rate;
+    if (delta.isNaN) return a.positionUs;
+    // Checked in floating point first: `round()` throws on infinities and on
+    // anything past the int64 range, and an in-range delta can still
+    // overflow when added to an extreme anchor position.
+    final exact = a.positionUs + delta;
+    if (exact.abs() >= maxPositionUs || delta.abs() >= maxPositionUs) {
+      return exact.isNegative ? -maxPositionUs : maxPositionUs;
+    }
+    return a.positionUs + delta.round();
   }
 
   /// [positionAt], clamped to `[0, durationUs]` when [durationUs] is known
@@ -110,17 +154,31 @@ class PlaybackSnapshot {
     'rate': rate,
   };
 
+  /// Decodes a §5.1 snapshot. Throws [FormatException] for a `rate` that is
+  /// not a finite number in [[minRate], [maxRate]] (absent means 1.0): that
+  /// is not a value from a later protocol version but a broken one, and the
+  /// codec drops the frame that carried it (§2.1).
   factory PlaybackSnapshot.fromJson(Map<String, Object?> json) =>
       PlaybackSnapshot(
         rev: json['rev'] as int,
-        status: PlaybackStatus.values.byName(json['status'] as String),
+        status: PlaybackStatus.fromWire(json['status'] as String),
         mediaId: json['mediaId'] as String?,
         anchor: json['anchor'] == null
             ? null
             : PlaybackAnchor.fromJson(json['anchor'] as Map<String, Object?>),
         positionUs: (json['positionUs'] as int?) ?? 0,
-        rate: ((json['rate'] as num?) ?? 1.0).toDouble(),
+        rate: _rateFromJson(json['rate'] as num?),
       );
+
+  static double _rateFromJson(num? wire) {
+    final rate = (wire ?? 1.0).toDouble();
+    // Negated rather than `rate < minRate || ...`: NaN fails every
+    // comparison, so only this form refuses it too.
+    if (!(rate >= minRate && rate <= maxRate)) {
+      throw FormatException('rate must be in [$minRate, $maxRate]', wire);
+    }
+    return rate;
+  }
 
   @override
   bool operator ==(Object other) =>

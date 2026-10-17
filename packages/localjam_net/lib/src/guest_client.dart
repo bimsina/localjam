@@ -14,15 +14,34 @@ import 'package:meta/meta.dart';
 
 import 'monotonic.dart';
 
-/// Thrown when the host answers the join handshake with `reject` (§3.1).
+/// Thrown when the host answers the join handshake with `reject` (§3.1) —
+/// or with anything in a major protocol version this client does not speak,
+/// which is the same answer ([RejectReason.version], §2). Terminal: retrying
+/// the same join against the same host gets the same answer.
 class JamRejectedException implements Exception {
-  const JamRejectedException(this.reason);
+  const JamRejectedException(this.reason, {this.hostVersions = const []});
 
   /// Why the host rejected the join.
   final RejectReason reason;
 
+  /// For [RejectReason.version]: the major versions the host speaks, when it
+  /// said (empty otherwise) — enough to tell "update this app" from "the
+  /// host's app is the old one".
+  final List<int> hostVersions;
+
   @override
   String toString() => 'JamRejectedException(${reason.wire})';
+}
+
+/// A media-plane request the host answered with an unexpected status
+/// (§6.2, §6.4, §6.5). Still an [HttpException] — the message is the same —
+/// but with the [statusCode], so a caller can tell a full room (`507`) from
+/// a busy one (`429`) or a refused add (`403`) without parsing text.
+class JamHttpStatusException extends HttpException {
+  const JamHttpStatusException(this.statusCode, super.message, {super.uri});
+
+  /// The HTTP status the host answered with.
+  final int statusCode;
 }
 
 /// Kind of a [JamPeerEvent].
@@ -63,7 +82,12 @@ class JamGuestClient {
     this._port,
     this._token,
     this._pingInterval,
+    this._livenessTimeout,
+    this._mediaTimeout,
+    this._localClockUs,
   ) {
+    _http.connectionTimeout = _mediaTimeout;
+    _lastFrameUs = monotonicNowUs();
     _sub = _ws.listen(
       _onFrame,
       onDone: _onSocketDone,
@@ -71,6 +95,12 @@ class JamGuestClient {
       cancelOnError: true,
     );
   }
+
+  /// The default for `connect(livenessTimeout:)`: three ping intervals (6 s
+  /// at the default 2 s). The host answers every ping (§4), so three in a row
+  /// unanswered is not a slow network, it is a host that is not there.
+  static Duration defaultLivenessTimeout(Duration pingInterval) =>
+      pingInterval * 3;
 
   /// Ceiling on one `GET /artwork/{id}` response (§6.5). Embedded cover art
   /// is tens of kilobytes; 8 MB is generous for a hi-res cover and still
@@ -85,7 +115,8 @@ class JamGuestClient {
 
   /// Parses a `localjam://join?...` URI (§1 Discovery), tries each `host`
   /// candidate in order, performs the §3.1 handshake, and starts the §4
-  /// clock-sync schedule (burst of 8 pings, then one every [pingInterval]).
+  /// clock-sync schedule (a burst of 8 pings [burstPingSpacing] apart, then
+  /// one every [pingInterval]).
   ///
   /// Pass [resumePeerId] to resume a dropped slot within the host's grace
   /// window (§3.3); it is carried in the `hello` payload. [clientId] is this
@@ -93,8 +124,24 @@ class JamGuestClient {
   /// under it, so a client that force-quit and came back never haunts the
   /// roster as a second copy of itself.
   ///
-  /// Throws [JamRejectedException] if the host rejects the join, or
-  /// [SocketException] if no candidate host is reachable.
+  /// [livenessTimeout] bounds how long the connection may go without a
+  /// single frame from the host before it is declared dead and closed
+  /// (§3.3; default [defaultLivenessTimeout]). A host that lost power, left
+  /// the network or was suspended sends no FIN, so without this the socket
+  /// would look open for minutes. [mediaTimeout] bounds the media plane the
+  /// same way (§6.2/§6.4): connecting, waiting for a response, and every gap
+  /// between body chunks.
+  ///
+  /// [localClockUs] is this guest's local clock for §4 — the `t0`/`t3` of
+  /// every ping and the input side of [clock] ([localNowUs],
+  /// [sessionNowUs]). It defaults to the process-wide monotonic clock and
+  /// should be left alone outside tools: the CLI injects a skewed one to
+  /// show two terminals on one machine converging as if they were two
+  /// devices. Liveness and media timeouts always run on the real clock.
+  ///
+  /// Throws [JamRejectedException] if the host rejects the join (or speaks
+  /// another major protocol version), or [SocketException] if no candidate
+  /// host is reachable.
   static Future<JamGuestClient> connect(
     Uri joinUri, {
     String clientName = 'guest',
@@ -104,6 +151,9 @@ class JamGuestClient {
     Duration connectTimeout = const Duration(seconds: 5),
     String? resumePeerId,
     String? clientId,
+    Duration? livenessTimeout,
+    Duration mediaTimeout = const Duration(seconds: 10),
+    int Function()? localClockUs,
   }) async {
     final params = joinUri.queryParameters;
     final hostsParam = params['host'];
@@ -125,13 +175,37 @@ class JamGuestClient {
     for (final host in hosts) {
       final wsUri = Uri(scheme: 'ws', host: host, port: port, path: '/ws');
       final WebSocket ws;
+      // No permessage-deflate: control frames are small JSON (§1), and the
+      // host does not offer it either (§9.1).
+      final pending = WebSocket.connect(
+        '$wsUri',
+        compression: CompressionOptions.compressionOff,
+      );
       try {
-        ws = await WebSocket.connect('$wsUri').timeout(connectTimeout);
+        ws = await pending.timeout(connectTimeout);
       } catch (e) {
+        // A host that was merely asleep may still complete this upgrade
+        // later; a socket nobody listens to would sit in its pre-hello
+        // slots until its hello timeout. Close it if it ever arrives.
+        unawaited(
+          pending.then(
+            (late) => late.close(WebSocketStatus.goingAway),
+            onError: (Object _) {},
+          ),
+        );
         lastError = e; // Try the next candidate (§1: guests try in order).
         continue;
       }
-      final client = JamGuestClient._(ws, host, port, token, pingInterval);
+      final client = JamGuestClient._(
+        ws,
+        host,
+        port,
+        token,
+        pingInterval,
+        livenessTimeout ?? defaultLivenessTimeout(pingInterval),
+        mediaTimeout,
+        localClockUs ?? monotonicNowUs,
+      );
       try {
         await client._handshake(
           clientName: clientName,
@@ -162,14 +236,41 @@ class JamGuestClient {
   final int _port;
   final String _token;
   final Duration _pingInterval;
-  final HttpClient _http = HttpClient();
+  final Duration _livenessTimeout;
+  final Duration _mediaTimeout;
+  final int Function() _localClockUs;
+
+  /// Media, artwork and uploads share this client, and with it a bound on
+  /// connections to the host: the host caps connections per address
+  /// (§9.1), and an unbounded client answered a burst of 40 cover fetches
+  /// with seven `503`s. Requests past the bound wait their turn instead.
+  final HttpClient _http = HttpClient()
+    ..maxConnectionsPerHost = maxConnectionsToHost;
+
+  /// How many media-plane connections a guest opens to its host at once
+  /// (§9.1): well under the host's per-address cap, with room for the
+  /// control socket and a reconnect.
+  static const int maxConnectionsToHost = 6;
 
   late final StreamSubscription<Object?> _sub;
   final Completer<void> _done = Completer<void>();
-  Completer<Message>? _handshakeCompleter;
+  Completer<DecodedMessage>? _handshakeCompleter;
   Timer? _pingTimer;
+  final List<Timer> _burstTimers = [];
+  Timer? _livenessTimer;
   int _seq = 0;
   bool _closed = false;
+
+  /// Local monotonic µs of the last frame of any kind from the host.
+  late int _lastFrameUs;
+  bool _hostSilent = false;
+
+  /// This peer's upload credential from `welcome` (§6.4).
+  String? _uploadKey;
+
+  bool _hostAway = false;
+  final StreamController<bool> _hostAwayChanges =
+      StreamController<bool>.broadcast();
 
   final ClockSync _clock = ClockSync();
   PlaybackSnapshot _snapshot = PlaybackSnapshot.initial;
@@ -178,7 +279,7 @@ class JamGuestClient {
   PeerInfo? _hostPeer;
   SessionEndedMessage? _sessionEnded;
 
-  /// Until a v0.2 host says otherwise, assume nothing is allowed (§5.6).
+  /// Until the host says otherwise, assume nothing is allowed (§5.6).
   JamPermissions _permissions = const JamPermissions.initial(
     policy: JamPolicy.listenOnly,
   );
@@ -233,7 +334,7 @@ class JamGuestClient {
   /// The host as a person, from `welcome.host` (§3.1): the reserved host
   /// peer id plus its display name ("Silky Puffin"). Never a member of
   /// [peers] — the host is not a joined peer. Null when the host sent none
-  /// (a pre-v0.2 host, or one with no identity to share).
+  /// (a host with no identity to share).
   PeerInfo? get hostPeer => _hostPeer;
 
   /// The `session_ended` the host sent before closing (§3.4), if any: a
@@ -242,7 +343,7 @@ class JamGuestClient {
   SessionEndedMessage? get sessionEnded => _sessionEnded;
 
   /// The room's permission document (§5.6): from `welcome`, then every
-  /// `permissions` broadcast. Listen-only until a v0.2 host says otherwise.
+  /// `permissions` broadcast. Listen-only until the host says otherwise.
   JamPermissions get permissions => _permissions;
 
   /// Permission-document broadcasts after the handshake (§5.6).
@@ -263,19 +364,39 @@ class JamGuestClient {
   ErrorMessage? get lastFatalError => _lastFatalError;
 
   /// Completes when the WebSocket to the host closes for any reason — host
-  /// shutdown, a drop, or a local [close]. Completes exactly once and never
-  /// errors.
+  /// shutdown, a drop, the liveness watchdog ([hostSilent]), or a local
+  /// [close]. Completes exactly once and never errors.
   Future<void> get done => _done.future;
 
-  /// This guest's local monotonic clock (µs, arbitrary epoch) — the `t0`/`t3`
-  /// timebase of §4 and the input side of [clock].
-  int get localNowUs => monotonicNowUs();
+  /// Whether this connection was closed by the liveness watchdog: nothing
+  /// arrived from the host for `livenessTimeout` (§3.3). The host may be
+  /// dead, out of range, or asleep — see [hostAway] for which one it said.
+  bool get hostSilent => _hostSilent;
+
+  /// Whether the host announced it is away (§3.5): from `welcome`, then
+  /// every `host_status`. A host that is away is expected to go quiet —
+  /// its phone is asleep — so a reconnect layer should wait much longer
+  /// before calling it gone. Keeps its last value after the connection ends.
+  bool get hostAway => _hostAway;
+
+  /// Changes to [hostAway] after the handshake (§3.5).
+  Stream<bool> get hostAwayChanges => _hostAwayChanges.stream;
+
+  /// This peer's upload credential (§6.4), from `welcome`. [uploadMedia]
+  /// presents it; exposed for tests and diagnostics only.
+  @visibleForTesting
+  String? get uploadKey => _uploadKey;
+
+  /// This guest's local clock (µs, arbitrary epoch) — the `t0`/`t3` timebase
+  /// of §4 and the input side of [clock]. The process-wide monotonic clock
+  /// unless `connect(localClockUs:)` said otherwise.
+  int get localNowUs => _localClockUs();
 
   /// The current session-clock time (host monotonic µs), i.e.
   /// `clock.localToHostUs(localNowUs)`.
   ///
   /// Throws [StateError] before [ClockSync.isSynchronized].
-  int get sessionNowUs => _clock.localToHostUs(monotonicNowUs());
+  int get sessionNowUs => _clock.localToHostUs(_localClockUs());
 
   // --- Handshake (§3.1) --------------------------------------------------------
 
@@ -287,7 +408,7 @@ class JamGuestClient {
     String? resumePeerId,
     String? clientId,
   }) async {
-    final completer = Completer<Message>();
+    final completer = Completer<DecodedMessage>();
     _handshakeCompleter = completer;
     _send(
       HelloMessage(
@@ -299,49 +420,140 @@ class JamGuestClient {
         clientId: clientId,
       ),
     );
-    final reply = await completer.future.timeout(timeout);
+    final decoded = await completer.future.timeout(timeout);
     _handshakeCompleter = null;
+    final reply = decoded.message;
+    if (!decoded.isSupportedVersion) {
+      // §2: whatever the host answered — a version reject echoing our `v`
+      // would decode as supported — it answered in a major version this
+      // client cannot read. That is a version mismatch, and final.
+      final versions = reply.payloadToJson()['versions'];
+      throw JamRejectedException(
+        RejectReason.version,
+        hostVersions: {
+          decoded.v,
+          if (versions is List) ...versions.whereType<int>(),
+        }.toList(),
+      );
+    }
     switch (reply) {
       case WelcomeMessage():
-        _selfPeerId = reply.selfPeerId;
-        _sessionId = reply.sessionId;
-        _sessionName = reply.sessionName;
-        _snapshot = reply.snapshot;
-        _playlist = reply.playlist;
-        final permissions = reply.permissions;
-        if (permissions != null) _permissions = permissions;
-        _hostPeer = reply.host;
-        for (final peer in reply.peers) {
-          _peers[peer.peerId] = peer;
-        }
-        _startClockSchedule();
-      case RejectMessage(:final reason):
-        throw JamRejectedException(reason);
+        break; // Already applied by [_onFrame] — see [_applyWelcome].
+      case RejectMessage(:final reason, :final versions):
+        throw JamRejectedException(reason, hostVersions: versions);
       default:
         throw StateError('Unexpected handshake reply: ${reply.type}');
     }
   }
 
+  /// Adopts the `welcome` (§3.1) the moment it is received — synchronously,
+  /// in the frame handler, not in [_handshake]'s continuation. A host may
+  /// send its next broadcast (a `state`, a `playlist`, a `host_status`) right
+  /// behind the welcome, and frames are handled as they arrive: applying the
+  /// welcome any later would overwrite those newer values with older ones.
+  void _applyWelcome(WelcomeMessage welcome) {
+    _selfPeerId = welcome.selfPeerId;
+    _sessionId = welcome.sessionId;
+    _sessionName = welcome.sessionName;
+    _snapshot = welcome.snapshot;
+    _playlist = welcome.playlist;
+    final permissions = welcome.permissions;
+    if (permissions != null) _permissions = permissions;
+    _hostPeer = welcome.host;
+    _uploadKey = welcome.uploadKey;
+    _hostAway = welcome.hostAway;
+    for (final peer in welcome.peers) {
+      _peers[peer.peerId] = peer;
+    }
+    _startClockSchedule();
+    _startLivenessWatchdog();
+  }
+
+  // --- Liveness (§3.3) -----------------------------------------------------------
+
+  /// The guest half of §3.3: the host answers every ping, so a connection
+  /// that has heard nothing at all — no pong, no broadcast — for
+  /// [_livenessTimeout] is dead, whatever the socket claims. A host that
+  /// lost power, walked out of range or had its Wi-Fi switched off sends no
+  /// FIN; without this, the guest would sit "connected" to nothing until TCP
+  /// gave up minutes later, and every reconnect and host-gone timeout above
+  /// it would only start then.
+  void _startLivenessWatchdog() {
+    final check = _livenessTimeout ~/ 6;
+    _livenessTimer = Timer.periodic(
+      check < const Duration(milliseconds: 50)
+          ? const Duration(milliseconds: 50)
+          : check > const Duration(seconds: 1)
+          ? const Duration(seconds: 1)
+          : check,
+      (_) {
+        if (_closed) return;
+        final silentUs = monotonicNowUs() - _lastFrameUs;
+        if (silentUs <= _livenessTimeout.inMicroseconds) return;
+        _hostSilent = true;
+        // Report the death now; the close handshake with a host that is not
+        // there would only add the socket's own close timeout to it.
+        if (!_done.isCompleted) _done.complete();
+        unawaited(close());
+      },
+    );
+  }
+
   // --- Clock schedule (§4) -------------------------------------------------------
+
+  /// How far apart the 8 join-burst pings go out (§4).
+  ///
+  /// Spaced, not back to back: eight pings sent in one go share one Wi-Fi
+  /// wake-up and one queue, so they all see the same delay — the burst then
+  /// offers the min-RTT filter eight copies of one sample. Spread over
+  /// 700 ms they sample the link at different moments, and the first
+  /// minute's worst offset error (simulated, good Wi-Fi) drops from ~109 ms
+  /// to under a millisecond.
+  static const Duration burstPingSpacing = Duration(milliseconds: 100);
 
   void _startClockSchedule() {
     // Burst of 8 pings at join; the estimator keeps the min-RTT sample.
-    for (var i = 0; i < 8; i++) {
-      _sendPing();
-    }
+    _startBurst();
     // Steady state: one ping every 2 s (also our liveness heartbeat, §3.3).
     _pingTimer = Timer.periodic(_pingInterval, (_) => _sendPing());
   }
 
+  /// Sends a fresh §4 burst now — 8 pings [burstPingSpacing] apart, on top
+  /// of the steady schedule — for when this guest has reason to distrust
+  /// its clock mapping: it just woke from a device sleep, or the network
+  /// changed under it. The steady schedule alone takes ~16 s to re-gather
+  /// what a burst gathers in under one. Restarts a burst already running.
+  ///
+  /// A clock discontinuity that [ClockSync] detects on its own (it resets
+  /// and [ClockSync.isSynchronized] goes false) triggers one automatically.
+  void resyncClock() {
+    if (_closed) return;
+    _startBurst();
+  }
+
+  void _startBurst() {
+    for (final timer in _burstTimers) {
+      timer.cancel();
+    }
+    _burstTimers.clear();
+    _sendPing();
+    for (var i = 1; i < 8; i++) {
+      _burstTimers.add(Timer(burstPingSpacing * i, _sendPing));
+    }
+  }
+
   void _sendPing() {
     if (_closed) return;
-    _send(ClockPingMessage(t0: monotonicNowUs()));
+    _send(ClockPingMessage(t0: _localClockUs()));
   }
 
   // --- Incoming frames -------------------------------------------------------------
 
   void _onFrame(Object? data) {
-    final t3 = monotonicNowUs(); // §4: t3 = local receive time.
+    final t3 = _localClockUs(); // §4: t3 = local receive time.
+    // Any frame at all proves the host is there (§3.3) — measured on the
+    // real clock, whatever [_localClockUs] is.
+    _lastFrameUs = monotonicNowUs();
     if (data is! String) return;
     final DecodedMessage decoded;
     try {
@@ -353,14 +565,27 @@ class JamGuestClient {
 
     final handshake = _handshakeCompleter;
     if (handshake != null &&
-        (message is WelcomeMessage || message is RejectMessage)) {
-      if (!handshake.isCompleted) handshake.complete(message);
+        (!decoded.isSupportedVersion ||
+            message is WelcomeMessage ||
+            message is RejectMessage)) {
+      // Exactly one handshake reply counts; a second welcome is ignored.
+      _handshakeCompleter = null;
+      if (handshake.isCompleted) return;
+      if (decoded.isSupportedVersion && message is WelcomeMessage) {
+        _applyWelcome(message);
+      }
+      handshake.complete(decoded);
       return;
     }
+    if (!decoded.isSupportedVersion) return; // Not ours to read (§2).
 
     switch (message) {
       case ClockPongMessage(:final t0, :final t1, :final t2):
+        final wasSynchronized = _clock.isSynchronized;
         _clock.addSample(ClockSample(t0: t0, t1: t1, t2: t2, t3: t3));
+        // A discontinuity reset the estimator (§4): re-gather a burst now
+        // instead of waiting out the steady schedule.
+        if (wasSynchronized && !_clock.isSynchronized) _startBurst();
       case StateMessage(:final snapshot):
         _snapshot = snapshot;
         if (!_states.isClosed) _states.add(snapshot);
@@ -391,6 +616,12 @@ class JamGuestClient {
         // §3.4: the host ended the room on purpose. Remember it so the
         // reconnect layer knows this close is not a drop to retry.
         _sessionEnded = message;
+      case HostStatusMessage(:final away):
+        // §3.5: the host is about to nap (or is back).
+        if (away != _hostAway) {
+          _hostAway = away;
+          if (!_hostAwayChanges.isClosed) _hostAwayChanges.add(away);
+        }
       case ErrorMessage():
         // §8: fatal errors are followed by a host-side close; remember the
         // reason so reconnect layers can tell a kick from a plain drop.
@@ -426,7 +657,8 @@ class JamGuestClient {
   Future<void> requestSeek(int positionUs) async =>
       _send(RequestMessage(action: RequestAction.seek, positionUs: positionUs));
 
-  /// Asks the host to select [mediaId] (§5.2).
+  /// Asks the host to select [mediaId] (§5.2): a playing room plays it from
+  /// its start, a paused one cues it, and the current item stays as it is.
   Future<void> requestSetMedia(String mediaId) async =>
       _send(RequestMessage(action: RequestAction.setMedia, mediaId: mediaId));
 
@@ -494,9 +726,12 @@ class JamGuestClient {
   ///
   /// [onProgress] receives values in [0, 1]. Returns [destination]. Throws
   /// [ArgumentError] if [mediaId] is not in the current playlist,
-  /// [HttpException] on a non-200 response, and [StateError] on a digest
-  /// mismatch or an over-size body — after deleting the partial
-  /// [destination] and reporting `media_status: none`.
+  /// [HttpException] on a non-200 response, [TimeoutException] when the host
+  /// stops answering (no connection, no response, or no body bytes within
+  /// `mediaTimeout` — a host that died mid-transfer must not hang the fetch
+  /// forever), and [StateError] on a digest mismatch or an over-size body.
+  /// Every failure after the response arrives deletes the partial
+  /// [destination] and reports `media_status: none`.
   Future<File> fetchMediaToFile(
     String mediaId,
     File destination, {
@@ -516,12 +751,11 @@ class JamGuestClient {
       port: _port,
       path: '/media/$mediaId',
     );
-    final request = await _http.getUrl(uri);
-    request.headers.set(HttpHeaders.authorizationHeader, 'Bearer $_token');
-    final response = await request.close();
+    final response = await _get(uri);
     if (response.statusCode != HttpStatus.ok) {
-      await response.drain<void>();
-      throw HttpException(
+      await _discard(response);
+      throw JamHttpStatusException(
+        response.statusCode,
         'GET $uri failed with ${response.statusCode}',
         uri: uri,
       );
@@ -545,8 +779,9 @@ class JamGuestClient {
     var received = 0;
     var lastReported = 0.0;
     var overSize = false;
+    Object? stalled;
     try {
-      await for (final chunk in response) {
+      await for (final chunk in _idleBounded(response)) {
         if (limit > 0 && received + chunk.length > limit) {
           overSize = true;
           break;
@@ -570,10 +805,19 @@ class JamGuestClient {
         }
       }
       await sink.flush();
+    } on TimeoutException catch (e) {
+      stalled = e;
     } finally {
       await sink.close();
     }
     hasher.close();
+
+    if (stalled != null) {
+      // The error ended the `await for`, which cancelled the response and
+      // with it the connection.
+      await _abandonFetch(mediaId, destination);
+      throw stalled;
+    }
 
     if (overSize) {
       // Breaking out of the `await for` above already cancelled the response
@@ -651,7 +895,8 @@ class JamGuestClient {
   /// playlist entry declares it), so an over-cap body is abandoned mid-stream
   /// rather than grown until the app dies.
   ///
-  /// Throws [HttpException] on a non-200 response (404 for an unknown id) and
+  /// Throws [JamHttpStatusException] on a non-200 response (404 for an
+  /// unknown id), [TimeoutException] when the host stops answering, and
   /// [StateError] when the body exceeds [maxArtworkBytes].
   Future<Uint8List> fetchArtwork(String artworkId) async {
     final uri = Uri(
@@ -660,18 +905,17 @@ class JamGuestClient {
       port: _port,
       path: '/artwork/$artworkId',
     );
-    final request = await _http.getUrl(uri);
-    request.headers.set(HttpHeaders.authorizationHeader, 'Bearer $_token');
-    final response = await request.close();
+    final response = await _get(uri);
     if (response.statusCode != HttpStatus.ok) {
-      await response.drain<void>();
-      throw HttpException(
+      await _discard(response);
+      throw JamHttpStatusException(
+        response.statusCode,
         'GET $uri failed with ${response.statusCode}',
         uri: uri,
       );
     }
     final builder = BytesBuilder(copy: false);
-    await for (final chunk in response) {
+    await for (final chunk in _idleBounded(response)) {
       if (builder.length + chunk.length > maxArtworkBytes) {
         builder.clear();
         throw StateError(
@@ -691,10 +935,26 @@ class JamGuestClient {
   /// [name] defaults to the file's basename (sent percent-encoded, §6.4).
   /// [onProgress] receives values in [0, 1] as body bytes are flushed.
   ///
-  /// Returns the host's [MediaItem] — the newly created item (201), or the
-  /// pre-existing item when this content was already in the session (200,
-  /// idempotent). Throws [HttpException] on any other response (401 bad
-  /// token, 413 over the host's size limit, ...).
+  /// The request carries this peer's upload key from `welcome` (§6.4) —
+  /// it is what tells the host who is uploading, and so whether they may.
+  ///
+  /// Returns the host's [MediaItem] — the newly added item (201; also
+  /// content the room had but that was removed from the queue, now back in
+  /// it and credited to this peer), or the queued item when this content is
+  /// already in the queue (200, idempotent). Throws
+  /// [JamHttpStatusException] (an [HttpException]) on any other response —
+  /// 401 bad token, 403 not allowed to add tracks (or no longer in the room
+  /// by the time the body arrived), 429 too many uploads in flight, 507 the
+  /// room's budget is spent, ... (§6.4) — and [TimeoutException] when the
+  /// host stops reading the body or never answers it (a host that died
+  /// mid-upload must not hang it forever).
+  ///
+  /// The status arrives once the body has been sent: the host reads a
+  /// refused body to its end so it can say why, but only up to
+  /// `JamHostServer.refusedUploadDrainBytes` (64 MB) and for a bounded
+  /// time. A refusal of a larger or slower body — a 413 always is one, and
+  /// a 408 usually — ends the upload with the connection error the host's
+  /// cut-off causes ([SocketException] or a status-less [HttpException]).
   Future<MediaItem> uploadMedia(
     File file, {
     required MediaKind kind,
@@ -705,8 +965,10 @@ class JamGuestClient {
   }) async {
     final total = await file.length();
     final uri = Uri(scheme: 'http', host: _host, port: _port, path: '/media');
-    final request = await _http.postUrl(uri);
+    final request = await _http.postUrl(uri).timeout(_mediaTimeout);
     request.headers.set(HttpHeaders.authorizationHeader, 'Bearer $_token');
+    final uploadKey = _uploadKey;
+    if (uploadKey != null) request.headers.set(uploadKeyHeader, uploadKey);
     request.headers.set('X-LocalJam-Kind', kind.wire);
     request.headers.set(
       'X-LocalJam-Name',
@@ -716,29 +978,69 @@ class JamGuestClient {
     if (durationUs != null) {
       request.headers.set('X-LocalJam-Duration-Us', '$durationUs');
     }
-    request.headers.set('X-LocalJam-Peer-Id', _selfPeerId);
     request.headers.contentType = ContentType.binary;
     request.contentLength = total;
 
-    var sent = 0;
-    await for (final chunk in file.openRead()) {
-      request.add(chunk);
-      // Flush per chunk: backpressure keeps memory flat and makes progress
-      // reflect bytes actually handed to the socket.
-      await request.flush();
-      sent += chunk.length;
-      onProgress?.call(total > 0 ? (sent / total).clamp(0.0, 1.0) : 1.0);
+    final HttpClientResponse response;
+    final String body;
+    try {
+      var sent = 0;
+      await for (final chunk in file.openRead()) {
+        request.add(chunk);
+        // Flush per chunk: backpressure keeps memory flat and makes progress
+        // reflect bytes actually handed to the socket — and a host that
+        // stops reading shows up here, as a flush that never completes.
+        await request.flush().timeout(_mediaTimeout);
+        sent += chunk.length;
+        onProgress?.call(total > 0 ? (sent / total).clamp(0.0, 1.0) : 1.0);
+      }
+      // The host hashes as it receives, then reads tags and stores the file
+      // before it answers (§6.4): allow it a while, not forever.
+      response = await request.close().timeout(_mediaTimeout * 6);
+      body = await utf8.decodeStream(_idleBounded(response));
+    } on TimeoutException {
+      request.abort();
+      rethrow;
     }
-    final response = await request.close();
-    final body = await utf8.decodeStream(response);
     if (response.statusCode != HttpStatus.created &&
         response.statusCode != HttpStatus.ok) {
-      throw HttpException(
+      throw JamHttpStatusException(
+        response.statusCode,
         'POST $uri failed with ${response.statusCode}',
         uri: uri,
       );
     }
     return MediaItem.fromJson(jsonDecode(body) as Map<String, Object?>);
+  }
+
+  /// The request header carrying this peer's upload key (§6.4).
+  static const String uploadKeyHeader = 'X-LocalJam-Upload-Key';
+
+  /// `GET [uri]` with Bearer auth, bounded by `mediaTimeout` from connect to
+  /// response headers.
+  Future<HttpClientResponse> _get(Uri uri) async {
+    final request = await _http.getUrl(uri).timeout(_mediaTimeout);
+    request.headers.set(HttpHeaders.authorizationHeader, 'Bearer $_token');
+    try {
+      return await request.close().timeout(_mediaTimeout);
+    } on TimeoutException {
+      request.abort();
+      rethrow;
+    }
+  }
+
+  /// [response]'s body, failing with a [TimeoutException] when the host
+  /// goes quiet for `mediaTimeout` between chunks — a dead host never closes
+  /// the stream on its own.
+  Stream<List<int>> _idleBounded(HttpClientResponse response) =>
+      response.timeout(_mediaTimeout);
+
+  /// Drains an unwanted response body, without waiting on a host that has
+  /// stopped sending it.
+  Future<void> _discard(HttpClientResponse response) async {
+    try {
+      await _idleBounded(response).drain<void>();
+    } catch (_) {}
   }
 
   // --- Teardown ------------------------------------------------------------------
@@ -748,9 +1050,17 @@ class JamGuestClient {
     if (_closed) return;
     _closed = true;
     _pingTimer?.cancel();
+    for (final timer in _burstTimers) {
+      timer.cancel();
+    }
+    _livenessTimer?.cancel();
     await _sub.cancel();
     try {
-      await _ws.close(WebSocketStatus.normalClosure);
+      // Bounded: against a host that is not there, the close handshake can
+      // only end in the socket's own timeout.
+      await _ws
+          .close(WebSocketStatus.normalClosure)
+          .timeout(const Duration(seconds: 1));
     } catch (_) {}
     if (!_done.isCompleted) _done.complete();
     _http.close(force: true);
@@ -759,6 +1069,7 @@ class JamGuestClient {
     await _peerEvents.close();
     await _permissionUpdates.close();
     await _errors.close();
+    await _hostAwayChanges.close();
   }
 
   // --- Wire helper -----------------------------------------------------------------
