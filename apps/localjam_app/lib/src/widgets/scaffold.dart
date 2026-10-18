@@ -242,7 +242,15 @@ class _JamScaffoldState extends State<JamScaffold> {
         controller: widget.controller,
         slivers: [
           CupertinoSliverNavigationBar(
-            largeTitle: Text(widget.title),
+            // Cupertino insets the large title by a fixed 16; the rest of
+            // the margin (20 on wide phones, a reading column's side)
+            // is ours to add.
+            largeTitle: Padding(
+              padding: EdgeInsetsDirectional.only(
+                start: math.max(0, navPadding.start - _kCupertinoTitleInset),
+              ),
+              child: Text(widget.title),
+            ),
             middle: Text(widget.title),
             alwaysShowMiddle: false,
             leading: leading,
@@ -281,6 +289,9 @@ class _JamScaffoldState extends State<JamScaffold> {
       ? null
       : Row(mainAxisSize: MainAxisSize.min, children: widget.trailing);
 }
+
+/// The fixed leading inset Cupertino gives a large title.
+const double _kCupertinoTitleInset = 16;
 
 /// The nav bar's insets: the large title on the page margin (plus a reading
 /// column's [side]); trailing icon buttons' glyphs on the same margin.

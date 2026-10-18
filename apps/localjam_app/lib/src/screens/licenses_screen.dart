@@ -127,6 +127,8 @@ class _JamLicensesScreenState extends State<JamLicensesScreen> {
     return JamScaffold(
       title: LicensesStrings.title,
       grouped: true,
+      // The large title shares the reading column's leading edge.
+      maxContentWidth: JamContentWidth.reading,
       children: [
         Center(
           child: ConstrainedBox(
@@ -248,6 +250,7 @@ class _LicenseDetail extends StatelessWidget {
     return JamScaffold(
       title: package,
       largeTitle: false,
+      maxContentWidth: JamContentWidth.reading,
       children: [
         Center(
           child: ConstrainedBox(

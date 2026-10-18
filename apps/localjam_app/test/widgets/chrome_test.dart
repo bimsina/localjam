@@ -264,7 +264,7 @@ void main() {
     testWidgets('a reading column centres in the pane, title on its edge', (
       tester,
     ) async {
-      tester.view.physicalSize = const Size(1200, 900);
+      tester.view.physicalSize = const Size(1000, 1300);
       tester.view.devicePixelRatio = 1;
       addTearDown(tester.view.reset);
       await tester.pumpWidget(
@@ -278,9 +278,19 @@ void main() {
       );
       await tester.pumpAndSettle();
       final row = tester.getRect(find.text('Row'));
-      expect(row.left, closeTo((1200 - 640) / 2, 1));
-      final title = tester.getRect(find.text('Settings').first);
-      expect(title.left, greaterThanOrEqualTo(row.left));
+      expect(row.left, closeTo((1000 - 640) / 2, 1));
+      // The large title (the taller of the two) starts on the column's
+      // margin, not the window's.
+      final titles = [
+        for (
+          var i = 0;
+          i < find.text('Settings', skipOffstage: false).evaluate().length;
+          i++
+        )
+          tester.getRect(find.text('Settings', skipOffstage: false).at(i)),
+      ];
+      final large = titles.reduce((a, b) => a.left <= b.left ? a : b);
+      expect(large.left, closeTo(row.left + JamSpace.pageFor(1000), 1));
     });
 
     testWidgets('grouped pages use groupedBackground; inline titles work', (

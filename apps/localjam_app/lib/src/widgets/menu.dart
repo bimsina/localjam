@@ -165,6 +165,7 @@ class JamMenuButton extends StatefulWidget {
     this.alignment = JamMenuAlignment.automatic,
     this.dimsBackground = false,
     this.onOpenChanged,
+    this.triggerAlignment = Alignment.center,
   });
 
   /// Item groups, separated by the thick group divider.
@@ -205,6 +206,11 @@ class JamMenuButton extends StatefulWidget {
 
   /// Told when the menu opens and closes.
   final ValueChanged<bool>? onOpenChanged;
+
+  /// Where a glass trigger's circle sits in its 44 hit box (see
+  /// `JamGlassButton.alignment`) — `centerRight` to put the circle's edge
+  /// on the content's trailing edge.
+  final AlignmentGeometry triggerAlignment;
 
   @override
   State<JamMenuButton> createState() => _JamMenuButtonState();
@@ -315,6 +321,7 @@ class _JamMenuButtonState extends State<JamMenuButton>
           visualSize: widget.visualSize,
           iconSize: widget.visualSize <= 30 ? 15 : 18,
           iconColor: widget.iconColor,
+          alignment: widget.triggerAlignment,
           onPressed: open,
         ),
       };

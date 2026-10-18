@@ -83,6 +83,7 @@ class JamGlassButton extends StatelessWidget {
     this.selected = false,
     this.iconColor,
     this.fillColor,
+    this.alignment = Alignment.center,
   });
 
   final IconData icon;
@@ -109,6 +110,11 @@ class JamGlassButton extends StatelessWidget {
   /// a button on a surface the material would vanish into (a sheet's
   /// xmark on the dark `elevated` ground).
   final Color? fillColor;
+
+  /// Where the painted circle sits in its 44 pt hit box: `centerRight` puts
+  /// a 30 pt circle's edge on the content's trailing edge (the Now Playing
+  /// •••), `centerLeft` on its leading edge.
+  final AlignmentGeometry alignment;
 
   @override
   Widget build(BuildContext context) {
@@ -170,7 +176,7 @@ class JamGlassButton extends StatelessWidget {
             dimension: visualSize > JamMetrics.hitTarget
                 ? visualSize
                 : JamMetrics.hitTarget,
-            child: Center(child: circle),
+            child: Align(alignment: alignment, child: circle),
           ),
         ),
       ),
