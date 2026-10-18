@@ -644,3 +644,14 @@ class _ShimmerCard extends StatelessWidget {
     );
   }
 }
+
+/// Opens one past jam's detail page.
+///
+/// Placeholder for the redesign; the history pass replaces the body, the
+/// signature stays. Home's Recent section calls it.
+Future<void> showJamHistoryDetail(
+  BuildContext context,
+  JamHistoryRecord record,
+) async {
+  await context.push('/history');
+}

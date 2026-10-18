@@ -1258,3 +1258,14 @@ class _LeaveRow extends StatelessWidget {
     );
   }
 }
+
+/// Opens the Invite sheet (QR, Share Link, Copy Link) on its own.
+///
+/// Placeholder for the redesign's split of the room sheet into People and
+/// Invite; the people-sheet pass replaces the body, the signature stays.
+Future<void> showInviteSheet(
+  BuildContext context,
+  JamEngine engine, {
+  required String selfName,
+  required JamNetworkStatus network,
+}) => showRoomSheet(context, engine, selfName: selfName, network: network);

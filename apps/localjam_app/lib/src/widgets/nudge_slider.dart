@@ -12,6 +12,7 @@ import 'package:localjam_client/localjam_client.dart';
 
 import '../design/tokens.dart';
 import '../design/typography.dart';
+import 'sheet.dart';
 
 /// Every user-facing string this control can show.
 abstract final class JamNudgeStrings {
@@ -106,3 +107,15 @@ class _NudgeSliderState extends State<NudgeSlider> {
     );
   }
 }
+
+/// Opens the Sound Offset sheet: the nudge control on its own.
+///
+/// Placeholder for the redesign; the sheets pass owns the final layout, the
+/// signature stays.
+Future<void> showSoundOffsetSheet(BuildContext context, JamEngine engine) =>
+    showJamSheet<void>(
+      context,
+      title: JamNudgeStrings.label,
+      scrollable: false,
+      builder: (_) => NudgeSlider(engine: engine),
+    );
