@@ -193,6 +193,36 @@ void main() {
     expect(find.text(HostSetupStrings.songCount(1)), findsOneWidget);
   });
 
+  test('the Songs footer follows the preset — Listen Only is not '
+      '"everyone can add songs"', () {
+    expect(
+      HostSetupStrings.songsFooter(JamPolicy.jam),
+      HostSetupStrings.songsFooterGuests,
+    );
+    expect(
+      HostSetupStrings.songsFooter(JamPolicy.open),
+      HostSetupStrings.songsFooterGuests,
+    );
+    expect(
+      HostSetupStrings.songsFooter(JamPolicy.listenOnly),
+      HostSetupStrings.songsFooterHost,
+    );
+    // Sentence-case count headers (§10.9).
+    expect(HostSetupStrings.songCount(12), '12 songs');
+    expect(HostSetupStrings.songCount(1), '1 song');
+  });
+
+  testWidgets('the empty Songs section says who can add songs', (
+    tester,
+  ) async {
+    final session = testSession();
+    await _tall(tester);
+    final router = await pumpApp(tester, session);
+    router.push('/host', extra: const HostSetupArgs(paths: [], name: 'Jam'));
+    await tester.pumpAndSettle();
+    expect(find.text(HostSetupStrings.songsFooterGuests), findsOneWidget);
+  });
+
   testWidgets('renders on the dark palette', (tester) async {
     final session = testSession();
     final router = await pumpApp(tester, session, theme: jamDarkTheme());
