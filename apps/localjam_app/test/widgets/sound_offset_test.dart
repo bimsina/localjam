@@ -11,6 +11,7 @@ import 'package:localjam_app/src/design/theme.dart';
 import 'package:localjam_app/src/state/session_controller.dart';
 import 'package:localjam_app/src/widgets/diagnostics_sheet.dart';
 import 'package:localjam_app/src/widgets/nudge_slider.dart';
+import 'package:localjam_app/src/widgets/sheet.dart';
 
 import '../harness.dart';
 
@@ -66,9 +67,22 @@ void main() {
       expect(find.text(JamNudgeStrings.noOffset), findsOneWidget);
       expect(find.text(JamNudgeStrings.footnote), findsOneWidget);
       expect(find.byType(CupertinoSlider), findsOneWidget);
-      // Nothing to reset yet.
+      // The ends say which way is which.
+      expect(find.text(JamNudgeStrings.later), findsOneWidget);
+      expect(find.text(JamNudgeStrings.earlier), findsOneWidget);
+      expect(
+        tester.getCenter(find.text(JamNudgeStrings.later)).dx,
+        lessThan(tester.getCenter(find.text(JamNudgeStrings.earlier)).dx),
+      );
+      // The header holds Done alone: Reset lives under the slider, and
+      // only while there is something to reset.
+      final header = find.byType(JamSheetHeader);
+      expect(
+        find.descendant(of: header, matching: find.text(JamNudgeStrings.reset)),
+        findsNothing,
+      );
       final reset = find.text(JamNudgeStrings.reset);
-      expect(reset, findsOneWidget);
+      expect(reset.hitTestable(), findsNothing);
 
       // A step earlier: applied and shown at once.
       await tester.tap(find.bySemanticsLabel(JamNudgeStrings.earlier));
@@ -85,6 +99,8 @@ void main() {
       expect(find.text(JamNudgeStrings.playsLater), findsOneWidget);
 
       // Reset goes back to zero.
+      await tester.pumpAndSettle();
+      expect(reset.hitTestable(), findsOneWidget);
       await tester.tap(reset);
       await tester.runAsync(pumpEventQueue);
       await tester.pump();
@@ -99,8 +115,17 @@ void main() {
     }
   });
 
-  testWidgets('Diagnostics: plain rows, the nudge still works there, and '
-      'Copy copies', (tester) async {
+  test('diagnostics durations read like numbers, not log lines', () {
+    expect(formatDiagnosticsDuration(0), '0.0 ms');
+    expect(formatDiagnosticsDuration(-20), '0.0 ms');
+    expect(formatDiagnosticsDuration(3200), '+3.2 ms');
+    expect(formatDiagnosticsDuration(-100), '−0.1 ms');
+    expect(formatDiagnosticsDuration(-272391400), '−272.4 s');
+    expect(formatDiagnosticsDuration(3600000000), '+3,600.0 s');
+  });
+
+  testWidgets('Diagnostics: plain rows, Sound Offset as a row that opens its '
+      'sheet, and Copy confirms in place', (tester) async {
     final session = testSession();
     final heard = <String>[];
     final sub = session.notices.listen((n) => heard.add(n.message));
@@ -135,19 +160,40 @@ void main() {
     // No uppercase labels.
     expect(find.text(JamDiagnosticsStrings.drift.toUpperCase()), findsNothing);
 
-    // The nudge, working in place.
+    // One home for Sound Offset: a read-only row here, no second slider.
+    expect(find.byType(CupertinoSlider), findsNothing);
     expect(find.text(JamNudgeStrings.title), findsOneWidget);
-    await tester.tap(find.bySemanticsLabel(JamNudgeStrings.earlier));
-    await tester.runAsync(pumpEventQueue);
+    expect(find.text(JamNudgeStrings.value(0)), findsOneWidget);
+    await tester.runAsync(() => engine.setNudgeUs(10000));
     await tester.pump();
-    expect(engine.nudgeUs.value, 10000);
+    expect(find.text(JamNudgeStrings.value(10)), findsOneWidget);
 
+    // Copy is in the content, not the header, and confirms itself.
+    expect(
+      find.descendant(
+        of: find.byType(JamSheetHeader),
+        matching: find.text(JamDiagnosticsStrings.copy),
+      ),
+      findsNothing,
+    );
     await tester.tap(find.text(JamDiagnosticsStrings.copy));
     await tester.runAsync(pumpEventQueue);
     await tester.pump();
     expect(copied, contains('${JamDiagnosticsStrings.clockOffset}: +3.2 ms'));
     expect(copied, contains('${JamNudgeStrings.title}: +10 ms'));
-    expect(heard, contains(JamDiagnosticsStrings.copied));
+    expect(find.text(JamDiagnosticsStrings.copied), findsOneWidget);
+    expect(find.byIcon(CupertinoIcons.checkmark), findsOneWidget);
+    // No toast over the sheet.
+    expect(heard, isEmpty);
+    await tester.pump(const Duration(milliseconds: 1600));
+    expect(find.text(JamDiagnosticsStrings.copy), findsOneWidget);
+    expect(find.text(JamDiagnosticsStrings.copied), findsNothing);
+
+    // The row opens the Sound Offset sheet, where the slider lives.
+    await tester.tap(find.text(JamNudgeStrings.title));
+    await tester.pumpAndSettle();
+    expect(find.byType(CupertinoSlider), findsOneWidget);
+    expect(find.text(JamNudgeStrings.footnote), findsOneWidget);
 
     await leaveTestSession(tester, session);
   });

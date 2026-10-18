@@ -1,10 +1,11 @@
 /// The rationale sheet, and the rule that a dismissal is not consent.
 library;
 
+import 'package:flutter/cupertino.dart' show CupertinoIcons;
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:localjam_app/src/design/theme.dart';
-import 'package:localjam_app/src/util/permissions.dart';
+import 'package:localjam_app/src/design/tokens.dart';
 import 'package:localjam_app/src/widgets/buttons.dart';
 import 'package:localjam_app/src/widgets/permission_sheet.dart';
 
@@ -22,15 +23,14 @@ Widget _host(Future<void> Function(BuildContext) onTap, {ThemeData? theme}) =>
     );
 
 void main() {
-  test('the bodies are the copy from permissions.dart; titles are Title '
-      'Case', () {
+  test('each primer says its own thing once, in Title Case headings', () {
     expect(
       JamPermissionRationale.localNetwork.title,
       JamPermissionSheetStrings.localNetworkTitle,
     );
     expect(
       JamPermissionRationale.localNetwork.body,
-      JamPermissionCopy.localNetworkDetail,
+      JamPermissionSheetStrings.localNetworkBody,
     );
     expect(
       JamPermissionRationale.notifications.title,
@@ -38,8 +38,27 @@ void main() {
     );
     expect(
       JamPermissionRationale.audioLibrary.body,
-      JamPermissionCopy.audioLibraryDetail,
+      JamPermissionSheetStrings.audioLibraryBody,
     );
+    const all = [
+      JamPermissionRationale.localNetwork,
+      JamPermissionRationale.notifications,
+      JamPermissionRationale.audioLibrary,
+      JamPermissionRationale.camera,
+    ];
+    // No two primers share their promise headings.
+    expect(all.map((r) => r.doesHeading).toSet(), hasLength(all.length));
+    expect(all.map((r) => r.neverHeading).toSet(), hasLength(all.length));
+    for (final r in [...all, JamPermissionRationale.localNetworkApple]) {
+      // No "cannot", and the Wi-Fi is named once, not in every line.
+      for (final text in [r.body, r.doesBullet, r.neverBullet]) {
+        expect(text, isNot(contains('cannot')));
+      }
+      expect(
+        '${r.body} ${r.doesBullet} ${r.neverBullet}'.split('Wi‑Fi').length,
+        lessThanOrEqualTo(2),
+      );
+    }
   });
 
   testWidgets('shows the ask, the promise, and both actions', (tester) async {
@@ -58,15 +77,29 @@ void main() {
       find.text(JamPermissionSheetStrings.localNetworkTitle),
       findsOneWidget,
     );
-    expect(find.text(JamPermissionCopy.localNetworkDetail), findsOneWidget);
-    // The promise, headed in plain words — never an uppercase label.
-    expect(find.text(JamPermissionSheetStrings.doesHeading), findsOneWidget);
-    expect(find.text(JamPermissionSheetStrings.neverHeading), findsOneWidget);
     expect(
-      find.text(JamPermissionSheetStrings.neverHeading.toUpperCase()),
-      findsNothing,
+      find.text(JamPermissionSheetStrings.localNetworkBody),
+      findsOneWidget,
     );
+    // The promise, headed in plain words — never an uppercase label.
+    const rationale = JamPermissionRationale.localNetwork;
+    expect(find.text(rationale.doesHeading), findsOneWidget);
+    expect(find.text(rationale.neverHeading), findsOneWidget);
+    expect(find.text(rationale.neverHeading.toUpperCase()), findsNothing);
     expect(find.byType(JamButton), findsNWidgets(2));
+    // The buttons sit on the page margin like every other sheet's; only the
+    // words take the narrower measure.
+    final sheet = tester.getRect(find.byType(JamPermissionSheet));
+    final button = tester.getRect(find.byType(JamButton).first);
+    expect(button.left - sheet.left, 16);
+    expect(sheet.right - button.right, 16);
+    final body = tester.getRect(
+      find.text(JamPermissionSheetStrings.localNetworkBody),
+    );
+    expect(body.left - sheet.left, greaterThanOrEqualTo(32));
+    // The promise glyphs are not tint: nothing there can be tapped.
+    final glyph = tester.widget<Icon>(find.byIcon(CupertinoIcons.lock));
+    expect(glyph.color, isNot(JamColors.light.tint));
     expect(find.text(JamPermissionSheetStrings.continueLabel), findsOneWidget);
     expect(find.text(JamPermissionSheetStrings.dismissLabel), findsOneWidget);
   });
@@ -141,7 +174,7 @@ void main() {
 
     expect(
       find.bySemanticsLabel(
-        '${JamPermissionSheetStrings.neverHeading}: '
+        '${JamPermissionRationale.localNetwork.neverHeading}: '
         '${JamPermissionRationale.localNetwork.neverBullet}',
       ),
       findsOneWidget,

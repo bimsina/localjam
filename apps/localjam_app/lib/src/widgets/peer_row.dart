@@ -2,7 +2,7 @@
 ///
 /// An ordinary list row: a 40 avatar, the name, and a subtitle only when it
 /// says something — "Host", "You", "Host · You", "Co-host", what the host
-/// changed for this person ("Can’t add music"), or, in `warning`, that they
+/// changed for this person ("Can’t add songs"), or, in `warning`, that they
 /// are still loading the song. No pills, no rings, no "Listening": a person
 /// who is simply fine gets a name and nothing else (§1.2).
 ///
@@ -59,10 +59,16 @@ class JamPeerRow extends StatelessWidget implements JamSelfSeparatingRow {
     this.trailing,
     this.dimmed = false,
     this.onTap,
+    this.colorKey,
   });
 
-  /// Display name — the face's colour and initials come from it.
+  /// Display name — the face's initials come from it (and its colour, when
+  /// there is no [colorKey]).
   final String name;
+
+  /// A stable id for the face's colour (`JamAvatar.colorKey`): the peer id,
+  /// which every device in the jam sees the same.
+  final String? colorKey;
 
   /// Host, co-host or guest. Host and co-host are said in the subtitle.
   final JamPeerRole role;
@@ -70,7 +76,7 @@ class JamPeerRow extends StatelessWidget implements JamSelfSeparatingRow {
   /// Whether this row is this device ("You").
   final bool isYou;
 
-  /// Extra words after the role ("Can’t add music"), sentence case.
+  /// Extra words after the role ("Can’t add songs"), sentence case.
   final String? detail;
 
   /// Whether this person has the current track. Anything but ready replaces
@@ -129,13 +135,22 @@ class JamPeerRow extends StatelessWidget implements JamSelfSeparatingRow {
       subtitleMaxLines: 1,
       // The name is the row's title; the face must not say it twice.
       leading: ExcludeSemantics(
-        child: JamAvatar(name: name, size: JamAvatarSize.sheet, dimmed: dimmed),
+        child: JamAvatar(
+          name: name,
+          colorKey: colorKey,
+          size: JamAvatarSize.sheet,
+          dimmed: dimmed,
+        ),
       ),
       leadingWidth: JamAvatarSize.sheet,
       trailing: menu != null
+          // A quiet "•••": tint is for the one primary action, and a column
+          // of raspberry circles would outshout the names.
           ? JamMenuButton(
               groups: menu,
               semanticLabel: JamPeerRowStrings.more(name),
+              icon: CupertinoIcons.ellipsis,
+              iconColor: colors.secondaryLabel,
             )
           : trailing,
       onTap: onTap,

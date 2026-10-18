@@ -129,11 +129,26 @@ void main() {
         find.bySemanticsLabel(JamPeerRowStrings.more('Silky Puffin')),
         findsOneWidget,
       );
-      await tester.tap(find.byIcon(CupertinoIcons.ellipsis_circle));
+      // A quiet glyph in secondaryLabel, not a raspberry circle per row.
+      final glyph = tester.widget<Icon>(find.byIcon(CupertinoIcons.ellipsis));
+      expect(glyph.color, JamColors.light.secondaryLabel);
+      expect(find.byIcon(CupertinoIcons.ellipsis_circle), findsNothing);
+      await tester.tap(find.byIcon(CupertinoIcons.ellipsis));
       await tester.pumpAndSettle();
       await tester.tap(find.text('Make Co-host'));
       await tester.pumpAndSettle();
       expect(tapped, 1);
+    });
+
+    testWidgets('passes its colour key to the face', (tester) async {
+      await pumpRow(
+        tester,
+        const JamPeerRow(name: 'Silky Puffin', colorKey: 'peer-7'),
+      );
+      expect(
+        tester.widget<JamAvatar>(find.byType(JamAvatar)).colorKey,
+        'peer-7',
+      );
     });
 
     testWidgets('reads as one element: name, then the line under it', (

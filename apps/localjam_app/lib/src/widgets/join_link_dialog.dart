@@ -5,37 +5,46 @@
 /// a real hole: someone sends you the jam link in a chat and the app had
 /// nowhere to put it. This is that field, as an iOS alert with a text field.
 ///
-/// Two things the shared prompt has no business carrying: the clipboard is
-/// read on open, so a link that is already copied is simply *there* (with a
-/// note saying where it came from, because a field that fills itself is
-/// otherwise unnerving), and a bad link is answered under the field rather
-/// than in a toast — the mistake is in the field, so the correction belongs
-/// beside it.
+/// It behaves like iOS's own text-field alerts:
+///
+/// * **Join** stays disabled until the text parses as a jam link — no
+///   validating after the fact, no red field.
+/// * The clipboard is never read on open: on iOS that raises the system's
+///   "Allow Paste" prompt every time, even for a clipboard that holds no
+///   link. A **Paste** button reads it when asked to (shown only while the
+///   clipboard has text, which iOS can tell without prompting).
+/// * Only a real attempt that fails — Return on a bad link, or pasting
+///   something that isn't one — says so, by swapping the alert's message
+///   line for the reason.
 library;
 
 import 'package:flutter/cupertino.dart';
+import 'package:flutter/material.dart' show Theme;
 import 'package:flutter/services.dart';
 
+import '../design/theme.dart';
+import '../design/tokens.dart';
 import '../util/network.dart';
+import 'buttons.dart';
 import 'dialogs.dart';
 
 /// Every user-facing string these alerts can show.
 abstract final class JamJoinLinkStrings {
   static const String title = 'Join with Link';
-  static const String message = 'Paste the link someone shared with you.';
+  static const String message = 'Paste a link someone shared.';
 
   /// Not the URI scheme: `localjam://join?…` is machine text and tells the
-  /// user nothing about what to put in the box.
-  static const String hint = 'Jam Link';
-  static const String pasted = 'Pasted from your clipboard.';
+  /// user nothing about what to put in the box. Sentence case: it's a
+  /// placeholder, not a title.
+  static const String hint = 'Jam link';
+  static const String paste = 'Paste';
   static const String invalid = 'That isn’t a LocalJam link.';
   static const String cancel = 'Cancel';
   static const String join = 'Join';
 
   /// The deep-link confirmation, for a link that arrived from outside the
   /// app.
-  static const String confirmBody =
-      'A link opened LocalJam to join a jam on your network.';
+  static const String confirmBody = 'Someone shared a link to this jam.';
   static const String confirmDecline = cancel;
   static const String confirmFallbackName = 'This Jam';
 
@@ -45,10 +54,37 @@ abstract final class JamJoinLinkStrings {
 
 /// Asks for a `localjam://join?...` link. Returns the parsed URI, or null if
 /// the user backed out.
-Future<Uri?> promptForJoinLink(BuildContext context) {
+///
+/// [brightness] draws the alert in that appearance whatever the app's — the
+/// scanner passes [Brightness.dark] so the alert matches its black camera
+/// page instead of turning a muddy grey over it. Null follows [context]'s
+/// theme (the alert route captures it).
+Future<Uri?> promptForJoinLink(BuildContext context, {Brightness? brightness}) {
   // The keyboard belongs to the alert now.
   FocusManager.instance.primaryFocus?.unfocus();
-  return showJamAlert<Uri>(context, builder: (_) => const JoinLinkDialog());
+  final platform = Theme.of(context).platform;
+  return showJamAlert<Uri>(
+    context,
+    builder: (_) {
+      const dialog = JoinLinkDialog();
+      if (brightness == null) return dialog;
+      final theme = brightness == Brightness.dark
+          ? jamDarkTheme(platform: platform)
+          : jamLightTheme(platform: platform);
+      return Builder(
+        builder: (context) => MediaQuery(
+          data: MediaQuery.of(context).copyWith(platformBrightness: brightness),
+          child: Theme(
+            data: theme,
+            child: CupertinoTheme(
+              data: CupertinoTheme.of(context).copyWith(brightness: brightness),
+              child: dialog,
+            ),
+          ),
+        ),
+      );
+    },
+  );
 }
 
 /// The Join with Link alert. Owns its controller (the dialogs.dart lifetime
@@ -56,8 +92,7 @@ Future<Uri?> promptForJoinLink(BuildContext context) {
 class JoinLinkDialog extends StatefulWidget {
   const JoinLinkDialog({super.key, this.initialValue = ''});
 
-  /// Seeds the field instead of the clipboard. Tests use it; nothing else
-  /// needs to.
+  /// Seeds the field. Tests use it; nothing else needs to.
   final String initialValue;
 
   @override
@@ -69,35 +104,21 @@ class _JoinLinkDialogState extends State<JoinLinkDialog> {
     text: widget.initialValue,
   );
 
-  /// Set once the clipboard filled the field, so the note is only shown
-  /// when it is true — and cleared the moment the text is edited.
-  bool _fromClipboard = false;
+  /// Whether the clipboard holds text — asked without reading it, so no
+  /// prompt. Decides whether Paste is offered.
+  bool _canPaste = false;
+
+  /// Set by a real attempt that failed; cleared by the next edit.
   String? _error;
 
   @override
   void initState() {
     super.initState();
-    if (widget.initialValue.isEmpty) _prefill();
-  }
-
-  /// Reads the clipboard once, on open, and only takes a jam link from it.
-  /// Anything else stays out of the field: pasting someone's shopping list
-  /// into a link box is worse than an empty box.
-  void _prefill() {
-    Clipboard.getData(Clipboard.kTextPlain)
-        .then((data) {
-          final text = data?.text?.trim();
-          if (!mounted || text == null || text.isEmpty) return;
-          if (parseJoinUri(text) == null) return;
-          // Typed into already: the person's text wins.
-          if (_text.text.isNotEmpty) return;
-          setState(() {
-            _text.text = text;
-            _fromClipboard = true;
-          });
+    Clipboard.hasStrings()
+        .then((has) {
+          if (mounted && has != _canPaste) setState(() => _canPaste = has);
         })
-        // A platform without a clipboard is not an error path; the field
-        // just stays empty.
+        // A platform without a clipboard simply offers no Paste.
         .catchError((_) {});
   }
 
@@ -105,6 +126,29 @@ class _JoinLinkDialogState extends State<JoinLinkDialog> {
   void dispose() {
     _text.dispose();
     super.dispose();
+  }
+
+  /// Reads the clipboard because the person asked to. A jam link goes into
+  /// the field; anything else stays out of it (pasting someone's shopping
+  /// list into a link box helps nobody) and the message says why.
+  Future<void> _paste() async {
+    ClipboardData? data;
+    try {
+      data = await Clipboard.getData(Clipboard.kTextPlain);
+    } catch (_) {
+      data = null;
+    }
+    if (!mounted) return;
+    final text = data?.text?.trim() ?? '';
+    if (parseJoinUri(text) == null) {
+      setState(() => _error = JamJoinLinkStrings.invalid);
+      return;
+    }
+    _text.value = TextEditingValue(
+      text: text,
+      selection: TextSelection.collapsed(offset: text.length),
+    );
+    setState(() => _error = null);
   }
 
   void _submit() {
@@ -118,44 +162,62 @@ class _JoinLinkDialogState extends State<JoinLinkDialog> {
   }
 
   void _onChanged(String _) {
-    if (_error == null && !_fromClipboard) return;
-    setState(() {
-      _error = null;
-      _fromClipboard = false;
-    });
+    if (_error == null) return;
+    setState(() => _error = null);
   }
 
   @override
   Widget build(BuildContext context) =>
       ValueListenableBuilder<TextEditingValue>(
         valueListenable: _text,
-        builder: (context, value, _) => JamAlert(
-          title: JamJoinLinkStrings.title,
-          message: JamJoinLinkStrings.message,
-          content: JamAlertTextField(
-            controller: _text,
-            placeholder: JamJoinLinkStrings.hint,
-            keyboardType: TextInputType.url,
-            textCapitalization: TextCapitalization.none,
-            textInputAction: TextInputAction.go,
-            autocorrect: false,
-            errorText: _error,
-            helperText: _fromClipboard ? JamJoinLinkStrings.pasted : null,
-            onChanged: _onChanged,
-            onSubmitted: (_) => _submit(),
-          ),
-          actions: [
-            JamAlertAction(
-              label: JamJoinLinkStrings.cancel,
-              onPressed: () => Navigator.of(context).pop(),
+        builder: (context, value, _) {
+          final valid = parseJoinUri(value.text) != null;
+          return JamAlert(
+            title: JamJoinLinkStrings.title,
+            // A failed attempt answers where the alert explains itself:
+            // centred, in the message's place — not a red line under the
+            // field.
+            message: _error ?? JamJoinLinkStrings.message,
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                JamAlertTextField(
+                  controller: _text,
+                  placeholder: JamJoinLinkStrings.hint,
+                  keyboardType: TextInputType.url,
+                  textCapitalization: TextCapitalization.none,
+                  textInputAction: TextInputAction.go,
+                  autocorrect: false,
+                  onChanged: _onChanged,
+                  onSubmitted: (_) => _submit(),
+                ),
+                if (_canPaste && !valid) ...[
+                  const SizedBox(height: JamSpace.xs),
+                  Center(
+                    child: JamButton.plain(
+                      label: JamJoinLinkStrings.paste,
+                      icon: CupertinoIcons.doc_on_clipboard,
+                      size: JamButtonSize.small,
+                      onPressed: _paste,
+                    ),
+                  ),
+                ],
+              ],
             ),
-            JamAlertAction(
-              label: JamJoinLinkStrings.join,
-              isDefault: true,
-              onPressed: value.text.trim().isEmpty ? null : _submit,
-            ),
-          ],
-        ),
+            actions: [
+              JamAlertAction(
+                label: JamJoinLinkStrings.cancel,
+                onPressed: () => Navigator.of(context).pop(),
+              ),
+              JamAlertAction(
+                label: JamJoinLinkStrings.join,
+                isDefault: true,
+                onPressed: valid ? _submit : null,
+              ),
+            ],
+          );
+        },
       );
 }
 
