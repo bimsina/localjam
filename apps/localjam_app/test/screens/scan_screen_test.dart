@@ -197,7 +197,8 @@ void main() {
         home: Builder(
           builder: (context) => Center(
             child: GestureDetector(
-              onTap: () => promptForJoinLinkOnBlack(context),
+              onTap: () =>
+                  promptForJoinLink(context, brightness: Brightness.dark),
               child: const Text('open'),
             ),
           ),

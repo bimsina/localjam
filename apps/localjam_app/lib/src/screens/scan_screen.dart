@@ -17,8 +17,7 @@ import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/cupertino.dart';
-import 'package:flutter/material.dart'
-    show MaterialBasedCupertinoThemeData, Scaffold, Theme, ThemeData;
+import 'package:flutter/material.dart' show Scaffold;
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
@@ -30,7 +29,6 @@ import '../design/typography.dart';
 import '../util/network.dart';
 import '../util/permissions.dart';
 import '../widgets/buttons.dart';
-import '../widgets/dialogs.dart';
 import '../widgets/empty_state.dart';
 import '../widgets/glass.dart';
 import '../widgets/join_link_dialog.dart';
@@ -293,7 +291,9 @@ class _ScanScreenState extends State<ScanScreen> {
   }
 
   Future<void> _joinWithLink() async {
-    final uri = await promptForJoinLinkOnBlack(context);
+    // On the dark palette, like everything else on the black camera page:
+    // a light alert over pure black is a flat mid-grey with 2–3:1 text.
+    final uri = await promptForJoinLink(context, brightness: Brightness.dark);
     if (uri == null || !mounted) return;
     _done = true;
     context.pop('$uri');
@@ -320,7 +320,9 @@ class _ScanScreenState extends State<ScanScreen> {
 
     return AnnotatedRegion<SystemUiOverlayStyle>(
       value: jamOverlayStyleOnDark,
-      child: _OnBlack(
+      child: JamForcedAppearance(
+        brightness: Brightness.dark,
+
         child: Scaffold(
           backgroundColor: JamFixedColors.black,
           // No app bar: the camera is the screen, and everything else floats.
@@ -367,53 +369,6 @@ class _ScanScreenState extends State<ScanScreen> {
             ],
           ),
         ),
-      ),
-    );
-  }
-}
-
-/// The Join with Link alert, as the scanner presents it: always on the dark
-/// palette, like everything else on the black camera page.
-///
-/// The alert is pushed on the root navigator, which carries the app's own
-/// theme; opened from the scanner in Light it rendered light-on-black — an
-/// 80% light material over pure black is a flat mid-grey, with the tint and
-/// the error text at 2–3:1. Same alert, same field; only the palette is the
-/// page's.
-Future<Uri?> promptForJoinLinkOnBlack(BuildContext context) {
-  // The keyboard belongs to the alert now.
-  FocusManager.instance.primaryFocus?.unfocus();
-  return showJamAlert<Uri>(
-    context,
-    builder: (_) => const _OnBlack(child: JoinLinkDialog()),
-  );
-}
-
-/// The dark palette for everything on the black camera page, whatever the
-/// app's appearance: light-mode greys on black would be unreadable.
-class _OnBlack extends StatelessWidget {
-  const _OnBlack({required this.child});
-
-  final Widget child;
-
-  static final Map<TargetPlatform, ThemeData> _themes = {};
-
-  @override
-  Widget build(BuildContext context) {
-    final platform = Theme.of(context).platform;
-    final dark = _themes.putIfAbsent(
-      platform,
-      () => jamDarkTheme(platform: platform),
-    );
-    return Theme(
-      data: dark,
-      // A nested Material theme keeps the *app's* Cupertino theme (it
-      // inherits the nearest one), and every Cupertino surface — the alert's
-      // material, the text field's keyboard — reads its brightness from
-      // there. So the dark Cupertino theme is set here explicitly.
-      child: CupertinoTheme(
-        data: MaterialBasedCupertinoThemeData(materialTheme: dark),
-        child: child,
       ),
     );
   }
@@ -644,7 +599,9 @@ class ScannerUnavailableView extends StatelessWidget {
         ? (JamScanStrings.retry, onRetry)
         : (null, null);
 
-    return _OnBlack(
+    return JamForcedAppearance(
+      brightness: Brightness.dark,
+
       child: ColoredBox(
         color: JamFixedColors.black,
         child: Stack(

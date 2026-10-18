@@ -442,3 +442,46 @@ InputDecorationTheme jamBorderlessInput(JamColors c, TextTheme text) =>
       errorBorder: InputBorder.none,
       errorStyle: text.bodySmall!.copyWith(color: c.danger),
     );
+
+/// Draws [child] in [brightness] whatever the app's appearance: the Material
+/// theme, the Cupertino theme (a nested Material theme alone keeps the app's
+/// Cupertino one, which every Cupertino surface — an alert's material, a
+/// field's keyboard — reads its brightness from), and the platform
+/// brightness that dynamic Cupertino colours resolve against.
+///
+/// The one way a surface that is dark by nature (the scanner's black camera
+/// page, and the Join with Link alert opened over it) opts out of a light
+/// app.
+class JamForcedAppearance extends StatelessWidget {
+  const JamForcedAppearance({
+    super.key,
+    required this.brightness,
+    required this.child,
+  });
+
+  final Brightness brightness;
+  final Widget child;
+
+  static final Map<(TargetPlatform, Brightness), ThemeData> _themes = {};
+
+  @override
+  Widget build(BuildContext context) {
+    final platform = Theme.of(context).platform;
+    final theme = _themes.putIfAbsent(
+      (platform, brightness),
+      () => brightness == Brightness.dark
+          ? jamDarkTheme(platform: platform)
+          : jamLightTheme(platform: platform),
+    );
+    return MediaQuery(
+      data: MediaQuery.of(context).copyWith(platformBrightness: brightness),
+      child: Theme(
+        data: theme,
+        child: CupertinoTheme(
+          data: MaterialBasedCupertinoThemeData(materialTheme: theme),
+          child: child,
+        ),
+      ),
+    );
+  }
+}

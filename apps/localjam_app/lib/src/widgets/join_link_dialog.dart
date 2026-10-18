@@ -19,7 +19,6 @@
 library;
 
 import 'package:flutter/cupertino.dart';
-import 'package:flutter/material.dart' show Theme;
 import 'package:flutter/services.dart';
 
 import '../design/theme.dart';
@@ -62,28 +61,14 @@ abstract final class JamJoinLinkStrings {
 Future<Uri?> promptForJoinLink(BuildContext context, {Brightness? brightness}) {
   // The keyboard belongs to the alert now.
   FocusManager.instance.primaryFocus?.unfocus();
-  final platform = Theme.of(context).platform;
   return showJamAlert<Uri>(
     context,
-    builder: (_) {
-      const dialog = JoinLinkDialog();
-      if (brightness == null) return dialog;
-      final theme = brightness == Brightness.dark
-          ? jamDarkTheme(platform: platform)
-          : jamLightTheme(platform: platform);
-      return Builder(
-        builder: (context) => MediaQuery(
-          data: MediaQuery.of(context).copyWith(platformBrightness: brightness),
-          child: Theme(
-            data: theme,
-            child: CupertinoTheme(
-              data: CupertinoTheme.of(context).copyWith(brightness: brightness),
-              child: dialog,
-            ),
+    builder: (_) => brightness == null
+        ? const JoinLinkDialog()
+        : JamForcedAppearance(
+            brightness: brightness,
+            child: const JoinLinkDialog(),
           ),
-        ),
-      );
-    },
   );
 }
 
