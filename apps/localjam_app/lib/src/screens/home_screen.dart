@@ -649,7 +649,9 @@ class _RecentSection extends StatelessWidget {
               record,
               use24HourFormat: MediaQuery.alwaysUse24HourFormatOf(context),
             ),
-            subtitleMaxLines: 1,
+            // Two lines before an ellipsis: the time at the end is what
+            // tells two jams from one evening apart.
+            subtitleMaxLines: 2,
             // The same detail page Past Jams pushes, so the same chevron.
             chevron: true,
             // The same covers Past Jams reads back off this device.

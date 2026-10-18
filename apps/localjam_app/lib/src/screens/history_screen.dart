@@ -615,7 +615,9 @@ class _RecordRow extends StatelessWidget {
       record,
       use24HourFormat: MediaQuery.alwaysUse24HourFormatOf(context),
     ),
-    subtitleMaxLines: 1,
+    // Two lines before an ellipsis: the time at the end is what tells two
+    // jams from one evening apart, and it is the part that would be cut.
+    subtitleMaxLines: 2,
     chevron: true,
     separator: separator,
     onTap: onTap,

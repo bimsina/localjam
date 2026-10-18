@@ -259,6 +259,10 @@ void main() {
     expect(settings.variant, JamButtonVariant.gray);
     expect(settings.color, const Color(0xFFFFFFFF));
     expect(settings.expand, isFalse);
+    final width = tester
+        .getSize(find.widgetWithText(JamButton, JamScanStrings.openSettings))
+        .width;
+    expect(width, inInclusiveRange(140, 300));
 
     await tester.tap(find.bySemanticsLabel(JamScanStrings.close));
     await tester.pumpAndSettle();

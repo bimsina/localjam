@@ -665,17 +665,21 @@ class ScannerUnavailableView extends StatelessWidget {
                   ),
                   if (actionLabel != null && onAction != null) ...[
                     const SizedBox(height: JamSpace.xxl),
-                    ConstrainedBox(
-                      constraints: const BoxConstraints(
-                        minWidth: _actionMinWidth,
-                      ),
-                      // Neutral on black: the dark `fill` capsule with a
-                      // white label.
-                      child: JamButton(
-                        label: actionLabel,
-                        variant: JamButtonVariant.gray,
-                        color: JamNowPlayingColors.text,
-                        onPressed: onAction,
+                    // Hugs its label: a centred Container grows to whatever
+                    // width it is offered, so the width is the label's own.
+                    IntrinsicWidth(
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(
+                          minWidth: _actionMinWidth,
+                        ),
+                        // Neutral on black: the dark `fill` capsule with a
+                        // white label.
+                        child: JamButton(
+                          label: actionLabel,
+                          variant: JamButtonVariant.gray,
+                          color: JamNowPlayingColors.text,
+                          onPressed: onAction,
+                        ),
                       ),
                     ),
                   ],
