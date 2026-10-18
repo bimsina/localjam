@@ -8,6 +8,7 @@ import 'package:localjam_app/src/design/theme.dart';
 import 'package:localjam_app/src/design/tokens.dart';
 import 'package:localjam_app/src/widgets/buttons.dart';
 import 'package:localjam_app/src/widgets/permission_sheet.dart';
+import 'package:localjam_app/src/widgets/sheet.dart';
 
 Widget _host(Future<void> Function(BuildContext) onTap, {ThemeData? theme}) =>
     MaterialApp(
@@ -89,7 +90,16 @@ void main() {
     expect(find.byType(JamButton), findsNWidgets(2));
     // The buttons sit on the page margin like every other sheet's; only the
     // words take the narrower measure.
-    final sheet = tester.getRect(find.byType(JamPermissionSheet));
+    // Measured from the painted surface: a floating medium sheet stands
+    // [JamRadius.sheetFloatingInset] off the screen edges.
+    final sheet = tester.getRect(
+      find
+          .descendant(
+            of: find.byType(JamSheetSurface),
+            matching: find.byType(ClipRRect),
+          )
+          .first,
+    );
     final button = tester.getRect(find.byType(JamButton).first);
     expect(button.left - sheet.left, 16);
     expect(sheet.right - button.right, 16);
