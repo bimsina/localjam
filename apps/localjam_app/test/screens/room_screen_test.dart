@@ -17,6 +17,7 @@ import 'package:localjam_app/src/widgets/buttons.dart';
 import 'package:localjam_app/src/widgets/drag_to_dismiss.dart';
 import 'package:localjam_app/src/widgets/queue_sheet.dart';
 import 'package:localjam_app/src/widgets/room_sheet.dart';
+import 'package:localjam_app/src/widgets/sheet.dart';
 import 'package:localjam_app/src/widgets/transport.dart';
 import 'package:localjam_client/localjam_client.dart';
 
@@ -630,6 +631,46 @@ void main() {
     expect(session.isLive, isTrue);
 
     await leaveTestSession(tester, session);
+  });
+
+  testWidgets('a guest invites too: the header button and the menu item '
+      'open the same Invite sheet, with the link they joined by', (
+    tester,
+  ) async {
+    final host = testSession();
+    final guest = testSession(identity: 'Velvet Sloth');
+    final cache = Directory.systemTemp.createTempSync('localjam_invite');
+    addTearDown(() => cache.deleteSync(recursive: true));
+    await tester.runAsync(() async {
+      await host.startHost(sessionName: 'Invite Jam', discoverable: false);
+      expect(await guest.join(host.joinUri!, mediaCacheDir: cache), isTrue);
+      expect(await _waitFor(() => guest.engine != null), isTrue);
+    });
+    await resize(tester, const Size(390, 844));
+    await pumpRoom(tester, guest);
+
+    final invite = find.bySemanticsLabel(JamRoomStrings.invite);
+    expect(invite, findsOneWidget);
+    await tester.tap(invite);
+    await tester.pumpAndSettle();
+    expect(find.byType(InvitePanel), findsOneWidget);
+    await tester.tap(find.bySemanticsLabel(JamSheetStrings.close));
+    await tester.pumpAndSettle();
+    expect(find.byType(InvitePanel), findsNothing);
+
+    await tester.tap(find.bySemanticsLabel(JamRoomStrings.more));
+    await tester.pumpAndSettle();
+    expect(find.text(JamRoomStrings.invite), findsOneWidget);
+    expect(find.text(JamRoomStrings.leaveJam), findsOneWidget);
+    await tester.tap(find.text(JamRoomStrings.invite));
+    await tester.pumpAndSettle();
+    expect(find.byType(InvitePanel), findsOneWidget);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.runAsync(() async {
+      await guest.leave();
+      await host.leave();
+    });
   });
 
   testWidgets('the queue opens in place and the thumbnail brings the cover '

@@ -79,12 +79,12 @@ abstract final class JamRoomStrings {
   static const String diagnostics = 'Diagnostics';
   static const String endJam = 'End Jam';
   static const String leaveJam = 'Leave Jam';
-  static const String endTitle = 'End this jam?';
-  static const String endBody = 'Everyone listening will be disconnected.';
-  static const String leaveTitle = 'Leave this jam?';
-  static const String leaveBody =
-      'You can rejoin as long as the room is still up.';
-  static const String leave = 'Leave';
+  // The same confirmation the People sheet asks, word for word.
+  static const String endTitle = RoomSheetStrings.endTitle;
+  static const String endBody = RoomSheetStrings.endDetail;
+  static const String leaveTitle = RoomSheetStrings.leaveTitle;
+  static const String leaveBody = RoomSheetStrings.leaveDetail;
+  static const String leave = RoomSheetStrings.leave;
   static const String cancel = 'Cancel';
 
   // The title block.
@@ -489,14 +489,17 @@ class _RoomScreenState extends State<RoomScreen>
       trigger: JamMenuTrigger.glassOnArtwork,
       visualSize: 30,
       semanticLabel: JamRoomStrings.more,
+      // Dark over the backdrop, whatever the app theme says.
+      brightness: Brightness.dark,
       groups: [
         [
-          if (isHost)
-            JamMenuItem(
-              title: JamRoomStrings.invite,
-              icon: CupertinoIcons.person_badge_plus,
-              onPressed: () => _openInvite(engine),
-            ),
+          // A guest invites too, with the link they joined by — the same
+          // Invite sheet the People sheet opens.
+          JamMenuItem(
+            title: JamRoomStrings.invite,
+            icon: CupertinoIcons.person_badge_plus,
+            onPressed: () => _openInvite(engine),
+          ),
           JamMenuItem(
             title: JamRoomStrings.people,
             icon: CupertinoIcons.person_2,
@@ -540,7 +543,7 @@ class _RoomScreenState extends State<RoomScreen>
       queueSelected: wide && _panel == _PanelView.queue,
       peopleSelected: wide && _panel == _PanelView.people,
       onClose: _minimise,
-      onInvite: isHost ? () => _openInvite(engine) : null,
+      onInvite: () => _openInvite(engine),
       onQueue: _toggleQueue,
       onPeople: () => _openPeople(engine),
       onSoundOffset: () => _openSoundOffset(engine),
@@ -857,20 +860,24 @@ class _StageLayout extends MultiChildLayoutDelegate {
         minScrubTransport -
         minTransportFooter;
     final art = math.max(0.0, math.min(cw, avail));
-    var slack = math.max(0.0, avail - art);
-    double take(double share, double cap) {
-      final v = math.min(slack * share, cap);
-      return v;
-    }
-
-    final addTop = take(0.12, 24);
-    final addArtTitle = take(0.12, 12);
-    final addTitleScrub = take(0.1, 12);
-    slack -= addTop + addArtTitle + addTitleScrub;
-    final gTop = minTop + addTop;
+    // What the cover leaves, spread over the gaps in Music's proportions
+    // (art → title → scrubber → transport → footer) rather than most of it
+    // landing between the scrubber and the transport on a tall phone. Each
+    // inner gap stops growing at a ceiling, so a tall window whose cover is
+    // capped (a tablet) keeps the controls together and centres the group
+    // instead of pulling it apart.
+    final slack = math.max(0.0, avail - art);
+    double grow(double share, double cap) => math.min(slack * share, cap);
+    final addArtTitle = grow(0.14, 28);
+    final addTitleScrub = grow(0.10, 24);
+    final addScrubTransport = grow(0.28, 64);
+    final rest = slack - addArtTitle - addTitleScrub - addScrubTransport;
+    // The rest: some above the cover, the larger part between the transport
+    // and the footer (pinned to the bottom), where Music keeps its volume.
+    final gTop = minTop + rest * 0.4;
     final gArtTitle = minArtTitle + addArtTitle;
     final gTitleScrub = minTitleScrub + addTitleScrub;
-    final gScrubTransport = minScrubTransport + slack * 0.5;
+    final gScrubTransport = minScrubTransport + addScrubTransport;
 
     final bigArtY = gTop;
     final bigTitleY = bigArtY + art + gArtTitle;
@@ -1808,14 +1815,14 @@ class _FooterIcon extends StatelessWidget {
               decoration: ShapeDecoration(
                 color: selected
                     ? JamNowPlayingColors.fill
-                    : const Color(0x00FFFFFF),
+                    : JamNowPlayingColors.clear,
                 shape: const CircleBorder(),
               ),
               child: Icon(
                 icon,
                 size: 22,
                 color: selected
-                    ? const Color(0xFF000000)
+                    ? JamNowPlayingColors.selectedGlyph
                     : JamNowPlayingColors.secondary,
               ),
             ),
@@ -1851,7 +1858,7 @@ class _DockedPanel extends StatelessWidget {
       child: ColoredBox(
         // A shade of the backdrop, not a card: just enough to set the
         // panel apart from the player.
-        color: const Color(0x2E000000),
+        color: JamNowPlayingColors.panelShade,
         child: SafeArea(
           left: false,
           child: Column(

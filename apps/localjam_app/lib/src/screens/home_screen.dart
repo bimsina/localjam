@@ -27,7 +27,6 @@ import '../design/tokens.dart';
 import '../state/session_controller.dart';
 import '../util/capabilities.dart';
 import '../util/network.dart';
-import '../widgets/artwork.dart';
 import '../widgets/avatar.dart';
 import '../widgets/buttons.dart';
 import '../widgets/empty_state.dart';
@@ -37,7 +36,12 @@ import '../widgets/pressable.dart';
 import '../widgets/scaffold.dart';
 import '../widgets/section.dart';
 import '../widgets/session_gate.dart';
-import 'history_screen.dart' show showJamHistoryDetail;
+import 'history_screen.dart'
+    show
+        HistoryStrings,
+        JamArtworkMosaic,
+        jamHistorySummary,
+        showJamHistoryDetail;
 
 /// Every user-facing string on this screen, in one place.
 abstract final class HomeStrings {
@@ -79,37 +83,6 @@ abstract final class HomeStrings {
   static const String openRoom = 'Open Jam';
 
   static const String badCode = 'That code isn’t a jam invite.';
-
-  /// "You hosted · 12 songs · Yesterday".
-  static const String youHosted = 'You hosted';
-  static const String youJoined = 'You joined';
-  static String songs(int n) => n == 1 ? '1 song' : '$n songs';
-  static const String today = 'Today';
-  static const String yesterday = 'Yesterday';
-  static const String separator = ' · ';
-  static const List<String> weekdays = [
-    'Monday',
-    'Tuesday',
-    'Wednesday',
-    'Thursday',
-    'Friday',
-    'Saturday',
-    'Sunday',
-  ];
-  static const List<String> months = [
-    'Jan',
-    'Feb',
-    'Mar',
-    'Apr',
-    'May',
-    'Jun',
-    'Jul',
-    'Aug',
-    'Sep',
-    'Oct',
-    'Nov',
-    'Dec',
-  ];
 }
 
 /// The paste-a-link label, exported for the scanner's own fallback.
@@ -132,30 +105,6 @@ final RegExp _possessiveJam = RegExp(r'^(.+?)[’\x27]s Jam$');
 /// The host's name, when the room name is the default "Mia’s Jam".
 String jamHostNameFromRoom(String room) =>
     _possessiveJam.firstMatch(room.trim())?.group(1) ?? room;
-
-/// A calendar-relative "when" for a past jam: Today, Yesterday, a weekday
-/// within the week, then "12 Oct" (and the year once it is not this one).
-String jamRecentWhen(DateTime time, {DateTime? now}) {
-  final today = now ?? DateTime.now();
-  final day = DateTime(time.year, time.month, time.day);
-  final days = DateTime(
-    today.year,
-    today.month,
-    today.day,
-  ).difference(day).inDays;
-  if (days <= 0) return HomeStrings.today;
-  if (days == 1) return HomeStrings.yesterday;
-  if (days < 7) return HomeStrings.weekdays[time.weekday - 1];
-  final date = '${time.day} ${HomeStrings.months[time.month - 1]}';
-  return time.year == today.year ? date : '$date ${time.year}';
-}
-
-/// "You hosted · 12 songs · Yesterday".
-String jamRecentSubtitle(JamHistoryRecord record, {DateTime? now}) => [
-  record.wasHost ? HomeStrings.youHosted : HomeStrings.youJoined,
-  if (record.tracks.isNotEmpty) HomeStrings.songs(record.tracks.length),
-  jamRecentWhen(record.updatedAt, now: now),
-].join(HomeStrings.separator);
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -244,6 +193,13 @@ class _HomeScreenState extends State<HomeScreen> {
       return;
     }
     setState(() => _recents = next);
+  }
+
+  /// A past jam's detail page; Forget there has to take the row away
+  /// here too.
+  Future<void> _openRecent(JamHistoryRecord record) async {
+    await showJamHistoryDetail(context, record);
+    if (mounted) await _loadRecents();
   }
 
   Future<void> _refreshNetwork() async {
@@ -436,8 +392,7 @@ class _HomeScreenState extends State<HomeScreen> {
             child: _RecentSection(
               records: _recents,
               onSeeAll: () => unawaited(context.push('/history')),
-              onOpen: (record) =>
-                  unawaited(showJamHistoryDetail(context, record)),
+              onOpen: (record) => unawaited(_openRecent(record)),
             ),
           );
 
@@ -646,9 +601,15 @@ class _RecentSection extends StatelessWidget {
           JamRow(
             key: ValueKey(record.sessionId),
             title: record.sessionName,
-            subtitle: jamRecentSubtitle(record),
+            subtitle: jamHistorySummary(record),
             subtitleMaxLines: 1,
-            leading: const JamArtworkTile(size: JamArtworkSize.thumb),
+            // The same covers Past Jams reads back off this device.
+            leading: JamArtworkMosaic(
+              tracks: record.tracks,
+              size: JamArtworkSize.thumb,
+              semanticLabel: HistoryStrings.cover(record.sessionName),
+            ),
+            leadingWidth: JamArtworkSize.thumb,
             onTap: () => onOpen(record),
           ),
       ],

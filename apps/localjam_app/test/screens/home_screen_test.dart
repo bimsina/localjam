@@ -6,6 +6,7 @@ import 'package:flutter/material.dart' show Icons;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:localjam_client/localjam_client.dart';
 import 'package:localjam_app/src/design/theme.dart';
+import 'package:localjam_app/src/screens/history_screen.dart';
 import 'package:localjam_app/src/screens/home_screen.dart';
 import 'package:localjam_app/src/screens/settings_screen.dart';
 import 'package:localjam_app/src/state/session_controller.dart';
@@ -225,16 +226,8 @@ void main() {
   group('recent jams', () {
     final now = DateTime(2026, 10, 18, 15);
 
-    test('read as calendar days, not "3 d ago"', () {
-      expect(jamRecentWhen(DateTime(2026, 10, 18, 9), now: now), 'Today');
-      expect(jamRecentWhen(DateTime(2026, 10, 17, 23), now: now), 'Yesterday');
-      // 2026-10-14 is a Wednesday.
-      expect(jamRecentWhen(DateTime(2026, 10, 14), now: now), 'Wednesday');
-      expect(jamRecentWhen(DateTime(2026, 9, 2), now: now), '2 Sep');
-      expect(jamRecentWhen(DateTime(2025, 12, 31), now: now), '31 Dec 2025');
-    });
-
-    test('say who hosted, how many songs and when', () {
+    test('say who hosted, how many songs and when — the same line Past '
+        'Jams uses', () {
       JamHistoryRecord record({required bool host, int songs = 0}) =>
           JamHistoryRecord(
             sessionId: 's',
@@ -257,16 +250,16 @@ void main() {
             ],
           );
       expect(
-        jamRecentSubtitle(record(host: true, songs: 12), now: now),
+        jamHistorySummary(record(host: true, songs: 12), now: now),
         'You hosted · 12 songs · Yesterday',
       );
       expect(
-        jamRecentSubtitle(record(host: false, songs: 1), now: now),
+        jamHistorySummary(record(host: false, songs: 1), now: now),
         'You joined · 1 song · Yesterday',
       );
       // No "0 songs": the part is simply not there.
       expect(
-        jamRecentSubtitle(record(host: true), now: now),
+        jamHistorySummary(record(host: true), now: now),
         'You hosted · Yesterday',
       );
     });
