@@ -27,6 +27,7 @@ import 'artwork.dart';
 import 'glass.dart';
 import 'pressable.dart';
 import 'room_banner.dart';
+import 'sync_indicator.dart' show jamFadeThroughCurve;
 
 /// Strings the bar owns.
 abstract final class JamRoomBarStrings {
@@ -59,8 +60,18 @@ const double _kArt = JamArtworkSize.mini;
 const double _kGlyph = 22;
 const double _kButton = 44;
 
-/// Below this width the capsule drops the next button.
-const double _kNarrow = 280;
+/// Below this width the capsule drops the next button. Low enough that the
+/// sidebar dock on an iPad (~240 wide) keeps both glyphs.
+const double _kNarrow = 220;
+
+/// The largest text scale the capsule's lines grow to. The capsule's height
+/// is fixed — screens under it leave [kJamRoomBarFootprint] clear — so past
+/// [_kTwoLineMaxScale] it drops to one line instead of clipping, and one
+/// line still fits at this scale.
+const double _kMaxTextScale = 2;
+
+/// The largest text scale at which both lines fit in the capsule.
+const double _kTwoLineMaxScale = 1.45;
 
 /// The mini player, as a pure piece of layout.
 class JamRoomBar extends StatelessWidget {
@@ -125,6 +136,29 @@ class JamRoomBar extends StatelessWidget {
     final open = onOpen;
     final play = onPlayPause;
     final next = onNext;
+    final scaler = MediaQuery.textScalerOf(
+      context,
+    ).clamp(maxScaleFactor: _kMaxTextScale);
+    final twoLines = scaler.scale(1) <= _kTwoLineMaxScale;
+    // The sidebar dock is narrower than any phone capsule: a tighter inset
+    // there keeps the song's title.
+    final docked = radius != null;
+    final artInset = docked ? JamSpace.sm : (kJamRoomBarHeight - _kArt) / 2;
+
+    final titleText = Text(
+      title,
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+      style: context.jamSubheadline.copyWith(fontWeight: FontWeight.w600),
+    );
+    final lineText = Text(
+      line,
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+      style: context.jamFootnote.copyWith(
+        color: alert != null ? colors.warning : colors.secondaryLabel,
+      ),
+    );
 
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
@@ -158,9 +192,7 @@ class JamRoomBar extends StatelessWidget {
                         onTap: open,
                         pressedOpacity: 0.7,
                         child: Padding(
-                          padding: const EdgeInsets.only(
-                            left: (kJamRoomBarHeight - _kArt) / 2,
-                          ),
+                          padding: EdgeInsets.only(left: artInset),
                           child: Row(
                             children: [
                               SizedBox.square(
@@ -169,31 +201,31 @@ class JamRoomBar extends StatelessWidget {
                                     artwork ??
                                     const JamArtworkTile(size: _kArt),
                               ),
-                              const SizedBox(width: JamSpace.md),
+                              SizedBox(
+                                width: docked ? JamSpace.sm : JamSpace.md,
+                              ),
                               Expanded(
-                                child: Column(
-                                  mainAxisAlignment: MainAxisAlignment.center,
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      title,
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: context.jamSubheadline.copyWith(
-                                        fontWeight: FontWeight.w600,
-                                      ),
-                                    ),
-                                    Text(
-                                      line,
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: context.jamFootnote.copyWith(
-                                        color: alert != null
-                                            ? colors.warning
-                                            : colors.secondaryLabel,
-                                      ),
-                                    ),
-                                  ],
+                                child: MediaQuery(
+                                  data: MediaQuery.of(
+                                    context,
+                                  ).copyWith(textScaler: scaler),
+                                  child: Column(
+                                    mainAxisAlignment: MainAxisAlignment.center,
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    // At accessibility sizes one line: the
+                                    // problem when there is one (it is what
+                                    // matters off Now Playing), else the
+                                    // song.
+                                    children: twoLines
+                                        ? [titleText, lineText]
+                                        : [
+                                            if (alert != null)
+                                              lineText
+                                            else
+                                              titleText,
+                                          ],
+                                  ),
                                 ),
                               ),
                             ],
@@ -266,9 +298,19 @@ class _BarButton extends StatelessWidget {
         child: SizedBox.square(
           dimension: _kButton,
           child: Center(
+            // Fade-through with a little scale: play and pause never sit on
+            // top of each other mid-swap.
             child: AnimatedSwitcher(
               duration: reduced ? Duration.zero : JamDuration.fast,
-              switchInCurve: JamCurve.standard,
+              switchInCurve: jamFadeThroughCurve,
+              switchOutCurve: jamFadeThroughCurve,
+              transitionBuilder: (child, animation) => FadeTransition(
+                opacity: animation,
+                child: ScaleTransition(
+                  scale: Tween<double>(begin: 0.8, end: 1).animate(animation),
+                  child: child,
+                ),
+              ),
               child: Icon(
                 icon,
                 key: ValueKey<IconData>(icon),
@@ -459,34 +501,37 @@ class _EndedBar extends StatelessWidget {
             height: kJamRoomBarHeight,
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: JamSpace.xl),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      label,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: context.jamSubheadline.copyWith(
-                        fontWeight: FontWeight.w600,
+              child: MediaQuery.withClampedTextScaling(
+                maxScaleFactor: _kMaxTextScale,
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        label,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: context.jamSubheadline.copyWith(
+                          fontWeight: FontWeight.w600,
+                        ),
                       ),
                     ),
-                  ),
-                  if (!rejoining) ...[
-                    Text(
-                      JamRoomBarStrings.endedAction,
-                      style: context.jamFootnote.copyWith(
-                        color: colors.secondaryLabel,
+                    if (!rejoining) ...[
+                      Text(
+                        JamRoomBarStrings.endedAction,
+                        style: context.jamFootnote.copyWith(
+                          color: colors.secondaryLabel,
+                        ),
                       ),
-                    ),
-                    const SizedBox(width: JamSpace.xs),
-                    Icon(
-                      CupertinoIcons.chevron_right,
-                      size: 14,
-                      color: colors.tertiaryLabel,
-                    ),
-                  ] else
-                    const CupertinoActivityIndicator(radius: 8),
-                ],
+                      const SizedBox(width: JamSpace.xs),
+                      Icon(
+                        CupertinoIcons.chevron_right,
+                        size: 14,
+                        color: colors.tertiaryLabel,
+                      ),
+                    ] else
+                      const CupertinoActivityIndicator(radius: 8),
+                  ],
+                ),
               ),
             ),
           ),

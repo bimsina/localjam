@@ -97,42 +97,58 @@ JamSyncState jamSyncState({
   return JamSyncState.inSync;
 }
 
-/// How loudly a status line speaks.
+/// How loudly a status line speaks — through its glyph. The words are always
+/// white: orange or red 13 pt text over an arbitrary cover is unreadable on
+/// half of them (spec §10.7).
 enum JamStatusTone {
-  /// A wait that needs nothing from anyone: secondary white.
+  /// A wait that needs nothing from anyone: a white glyph.
   calm,
 
-  /// Recoverable trouble: the warning orange.
+  /// Recoverable trouble: the glyph in the warning orange.
   warning,
 
-  /// Broken: red.
+  /// Broken: the glyph in red.
   danger,
 }
 
-/// One footnote line under the room's name.
+/// One footnote line under the room's name: a small leading glyph and white
+/// words.
 @immutable
 class JamStatusLine {
-  const JamStatusLine(this.text, {this.tone = JamStatusTone.calm});
+  const JamStatusLine(this.text, {this.tone = JamStatusTone.calm, this.icon});
 
   final String text;
   final JamStatusTone tone;
 
-  @override
-  bool operator ==(Object other) =>
-      other is JamStatusLine && other.text == text && other.tone == tone;
+  /// The leading glyph. Null takes [tone]'s default ([jamStatusToneIcon]).
+  final IconData? icon;
 
   @override
-  int get hashCode => Object.hash(text, tone);
+  bool operator ==(Object other) =>
+      other is JamStatusLine &&
+      other.text == text &&
+      other.tone == tone &&
+      other.icon == icon;
+
+  @override
+  int get hashCode => Object.hash(text, tone, icon);
 }
 
 /// The line [state] puts on screen, or null when sync has nothing to say.
 JamStatusLine? jamSyncStatusLine(JamSyncState state) => switch (state) {
   JamSyncState.idle || JamSyncState.inSync => null,
-  JamSyncState.syncing => const JamStatusLine(JamSyncStrings.syncing),
-  JamSyncState.hostAway => const JamStatusLine(JamSyncStrings.hostAsleep),
+  JamSyncState.syncing => const JamStatusLine(
+    JamSyncStrings.syncing,
+    icon: CupertinoIcons.arrow_2_circlepath,
+  ),
+  JamSyncState.hostAway => const JamStatusLine(
+    JamSyncStrings.hostAsleep,
+    icon: CupertinoIcons.moon_zzz_fill,
+  ),
   JamSyncState.reconnecting => const JamStatusLine(
     JamSyncStrings.reconnecting,
     tone: JamStatusTone.warning,
+    icon: CupertinoIcons.wifi_exclamationmark,
   ),
   JamSyncState.catchingUp => const JamStatusLine(
     JamSyncStrings.catchingUp,
@@ -144,13 +160,26 @@ JamStatusLine? jamSyncStatusLine(JamSyncState state) => switch (state) {
   ),
 };
 
-/// The colour of [tone] on the Now Playing backdrop, which is the same in
-/// both themes (D4) — so these are the dark palette's values, fixed.
+/// The colour of [tone]'s glyph on the Now Playing backdrop, which is the
+/// same in both themes (D4) — so these are the dark palette's values, fixed.
 Color jamStatusToneColor(JamStatusTone tone) => switch (tone) {
-  JamStatusTone.calm => JamNowPlayingColors.secondary,
+  JamStatusTone.calm => JamNowPlayingColors.text,
   JamStatusTone.warning => JamColors.dark.warning,
   JamStatusTone.danger => JamColors.dark.danger,
 };
+
+/// The glyph a line of [tone] gets when it names none of its own.
+IconData jamStatusToneIcon(JamStatusTone tone) => switch (tone) {
+  JamStatusTone.calm => CupertinoIcons.info_circle_fill,
+  JamStatusTone.warning => CupertinoIcons.exclamationmark_triangle_fill,
+  JamStatusTone.danger => CupertinoIcons.exclamationmark_octagon_fill,
+};
+
+/// A fade-*through* for one-line labels: the old line is gone before the new
+/// one appears, so two strings are never legible on top of each other
+/// mid-swap. Use as both curves of an [AnimatedSwitcher] (the outgoing
+/// child runs it in reverse).
+const Curve jamFadeThroughCurve = Interval(0.5, 1, curve: Curves.easeOut);
 
 /// The footnote under the room's name: sync's problem when it has one,
 /// otherwise [fallback] (the room's other news — a download, a hold), and
@@ -216,34 +245,81 @@ class _JamSyncIndicatorState extends State<JamSyncIndicator> {
         ? fallback
         : jamSyncStatusLine(widget.state) ?? fallback;
     final reduced = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
+    final alignment = switch (widget.textAlign) {
+      TextAlign.left || TextAlign.start => AlignmentDirectional.topStart,
+      TextAlign.right || TextAlign.end => AlignmentDirectional.topEnd,
+      _ => AlignmentDirectional.topCenter,
+    };
     return AnimatedSwitcher(
-      duration: reduced ? Duration.zero : JamDuration.base,
-      switchInCurve: JamCurve.standard,
-      switchOutCurve: JamCurve.standard,
-      layoutBuilder: (current, previous) => Stack(
-        alignment: Alignment.topCenter,
-        children: [...previous, ?current],
-      ),
+      // Long enough for each half of the fade-through to read.
+      duration: reduced ? Duration.zero : JamDuration.slow,
+      switchInCurve: jamFadeThroughCurve,
+      switchOutCurve: jamFadeThroughCurve,
+      layoutBuilder: (current, previous) =>
+          Stack(alignment: alignment, children: [...previous, ?current]),
       child: line == null
           ? const SizedBox.shrink(key: ValueKey<String>('quiet'))
           : Semantics(
-              key: ValueKey<JamStatusLine>(line),
+              // Keyed by what the line *is*, not its numbers: "Getting this
+              // song… 14%" counting up updates in place rather than fading
+              // through on every percent.
+              key: ValueKey<String>(
+                '${line.tone.name}:'
+                '${line.text.replaceAll(RegExp(r'\d+'), '#')}',
+              ),
               liveRegion: true,
               onLongPress: widget.onShowDetails,
               child: GestureDetector(
                 onLongPress: widget.onShowDetails,
                 behavior: HitTestBehavior.opaque,
-                child: Text(
-                  line.text,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  textAlign: widget.textAlign,
-                  style: context.jamFootnote.copyWith(
-                    color: jamStatusToneColor(line.tone),
-                  ),
-                ),
+                child: _StatusLineText(line: line, alignment: alignment),
               ),
             ),
+    );
+  }
+}
+
+/// A glyph in the tone's colour, then the words in white.
+class _StatusLineText extends StatelessWidget {
+  const _StatusLineText({required this.line, required this.alignment});
+
+  final JamStatusLine line;
+  final AlignmentGeometry alignment;
+
+  @override
+  Widget build(BuildContext context) {
+    final style = context.jamFootnote.copyWith(
+      color: JamNowPlayingColors.text,
+      fontWeight: line.tone == JamStatusTone.calm
+          ? FontWeight.w400
+          : FontWeight.w600,
+    );
+    final glyphSize = MediaQuery.textScalerOf(context).scale(12);
+    return Align(
+      alignment: alignment,
+      widthFactor: 1,
+      heightFactor: 1,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          ExcludeSemantics(
+            child: Icon(
+              line.icon ?? jamStatusToneIcon(line.tone),
+              size: glyphSize,
+              color: jamStatusToneColor(line.tone),
+            ),
+          ),
+          const SizedBox(width: JamSpace.xs),
+          Flexible(
+            child: Text(
+              line.text,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: style,
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

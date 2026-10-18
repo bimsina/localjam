@@ -29,6 +29,28 @@ Widget _host(
 Color? _colorOf(WidgetTester tester, String text) =>
     tester.widget<Text>(find.text(text)).style!.color;
 
+Color? _glyphColor(WidgetTester tester) => tester
+    .widget<Icon>(
+      find
+          .descendant(
+            of: find.byType(JamSyncIndicator),
+            matching: find.byType(Icon),
+          )
+          .last,
+    )
+    .color;
+
+/// The combined opacity the switcher's fades give [text].
+double _opacityOf(WidgetTester tester, String text) {
+  var opacity = 1.0;
+  for (final fade in tester.widgetList<FadeTransition>(
+    find.ancestor(of: find.text(text), matching: find.byType(FadeTransition)),
+  )) {
+    opacity *= fade.opacity.value;
+  }
+  return opacity;
+}
+
 void main() {
   testWidgets('in sync and idle say nothing at all', (tester) async {
     for (final state in [JamSyncState.inSync, JamSyncState.idle]) {
@@ -50,37 +72,92 @@ void main() {
     );
   });
 
-  testWidgets('trouble is warning text; a wait is calm white', (tester) async {
+  testWidgets('the words are always white; the glyph carries the tone', (
+    tester,
+  ) async {
     await tester.pumpWidget(_host(JamSyncState.catchingUp));
     await tester.pumpAndSettle();
     expect(find.text(JamSyncStrings.catchingUp), findsOneWidget);
-    expect(_colorOf(tester, JamSyncStrings.catchingUp), JamColors.dark.warning);
+    expect(
+      _colorOf(tester, JamSyncStrings.catchingUp),
+      JamNowPlayingColors.text,
+    );
+    expect(_glyphColor(tester), JamColors.dark.warning);
 
     await tester.pumpWidget(_host(JamSyncState.reconnecting));
     await tester.pumpAndSettle();
     expect(
       _colorOf(tester, JamSyncStrings.reconnecting),
-      JamColors.dark.warning,
+      JamNowPlayingColors.text,
     );
+    expect(_glyphColor(tester), JamColors.dark.warning);
 
     await tester.pumpWidget(_host(JamSyncState.hostAway));
     await tester.pumpAndSettle();
     expect(
       _colorOf(tester, JamSyncStrings.hostAsleep),
-      JamNowPlayingColors.secondary,
+      JamNowPlayingColors.text,
     );
+    expect(_glyphColor(tester), JamNowPlayingColors.text);
   });
 
-  testWidgets('out of sync is the only red state', (tester) async {
+  testWidgets('out of sync is the only red glyph', (tester) async {
     await tester.pumpWidget(_host(JamSyncState.offSync));
     await tester.pumpAndSettle();
-    expect(_colorOf(tester, JamSyncStrings.offSync), JamColors.dark.danger);
+    expect(_colorOf(tester, JamSyncStrings.offSync), JamNowPlayingColors.text);
+    expect(_glyphColor(tester), JamColors.dark.danger);
   });
 
   testWidgets('the same colours in either app theme (D4)', (tester) async {
     await tester.pumpWidget(_host(JamSyncState.offSync, dark: true));
     await tester.pumpAndSettle();
-    expect(_colorOf(tester, JamSyncStrings.offSync), JamColors.dark.danger);
+    expect(_colorOf(tester, JamSyncStrings.offSync), JamNowPlayingColors.text);
+    expect(_glyphColor(tester), JamColors.dark.danger);
+  });
+
+  testWidgets('a swap fades through: the two lines are never both visible', (
+    tester,
+  ) async {
+    await tester.pumpWidget(_host(JamSyncState.syncing));
+    await tester.pumpAndSettle();
+    await tester.pumpWidget(_host(JamSyncState.reconnecting));
+    for (var ms = 0; ms <= 400; ms += 25) {
+      await tester.pump(const Duration(milliseconds: 25));
+      final visible = [
+        for (final text in [
+          JamSyncStrings.syncing,
+          JamSyncStrings.reconnecting,
+        ])
+          if (find.text(text).evaluate().isNotEmpty &&
+              _opacityOf(tester, text) > 0.01)
+            text,
+      ];
+      expect(visible.length, lessThanOrEqualTo(1), reason: '$ms ms: $visible');
+    }
+    await tester.pumpAndSettle();
+    expect(find.text(JamSyncStrings.syncing), findsNothing);
+    expect(find.text(JamSyncStrings.reconnecting), findsOneWidget);
+  });
+
+  testWidgets('a count updates in place rather than fading through', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      _host(
+        JamSyncState.inSync,
+        fallback: const JamStatusLine('Getting this song… 14%'),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.pumpWidget(
+      _host(
+        JamSyncState.inSync,
+        fallback: const JamStatusLine('Getting this song… 15%'),
+      ),
+    );
+    await tester.pump();
+    expect(find.text('Getting this song… 14%'), findsNothing);
+    expect(find.text('Getting this song… 15%'), findsOneWidget);
   });
 
   testWidgets('nothing animates on its own', (tester) async {

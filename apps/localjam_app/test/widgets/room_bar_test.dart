@@ -106,11 +106,46 @@ void main() {
     await tester.tap(find.byIcon(CupertinoIcons.forward_fill));
     expect(skipped, 1);
 
+    // The iPad sidebar dock (~240 wide) keeps both glyphs…
     await tester.pumpWidget(
       _host(Center(child: SizedBox(width: 240, child: bar()))),
     );
+    expect(find.byIcon(CupertinoIcons.forward_fill), findsOneWidget);
+    // …and only a capsule narrower than any real one drops next.
+    await tester.pumpWidget(
+      _host(Center(child: SizedBox(width: 200, child: bar()))),
+    );
     expect(find.byIcon(CupertinoIcons.forward_fill), findsNothing);
     expect(find.byIcon(CupertinoIcons.play_fill), findsOneWidget);
+  });
+
+  testWidgets('at accessibility sizes the capsule keeps its height and drops '
+      'to one line rather than clipping', (tester) async {
+    Widget bar({String? alert}) => MediaQuery(
+      data: const MediaQueryData(
+        size: Size(390, 844),
+        textScaler: TextScaler.linear(3),
+      ),
+      child: JamRoomBar(
+        title: 'A Song',
+        subtitle: 'Van Jam',
+        alert: alert,
+        onPlayPause: () {},
+        onNext: () {},
+      ),
+    );
+    await tester.pumpWidget(_host(bar()));
+    expect(tester.takeException(), isNull);
+    expect(tester.getSize(find.byType(JamRoomBar)).height, kJamRoomBarHeight);
+    expect(find.text('A Song'), findsOneWidget);
+    expect(find.text('Van Jam'), findsNothing);
+    expect(find.byIcon(CupertinoIcons.play_fill), findsOneWidget);
+
+    // A problem is what matters off Now Playing: it takes the one line.
+    await tester.pumpWidget(_host(bar(alert: 'Headphones disconnected')));
+    expect(tester.takeException(), isNull);
+    expect(find.text('Headphones disconnected'), findsOneWidget);
+    expect(find.text('A Song'), findsNothing);
   });
 
   testWidgets('a capsule: 64 tall, no progress line, a problem replaces the '
