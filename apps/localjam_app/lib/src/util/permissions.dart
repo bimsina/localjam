@@ -20,43 +20,19 @@ export 'package:permission_handler/permission_handler.dart'
 /// Deliberately a plain holder of strings rather than widgets: the redesign
 /// owns the presentation, this owns the wording.
 abstract final class JamPermissionCopy {
-  /// Android 17's `ACCESS_LOCAL_NETWORK`.
-  static const String localNetworkTitle = 'Let LocalJam use this network';
-  static const String localNetworkDetail =
-      'A jam runs entirely between the phones on your Wi-Fi or hotspot. '
-      'Without local network access nothing can reach anything.';
-
-  /// The same permission on iOS and macOS, where there is no API to request
-  /// it: the OS fires its own alert the first time the app touches Bonjour
-  /// or a LAN socket. All this sheet can do is make that alert expected —
-  /// which is the difference between tapping Allow and tapping the greyed
-  /// half of a dialog that came out of nowhere.
-  static const String localNetworkAppleDetail =
-      'A jam runs entirely between the phones on your Wi-Fi or hotspot. '
-      'Next, the system will ask you to allow it — LocalJam cannot reach '
-      'anyone without that.';
-
-  /// Android 13+ `POST_NOTIFICATIONS`.
-  static const String notificationsTitle = 'Show the Playback Card';
-  static const String notificationsDetail =
-      'The lock-screen card is how you pause and skip without unlocking. '
-      'Music still plays if you say no.';
-
-  /// Android `READ_MEDIA_AUDIO` / `READ_EXTERNAL_STORAGE`.
-  static const String audioLibraryTitle = 'Reach Your Music';
-  static const String audioLibraryDetail =
-      'LocalJam reads the songs already on this phone so you can queue them. '
-      'Nothing leaves your network.';
+  // The primers' titles and bodies live with the sheet that shows them
+  // (`JamPermissionSheetStrings`); what is left here is what the app says
+  // after the OS has answered.
 
   /// Shown when the OS will no longer prompt and only Settings can undo it.
   static const String audioLibraryDenied =
-      'LocalJam cannot see your music. Turn on music access in Settings, or '
-      'add files with the file picker instead.';
+      'LocalJam can’t see your music. Turn on music access in Settings, or '
+      'add songs from Files instead.';
 
   /// Camera, for the QR scanner.
   static const String cameraDenied =
-      'LocalJam cannot open the camera. Turn on camera access in Settings, or '
-      'join with a link instead.';
+      'LocalJam can’t use the camera. Turn it on in Settings, or join with a '
+      'link instead.';
 
   /// Action label for anything that hands the user to the OS.
   static const String openSettings = 'Open Settings';
