@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:localjam_app/src/widgets/rename_dialog.dart';
 import 'package:localjam_app/src/design/theme.dart';
+import 'package:localjam_app/src/screens/licenses_screen.dart';
 import 'package:localjam_app/src/screens/settings_screen.dart';
 import 'package:localjam_app/src/state/app_settings.dart';
 import 'package:localjam_app/src/state/session_controller.dart';
@@ -109,7 +110,11 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text(SettingsStrings.licences));
     await tester.pumpAndSettle();
-    expect(find.byType(LicensePage), findsOneWidget);
+    expect(find.byType(JamLicensesScreen), findsOneWidget);
+    // Cupertino all the way: no Material licence page or app bar.
+    expect(find.byType(LicensePage), findsNothing);
+    expect(find.byType(AppBar), findsNothing);
+    expect(find.text(SettingsStrings.appName), findsOneWidget);
   });
 
   testWidgets('renders on the dark palette', (tester) async {

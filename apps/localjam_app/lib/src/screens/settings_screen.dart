@@ -9,7 +9,7 @@ library;
 import 'dart:async';
 
 import 'package:flutter/cupertino.dart';
-import 'package:flutter/material.dart' show LicensePage, Theme, ThemeMode;
+import 'package:flutter/material.dart' show ThemeMode;
 import 'package:flutter/services.dart';
 import 'package:localjam_client/localjam_client.dart';
 import 'package:package_info_plus/package_info_plus.dart';
@@ -24,6 +24,7 @@ import '../widgets/list.dart';
 import '../widgets/rename_dialog.dart';
 import '../widgets/scaffold.dart';
 import '../widgets/section.dart';
+import 'licenses_screen.dart';
 
 /// Every user-facing string on this screen, in one place.
 abstract final class SettingsStrings {
@@ -47,8 +48,7 @@ abstract final class SettingsStrings {
   static const String openSourceDetail = 'GitHub';
   static const String linkCopied = 'Link copied. Paste it in a browser.';
 
-  /// American spelling, deliberately: the page's own title comes from
-  /// `MaterialLocalizations` and says "Licenses".
+  /// American spelling, like the page's own title.
   static const String licences = 'Licenses';
   static const String aboutFooter =
       'LocalJam is free and open source. It works over local Wi‑Fi, with no '
@@ -149,37 +149,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
     JamSession.read(context).notify(SettingsStrings.linkCopied);
   }
 
-  /// The licence list, on the app's own canvas.
-  ///
-  /// Pushing the route by hand is what lets a [Theme] sit above
-  /// [LicensePage]; the page title itself still comes from
-  /// `MaterialLocalizations` and stays "Licenses".
-  void _showLicences() {
-    final theme = Theme.of(context);
-    final colors = context.jamColors;
-    unawaited(
-      Navigator.of(context).push(
-        CupertinoPageRoute<void>(
-          builder: (context) => Theme(
-            data: theme.copyWith(
-              scaffoldBackgroundColor: colors.background,
-              canvasColor: colors.background,
-              cardColor: colors.background,
-              colorScheme: theme.colorScheme.copyWith(
-                surface: colors.background,
-              ),
-            ),
-            child: LicensePage(
-              applicationName: SettingsStrings.appName,
-              applicationVersion: _version,
-              applicationIcon: const _AppIcon(),
-              applicationLegalese: SettingsStrings.legalese,
-            ),
-          ),
+  /// The licence list: grouped iOS rows, no Material chrome.
+  void _showLicences() => unawaited(
+    Navigator.of(context).push(
+      CupertinoPageRoute<void>(
+        builder: (context) => JamLicensesScreen(
+          applicationName: SettingsStrings.appName,
+          applicationVersion: _version,
+          applicationIcon: const _AppIcon(),
+          applicationLegalese: SettingsStrings.legalese,
         ),
       ),
-    );
-  }
+    ),
+  );
 
   static String _modeLabel(ThemeMode mode) => switch (mode) {
     ThemeMode.system => SettingsStrings.system,
