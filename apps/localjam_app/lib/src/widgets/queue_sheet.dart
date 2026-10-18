@@ -47,8 +47,8 @@ abstract final class QueueSheetStrings {
   /// Confirmation after a removal, so it is never silent.
   static String removed(String title) => 'Removed “$title”';
   static const String undo = 'Undo';
-  static const String uploading = 'Sending your song to the room';
-  static const String importing = 'Adding your music to the room';
+  static const String uploading = 'Sending your song to the jam';
+  static const String importing = 'Adding your music to the jam';
   static const String hostRunsQueue = 'Only the host can add songs.';
 
   /// Why "Add Songs" is grey while the host cannot be reached — the same
@@ -722,6 +722,7 @@ class _QueueRow extends StatelessWidget {
     Widget track({
       VoidCallback? onLongPress,
       bool preview = false,
+      bool grip = true,
       EdgeInsets? previewPadding,
     }) => FutureBuilder<Uint8List?>(
       future: artwork,
@@ -742,7 +743,7 @@ class _QueueRow extends StatelessWidget {
         prefetchProgress: fetching ? (prefetch?.progress ?? 0) : null,
         hasError: failed,
         errorText: QueueSheetStrings.fetchFailed,
-        showDragHandle: index != null && !preview,
+        showDragHandle: index != null && !preview && grip,
         onTap: preview ? null : onTap,
         onLongPress: onLongPress,
         trailing: showRetry && !preview ? _RetryButton(onPressed: retry) : null,
@@ -764,66 +765,105 @@ class _QueueRow extends StatelessWidget {
     // the menu attaches to the lifted row — so it can only ever be read as
     // acting on that row, and never covers another row's title.
     final platterInset = math.max(0.0, horizontalPadding - _kPlatterPadding);
-    Widget row = menu.isEmpty
-        ? track()
-        : Builder(
-            builder: (rowContext) => track(
-              onLongPress: () => unawaited(
-                _showRowMenu(
-                  rowContext,
-                  items: menu,
-                  inset: platterInset,
-                  preview: track(
-                    preview: true,
-                    previewPadding: const EdgeInsets.symmetric(
-                      horizontal: _kPlatterPadding,
+    // [grip]: false while the row is swiped open — a reorder grip does not
+    // belong beside an open Remove (as in Music).
+    Widget assemble({required bool grip}) {
+      Widget row = menu.isEmpty
+          ? track(grip: grip)
+          : Builder(
+              builder: (rowContext) => track(
+                grip: grip,
+                onLongPress: () => unawaited(
+                  _showRowMenu(
+                    rowContext,
+                    items: menu,
+                    inset: platterInset,
+                    preview: track(
+                      preview: true,
+                      previewPadding: const EdgeInsets.symmetric(
+                        horizontal: _kPlatterPadding,
+                      ),
                     ),
                   ),
                 ),
               ),
-            ),
-          );
+            );
 
-    if (index != null) {
-      row = Stack(
+      if (index == null) return row;
+      // The Stack stays either way, so the row's state survives the grip
+      // coming and going.
+      return Stack(
         children: [
           row,
-          Positioned(
-            top: 0,
-            bottom: 0,
-            right: math.max(0, horizontalPadding - 12),
-            width: JamMetrics.hitTarget,
-            // ColoredBox, not SizedBox: `ReorderableDragStartListener` wraps
-            // its child in a `Listener` that defers hit testing, and an empty
-            // SizedBox never claims the pointer.
-            child: Semantics(
-              label: QueueSheetStrings.reorder,
-              child: ReorderableDragStartListener(
-                index: index,
-                child: const ColoredBox(color: JamFixedColors.clear),
+          if (grip)
+            Positioned(
+              top: 0,
+              bottom: 0,
+              right: math.max(0, horizontalPadding - 12),
+              width: JamMetrics.hitTarget,
+              // ColoredBox, not SizedBox: `ReorderableDragStartListener` wraps
+              // its child in a `Listener` that defers hit testing, and an empty
+              // SizedBox never claims the pointer.
+              child: Semantics(
+                label: QueueSheetStrings.reorder,
+                child: ReorderableDragStartListener(
+                  index: index,
+                  child: const ColoredBox(color: JamFixedColors.clear),
+                ),
               ),
             ),
-          ),
         ],
       );
     }
 
-    // Outside the grip, so the grip slides away with the row and the
-    // uncovered button is what a tap at the edge reaches.
-    if (canRemove) {
-      row = JamSwipeAction(
-        key: ValueKey<String>('queue-dismiss-${item.mediaId}'),
-        label: QueueSheetStrings.remove,
-        // Decided before the row goes: a removal the room refused springs
-        // back instead of vanishing from this phone only.
-        onAction: () => _removeAndSay(context),
-        onRemoved: onRemoved,
-        child: row,
-      );
-    }
+    // Outside the grip, so the uncovered button is what a tap at the edge
+    // reaches.
+    final row = canRemove
+        ? _SwipeToRemove(
+            key: ValueKey<String>('queue-dismiss-${item.mediaId}'),
+            // Decided before the row goes: a removal the jam refused springs
+            // back instead of vanishing from this phone only.
+            onAction: () => _removeAndSay(context),
+            onRemoved: onRemoved,
+            builder: (open) => assemble(grip: !open),
+          )
+        : assemble(grip: true);
 
     return animateIn ? _InsertReveal(child: row) : row;
   }
+}
+
+/// Swipe-to-remove that rebuilds its row with whether it is open, so the
+/// row can drop what does not belong beside an open action.
+class _SwipeToRemove extends StatefulWidget {
+  const _SwipeToRemove({
+    super.key,
+    required this.onAction,
+    required this.onRemoved,
+    required this.builder,
+  });
+
+  final Future<bool> Function() onAction;
+  final VoidCallback onRemoved;
+  final Widget Function(bool open) builder;
+
+  @override
+  State<_SwipeToRemove> createState() => _SwipeToRemoveState();
+}
+
+class _SwipeToRemoveState extends State<_SwipeToRemove> {
+  bool _open = false;
+
+  @override
+  Widget build(BuildContext context) => JamSwipeAction(
+    label: QueueSheetStrings.remove,
+    onAction: widget.onAction,
+    onRemoved: widget.onRemoved,
+    onOpenChanged: (open) {
+      if (mounted && open != _open) setState(() => _open = open);
+    },
+    child: widget.builder(_open),
+  );
 }
 
 /// "Try again" on a row whose fetch the engine gave up on.

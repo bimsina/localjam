@@ -110,7 +110,8 @@ class JamTrackRow extends StatelessWidget implements JamSelfSeparatingRow {
   /// The song could not be fetched or decoded.
   final bool hasError;
 
-  /// The reason, shown in `danger` (default "Couldn’t be loaded").
+  /// The reason, shown in `danger` — [JamNowPlayingColors.destructive] on
+  /// the backdrop (default "Couldn’t be loaded").
   final String? errorText;
 
   /// Draws the reorder handle.
@@ -212,9 +213,15 @@ class JamTrackRow extends StatelessWidget implements JamSelfSeparatingRow {
                       subtitle,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: jamTabular(
-                        context.jamSubheadline,
-                      ).copyWith(color: hasError ? colors.danger : secondary),
+                      style: jamTabular(context.jamSubheadline).copyWith(
+                        color: !hasError
+                            ? secondary
+                            // On the backdrop, the pale red tuned for the
+                            // art (system red on a dark cover is ~3:1).
+                            : onBackdrop
+                            ? JamNowPlayingColors.destructive
+                            : colors.danger,
+                      ),
                     ),
                 ],
               ),
