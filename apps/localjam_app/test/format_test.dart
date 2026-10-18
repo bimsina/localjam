@@ -80,7 +80,15 @@ void main() {
   group('formatSignedMs', () {
     test('signs a real figure', () {
       expect(formatSignedMs(12300), '+12.3 ms');
-      expect(formatSignedMs(-12300), '-12.3 ms');
+      expect(formatSignedMs(-12300), '−12.3 ms');
+    });
+
+    test('uses a real minus, and seconds past a second', () {
+      // "-272391.4 ms" was a guest's clock offset in Diagnostics.
+      expect(formatSignedMs(-272391400), '−272.4 s');
+      expect(formatSignedMs(1500000), '+1.5 s');
+      expect(formatSignedMs(-999000), '−999.0 ms');
+      expect(formatSignedMs(-5000), isNot(contains('-')));
     });
 
     test('renders anything that rounds to zero as an unsigned 0.0 ms', () {
@@ -96,7 +104,7 @@ void main() {
 
     test('starts signing again at the deadband edge', () {
       expect(formatSignedMs(60), '+0.1 ms');
-      expect(formatSignedMs(-60), '-0.1 ms');
+      expect(formatSignedMs(-60), '−0.1 ms');
     });
 
     test('formatDriftMs is the same formatter', () {

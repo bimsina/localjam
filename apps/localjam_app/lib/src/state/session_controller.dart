@@ -51,6 +51,27 @@ enum JamSessionPhase {
   ended,
 }
 
+/// What kind of thing a [JamNotice] says, so the shell can pick its glyph
+/// instead of guessing from whether it carries an action.
+enum JamNoticeTone {
+  /// The room narrating itself, or a neutral confirmation — including one
+  /// that carries an Undo. No glyph.
+  neutral,
+
+  /// Something the user did, done ("Link copied"): a checkmark.
+  done,
+
+  /// Someone arrived, left or was removed: a person glyph.
+  people,
+
+  /// Something needs attention but nothing broke (a file skipped, a
+  /// permission declined).
+  warning,
+
+  /// Something failed.
+  error,
+}
+
 /// A transient, one-shot message for the app shell to surface.
 ///
 /// Emitted rather than stored: these are things that *happened* ("Ana
@@ -59,13 +80,18 @@ enum JamSessionPhase {
 /// all. One channel, one place that renders it (the router shell).
 @immutable
 class JamNotice {
-  const JamNotice(this.message, {this.actionLabel, this.onAction});
+  const JamNotice(this.message, {this.actionLabel, this.onAction, this.tone});
 
   final String message;
 
-  /// Optional action, e.g. "Open settings" on a permanent permission denial.
+  /// Optional action, e.g. "Open Settings" on a permanent permission denial,
+  /// or "Undo".
   final String? actionLabel;
   final VoidCallback? onAction;
+
+  /// What kind of notice this is, when the sender said. Null for senders
+  /// that predate it; the shell then falls back to its own guess.
+  final JamNoticeTone? tone;
 
   @override
   String toString() => 'JamNotice($message)';
@@ -74,7 +100,8 @@ class JamNotice {
 /// What the app says when Android takes the foreground service away.
 const String kJamKeepAliveLost = 'Background playback may pause';
 
-/// The lead of the receipt a host gets on the way back to home.
+/// What a jam that ended is called. The host gets no toast for it any more:
+/// the new row at the top of Recent says it (§10.5).
 const String kJamEnded = 'Jam ended';
 
 /// What a pick that added nothing says, because the room already had exactly
@@ -101,7 +128,11 @@ const String kJamNotConnected =
 const String kJamIntentFailed = 'That didn’t go through. Try again.';
 
 /// A failed rejoin that the controller turned back into the ended screen.
-const String kJamRejoinFailed = 'Could not get back into that room.';
+const String kJamRejoinFailed = 'Couldn’t get back into that jam.';
+
+/// What a host is told when a guest it removed is gone: its own action, not
+/// "Okon left".
+String jamRemovedNotice(String name) => 'Removed $name';
 
 /// This app and the host cannot talk: a different major protocol version
 /// (§2) — refused at the door, or reported by the host later.
@@ -176,12 +207,12 @@ class JamAddFailure {
 /// gone, and saying so would send people to rejoin a room that is fine.
 String? jamAddFailureWhy(Object error) => switch (error) {
   JamHttpStatusException(statusCode: 507) =>
-    'The room\u2019s upload space is full.',
+    'The jam\u2019s upload space is full.',
   JamHttpStatusException(statusCode: 429) =>
     'Wait for your other uploads to finish, then try again.',
   JamHttpStatusException(statusCode: 403) =>
-    'This room is listen-only, or the host hasn\u2019t let you add tracks.',
-  JamHttpStatusException(statusCode: 413) => 'It\u2019s too big for the room.',
+    'This jam is listen-only, or the host hasn\u2019t let you add songs.',
+  JamHttpStatusException(statusCode: 413) => 'It\u2019s too big for the jam.',
   JamHttpStatusException(statusCode: 401) =>
     'The invite is no longer valid. Ask the host for a fresh code.',
   _ => null,
@@ -256,6 +287,18 @@ class JamSessionController extends ChangeNotifier {
   /// Guest display names by peerId, so a `peerLeft` event (which carries only
   /// an id) can still say who left.
   final Map<String, String> _peerNames = {};
+
+  /// Guests this host removed ([removePeer]) whose departure has not been
+  /// heard yet — so the host is told "Removed Okon", not "Okon left".
+  final Set<String> _removing = {};
+
+  /// Every room this device has hosted since the app started.
+  ///
+  /// Never cleared: a host's own advertisement can outlive its room (a
+  /// daemon that confirmed a registration late, a record still cached two
+  /// TTLs on), and the one jam a device must never offer itself is its own —
+  /// least of all with "Join" under a room it just ended.
+  final Set<String> _ownRoomTokens = {};
 
   /// Nearby rooms over mDNS. Owned here rather than by a screen so the home
   /// screen can show live discovery the moment the app opens, and so a
@@ -403,10 +446,20 @@ class JamSessionController extends ChangeNotifier {
   /// Publishes a transient message. Public so screens that own a flow the
   /// controller cannot see (pickers, permissions, the scanner) can use the
   /// same channel rather than each growing a SnackBar.
-  void notify(String message, {String? actionLabel, VoidCallback? onAction}) {
+  void notify(
+    String message, {
+    String? actionLabel,
+    VoidCallback? onAction,
+    JamNoticeTone? tone,
+  }) {
     if (_notices.isClosed) return;
     _notices.add(
-      JamNotice(message, actionLabel: actionLabel, onAction: onAction),
+      JamNotice(
+        message,
+        actionLabel: actionLabel,
+        onAction: onAction,
+        tone: tone,
+      ),
     );
   }
 
@@ -443,7 +496,9 @@ class JamSessionController extends ChangeNotifier {
       ok = false;
     }
     // A room that ended under the finger has its own screen saying so.
-    if (!ok && identical(engine, _engine) && isLive) notify(_whyNot());
+    if (!ok && identical(engine, _engine) && isLive) {
+      notify(_whyNot(), tone: JamNoticeTone.warning);
+    }
     return ok;
   }
 
@@ -545,8 +600,19 @@ class JamSessionController extends ChangeNotifier {
 
   void _onRoomsChanged() {
     final browser = _browser;
-    if (browser != null) _nearby.value = browser.rooms.value;
+    if (browser == null) return;
+    final rooms = browser.rooms.value;
+    _nearby.value = _ownRoomTokens.isEmpty
+        ? rooms
+        : List.unmodifiable([
+            for (final room in rooms)
+              if (!_ownRoomTokens.contains(room.token)) room,
+          ]);
   }
+
+  /// Whether [room] is one this device hosted since the app started — never
+  /// listed under Nearby.
+  bool isOwnRoom(JamNearbyRoom room) => _ownRoomTokens.contains(room.token);
 
   Future<void> _stopBrowsing() async {
     final browser = _browser;
@@ -805,7 +871,7 @@ class JamSessionController extends ChangeNotifier {
     // and report "Could not add a, b, c" — true, and no help at all. Say
     // why once instead, before reading a byte.
     if (!canSendCommands) {
-      notify(_whyNot());
+      notify(_whyNot(), tone: JamNoticeTone.warning);
       return failures;
     }
     var attempted = 0;
@@ -820,7 +886,10 @@ class JamSessionController extends ChangeNotifier {
         // fail identically, so stop and say why.
         debugPrint('localjam: add stopped, host unreachable: $e');
         _addFailures = const [];
-        notify(e.hostAway ? kJamHostAsleepTryLater : kJamNotConnected);
+        notify(
+          e.hostAway ? kJamHostAsleepTryLater : kJamNotConnected,
+          tone: JamNoticeTone.warning,
+        );
         return failures;
       } catch (e) {
         debugPrint('localjam: could not add ${file.path}: $e');
@@ -832,12 +901,12 @@ class JamSessionController extends ChangeNotifier {
     // pick worked. Only when at least one actually landed.
     if (failures.length < attempted) JamHaptics.queued();
     if (failures.isNotEmpty) {
-      notify(describeAddFailures(failures));
+      notify(describeAddFailures(failures), tone: JamNoticeTone.warning);
     } else if (duplicates > 0 && duplicates == attempted) {
       // Nothing failed and nothing changed: the room already had these exact
       // bytes (§6.4). Without this the queue simply does not move and the
       // pick reads as a button that did nothing.
-      notify(kJamAlreadyQueued);
+      notify(kJamAlreadyQueued, tone: JamNoticeTone.neutral);
     }
     return _addFailures;
   }
@@ -863,7 +932,9 @@ class JamSessionController extends ChangeNotifier {
       debugPrint('localjam: could not add ${failure.name}: ${failure.reason}');
     }
     _addFailures = List.unmodifiable(failures);
-    if (failures.isNotEmpty) notify(describeAddFailures(failures));
+    if (failures.isNotEmpty) {
+      notify(describeAddFailures(failures), tone: JamNoticeTone.warning);
+    }
     // The room's "adding your music" state hangs off this.
     notifyListeners();
   }
@@ -945,11 +1016,9 @@ class JamSessionController extends ChangeNotifier {
   /// Ends the session on purpose — the only way out. A host closing the room
   /// ends it for everyone (PROTOCOL.md §10: host death ends the room).
   Future<void> leave() async {
-    // A host who ends the jam is dropped straight back on home, and the
-    // terminal "this jam ended" screen is for guests — it explains something
-    // that happened *to* them. So the host gets the one thing that screen
-    // would have told them that they do not already know: how big it was.
-    final farewell = _endSummary();
+    // No "Jam ended" toast on the way out (§10.5): a host who ends the jam
+    // lands on home, where the jam is already the newest Recent row, and a
+    // guest's ended screen says it in full.
     await _teardown();
     _phase = JamSessionPhase.idle;
     _endReason = null;
@@ -964,26 +1033,7 @@ class JamSessionController extends ChangeNotifier {
     // long as the platform likes, and leaving must not wait on the radio.
     unawaited(_resumeBrowsing());
     notifyListeners();
-    if (farewell != null) notify(farewell);
   }
-
-  /// "Jam ended · 12 tracks, 3 people", or null when this is not a host
-  /// closing a live room (a guest leaving needs no receipt, and an already
-  /// terminal session has had its say on the ended screen).
-  String? _endSummary() {
-    final engine = _engine;
-    if (engine == null || !isHost || _phase != JamSessionPhase.live) {
-      return null;
-    }
-    final tracks = engine.playlist.length;
-    // The host is in the room too, and never appears in `peers`.
-    final people = engine.peers.length + 1;
-    return '$kJamEnded · ${_plural(tracks, 'track')}, '
-        '${_plural(people, 'person', 'people')}';
-  }
-
-  static String _plural(int count, String one, [String? many]) =>
-      '$count ${count == 1 ? one : (many ?? '${one}s')}';
 
   /// Closes whatever engine is attached, leaving [phase] to the caller.
   Future<void> _teardown() async {
@@ -1018,6 +1068,12 @@ class JamSessionController extends ChangeNotifier {
     // The room we are in is the one room we can never join. A host reads its
     // own advertisement, and a guest reads the host's.
     _setExcludedToken(_tokenOf(hostEngine?.joinUri ?? _lastJoinUri));
+    // A room of our own stays out of Nearby for good, not just while we are
+    // in it — see [_ownRoomTokens].
+    final own = _tokenOf(hostEngine?.joinUri);
+    if (own != null && own.isNotEmpty && _ownRoomTokens.add(own)) {
+      _onRoomsChanged();
+    }
     // §2.8: the jam started, or you got in. One buzz, on both sides — the
     // room's own celebration overlay does not fire on desktop or under
     // reduced motion, and this moment should be felt regardless.
@@ -1076,6 +1132,7 @@ class JamSessionController extends ChangeNotifier {
     }
     _subs.clear();
     _peerNames.clear();
+    _removing.clear();
     _sourcePaths.clear();
     backdrops.clear();
     _lastMediaId = null;
@@ -1104,7 +1161,7 @@ class JamSessionController extends ChangeNotifier {
     final held = JamKeepAlive.active.value;
     if (held == _keepAliveHeld) return;
     _keepAliveHeld = held;
-    if (!held) notify(kJamKeepAliveLost);
+    if (!held) notify(kJamKeepAliveLost, tone: JamNoticeTone.warning);
   }
 
   /// Only Android has a keep-alive to lose. Everywhere else the notifier
@@ -1133,10 +1190,10 @@ class JamSessionController extends ChangeNotifier {
   void _onGuestError(ErrorMessage error) {
     debugPrint('localjam: host error ${error.code.wire} — ${error.message}');
     final copy = switch (error.code) {
-      ErrorCode.notAllowed => 'The host has not given you that yet.',
-      ErrorCode.mediaGone => 'That track is no longer in the room.',
+      ErrorCode.notAllowed => 'The host hasn’t given you that yet.',
+      ErrorCode.mediaGone => 'That song is no longer in the jam.',
       ErrorCode.internal => 'The host hit a problem with that.',
-      ErrorCode.sessionFull => 'The room is full.',
+      ErrorCode.sessionFull => 'The jam is full.',
       ErrorCode.versionUnsupported => kJamVersionMismatch,
       // A code from a newer host (§2 tolerant decoding): nothing specific
       // to say about it, and nothing to retry automatically either.
@@ -1144,7 +1201,24 @@ class JamSessionController extends ChangeNotifier {
       // kicked and badToken are fatal; sessionEnded owns the message.
       ErrorCode.kicked || ErrorCode.badToken => null,
     };
-    if (copy != null) notify(copy);
+    if (copy != null) notify(copy, tone: JamNoticeTone.warning);
+  }
+
+  /// Removes [peerId] from the jam this device hosts (§5.6) — what People's
+  /// "Remove from Jam" should call, so the departure that follows is told
+  /// as the host's own action ("Removed Okon"), even for a guest the engine
+  /// cannot keep out (one that sent no device id). Throws what
+  /// [JamHostEngine.kickPeer] throws.
+  void removePeer(String peerId) {
+    final host = hostEngine;
+    if (host == null) return;
+    _removing.add(peerId);
+    try {
+      host.kickPeer(peerId);
+    } catch (_) {
+      _removing.remove(peerId);
+      rethrow;
+    }
   }
 
   /// Presence, from the host's side. A host is usually looking at the queue
@@ -1158,10 +1232,21 @@ class JamSessionController extends ChangeNotifier {
         final name = peer.clientName.isEmpty ? 'Someone' : peer.clientName;
         _peerNames[peer.peerId] = name;
         JamHaptics.peerJoined();
-        notify('$name joined');
+        notify('$name joined', tone: JamNoticeTone.people);
       case JamHostEventKind.peerLeft:
-        final name = _peerNames.remove(event.peerId) ?? 'Someone';
-        notify('$name left');
+        final id = event.peerId;
+        final name = _peerNames.remove(id) ?? 'Someone';
+        // A kick drops the connection like any departure, but it is the
+        // host's own doing, and "Okon left" tells it as theirs. The engine
+        // lists a kicked device before it drops it, so a removal made
+        // anywhere (not only through [removePeer]) reads right.
+        final removed =
+            _removing.remove(id) ||
+            (hostEngine?.kickedPeers.any((p) => p.peerId == id) ?? false);
+        notify(
+          removed ? jamRemovedNotice(name) : '$name left',
+          tone: JamNoticeTone.people,
+        );
       case _:
         return;
     }
@@ -1174,8 +1259,9 @@ class JamSessionController extends ChangeNotifier {
         .firstOrNull;
     notify(
       item == null
-          ? '$who added a track'
+          ? '$who added a song'
           : '$who added ${jamDisplayTitle(item)}',
+      tone: JamNoticeTone.people,
     );
   }
 
@@ -1192,7 +1278,7 @@ class JamSessionController extends ChangeNotifier {
     if (playlist.length < 2) return;
     if (previous == playlist.last.mediaId &&
         current == playlist.first.mediaId) {
-      notify('Starting the queue over');
+      notify('Starting the queue over', tone: JamNoticeTone.neutral);
     }
   }
 
@@ -1248,25 +1334,25 @@ class JamSessionController extends ChangeNotifier {
   static String _describe(Object error) => switch (error) {
     JamRejectedException(:final reason) => switch (reason) {
       RejectReason.version => kJamVersionMismatch,
-      RejectReason.full => 'That room is full right now.',
+      RejectReason.full => 'That jam is full right now.',
       RejectReason.badToken =>
-        'That code no longer works — the room was restarted. Ask for a '
+        'That code no longer works because the jam restarted. Ask for a '
             'fresh one.',
       // §5.6: the device stays out until the host lets it back in, so the
       // sentence says whose call that is rather than inviting a retry.
       RejectReason.kicked =>
-        'The host removed you from this room. They can let you back in.',
+        'The host removed you from this jam. They can let you back in.',
       // A reason from a newer host: still a no, and still final.
       RejectReason.unknown =>
-        'The room didn’t let you in. Ask the host for a fresh code.',
+        'The jam didn’t let you in. Ask the host for a fresh code.',
     },
     JamOffNetworkException() =>
       'That link points outside your network. A jam only runs between '
           'devices on it.',
     SocketException() =>
-      'Could not reach that room. Check you are both on '
+      'Couldn’t reach that jam. Check you’re both on '
           'the same network or hotspot.',
-    FormatException() => 'That link is not a jam invite.',
+    FormatException() => 'That link isn’t a jam invite.',
     _ => _generic(error),
   };
 
@@ -1305,8 +1391,8 @@ String describeAddFailures(List<JamAddFailure> failures) {
   final rest = failures.length - 3;
   final tail = rest > 0 ? '$names and $rest more' : names;
   final lead = failures.length == 1
-      ? 'Could not add $tail'
-      : "${failures.length} files couldn't be added: $tail";
+      ? 'Couldn’t add $tail'
+      : '${failures.length} songs couldn’t be added: $tail';
   final why = failures.first.why;
   if (why == null || failures.any((f) => f.why != why)) return lead;
   return '$lead. $why';

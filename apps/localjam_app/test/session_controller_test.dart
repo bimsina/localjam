@@ -319,6 +319,7 @@ void main() {
 
       await guest.leave();
       expect(await waitFor(() => heard.contains('Ana left')), isTrue);
+      expect(heard.where((m) => m.startsWith('Removed')), isEmpty);
 
       await host.leave();
     });
@@ -381,7 +382,7 @@ void main() {
       expect(host.addFailures.first.name, 'localjam_missing_one.mp3');
       expect(
         heard.single,
-        "2 files couldn't be added: localjam_missing_one.mp3, "
+        '2 songs couldn’t be added: localjam_missing_one.mp3, '
         'localjam_missing_two.mp3',
       );
 
@@ -392,7 +393,7 @@ void main() {
   test('failure copy names files and counts, never stack traces', () {
     expect(
       describeAddFailures([const JamAddFailure('a.mp3', 'boom')]),
-      'Could not add a.mp3',
+      'Couldn’t add a.mp3',
     );
     expect(
       describeAddFailures([
@@ -402,7 +403,7 @@ void main() {
         const JamAddFailure('d.mp3', 'boom'),
         const JamAddFailure('e.mp3', 'boom'),
       ]),
-      "5 files couldn't be added: a.mp3, b.mp3, c.mp3 and 2 more",
+      '5 songs couldn’t be added: a.mp3, b.mp3, c.mp3 and 2 more',
     );
   });
 
@@ -506,6 +507,91 @@ void main() {
       await host.leave();
       await host.stopBrowsing();
       await browser.stop();
+    });
+  });
+
+  testWidgets('a jam this device hosted never comes back under Nearby, '
+      'even after it ended', (tester) async {
+    // The Android P1: the host's own advertisement outlived its room (a
+    // registration the daemon confirmed late), and the moment the jam ended
+    // the filter was cleared — so the device offered "Join" on its own
+    // ended jam for minutes.
+    final host = testSession();
+    await tester.runAsync(() async {
+      await host.startHost(sessionName: 'Own Room', discoverable: false);
+      final ownUri = host.joinUri!;
+      await host.leave();
+      expect(host.excludedToken, isNull, reason: 'not in a room any more');
+
+      final browser = JamRoomBrowser.withSources(
+        events: const Stream<Never>.empty(),
+      );
+      await host.startBrowsing(browser: browser);
+      JamNearbyRoom nearby(String name, Uri uri) =>
+          JamNearbyRoom(key: '_$name', sessionName: name, joinUri: uri);
+      final other = nearby(
+        'Van Jam',
+        Uri.parse('localjam://join?host=192.168.1.9&port=1&token=other'),
+      );
+      // A daemon that keeps answering for the dead room, next to a live one.
+      browser.rooms.value = [nearby('Own Room', ownUri), other];
+
+      expect(host.nearbyRooms.value.map((r) => r.sessionName), ['Van Jam']);
+      expect(host.isOwnRoom(nearby('Own Room', ownUri)), isTrue);
+      expect(host.isOwnRoom(other), isFalse);
+
+      await host.stopBrowsing();
+    });
+  });
+
+  testWidgets('a host that removes a guest is told "Removed", not "left"', (
+    tester,
+  ) async {
+    final host = testSession();
+    final guest = testSession();
+    final cache = tempCache();
+
+    await tester.runAsync(() async {
+      final heard = <JamNotice>[];
+      final sub = host.notices.listen(heard.add);
+      addTearDown(sub.cancel);
+
+      await host.startHost(sessionName: 'Kick Room', discoverable: false);
+      await guest.join(host.joinUri!, clientName: 'Okon', mediaCacheDir: cache);
+      expect(await waitFor(() => host.engine!.peers.isNotEmpty), isTrue);
+
+      host.removePeer(host.engine!.peers.first.peerId);
+      expect(
+        await waitFor(() => heard.any((n) => n.message.startsWith('Removed'))),
+        isTrue,
+      );
+      final messages = heard.map((n) => n.message).toList();
+      expect(messages, contains(jamRemovedNotice('Okon')));
+      expect(messages, isNot(contains('Okon left')));
+      expect(
+        heard.firstWhere((n) => n.message == jamRemovedNotice('Okon')).tone,
+        JamNoticeTone.people,
+      );
+
+      await guest.leave();
+      await host.leave();
+    });
+  });
+
+  testWidgets('ending a jam as host leaves no "Jam ended" toast behind', (
+    tester,
+  ) async {
+    // §10.5: the jam is already the newest row in Recent; the toast said it a
+    // second time (and in "tracks").
+    final host = testSession();
+    await tester.runAsync(() async {
+      final heard = <String>[];
+      final sub = host.notices.listen((n) => heard.add(n.message));
+      addTearDown(sub.cancel);
+      await host.startHost(sessionName: 'Quiet End', discoverable: false);
+      await host.leave();
+      await Future<void>.delayed(Duration.zero);
+      expect(heard.where((m) => m.startsWith(kJamEnded)), isEmpty);
     });
   });
 
@@ -722,7 +808,7 @@ void main() {
         isTrue,
         reason: 'a refused request must reach the user',
       );
-      expect(heard.first, 'The host has not given you that yet.');
+      expect(heard.first, 'The host hasn’t given you that yet.');
 
       await guest.leave();
       await host.leave();

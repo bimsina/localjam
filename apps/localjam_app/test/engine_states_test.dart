@@ -176,14 +176,14 @@ void main() {
 
       expect(
         describeAddFailures([refused(507)]),
-        'Could not add a.mp3. The room’s upload space is full.',
+        'Couldn’t add a.mp3. The jam’s upload space is full.',
       );
       // Mixed reasons stay at the names; nothing raw either way.
       final mixed = describeAddFailures([
         refused(507),
         JamAddFailure.of('/b.mp3', const SocketException('reset')),
       ]);
-      expect(mixed, "2 files couldn't be added: a.mp3, b.mp3");
+      expect(mixed, '2 songs couldn’t be added: a.mp3, b.mp3');
       expect(mixed, isNot(contains('Exception')));
     });
   });
