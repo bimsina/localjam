@@ -187,13 +187,13 @@ class _LocalJamAppState extends State<LocalJamApp> {
   Future<void> _joinFromLink(Uri uri) async {
     final parsed = parseJoinUri('$uri');
     if (parsed == null) {
-      _session.notify(AppStrings.notAnInvite);
+      _session.notify(AppStrings.notAnInvite, tone: JamNoticeTone.warning);
       return;
     }
     // LocalJam is a LAN product; a link pointing anywhere routable is not a
     // jam, it is this app being aimed at someone else's server.
     if (!joinUriIsLocalOnly(parsed)) {
-      _session.notify(AppStrings.notLocal);
+      _session.notify(AppStrings.notLocal, tone: JamNoticeTone.warning);
       return;
     }
     final context = _router.routerDelegate.navigatorKey.currentContext;
@@ -214,7 +214,10 @@ class _LocalJamAppState extends State<LocalJamApp> {
       _router.push('/room');
     } else {
       // Deep links showed nothing at all on failure before this.
-      _session.notify(_session.error ?? AppStrings.couldNotJoin);
+      _session.notify(
+        _session.error ?? AppStrings.couldNotJoin,
+        tone: JamNoticeTone.error,
+      );
     }
   }
 

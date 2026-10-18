@@ -27,34 +27,50 @@ Widget _host(void Function(BuildContext) onTap, {ThemeData? theme}) =>
 void main() {
   testWidgets('shows the message with a status glyph', (tester) async {
     await tester.pumpWidget(
-      _host((context) => showJamNotice(context, const JamNotice('Ana joined'))),
+      _host(
+        (context) => showJamNotice(
+          context,
+          const JamNotice('Ana joined', tone: JamNoticeTone.people),
+        ),
+      ),
     );
     await tester.tap(find.text('Go'));
     await tester.pumpAndSettle();
 
     expect(find.byType(JamNoticeCard), findsOneWidget);
     expect(find.text('Ana joined'), findsOneWidget);
-    expect(find.byIcon(CupertinoIcons.info_circle_fill), findsOneWidget);
+    expect(find.byIcon(CupertinoIcons.person_fill), findsOneWidget);
   });
 
-  test('kinds follow what a notice is', () {
-    expect(
-      jamNoticeKindFor(
-        JamNotice('Removed “Low Tide”', actionLabel: 'Undo', onAction: () {}),
-      ),
-      JamNoticeKind.neutral,
-    );
-    expect(
-      jamNoticeKindFor(
-        JamNotice('Camera is off', actionLabel: 'Settings', onAction: () {}),
-      ),
-      JamNoticeKind.warning,
-    );
-    expect(
-      jamNoticeKindFor(const JamNotice('Link copied')),
-      JamNoticeKind.success,
-    );
-    expect(jamNoticeKindFor(const JamNotice('Ana joined')), JamNoticeKind.info);
+  testWidgets('the glyph follows the tone the sender gave', (tester) async {
+    const glyphs = <JamNoticeTone, IconData?>{
+      JamNoticeTone.neutral: null,
+      JamNoticeTone.done: CupertinoIcons.checkmark_circle_fill,
+      JamNoticeTone.people: CupertinoIcons.person_fill,
+      JamNoticeTone.warning: CupertinoIcons.exclamationmark_triangle_fill,
+      JamNoticeTone.error: CupertinoIcons.xmark_octagon_fill,
+    };
+    for (final MapEntry(key: tone, value: glyph) in glyphs.entries) {
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: jamLightTheme(),
+          home: Scaffold(
+            body: JamNoticeBody(message: 'x', tone: tone),
+          ),
+        ),
+      );
+      final icons = find.descendant(
+        of: find.byType(JamNoticeBody),
+        matching: find.byType(Icon),
+      );
+      if (glyph == null) {
+        expect(icons, findsNothing, reason: '$tone');
+      } else {
+        expect(find.byIcon(glyph), findsOneWidget, reason: '$tone');
+      }
+    }
+    // Unsaid is neutral: no glyph, never a guess from the words.
+    expect(const JamNotice('Link copied').tone, JamNoticeTone.neutral);
   });
 
   testWidgets('an Undo notice carries no glyph at all', (tester) async {
@@ -63,7 +79,6 @@ void main() {
         (context) => showJamNotice(
           context,
           JamNotice('Removed “Low Tide”', actionLabel: 'Undo', onAction: () {}),
-          kind: JamNoticeKind.neutral,
         ),
       ),
     );
@@ -105,8 +120,8 @@ void main() {
             'Could not join',
             actionLabel: 'Retry',
             onAction: () => retried++,
+            tone: JamNoticeTone.error,
           ),
-          kind: JamNoticeKind.error,
         ),
       ),
     );
@@ -169,7 +184,7 @@ void main() {
         home: const Scaffold(
           body: JamNoticeBody(
             message: 'Out of sync',
-            kind: JamNoticeKind.error,
+            tone: JamNoticeTone.error,
           ),
         ),
       ),
@@ -234,8 +249,7 @@ void main() {
       _host(
         (context) => showJamNotice(
           context,
-          const JamNotice('Reconnecting'),
-          kind: JamNoticeKind.warning,
+          const JamNotice('Reconnecting', tone: JamNoticeTone.warning),
         ),
         theme: jamDarkTheme(),
       ),

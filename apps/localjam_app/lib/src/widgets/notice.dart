@@ -27,28 +27,7 @@ import '../state/session_controller.dart';
 import 'glass.dart';
 import 'pressable.dart';
 
-export '../state/session_controller.dart' show JamNotice;
-
-/// How loud a notice is: the glyph and its colour change, nothing else.
-enum JamNoticeKind {
-  /// Something happened and it was fine. "Ana joined."
-  info,
-
-  /// No glyph at all: a plain confirmation of something the user just did,
-  /// usually with its Undo ("Removed “Low Tide” · Undo"). Never a warning —
-  /// the user meant it.
-  neutral,
-
-  /// Something the user asked for is done. A checkmark.
-  success,
-
-  /// Something needs attention but nothing broke. A permission was declined,
-  /// a file was skipped.
-  warning,
-
-  /// An action failed. Usually paired with a retry action.
-  error,
-}
+export '../state/session_controller.dart' show JamNotice, JamNoticeTone;
 
 /// Which edge of the window a notice floats at.
 enum JamNoticePosition {
@@ -68,26 +47,30 @@ const EdgeInsets kJamNoticeMargin = EdgeInsets.all(JamSpace.lg);
 /// How far a notice rises as it arrives.
 const double _kNoticeRise = 24;
 
-extension on JamNoticeKind {
+/// How loud a notice is ([JamNotice.tone]): the glyph and its colour
+/// change, nothing else.
+extension on JamNoticeTone {
   IconData? get glyph => switch (this) {
-    JamNoticeKind.info => CupertinoIcons.info_circle_fill,
-    JamNoticeKind.neutral => null,
-    JamNoticeKind.success => CupertinoIcons.checkmark_circle_fill,
-    JamNoticeKind.warning => CupertinoIcons.exclamationmark_triangle_fill,
-    JamNoticeKind.error => CupertinoIcons.xmark_octagon_fill,
+    // A plain confirmation of something the user just did — usually with
+    // its Undo — gets no glyph at all: the user meant it.
+    JamNoticeTone.neutral => null,
+    JamNoticeTone.done => CupertinoIcons.checkmark_circle_fill,
+    JamNoticeTone.people => CupertinoIcons.person_fill,
+    JamNoticeTone.warning => CupertinoIcons.exclamationmark_triangle_fill,
+    JamNoticeTone.error => CupertinoIcons.xmark_octagon_fill,
   };
 
   Color tint(JamColors colors) => switch (this) {
-    JamNoticeKind.info || JamNoticeKind.neutral => colors.secondaryLabel,
-    JamNoticeKind.success => colors.success,
-    JamNoticeKind.warning => colors.warning,
-    JamNoticeKind.error => colors.danger,
+    JamNoticeTone.neutral || JamNoticeTone.people => colors.secondaryLabel,
+    JamNoticeTone.done => colors.success,
+    JamNoticeTone.warning => colors.warning,
+    JamNoticeTone.error => colors.danger,
   };
 
   String get semanticPrefix => switch (this) {
-    JamNoticeKind.info || JamNoticeKind.neutral || JamNoticeKind.success => '',
-    JamNoticeKind.warning => 'Warning. ',
-    JamNoticeKind.error => 'Error. ',
+    JamNoticeTone.neutral || JamNoticeTone.done || JamNoticeTone.people => '',
+    JamNoticeTone.warning => 'Warning. ',
+    JamNoticeTone.error => 'Error. ',
   };
 }
 
@@ -99,24 +82,24 @@ class JamNoticeBody extends StatelessWidget {
   const JamNoticeBody({
     super.key,
     required this.message,
-    this.kind = JamNoticeKind.info,
+    this.tone = JamNoticeTone.neutral,
   });
 
   final String message;
-  final JamNoticeKind kind;
+  final JamNoticeTone tone;
 
   @override
   Widget build(BuildContext context) {
     final colors = context.jamColors;
     return Semantics(
       liveRegion: true,
-      label: '${kind.semanticPrefix}$message',
+      label: '${tone.semanticPrefix}$message',
       excludeSemantics: true,
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          if (kind.glyph case final glyph?) ...[
-            Icon(glyph, size: 18, color: kind.tint(colors)),
+          if (tone.glyph case final glyph?) ...[
+            Icon(glyph, size: 18, color: tone.tint(colors)),
             const SizedBox(width: JamSpace.sm),
           ],
           Flexible(
@@ -141,15 +124,10 @@ class JamNoticeBody extends StatelessWidget {
 /// Separate from the overlay plumbing so a test, or a wide layout that wants
 /// it docked, can render exactly what the app shows.
 class JamNoticeCard extends StatelessWidget {
-  const JamNoticeCard({
-    super.key,
-    required this.notice,
-    this.kind = JamNoticeKind.info,
-    this.onAction,
-  });
+  const JamNoticeCard({super.key, required this.notice, this.onAction});
 
+  /// What to say, and how loud ([JamNotice.tone]).
   final JamNotice notice;
-  final JamNoticeKind kind;
 
   /// Wraps [JamNotice.onAction] so the host can dismiss itself on the way.
   final VoidCallback? onAction;
@@ -180,7 +158,10 @@ class JamNoticeCard extends StatelessWidget {
             mainAxisSize: MainAxisSize.min,
             children: [
               Flexible(
-                child: JamNoticeBody(message: notice.message, kind: kind),
+                child: JamNoticeBody(
+                  message: notice.message,
+                  tone: notice.tone,
+                ),
               ),
               if (hasAction) ...[
                 const SizedBox(width: JamSpace.xs),
@@ -263,7 +244,6 @@ class _JamNoticeHost {
 
   JamNoticeHandle show({
     required JamNotice notice,
-    required JamNoticeKind kind,
     required Duration duration,
     required EdgeInsets margin,
     required JamNoticePosition position,
@@ -277,7 +257,6 @@ class _JamNoticeHost {
       builder: (context) => _JamNoticeOverlay(
         key: _key,
         notice: notice,
-        kind: kind,
         duration: duration,
         margin: margin,
         position: position,
@@ -314,7 +293,6 @@ class _JamNoticeOverlay extends StatefulWidget {
   const _JamNoticeOverlay({
     super.key,
     required this.notice,
-    required this.kind,
     required this.duration,
     required this.margin,
     required this.position,
@@ -322,7 +300,6 @@ class _JamNoticeOverlay extends StatefulWidget {
   });
 
   final JamNotice notice;
-  final JamNoticeKind kind;
   final Duration duration;
   final EdgeInsets margin;
   final JamNoticePosition position;
@@ -394,7 +371,6 @@ class _JamNoticeOverlayState extends State<_JamNoticeOverlay>
                 ),
                 child: JamNoticeCard(
                   notice: widget.notice,
-                  kind: widget.kind,
                   onAction: () {
                     widget.notice.onAction?.call();
                     dismiss();
@@ -409,14 +385,14 @@ class _JamNoticeOverlayState extends State<_JamNoticeOverlay>
   }
 }
 
-/// Shows [notice] above everything, including modal sheets and dialogs.
+/// Shows [notice] above everything, including modal sheets and dialogs,
+/// with the glyph its [JamNotice.tone] calls for.
 ///
 /// Returns null only when there is no overlay to draw into — a bare widget
 /// with no `Navigator` above it.
 JamNoticeHandle? showJamNotice(
   BuildContext context,
   JamNotice notice, {
-  JamNoticeKind kind = JamNoticeKind.info,
   Duration duration = kJamNoticeDuration,
   EdgeInsets? margin,
   JamNoticePosition position = JamNoticePosition.bottom,
@@ -429,35 +405,8 @@ JamNoticeHandle? showJamNotice(
   if (overlay == null) return null;
   return _JamNoticeHost.of(overlay).show(
     notice: notice,
-    kind: kind,
     duration: duration,
     margin: margin ?? kJamNoticeMargin,
     position: position,
   );
 }
-
-/// The kind a notice should show, read from what it says — until
-/// `JamNotice` carries its own (see the router shell, its one caller).
-///
-/// - an **Undo** action: [JamNoticeKind.neutral] — the user did this on
-///   purpose, so no warning triangle and no glyph at all;
-/// - any other action ("Open Settings"): [JamNoticeKind.warning];
-/// - a finished request ("Link copied", "Mia can join again"):
-///   [JamNoticeKind.success];
-/// - everything else: [JamNoticeKind.info].
-JamNoticeKind jamNoticeKindFor(JamNotice notice) {
-  final action = notice.actionLabel;
-  if (action != null) {
-    return action.toLowerCase() == kJamNoticeUndo.toLowerCase()
-        ? JamNoticeKind.neutral
-        : JamNoticeKind.warning;
-  }
-  final message = notice.message.toLowerCase();
-  if (message.endsWith('copied') || message.endsWith('can join again')) {
-    return JamNoticeKind.success;
-  }
-  return JamNoticeKind.info;
-}
-
-/// The undo action's label, as notices spell it.
-const String kJamNoticeUndo = 'Undo';

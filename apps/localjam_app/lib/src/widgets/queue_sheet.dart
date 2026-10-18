@@ -271,7 +271,7 @@ class _QueuePanelState extends State<QueuePanel> {
                 // landed, or is already on its way. Say so rather than
                 // leaving a tap that did nothing.
                 if (!guest.retryFetch(item.mediaId)) {
-                  session.notify(kJamIntentFailed);
+                  session.notify(kJamIntentFailed, tone: JamNoticeTone.warning);
                 }
               },
       ),

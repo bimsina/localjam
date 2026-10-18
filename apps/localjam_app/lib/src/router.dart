@@ -329,11 +329,8 @@ class _RoomBarShellState extends State<_RoomBarShell> {
     final top = _noticeAtTop();
     showJamNotice(
       context,
+      // Its glyph is its own [JamNotice.tone]: the sender says.
       notice,
-      // An Undo is the user's own deliberate act (no glyph, never a
-      // warning); another action is something to deal with; a finished
-      // request gets a checkmark; the rest is the room narrating itself.
-      kind: jamNoticeKindFor(notice),
       position: top ? JamNoticePosition.top : JamNoticePosition.bottom,
       margin: top ? _topNoticeMargin : _noticeMargin(),
     );

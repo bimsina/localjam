@@ -51,8 +51,7 @@ enum JamSessionPhase {
   ended,
 }
 
-/// What kind of thing a [JamNotice] says, so the shell can pick its glyph
-/// instead of guessing from whether it carries an action.
+/// What kind of thing a [JamNotice] says: its glyph and colour.
 enum JamNoticeTone {
   /// The room narrating itself, or a neutral confirmation — including one
   /// that carries an Undo. No glyph.
@@ -80,7 +79,12 @@ enum JamNoticeTone {
 /// all. One channel, one place that renders it (the router shell).
 @immutable
 class JamNotice {
-  const JamNotice(this.message, {this.actionLabel, this.onAction, this.tone});
+  const JamNotice(
+    this.message, {
+    this.actionLabel,
+    this.onAction,
+    this.tone = JamNoticeTone.neutral,
+  });
 
   final String message;
 
@@ -89,9 +93,9 @@ class JamNotice {
   final String? actionLabel;
   final VoidCallback? onAction;
 
-  /// What kind of notice this is, when the sender said. Null for senders
-  /// that predate it; the shell then falls back to its own guess.
-  final JamNoticeTone? tone;
+  /// What kind of notice this is — the sender says; nothing guesses it from
+  /// the words. A notice with an Undo is [JamNoticeTone.neutral] (§10.5).
+  final JamNoticeTone tone;
 
   @override
   String toString() => 'JamNotice($message)';
@@ -450,7 +454,7 @@ class JamSessionController extends ChangeNotifier {
     String message, {
     String? actionLabel,
     VoidCallback? onAction,
-    JamNoticeTone? tone,
+    JamNoticeTone tone = JamNoticeTone.neutral,
   }) {
     if (_notices.isClosed) return;
     _notices.add(
@@ -1237,12 +1241,9 @@ class JamSessionController extends ChangeNotifier {
         final id = event.peerId;
         final name = _peerNames.remove(id) ?? 'Someone';
         // A kick drops the connection like any departure, but it is the
-        // host's own doing, and "Okon left" tells it as theirs. The engine
-        // lists a kicked device before it drops it, so a removal made
-        // anywhere (not only through [removePeer]) reads right.
-        final removed =
-            _removing.remove(id) ||
-            (hostEngine?.kickedPeers.any((p) => p.peerId == id) ?? false);
+        // host's own doing, and "Okon left" tells it as theirs. Every
+        // removal goes through [removePeer], which marks it.
+        final removed = _removing.remove(id);
         notify(
           removed ? jamRemovedNotice(name) : '$name left',
           tone: JamNoticeTone.people,
