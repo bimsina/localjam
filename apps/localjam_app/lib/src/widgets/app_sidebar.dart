@@ -1,11 +1,13 @@
 /// Desktop navigation (DESIGN_SPEC v3 §6.11, D7).
 ///
 /// On a wide window the phone chrome stops working: destinations behind
-/// nav-bar icons and a mini player floating over a 1400px window both read as
-/// leftovers from a smaller screen. The sidebar holds identity, the
-/// destinations and the live jam, all permanently visible — a column like
+/// nav-bar icons read as leftovers from a smaller screen. The sidebar holds
+/// identity and the destinations, permanently visible — a column like
 /// Music's on the Mac: rows of icon and title, the selected one on a tinted
-/// rounded highlight.
+/// rounded highlight. The live jam's mini player is not in here: it floats
+/// over the bottom of the content pane (the router shell), where the song's
+/// name and both transport buttons have room — in a 260 pt column it cut
+/// the title short and dropped Next.
 library;
 
 import 'dart:async';
@@ -16,11 +18,9 @@ import 'package:go_router/go_router.dart';
 import '../design/breakpoints.dart';
 import '../design/tokens.dart';
 import '../design/typography.dart';
-import '../state/session_controller.dart';
 import 'avatar.dart';
 import 'list.dart';
 import 'pressable.dart';
-import 'room_bar.dart';
 
 /// Everything the sidebar says out loud.
 abstract final class AppSidebarStrings {
@@ -48,7 +48,6 @@ class AppSidebar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = context.jamColors;
-    final session = JamSession.of(context);
     final location = GoRouterState.of(context).matchedLocation;
     final light = CupertinoTheme.brightnessOf(context) == Brightness.light;
 
@@ -93,8 +92,6 @@ class AppSidebar extends StatelessWidget {
                 current: location,
               ),
               const Spacer(),
-              // The mini player paints its own capsule and margins.
-              if (session.hasRoom) const RoomBar(),
             ],
           ),
         ),

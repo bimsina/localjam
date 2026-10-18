@@ -2,9 +2,15 @@
 ///
 /// [JamSessionController.notices] is a single channel and the router shell is
 /// the single subscriber; this is the single *look* (DESIGN_SPEC v3 §5): a
-/// capsule of blurred `material` near the bottom, above the mini player — a
-/// glyph, one line of subheadline text, at most one tint action — that
-/// dismisses itself. No full-width snackbars.
+/// capsule of blurred `material` — a glyph, one line of subheadline text, at
+/// most one tint action — that dismisses itself. No full-width snackbars.
+///
+/// **Never over a control (§10.5).** Where it floats is the caller's call
+/// ([JamNoticePosition]): the router shell puts it at the *top* (under the
+/// status bar) on Now Playing and whenever a sheet is open — the bottom
+/// there is all transport and sheet content — and at the bottom, above the
+/// mini player or the pinned button, everywhere else. Copy actions do not
+/// use a notice at all: they confirm in place (`JamCopyButton`).
 ///
 /// It is hosted in the **root navigator's overlay**, not a
 /// `ScaffoldMessenger`, so a notice raised from inside a sheet is drawn above
@@ -28,12 +34,29 @@ enum JamNoticeKind {
   /// Something happened and it was fine. "Ana joined."
   info,
 
+  /// No glyph at all: a plain confirmation of something the user just did,
+  /// usually with its Undo ("Removed “Low Tide” · Undo"). Never a warning —
+  /// the user meant it.
+  neutral,
+
+  /// Something the user asked for is done. A checkmark.
+  success,
+
   /// Something needs attention but nothing broke. A permission was declined,
   /// a file was skipped.
   warning,
 
   /// An action failed. Usually paired with a retry action.
   error,
+}
+
+/// Which edge of the window a notice floats at.
+enum JamNoticePosition {
+  /// Under the status bar (Now Playing, any open sheet).
+  top,
+
+  /// Above the bottom chrome (the default).
+  bottom,
 }
 
 /// How long a notice stays up before it goes on its own.
@@ -46,20 +69,23 @@ const EdgeInsets kJamNoticeMargin = EdgeInsets.all(JamSpace.lg);
 const double _kNoticeRise = 24;
 
 extension on JamNoticeKind {
-  IconData get glyph => switch (this) {
+  IconData? get glyph => switch (this) {
     JamNoticeKind.info => CupertinoIcons.info_circle_fill,
+    JamNoticeKind.neutral => null,
+    JamNoticeKind.success => CupertinoIcons.checkmark_circle_fill,
     JamNoticeKind.warning => CupertinoIcons.exclamationmark_triangle_fill,
     JamNoticeKind.error => CupertinoIcons.xmark_octagon_fill,
   };
 
   Color tint(JamColors colors) => switch (this) {
-    JamNoticeKind.info => colors.secondaryLabel,
+    JamNoticeKind.info || JamNoticeKind.neutral => colors.secondaryLabel,
+    JamNoticeKind.success => colors.success,
     JamNoticeKind.warning => colors.warning,
     JamNoticeKind.error => colors.danger,
   };
 
   String get semanticPrefix => switch (this) {
-    JamNoticeKind.info => '',
+    JamNoticeKind.info || JamNoticeKind.neutral || JamNoticeKind.success => '',
     JamNoticeKind.warning => 'Warning. ',
     JamNoticeKind.error => 'Error. ',
   };
@@ -89,8 +115,10 @@ class JamNoticeBody extends StatelessWidget {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(kind.glyph, size: 18, color: kind.tint(colors)),
-          const SizedBox(width: JamSpace.sm),
+          if (kind.glyph case final glyph?) ...[
+            Icon(glyph, size: 18, color: kind.tint(colors)),
+            const SizedBox(width: JamSpace.sm),
+          ],
           Flexible(
             child: Text(
               message,
@@ -238,6 +266,7 @@ class _JamNoticeHost {
     required JamNoticeKind kind,
     required Duration duration,
     required EdgeInsets margin,
+    required JamNoticePosition position,
   }) {
     // Replacing rather than queueing is deliberate: three stacked notices
     // about a network that dropped is three chances to miss the current one.
@@ -251,6 +280,7 @@ class _JamNoticeHost {
         kind: kind,
         duration: duration,
         margin: margin,
+        position: position,
         onDismissed: () {
           if (identical(_current, handle)) _remove();
         },
@@ -287,6 +317,7 @@ class _JamNoticeOverlay extends StatefulWidget {
     required this.kind,
     required this.duration,
     required this.margin,
+    required this.position,
     required this.onDismissed,
   });
 
@@ -294,6 +325,7 @@ class _JamNoticeOverlay extends StatefulWidget {
   final JamNoticeKind kind;
   final Duration duration;
   final EdgeInsets margin;
+  final JamNoticePosition position;
   final VoidCallback onDismissed;
 
   @override
@@ -340,12 +372,15 @@ class _JamNoticeOverlayState extends State<_JamNoticeOverlay>
   @override
   Widget build(BuildContext context) {
     // The overlay is the window, so the notice clears the home indicator
-    // itself; the caller's margin is what it keeps clear *on top of* that.
+    // (or the status bar) itself; the caller's margin is what it keeps clear
+    // *on top of* that.
+    final top = widget.position == JamNoticePosition.top;
+    // Only the capsule takes touches: the space around it is the screen.
     return SafeArea(
       child: Padding(
         padding: widget.margin,
         child: Align(
-          alignment: Alignment.bottomCenter,
+          alignment: top ? Alignment.topCenter : Alignment.bottomCenter,
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 560),
             child: FadeTransition(
@@ -353,7 +388,7 @@ class _JamNoticeOverlayState extends State<_JamNoticeOverlay>
               child: SlideTransition(
                 position: _controller.drive(
                   Tween<Offset>(
-                    begin: const Offset(0, _kNoticeRise / 56),
+                    begin: Offset(0, (top ? -_kNoticeRise : _kNoticeRise) / 56),
                     end: Offset.zero,
                   ).chain(CurveTween(curve: JamCurve.standard)),
                 ),
@@ -384,6 +419,7 @@ JamNoticeHandle? showJamNotice(
   JamNoticeKind kind = JamNoticeKind.info,
   Duration duration = kJamNoticeDuration,
   EdgeInsets? margin,
+  JamNoticePosition position = JamNoticePosition.bottom,
 }) {
   // Root, not nearest: the nearest overlay inside a modal route is the one
   // the route itself lives in, and an entry there would be clipped by it.
@@ -396,5 +432,32 @@ JamNoticeHandle? showJamNotice(
     kind: kind,
     duration: duration,
     margin: margin ?? kJamNoticeMargin,
+    position: position,
   );
 }
+
+/// The kind a notice should show, read from what it says — until
+/// `JamNotice` carries its own (see the router shell, its one caller).
+///
+/// - an **Undo** action: [JamNoticeKind.neutral] — the user did this on
+///   purpose, so no warning triangle and no glyph at all;
+/// - any other action ("Open Settings"): [JamNoticeKind.warning];
+/// - a finished request ("Link copied", "Mia can join again"):
+///   [JamNoticeKind.success];
+/// - everything else: [JamNoticeKind.info].
+JamNoticeKind jamNoticeKindFor(JamNotice notice) {
+  final action = notice.actionLabel;
+  if (action != null) {
+    return action.toLowerCase() == kJamNoticeUndo.toLowerCase()
+        ? JamNoticeKind.neutral
+        : JamNoticeKind.warning;
+  }
+  final message = notice.message.toLowerCase();
+  if (message.endsWith('copied') || message.endsWith('can join again')) {
+    return JamNoticeKind.success;
+  }
+  return JamNoticeKind.info;
+}
+
+/// The undo action's label, as notices spell it.
+const String kJamNoticeUndo = 'Undo';

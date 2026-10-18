@@ -23,6 +23,8 @@ import 'widgets/app_sidebar.dart';
 import 'widgets/notice.dart';
 import 'widgets/rename_dialog.dart';
 import 'widgets/room_bar.dart';
+import 'widgets/scaffold.dart';
+import 'widgets/sheet.dart';
 
 /// Arguments for re-hosting a past jam ("Host it again").
 class HostSetupArgs {
@@ -40,8 +42,16 @@ const String kOnboardingPath = '/welcome';
 const String kRoomPath = '/room';
 
 /// How much of the room screen's bottom edge the people strip occupies — a
-/// 44 dp row over a 12 dp inset. Notices clear it rather than land on it.
+/// 44 dp row over a 12 dp inset.
 const double kJamRoomPeopleStrip = 56;
+
+/// The tag both ends of the mini player → Now Playing hand-off can put on
+/// the cover (a `Hero`), so the artwork grows out of the capsule.
+const String kJamNowPlayingArtworkTag = 'jam-now-playing-artwork';
+
+/// How far a notice at the top keeps from the window's sides: clear of the
+/// header buttons under it (a 44 pt target 12 from the edge).
+const double _kTopNoticeSide = 64;
 
 /// Builds the app's router.
 ///
@@ -177,29 +187,35 @@ GoRouter _buildRouter(
         // home keeps rendering underneath — cheap, and required for both the
         // slide and the dismiss gesture to show anything.
         opaque: false,
-        transitionDuration: JamDuration.slow,
-        reverseTransitionDuration: JamDuration.base,
+        // The mini player opens into the player along iOS's sheet curve:
+        // quick off the mark, a long soft landing, no overshoot (a spring
+        // would lift the player past the top and flash home under it).
+        transitionDuration: const Duration(milliseconds: 450),
+        reverseTransitionDuration: JamDuration.slow,
         transitionsBuilder: (context, animation, secondary, child) =>
-            SlideTransition(
-              // Driven off the animation rather than a CurvedAnimation, which
-              // would be rebuilt (and leak its listener) every frame here.
-              position: animation.drive(
-                Tween<Offset>(
-                  begin: const Offset(0, 1),
-                  end: Offset.zero,
-                ).chain(CurveTween(curve: Curves.easeOutCubic)),
+            MediaQuery.disableAnimationsOf(context)
+            ? FadeTransition(opacity: animation, child: child)
+            : SlideTransition(
+                // Driven off the animation rather than a CurvedAnimation,
+                // which would be rebuilt (and leak its listener) every frame
+                // here.
+                position: animation.drive(
+                  Tween<Offset>(
+                    begin: const Offset(0, 1),
+                    end: Offset.zero,
+                  ).chain(CurveTween(curve: Curves.fastEaseInToSlowEaseOut)),
+                ),
+                child: child,
               ),
-              child: child,
-            ),
       ),
     ),
     GoRoute(
       path: '/host',
-      // Start a Jam is a sheet (§6.2): it rises over home, which recedes
-      // behind it the way an iOS page sheet does, with Cancel and Start in
-      // its own nav bar. A desktop window gets a plain page instead — a
-      // phone-shaped card over a 1280 px window is a dialog wearing a
-      // costume.
+      // Start a Jam is a task flow (§10.4): on a phone a page sheet that
+      // rises over home while home recedes behind it, with Cancel and Start
+      // in its own header; on a wide window (iPad, desktop) a centred form
+      // sheet over the dimmed app — never a full-window page with Cancel
+      // and Start a thousand points apart.
       pageBuilder: (context, state) {
         // `extra` when the router still has it; the controller's draft when
         // a rebuild dropped it — the same args either way.
@@ -210,11 +226,10 @@ GoRouter _buildRouter(
           initialName: args?.name ?? draft?.name,
           scrollController: controller,
         );
-        if (context.jamBreakpoint.hasSidebar) {
-          return CupertinoPage<void>(
+        if (jamUsesFormSheet(context)) {
+          return JamFormSheetPage<void>(
             key: state.pageKey,
-            fullscreenDialog: true,
-            child: screen(),
+            builder: (context, controller) => screen(controller),
           );
         }
         return _JamSheetPage<void>(
@@ -223,7 +238,16 @@ GoRouter _buildRouter(
         );
       },
     ),
-    GoRoute(path: '/scan', builder: (context, state) => const ScanScreen()),
+    GoRoute(
+      path: '/scan',
+      // A full-screen cover that slides up and closes with its xmark
+      // (§10.4) — not a sideways push wearing a modal's close button.
+      pageBuilder: (context, state) => CupertinoPage<void>(
+        key: state.pageKey,
+        fullscreenDialog: true,
+        child: const ScanScreen(),
+      ),
+    ),
   ],
 );
 
@@ -251,6 +275,9 @@ const double kJamMiniPlayerReach = JamMetrics.miniPlayerHeight + JamSpace.sm;
 
 /// The gap between the mini player and a notice floating above it.
 const double _kNoticeAboveBar = JamSpace.md;
+
+/// The gap between Home's Start a Jam and a notice above it.
+const double _kNoticeAboveHomeButton = JamSpace.xxl;
 
 /// Navigation chrome, per breakpoint.
 ///
@@ -299,20 +326,37 @@ class _RoomBarShellState extends State<_RoomBarShell> {
 
   void _show(JamNotice notice) {
     if (!mounted) return;
+    final top = _noticeAtTop();
     showJamNotice(
       context,
       notice,
-      // A notice carrying an action is one the user has to do something
-      // about; the rest are the room narrating itself.
-      kind: notice.actionLabel == null
-          ? JamNoticeKind.info
-          : JamNoticeKind.warning,
-      margin: _noticeMargin(),
+      // An Undo is the user's own deliberate act (no glyph, never a
+      // warning); another action is something to deal with; a finished
+      // request gets a checkmark; the rest is the room narrating itself.
+      kind: jamNoticeKindFor(notice),
+      position: top ? JamNoticePosition.top : JamNoticePosition.bottom,
+      margin: top ? _topNoticeMargin : _noticeMargin(),
     );
   }
 
-  /// Where a floating notice sits, so it never lands on the thing it is
-  /// talking about.
+  /// Whether a notice goes to the top of the window (§10.5): on Now
+  /// Playing, whose bottom is all scrubber, transport and footer; in Start
+  /// a Jam; and whenever a sheet is open, whose bottom is its content.
+  bool _noticeAtTop() {
+    final location = GoRouter.of(context).state.matchedLocation;
+    return location == kRoomPath ||
+        location == '/host' ||
+        jamOpenSheets.value > 0;
+  }
+
+  static const EdgeInsets _topNoticeMargin = EdgeInsets.fromLTRB(
+    _kTopNoticeSide,
+    JamSpace.xs,
+    _kTopNoticeSide,
+    JamSpace.lg,
+  );
+
+  /// Where a notice at the bottom sits, so it never lands on a control.
   ///
   /// The notice host is the app's root overlay, so it floats at the bottom of
   /// the *window* regardless of which route is on top. Everything it has to
@@ -323,27 +367,20 @@ class _RoomBarShellState extends State<_RoomBarShell> {
   /// numbers describe is the chrome sitting above the home indicator.
   EdgeInsets _noticeMargin() {
     const base = JamSpace.lg;
-    final onRoom = GoRouter.of(context).state.matchedLocation == kRoomPath;
-    if (onRoom) {
-      return const EdgeInsets.all(
-        base,
-      ).copyWith(bottom: base + kJamRoomPeopleStrip);
-    }
-    final phoneChrome = !context.jamBreakpoint.hasSidebar;
-    final hasBar = phoneChrome && JamSession.of(context).hasRoom;
+    final hasBar = JamSession.of(context).hasRoom;
     if (!hasBar) {
       // Home pins Start a Jam to the bottom while no jam runs; a notice
-      // floats above it rather than over the button.
+      // floats above it rather than over the button — far enough above
+      // that its blur samples the page, not the raspberry button.
       final onHome = GoRouter.of(context).state.matchedLocation == '/';
-      if (phoneChrome && onHome) {
-        // The button sits on the home indicator's inset, or 16 above the
-        // edge where there is none (JamBottomBar).
-        final floor = MediaQuery.paddingOf(context).bottom > 0
-            ? 0.0
-            : JamSpace.lg;
-        return const EdgeInsets.all(
-          base,
-        ).copyWith(bottom: floor + JamMetrics.buttonHeight + _kNoticeAboveBar);
+      if (onHome) {
+        final bottom = MediaQuery.paddingOf(context).bottom;
+        // Where JamBottomBar puts the button, less the safe area the
+        // notice host adds itself.
+        final floor = jamBottomBarInset(bottom) - bottom;
+        return const EdgeInsets.all(base).copyWith(
+          bottom: floor + JamMetrics.buttonHeight + _kNoticeAboveHomeButton,
+        );
       }
       return kJamNoticeMargin;
     }
@@ -374,7 +411,11 @@ class _RoomBarShellState extends State<_RoomBarShell> {
 
   @override
   Widget build(BuildContext context) {
+    final hasRoom = JamSession.of(context).hasRoom;
     if (context.jamBreakpoint.hasSidebar) {
+      // The mini player is the content pane's bottom accessory (iPadOS 26
+      // Music), not a capsule squeezed into the 260 pt sidebar, where the
+      // song's name was cut to "Sunday Morni…" and Next did not fit.
       return ColoredBox(
         color: context.jamColors.background,
         child: Row(
@@ -383,7 +424,11 @@ class _RoomBarShellState extends State<_RoomBarShell> {
               identity: _identity,
               onRename: () => unawaited(_rename()),
             ),
-            Expanded(child: widget.child),
+            Expanded(
+              child: hasRoom
+                  ? _withFloatingBar(context, widget.child)
+                  : widget.child,
+            ),
           ],
         ),
       );
@@ -392,8 +437,12 @@ class _RoomBarShellState extends State<_RoomBarShell> {
     // The bar stays up through the terminal `ended` phase too. Hiding it
     // there was the whole soft lock: an end that arrived while the user was
     // on home left a session nothing on screen could reach or dismiss.
-    if (!JamSession.of(context).hasRoom) return widget.child;
+    if (!hasRoom) return widget.child;
+    return _withFloatingBar(context, widget.child);
+  }
 
+  /// [child] with the mini player floating over its bottom edge.
+  Widget _withFloatingBar(BuildContext context, Widget child) {
     // The mini player floats over the screen (D1): it paints its own capsule,
     // margins and bottom inset, so nothing here frames it. The screen
     // underneath sees the capsule as bottom padding — its content scrolls
@@ -407,7 +456,7 @@ class _RoomBarShellState extends State<_RoomBarShell> {
               bottom: media.padding.bottom + kJamMiniPlayerReach,
             ),
           ),
-          child: widget.child,
+          child: child,
         ),
         Positioned(
           left: 0,

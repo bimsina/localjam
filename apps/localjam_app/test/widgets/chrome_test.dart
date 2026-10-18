@@ -3,6 +3,8 @@
 /// building block and progress.
 library;
 
+import 'dart:async';
+
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -192,6 +194,95 @@ void main() {
       },
     );
 
+    testWidgets('an empty page that fills the remainder neither scrolls nor '
+        'paints the bottom strip', (tester) async {
+      await tester.pumpWidget(
+        _app(
+          JamScaffold(
+            title: 'Nearby',
+            bottomBar: JamButton.filled(
+              label: 'Start a Jam',
+              expand: true,
+              onPressed: () {},
+            ),
+            slivers: const [
+              SliverFillRemaining(
+                hasScrollBody: false,
+                child: Center(child: Text('No Jams Nearby')),
+              ),
+            ],
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      final scrollable = tester.state<ScrollableState>(
+        find.byType(Scrollable).first,
+      );
+      expect(scrollable.position.maxScrollExtent, 0);
+      expect(
+        tester
+            .widget<AnimatedOpacity>(
+              find
+                  .descendant(
+                    of: find.byType(JamBottomBar),
+                    matching: find.byType(AnimatedOpacity),
+                  )
+                  .first,
+            )
+            .opacity,
+        0,
+      );
+    });
+
+    testWidgets('back is a bare chevron, even when a label is asked for', (
+      tester,
+    ) async {
+      await tester.pumpWidget(_app(const Scaffold(body: Text('Root'))));
+      final navigator = tester.state<NavigatorState>(find.byType(Navigator));
+      unawaited(
+        navigator.push(
+          MaterialPageRoute<void>(
+            builder: (_) => const JamScaffold(
+              title: 'Licenses',
+              previousPageTitle: 'Settings',
+              children: [Text('Body')],
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.byType(CupertinoNavigationBarBackButton), findsOneWidget);
+      expect(find.text('Settings'), findsNothing);
+    });
+
+    test('a small gesture inset gets air; iOS keeps its indicator inset', () {
+      expect(jamBottomBarInset(34), 34);
+      expect(jamBottomBarInset(24), greaterThanOrEqualTo(34));
+      expect(jamBottomBarInset(0), JamSpace.lg);
+    });
+
+    testWidgets('a reading column centres in the pane, title on its edge', (
+      tester,
+    ) async {
+      tester.view.physicalSize = const Size(1200, 900);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+      await tester.pumpWidget(
+        _app(
+          const JamScaffold(
+            title: 'Settings',
+            maxContentWidth: 640,
+            children: [SizedBox(height: 44, child: Text('Row'))],
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      final row = tester.getRect(find.text('Row'));
+      expect(row.left, closeTo((1200 - 640) / 2, 1));
+      final title = tester.getRect(find.text('Settings').first);
+      expect(title.left, greaterThanOrEqualTo(row.left));
+    });
+
     testWidgets('grouped pages use groupedBackground; inline titles work', (
       tester,
     ) async {
@@ -360,6 +451,112 @@ void main() {
       final item = tester.element(find.text('People'));
       expect(CupertinoTheme.brightnessOf(item), Brightness.dark);
       expect(MediaQuery.platformBrightnessOf(item), Brightness.dark);
+    });
+
+    testWidgets('a touch outside puts the menu away', (tester) async {
+      await tester.pumpWidget(
+        _app(
+          Scaffold(
+            body: Align(
+              alignment: Alignment.topCenter,
+              child: JamMenuButton(
+                groups: [
+                  [JamMenuItem(title: 'One', onPressed: () {})],
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.tap(find.byType(JamMenuButton));
+      await tester.pumpAndSettle();
+      expect(find.text('One'), findsOneWidget);
+      await tester.tapAt(const Offset(20, 580));
+      await tester.pumpAndSettle();
+      expect(find.text('One'), findsNothing);
+    });
+
+    testWidgets('an iOS 26 menu: a 22-radius surface', (tester) async {
+      await tester.pumpWidget(
+        _host(
+          JamMenuButton(
+            groups: [
+              [JamMenuItem(title: 'Diagnostics', onPressed: () {})],
+            ],
+          ),
+        ),
+      );
+      await tester.tap(find.byType(JamMenuButton));
+      await tester.pumpAndSettle();
+      expect(
+        tester
+            .widgetList<ClipRRect>(find.byType(ClipRRect))
+            .map((c) => c.borderRadius),
+        contains(BorderRadius.circular(JamRadius.menu)),
+      );
+    });
+
+    testWidgets('a row-wide trigger opens against its trailing edge', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        _app(
+          Scaffold(
+            body: Align(
+              alignment: Alignment.topCenter,
+              child: JamMenuButton(
+                groups: [
+                  [JamMenuItem(title: 'Listen Only', onPressed: () {})],
+                ],
+                builder: (context, open) => GestureDetector(
+                  onTap: open,
+                  child: const SizedBox(
+                    width: 760,
+                    height: 44,
+                    child: Text('Guests Can'),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      final row = tester.getRect(find.text('Guests Can'));
+      await tester.tap(find.text('Guests Can'));
+      await tester.pumpAndSettle();
+      final menu = tester.getRect(find.byType(CupertinoMenuItem));
+      expect(menu.right, closeTo(row.right - JamSpace.lg, 1));
+      expect(menu.top, greaterThan(row.bottom));
+    });
+
+    testWidgets('a menu opened at a point opens at the finger', (tester) async {
+      await tester.pumpWidget(
+        _app(
+          Scaffold(
+            body: Align(
+              alignment: Alignment.topLeft,
+              child: JamMenuButton(
+                groups: [
+                  [JamMenuItem(title: 'Remove', onPressed: () {})],
+                ],
+                anchorBuilder: (context, menu) => GestureDetector(
+                  onLongPressStart: (d) => menu.open(d.localPosition),
+                  child: const SizedBox(
+                    width: 800,
+                    height: 60,
+                    child: Text('Low Tide'),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.longPressAt(const Offset(120, 30));
+      await tester.pumpAndSettle();
+      final menu = tester.getRect(find.byType(CupertinoMenuItem));
+      expect(menu.left, closeTo(120, 1));
+      expect(menu.top, lessThan(60));
     });
 
     testWidgets('the glass trigger over artwork', (tester) async {

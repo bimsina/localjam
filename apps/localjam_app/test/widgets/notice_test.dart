@@ -37,6 +37,64 @@ void main() {
     expect(find.byIcon(CupertinoIcons.info_circle_fill), findsOneWidget);
   });
 
+  test('kinds follow what a notice is', () {
+    expect(
+      jamNoticeKindFor(
+        JamNotice('Removed “Low Tide”', actionLabel: 'Undo', onAction: () {}),
+      ),
+      JamNoticeKind.neutral,
+    );
+    expect(
+      jamNoticeKindFor(
+        JamNotice('Camera is off', actionLabel: 'Settings', onAction: () {}),
+      ),
+      JamNoticeKind.warning,
+    );
+    expect(
+      jamNoticeKindFor(const JamNotice('Link copied')),
+      JamNoticeKind.success,
+    );
+    expect(jamNoticeKindFor(const JamNotice('Ana joined')), JamNoticeKind.info);
+  });
+
+  testWidgets('an Undo notice carries no glyph at all', (tester) async {
+    await tester.pumpWidget(
+      _host(
+        (context) => showJamNotice(
+          context,
+          JamNotice('Removed “Low Tide”', actionLabel: 'Undo', onAction: () {}),
+          kind: JamNoticeKind.neutral,
+        ),
+      ),
+    );
+    await tester.tap(find.text('Go'));
+    await tester.pumpAndSettle();
+    expect(
+      find.descendant(
+        of: find.byType(JamNoticeBody),
+        matching: find.byType(Icon),
+      ),
+      findsNothing,
+    );
+    expect(find.text('Undo'), findsOneWidget);
+  });
+
+  testWidgets('a top notice floats under the status bar', (tester) async {
+    await tester.pumpWidget(
+      _host(
+        (context) => showJamNotice(
+          context,
+          const JamNotice('Ana joined'),
+          position: JamNoticePosition.top,
+        ),
+      ),
+    );
+    await tester.tap(find.text('Go'));
+    await tester.pumpAndSettle();
+    final card = tester.getRect(find.byType(JamNoticeCard));
+    expect(card.top, lessThan(100));
+  });
+
   testWidgets('an error carries its own glyph and its action', (tester) async {
     var retried = 0;
     await tester.pumpWidget(
