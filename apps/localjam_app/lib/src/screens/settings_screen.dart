@@ -15,7 +15,6 @@ import 'package:localjam_client/localjam_client.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
-import '../design/breakpoints.dart';
 import '../design/tokens.dart';
 import '../state/app_settings.dart';
 import '../state/session_controller.dart';
@@ -24,6 +23,7 @@ import '../widgets/list.dart';
 import '../widgets/rename_dialog.dart';
 import '../widgets/scaffold.dart';
 import '../widgets/section.dart';
+import 'history_screen.dart' show kJamReadingColumn;
 import 'licenses_screen.dart';
 
 /// Every user-facing string on this screen, in one place.
@@ -54,8 +54,9 @@ abstract final class SettingsStrings {
       'LocalJam is free and open source. It works over local Wi‑Fi, with no '
       'internet and no accounts.';
   static const String appName = 'LocalJam';
-  static const String legalese =
-      'Listen together, in sync, over local Wi‑Fi — no internet, no accounts.';
+
+  /// Kept short: the About footer already says what the app is.
+  static const String legalese = 'Listen together over local Wi‑Fi.';
 }
 
 /// The version to show before [PackageInfo] answers, and on a platform where
@@ -172,74 +173,85 @@ class _SettingsScreenState extends State<SettingsScreen> {
   @override
   Widget build(BuildContext context) {
     final settings = JamSettings.of(context);
-    final width = MediaQuery.sizeOf(context).width;
-    // A reading column on wide windows; sections bring their own margins.
-    final side = width > JamContentWidth.reading
-        ? (width - JamContentWidth.reading) / 2
-        : 0.0;
     final name = _identity.isEmpty ? SettingsStrings.loading : _identity;
 
     return JamScaffold(
       title: SettingsStrings.title,
       grouped: true,
-      contentPadding: EdgeInsets.fromLTRB(side, JamSpace.sm, side, 0),
-      children: [
-        JamSectionList(
-          children: [
-            JamSection(
-              children: [
-                JamRow(
-                  leading: _identity.isEmpty
-                      ? const SizedBox.square(dimension: JamAvatarSize.profile)
-                      : JamAvatar(name: _identity, size: JamAvatarSize.profile),
-                  leadingWidth: JamAvatarSize.profile,
-                  title: name,
-                  subtitle: SettingsStrings.howYouAppear,
-                  chevron: true,
-                  onTap: () => unawaited(_rename()),
-                  semanticLabel:
-                      '${SettingsStrings.you}: $name. '
-                      '${SettingsStrings.rename}',
-                ),
-              ],
-            ),
-            JamSection(
-              header: SettingsStrings.appearance,
-              footer: SettingsStrings.appearanceFooter,
-              children: [
-                for (final mode in ThemeMode.values)
-                  JamRow(
-                    title: _modeLabel(mode),
-                    checked: settings.themeMode == mode,
-                    onTap: () {
-                      if (settings.themeMode == mode) return;
-                      JamHaptics.selection();
-                      unawaited(settings.setThemeMode(mode));
-                    },
-                    semanticLabel:
-                        '${SettingsStrings.appearance}: ${_modeLabel(mode)}',
+      slivers: [
+        // A reading column sized from the pane this page sits in — not the
+        // window, which beside an iPad sidebar is 260 wider — and leading-
+        // aligned, so the sections start on the large title's edge.
+        // Sections bring their own side margins.
+        SliverConstrainedCrossAxis(
+          maxExtent: kJamReadingColumn,
+          sliver: SliverPadding(
+            padding: const EdgeInsets.only(top: JamSpace.sm),
+            sliver: SliverToBoxAdapter(
+              child: JamSectionList(
+                children: [
+                  JamSection(
+                    children: [
+                      JamRow(
+                        leading: _identity.isEmpty
+                            ? const SizedBox.square(
+                                dimension: JamAvatarSize.profile,
+                              )
+                            : JamAvatar(
+                                name: _identity,
+                                size: JamAvatarSize.profile,
+                              ),
+                        leadingWidth: JamAvatarSize.profile,
+                        title: name,
+                        subtitle: SettingsStrings.howYouAppear,
+                        chevron: true,
+                        onTap: () => unawaited(_rename()),
+                        semanticLabel:
+                            '${SettingsStrings.you}: $name. '
+                            '${SettingsStrings.rename}',
+                      ),
+                    ],
                   ),
-              ],
+                  JamSection(
+                    header: SettingsStrings.appearance,
+                    footer: SettingsStrings.appearanceFooter,
+                    children: [
+                      for (final mode in ThemeMode.values)
+                        JamRow(
+                          title: _modeLabel(mode),
+                          checked: settings.themeMode == mode,
+                          onTap: () {
+                            if (settings.themeMode == mode) return;
+                            JamHaptics.selection();
+                            unawaited(settings.setThemeMode(mode));
+                          },
+                          semanticLabel:
+                              '${SettingsStrings.appearance}: ${_modeLabel(mode)}',
+                        ),
+                    ],
+                  ),
+                  JamSection(
+                    header: SettingsStrings.about,
+                    footer: SettingsStrings.aboutFooter,
+                    children: [
+                      JamRow(title: SettingsStrings.version, value: _version),
+                      // Leaves the app, so no push chevron.
+                      JamRow(
+                        title: SettingsStrings.openSource,
+                        value: SettingsStrings.openSourceDetail,
+                        onTap: () => unawaited(_openRepository()),
+                      ),
+                      JamRow(
+                        title: SettingsStrings.licences,
+                        chevron: true,
+                        onTap: _showLicences,
+                      ),
+                    ],
+                  ),
+                ],
+              ),
             ),
-            JamSection(
-              header: SettingsStrings.about,
-              footer: SettingsStrings.aboutFooter,
-              children: [
-                JamRow(title: SettingsStrings.version, value: _version),
-                JamRow(
-                  title: SettingsStrings.openSource,
-                  value: SettingsStrings.openSourceDetail,
-                  chevron: true,
-                  onTap: () => unawaited(_openRepository()),
-                ),
-                JamRow(
-                  title: SettingsStrings.licences,
-                  chevron: true,
-                  onTap: _showLicences,
-                ),
-              ],
-            ),
-          ],
+          ),
         ),
       ],
     );

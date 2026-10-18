@@ -39,6 +39,47 @@ Future<JamAppSettings> pumpSettings(
 }
 
 void main() {
+  testWidgets('beside a sidebar, the column is sized from the pane and '
+      'starts on the large title’s edge', (tester) async {
+    // The iPad P1: (window − 640) / 2 of padding inside a pane that was
+    // already 260 narrower left a 380 strip drifting right of its title.
+    tester.view.physicalSize = const Size(1032, 1000) * 2;
+    tester.view.devicePixelRatio = 2;
+    addTearDown(tester.view.reset);
+    final session = testSession();
+    await tester.pumpWidget(
+      JamSettings(
+        settings: JamAppSettings(),
+        child: JamSession(
+          controller: session,
+          child: MaterialApp(
+            theme: jamLightTheme(),
+            home: const Row(
+              children: [
+                SizedBox(width: 260),
+                Expanded(child: SettingsScreen()),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final pane = tester.getRect(find.byType(SettingsScreen));
+    final row = tester.getRect(
+      find.ancestor(
+        of: find.text(SettingsStrings.system),
+        matching: find.byType(JamRow),
+      ),
+    );
+    // The grouped block starts at the page margin, where the large title
+    // does, and the column is the reading width, not a 380 strip.
+    expect(row.left - pane.left, inInclusiveRange(16, 20));
+    expect(row.width, greaterThan(600));
+    expect(row.right - pane.left, lessThanOrEqualTo(672));
+  });
+
   testWidgets('you, appearance, about — and nothing else', (tester) async {
     final session = testSession();
     await pumpSettings(tester, session);
