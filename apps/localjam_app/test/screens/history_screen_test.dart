@@ -56,6 +56,8 @@ Future<void> pumpHistory(
   JamSessionController session, {
   required List<JamHistoryRecord> records,
   Future<void> Function(JamHistoryRecord)? onForget,
+  Future<void> Function(JamHistoryRecord)? onRestore,
+  List<JamHistoryRecord> Function()? reload,
   ThemeData? theme,
 }) async {
   await tester.pumpWidget(
@@ -66,8 +68,9 @@ Future<void> pumpHistory(
         child: MaterialApp(
           theme: theme ?? jamLightTheme(),
           home: HistoryScreen(
-            loadRecords: () async => records,
+            loadRecords: () async => reload?.call() ?? records,
             forgetRecord: onForget ?? (_) async {},
+            restoreRecord: onRestore ?? (_) async {},
           ),
         ),
       ),
@@ -179,6 +182,9 @@ void main() {
       find.widgetWithText(JamButton, HistoryStrings.hostAgain),
       findsOneWidget,
     );
+    // No rule above the first song: the one hairline left is the separator
+    // between the two rows.
+    expect(find.byType(JamHairline), findsOneWidget);
     expect(find.byType(JamTrackRow), findsNWidgets(2));
     expect(find.text('Added by Neon Walrus · 3:42'), findsOneWidget);
     expect(find.text('Added by you · 3:00'), findsOneWidget);
@@ -219,57 +225,43 @@ void main() {
     expect(find.text(HistoryStrings.noneLeft), findsOneWidget);
   });
 
-  testWidgets('swiping reveals Forget, which asks first and takes no', (
-    tester,
-  ) async {
+  testWidgets('a swipe forgets at once, with no second question, and '
+      'offers Undo', (tester) async {
     final session = testSession();
-    var forgotten = 0;
+    final store = [_record(name: 'Bar Room'), _record(name: 'Van Jam')];
+    final notices = <JamNotice>[];
+    final sub = session.notices.listen(notices.add);
+    addTearDown(sub.cancel);
     await pumpHistory(
       tester,
       session,
-      records: [_record(name: 'Bar Room')],
-      onForget: (_) async => forgotten++,
-    );
-
-    await tester.drag(find.text('Bar Room'), const Offset(-120, 0));
-    await tester.pumpAndSettle();
-    expect(find.text(HistoryStrings.forget), findsOneWidget);
-
-    await tester.tap(find.text(HistoryStrings.forget));
-    await tester.pumpAndSettle();
-    expect(find.text(HistoryStrings.forgetTitle), findsOneWidget);
-
-    await tester.tap(find.text('Cancel'));
-    await tester.pumpAndSettle();
-    expect(forgotten, 0);
-    expect(find.text('Bar Room'), findsOneWidget);
-    // The row slid back.
-    expect(find.text(HistoryStrings.forget), findsNothing);
-  });
-
-  testWidgets('confirming Forget removes the row', (tester) async {
-    final session = testSession();
-    final forgotten = <String>[];
-    await pumpHistory(
-      tester,
-      session,
-      records: [
-        _record(name: 'Bar Room'),
-        _record(name: 'Van Jam'),
-      ],
-      onForget: (r) async => forgotten.add(r.sessionName),
+      records: store,
+      reload: () => [...store],
+      onForget: (r) async =>
+          store.removeWhere((x) => x.sessionId == r.sessionId),
+      onRestore: (r) async => store.insert(0, r),
     );
 
     await tester.drag(find.text('Bar Room'), const Offset(-120, 0));
     await tester.pumpAndSettle();
     await tester.tap(find.text(HistoryStrings.forget));
     await tester.pumpAndSettle();
-    await tester.tap(find.text(HistoryStrings.forgetConfirm).last);
-    await tester.pumpAndSettle();
 
-    expect(forgotten, ['Bar Room']);
+    // Mail / Notes: the swipe was the decision.
+    expect(find.text(HistoryStrings.forgetTitle), findsNothing);
     expect(find.text('Bar Room'), findsNothing);
     expect(find.text('Van Jam'), findsOneWidget);
+    expect(store.map((r) => r.sessionName), ['Van Jam']);
+
+    final notice = notices.single;
+    expect(notice.message, HistoryStrings.forgotten('Bar Room'));
+    expect(notice.actionLabel, HistoryStrings.undo);
+    expect(notice.tone, JamNoticeTone.neutral);
+
+    notice.onAction!();
+    await tester.pumpAndSettle();
+    expect(find.text('Bar Room'), findsOneWidget);
+    expect(store.map((r) => r.sessionName), ['Bar Room', 'Van Jam']);
   });
 
   testWidgets('Forget from the detail page menu pops back to the list', (
@@ -337,17 +329,51 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('a jam you joined offers "Host This Jam", not "Host Again"', (
+    tester,
+  ) async {
+    final session = testSession();
+    await pumpHistory(
+      tester,
+      session,
+      records: [
+        _record(
+          name: 'Van Jam',
+          wasHost: false,
+          tracks: [JamHistoryTrack(item: _item('Night Bus'))],
+        ),
+      ],
+    );
+    await tester.tap(find.text('Van Jam'));
+    await tester.pumpAndSettle();
+    expect(find.widgetWithText(JamButton, HistoryStrings.hostThis), findsOne);
+    expect(find.text(HistoryStrings.hostAgain), findsNothing);
+  });
+
   group('jamRelativeTime', () {
     final now = DateTime(2026, 10, 18, 15);
     test('reads like Apple does', () {
       expect(jamRelativeTime(now, now: now), HistoryStrings.justNow);
+      // Two jams in one evening must not read as the same row twice.
       expect(
-        jamRelativeTime(DateTime(2026, 10, 18, 9), now: now),
-        HistoryStrings.today,
+        jamRelativeTime(DateTime(2026, 10, 18, 9, 5), now: now),
+        'Today, 9:05 AM',
+      );
+      expect(
+        jamRelativeTime(DateTime(2026, 10, 18, 13, 52), now: now),
+        'Today, 1:52 PM',
       );
       expect(
         jamRelativeTime(DateTime(2026, 10, 17, 23), now: now),
-        HistoryStrings.yesterday,
+        'Yesterday, 11:00 PM',
+      );
+      expect(
+        jamRelativeTime(
+          DateTime(2026, 10, 17, 0, 30),
+          now: now,
+          use24HourFormat: true,
+        ),
+        'Yesterday, 00:30',
       );
       expect(jamRelativeTime(DateTime(2026, 10, 14), now: now), 'Wednesday');
       expect(jamRelativeTime(DateTime(2026, 9, 2), now: now), 'Sep 2');

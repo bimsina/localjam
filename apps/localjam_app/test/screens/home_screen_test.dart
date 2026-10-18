@@ -135,6 +135,25 @@ void main() {
     expect(jamHostNameFromRoom('Turbo Flamingo’s Jam'), 'Turbo Flamingo');
     expect(jamHostNameFromRoom("Mia's Jam"), 'Mia');
     expect(jamHostNameFromRoom('Kitchen Sunday'), 'Kitchen Sunday');
+    // Only a name that says whose it is gets a face.
+    expect(jamRoomNamesHost('Mia’s Jam'), isTrue);
+    expect(jamRoomNamesHost('Van Jam'), isFalse);
+  });
+
+  testWidgets('a room named for no one shows a neutral mark, not initials', (
+    tester,
+  ) async {
+    final session = testSession();
+    await pumpApp(tester, session);
+    publishNearby(session, [room('Van Jam')]);
+    await tester.pumpAndSettle();
+    expect(
+      find.descendant(
+        of: find.widgetWithText(JamRow, 'Van Jam'),
+        matching: find.byType(JamAvatar),
+      ),
+      findsNothing,
+    );
   });
 
   testWidgets('home says you are hosting rather than "nobody is hosting"', (
@@ -147,10 +166,12 @@ void main() {
     await startTestHost(tester, session, 'Bar Room');
     await tester.pumpAndSettle();
 
-    expect(find.text(HomeStrings.hostingTitle), findsOneWidget);
+    // One quiet line, not a second "you're hosting" block over the mini
+    // player, and no duplicate "Open Jam" — the mini player is the way back.
     expect(find.text(HomeStrings.hostingBody('Bar Room')), findsOneWidget);
     expect(find.text(HomeStrings.quietTitle), findsNothing);
-    expect(find.text(HomeStrings.openRoom), findsOneWidget);
+    expect(find.byType(JamEmptyState), findsNothing);
+    expect(find.text('Open Jam'), findsNothing);
     // You cannot host two at once, and the mini player owns the bottom: the
     // Start a Jam button is gone while the jam runs.
     expect(filledButtons(tester), isEmpty);
@@ -213,6 +234,23 @@ void main() {
     await session.stopBrowsing();
   });
 
+  testWidgets('on a wide pane, Start a Jam centres on the content column, '
+      'not on the pane', (tester) async {
+    tester.view.physicalSize = const Size(1032, 800) * 3;
+    tester.view.devicePixelRatio = 3;
+    addTearDown(tester.view.reset);
+    final session = testSession();
+    await pumpApp(tester, session);
+    await tester.pumpAndSettle();
+
+    final pane = tester.getRect(find.byType(HomeScreen));
+    final button = tester.getRect(find.text(HomeStrings.host));
+    final empty = tester.getRect(find.byType(JamEmptyState));
+    // One axis: the empty state and the button share a centre line.
+    expect(button.center.dx, closeTo(empty.center.dx, 1));
+    expect(button.center.dx, lessThan(pane.center.dx));
+  });
+
   testWidgets('renders on the dark palette', (tester) async {
     final session = testSession();
     await pumpApp(tester, session, theme: jamDarkTheme());
@@ -251,16 +289,16 @@ void main() {
           );
       expect(
         jamHistorySummary(record(host: true, songs: 12), now: now),
-        'You hosted · 12 songs · Yesterday',
+        'You hosted · 12 songs · Yesterday, 10:00 PM',
       );
       expect(
         jamHistorySummary(record(host: false, songs: 1), now: now),
-        'You joined · 1 song · Yesterday',
+        'You joined · 1 song · Yesterday, 10:00 PM',
       );
       // No "0 songs": the part is simply not there.
       expect(
         jamHistorySummary(record(host: true), now: now),
-        'You hosted · Yesterday',
+        'You hosted · Yesterday, 10:00 PM',
       );
     });
   });
