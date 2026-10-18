@@ -830,13 +830,8 @@ void main() {
         ),
       );
       expect(retry.loading, isTrue);
-      final back = tester.widget<JamButton>(
-        find.ancestor(
-          of: find.text(JamRoomStrings.back),
-          matching: find.byType(JamButton),
-        ),
-      );
-      expect(back.onPressed, isNull);
+      // No way out while the rejoin runs: the way home is not offered.
+      expect(find.text(JamRoomStrings.back), findsNothing);
     });
   });
 

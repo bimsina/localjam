@@ -104,8 +104,10 @@ class JamTransport extends StatelessWidget {
   /// shows [gatedMessage] beneath.
   final bool enabled;
 
-  /// The explanation shown under a gated bar.
-  final String gatedMessage;
+  /// The explanation shown under a gated bar. Null when the screen already
+  /// says why (an empty room's "Nothing Playing" and its Add Songs): one
+  /// prompt per action, not three.
+  final String? gatedMessage;
 
   @override
   Widget build(BuildContext context) {
@@ -163,15 +165,18 @@ class JamTransport extends StatelessWidget {
 
     if (enabled) return bar;
 
+    // Dimmed and inert, but still on screen: the controls you will get when
+    // the host promotes you.
+    final inert = IgnorePointer(child: ExcludeSemantics(child: bar));
+    final message = gatedMessage;
+    if (message == null) return inert;
     return Column(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        // Dimmed and inert, but still on screen: the controls you will get
-        // when the host promotes you.
-        IgnorePointer(child: ExcludeSemantics(child: bar)),
+        inert,
         Text(
-          gatedMessage,
+          message,
           textAlign: TextAlign.center,
           maxLines: 2,
           style: context.jamFootnote.copyWith(

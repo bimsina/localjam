@@ -52,6 +52,7 @@ import '../widgets/buttons.dart';
 import '../widgets/diagnostics_sheet.dart';
 import '../widgets/dialogs.dart';
 import '../widgets/drag_to_dismiss.dart';
+import '../widgets/empty_state.dart';
 import '../widgets/glass.dart';
 import '../widgets/menu.dart';
 import '../widgets/nudge_slider.dart';
@@ -74,8 +75,7 @@ abstract final class JamRoomStrings {
   static const String queue = 'Up Next';
   static const String more = 'More';
 
-  // The ••• menu.
-  static const String menuSoundOffset = 'Sound Offset…';
+  // The ••• menu (spec §10.1): only what has no control of its own.
   static const String diagnostics = 'Diagnostics';
   static const String endJam = 'End Jam';
   static const String leaveJam = 'Leave Jam';
@@ -126,9 +126,10 @@ abstract final class JamRoomStrings {
       ? 'Waiting for 1 person to get this song'
       : 'Waiting for $n people to get this song';
 
-  // Terminal states.
-  static const String hostGoneTitle = 'The Room Closed';
-  static const String hostGoneBody = 'The host left or went out of range.';
+  // Terminal states (spec §10.9: "jam", never "room"; plain reasons).
+  static const String hostGoneTitle = 'The Host Left';
+  static const String hostGoneBody =
+      'The host’s phone left the Wi‑Fi or went to sleep.';
   static const String kickedTitle = 'You Were Removed';
   static const String kickedBody = 'The host removed you from this jam.';
   // `rejected`, by the host's reason (JamSessionController.endRejectReason).
@@ -136,37 +137,35 @@ abstract final class JamRoomStrings {
   // which names the likeliest cause without promising it.
   static const String rejectedTitle = 'Couldn’t Get Back In';
   static const String rejectedBody =
-      'The room turned this phone away. It may have restarted — ask the host '
-      'for a fresh code.';
+      'The jam turned this phone away. It may have restarted, so ask the '
+      'host for a new code.';
 
   /// `bad_token`: the room restarted under a new code. The old link can
   /// never work again, so there is no "Try Again".
-  static const String restartedTitle = 'The Room Restarted';
+  static const String restartedTitle = 'The Jam Restarted';
   static const String restartedBody =
-      'The code this phone joined with no longer works. Ask the host for the '
-      'new one.';
+      'The code this phone joined with doesn’t work any more. Ask the host '
+      'for the new one.';
 
   /// `version`: no retry fixes this; an update does.
   static const String versionTitle = 'Update Needed';
   static const String versionBody = kJamVersionMismatch;
 
   /// `full`: the one refusal that can turn into a yes on its own.
-  static const String fullTitle = 'The Room Is Full';
+  static const String fullTitle = 'This Jam Is Full';
   static const String fullBody =
       'Someone has to leave before this phone can get back in.';
 
   /// Host only: the OS took the room's listening socket while the app was
   /// away and it could not be reopened (listenerFailed).
-  static const String listenerFailedTitle =
-      'The Room Stopped Letting People In';
+  static const String listenerFailedTitle = 'New Guests Can’t Join';
   static const String listenerFailedBody =
-      'Start a new one to keep going. Your queue comes with you.';
+      'Start a new jam to keep going. Your queue comes with you.';
   static const String startNew = 'Start a New Jam';
   static const String hostEndedTitle = 'The Host Ended the Jam';
-  static const String hostEndedBody =
-      'The room is closed. Everyone heard the same last song.';
+  static const String hostEndedBody = 'This jam is over for everyone.';
   static const String endedTitle = 'Jam Ended';
-  static const String endedBody = 'That’s everyone home safely.';
+  static const String endedBody = 'This jam is over.';
   static const String tryAgain = 'Try Again';
   static const String back = 'Back to Nearby';
   static const String rejoinFailed = kJamRejoinFailed;
@@ -183,6 +182,19 @@ const double kRoomShortHeight = 560;
 
 /// The cover's side margin on a phone (§6.3: 28–32).
 const double _kArtMargin = 28;
+
+/// The cover's side margin in a tablet or desktop pane, where the cover
+/// grows with the space (§10.12) rather than stopping at a phone's size.
+const double _kArtMarginWide = 48;
+
+/// The widest the cover gets in a large pane: past this a cover stops
+/// reading as an object held in the hand and starts reading as a poster.
+const double _kArtMaxWide = 640;
+
+/// The most the gap between the transport and the footer grows. In a tall
+/// pane the leftover height goes above and below the player as a group,
+/// so the footer stays with the controls (§10.12).
+const double _kTransportFooterMaxGap = 56;
 
 /// The queue-in-place thumbnail (§6.3) and the gap beside it.
 const double _kThumb = JamArtworkSize.list;
@@ -221,6 +233,9 @@ class _RoomScreenState extends State<RoomScreen>
 
   /// What the docked panel shows on wide windows.
   _PanelView _panel = _PanelView.queue;
+
+  /// The stage's memory across the queue's morph.
+  final _StageMemo _stageMemo = _StageMemo();
 
   /// The dark theme the immersive subtree runs under, per platform.
   ThemeData? _theme;
@@ -424,6 +439,16 @@ class _RoomScreenState extends State<RoomScreen>
     for (final peer in engine.peers) jamPeerName(peer),
   ];
 
+  /// The stable ids [_roster]'s faces take their colours from (§10.10),
+  /// parallel to it: each person's peer id — the one id every phone in the
+  /// jam knows them by (client ids never leave the host).
+  List<String> _rosterKeys(JamEngine engine) => <String>[
+    if (_identity.isNotEmpty) engine.selfPeerId,
+    if (engine is JamGuestEngine)
+      engine.hostPeer?.peerId ?? JamPermissions.hostPeerId,
+    for (final peer in engine.peers) peer.peerId,
+  ];
+
   /// The host, by name: the one the welcome frame carried, and the role
   /// word only when they shared none.
   String _hostName(JamEngine engine) {
@@ -483,8 +508,15 @@ class _RoomScreenState extends State<RoomScreen>
     final guest = engine is JamGuestEngine ? engine : null;
     final isHost = engine is JamHostEngine;
     final roster = _roster(engine);
+    final rosterKeys = _rosterKeys(engine);
     final canAdd = engine.can(JamCapability.addTracks);
+    // A sheet over the player (People, Sound Offset) brings its own grabber;
+    // two stacked bars read as one broken one.
+    final onTop = ModalRoute.of(context)?.isCurrent ?? true;
 
+    // Every action appears once (§10.1): Invite is the header's, People and
+    // Sound Offset are the footer's. The ••• keeps what has no control of
+    // its own.
     final menu = JamMenuButton(
       trigger: JamMenuTrigger.glassOnArtwork,
       visualSize: 30,
@@ -493,23 +525,6 @@ class _RoomScreenState extends State<RoomScreen>
       brightness: Brightness.dark,
       groups: [
         [
-          // A guest invites too, with the link they joined by — the same
-          // Invite sheet the People sheet opens.
-          JamMenuItem(
-            title: JamRoomStrings.invite,
-            icon: CupertinoIcons.person_badge_plus,
-            onPressed: () => _openInvite(engine),
-          ),
-          JamMenuItem(
-            title: JamRoomStrings.people,
-            icon: CupertinoIcons.person_2,
-            onPressed: () => _openPeople(engine),
-          ),
-          JamMenuItem(
-            title: JamRoomStrings.menuSoundOffset,
-            icon: CupertinoIcons.speaker_2,
-            onPressed: () => _openSoundOffset(engine),
-          ),
           JamMenuItem(
             title: JamRoomStrings.diagnostics,
             icon: CupertinoIcons.waveform_path_ecg,
@@ -537,8 +552,11 @@ class _RoomScreenState extends State<RoomScreen>
       queue: _queue,
       wide: wide,
       showGrabber: showGrabber,
+      grabberVisible: onTop,
+      stageMemo: _stageMemo,
       menu: menu,
       roster: roster,
+      rosterKeys: rosterKeys,
       cutout: backdrop.base,
       queueSelected: wide && _panel == _PanelView.queue,
       peopleSelected: wide && _panel == _PanelView.people,
@@ -581,8 +599,12 @@ class _RoomScreenState extends State<RoomScreen>
                   cache: session.backdrops,
                   builder: (context, backdrop) => JamBackdropView(
                     backdrop: backdrop,
-                    child: wide
-                        ? Row(
+                    child: Stack(
+                      fit: StackFit.expand,
+                      children: [
+                        _PlaceholderLift(visible: backdrop.isPlaceholder),
+                        if (wide)
+                          Row(
                             children: [
                               Expanded(
                                 child: player(backdrop, showGrabber: false),
@@ -596,10 +618,47 @@ class _RoomScreenState extends State<RoomScreen>
                               ),
                             ],
                           )
-                        : player(backdrop, showGrabber: true),
+                        else
+                          player(backdrop, showGrabber: true),
+                      ],
+                    ),
                   ),
                 ),
               ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// A song without a cover: the deep neutral backdrop gets a faint radial
+/// lift behind where the cover sits (§10.7), so it still reads as Now
+/// Playing and not as a screen waiting to load. Part of the backdrop — the
+/// one surface allowed a gradient.
+class _PlaceholderLift extends StatelessWidget {
+  const _PlaceholderLift({required this.visible});
+
+  final bool visible;
+
+  @override
+  Widget build(BuildContext context) {
+    final reduced = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
+    return IgnorePointer(
+      child: AnimatedOpacity(
+        opacity: visible ? 1 : 0,
+        duration: reduced ? Duration.zero : JamDuration.crossfade,
+        curve: JamCurve.standard,
+        child: const DecoratedBox(
+          decoration: BoxDecoration(
+            gradient: RadialGradient(
+              center: Alignment(0, -0.3),
+              radius: 0.85,
+              colors: [
+                JamNowPlayingColors.backdropPlaceholderLift,
+                JamNowPlayingColors.clear,
+              ],
             ),
           ),
         ),
@@ -619,8 +678,11 @@ class _Player extends StatelessWidget {
     required this.queue,
     required this.wide,
     required this.showGrabber,
+    required this.grabberVisible,
+    required this.stageMemo,
     required this.menu,
     required this.roster,
+    required this.rosterKeys,
     required this.cutout,
     required this.queueSelected,
     required this.peopleSelected,
@@ -640,8 +702,15 @@ class _Player extends StatelessWidget {
   final AnimationController queue;
   final bool wide;
   final bool showGrabber;
+
+  /// False while a sheet sits over the player: its slot stays, empty.
+  final bool grabberVisible;
+  final _StageMemo stageMemo;
   final Widget menu;
   final List<String> roster;
+
+  /// [roster]'s colour keys (peer ids), parallel to it.
+  final List<String> rosterKeys;
 
   /// The ground the face pile's cutouts are punched in.
   final Color cutout;
@@ -672,6 +741,7 @@ class _Player extends StatelessWidget {
       guest: guest,
       session: session,
       showGrabber: showGrabber,
+      grabberVisible: grabberVisible,
       onClose: onClose,
       onInvite: onInvite,
       onDiagnostics: onDiagnostics,
@@ -703,6 +773,7 @@ class _Player extends StatelessWidget {
 
     final footer = _Footer(
       roster: roster,
+      rosterKeys: rosterKeys,
       cutout: cutout,
       queueSelected: queueSelected,
       peopleSelected: peopleSelected,
@@ -744,17 +815,25 @@ class _Player extends StatelessWidget {
                   builder: (context, _) {
                     final t = JamCurve.standard.transform(queue.value);
                     final open = queue.value > 0;
-                    final maxContent = switch (context.jamBreakpoint) {
-                      JamBreakpoint.compact => double.infinity,
-                      JamBreakpoint.medium => JamArtworkSize.hero,
-                      JamBreakpoint.expanded => JamArtworkSize.heroExpanded,
-                    };
+                    // A phone's cover spans the width; a tablet's grows with
+                    // the pane (§10.12) up to a poster's size, and the height
+                    // left after the controls caps both.
+                    final phone =
+                        context.jamBreakpoint == JamBreakpoint.compact;
+                    final margin = phone ? _kArtMargin : _kArtMarginWide;
+                    final maxContent = phone ? double.infinity : _kArtMaxWide;
+                    // The list lines up with the cover it replaces.
+                    final listPad = math.max(
+                      margin,
+                      (constraints.maxWidth - maxContent) / 2,
+                    );
                     return CustomMultiChildLayout(
                       delegate: _StageLayout(
                         t: t,
-                        margin: _kArtMargin,
+                        margin: margin,
                         maxContent: maxContent,
                         bottomInset: bottomInset,
+                        memo: stageMemo,
                       ),
                       children: [
                         LayoutId(
@@ -777,7 +856,7 @@ class _Player extends StatelessWidget {
                                 opacity: Curves.easeIn.transform(queue.value),
                                 child: QueuePanel(
                                   engine: engine,
-                                  horizontalPadding: _kArtMargin,
+                                  horizontalPadding: listPad,
                                 ),
                               ),
                             ),
@@ -811,12 +890,18 @@ class _StageLayout extends MultiChildLayoutDelegate {
     required this.margin,
     required this.maxContent,
     required this.bottomInset,
+    required this.memo,
   });
 
   final double t;
   final double margin;
   final double maxContent;
   final double bottomInset;
+
+  /// The big layout's title height, kept across the queue's morph: the
+  /// title shrinks as the queue opens, and the controls placed under the
+  /// big title must not follow it.
+  final _StageMemo memo;
 
   @override
   void performLayout(Size size) {
@@ -843,6 +928,8 @@ class _StageLayout extends MultiChildLayoutDelegate {
       _Slot.title,
       BoxConstraints.tightFor(width: math.max(0, titleW)),
     ).height;
+    if (t == 0) memo.bigTitleH = titleH;
+    final bigTitleH = memo.bigTitleH ?? titleH;
 
     // The big cover.
     const minTop = JamSpace.sm;
@@ -850,7 +937,7 @@ class _StageLayout extends MultiChildLayoutDelegate {
     const minTitleScrub = JamSpace.md;
     const minScrubTransport = 0.0;
     const minTransportFooter = 0.0;
-    final fixed = footerH + transportH + scrubH + titleH + bottomPad;
+    final fixed = footerH + transportH + scrubH + bigTitleH + bottomPad;
     final avail =
         h -
         fixed -
@@ -873,22 +960,30 @@ class _StageLayout extends MultiChildLayoutDelegate {
     final addScrubTransport = grow(0.28, 64);
     final rest = slack - addArtTitle - addTitleScrub - addScrubTransport;
     // The rest: some above the cover, the larger part between the transport
-    // and the footer (pinned to the bottom), where Music keeps its volume.
-    final gTop = minTop + rest * 0.4;
+    // and the footer, where Music keeps its volume. On a phone that puts the
+    // footer on the bottom edge. In a tall pane (a tablet, whose cover is
+    // capped) that gap stops growing too, and what is still left is split
+    // above and below the whole player, so the footer stays with the
+    // controls instead of being stranded at the bottom (§10.12).
+    final addTransportFooter = math.min(rest * 0.6, _kTransportFooterMaxGap);
+    final excess = math.max(0.0, rest * 0.6 - addTransportFooter);
+    final gTop = minTop + rest * 0.4 + excess / 2;
     final gArtTitle = minArtTitle + addArtTitle;
     final gTitleScrub = minTitleScrub + addTitleScrub;
     final gScrubTransport = minScrubTransport + addScrubTransport;
 
     final bigArtY = gTop;
     final bigTitleY = bigArtY + art + gArtTitle;
-    final bigScrubY = bigTitleY + titleH + gTitleScrub;
+    final bigScrubY = bigTitleY + bigTitleH + gTitleScrub;
     final bigTransportY = bigScrubY + scrubH + gScrubTransport;
-    final bigFooterY = h - bottomPad - footerH;
+    final bigFooterY = h - bottomPad - footerH - excess / 2;
 
-    // The queue in place.
+    // The queue in place: only the cover and the title move. The scrubber,
+    // the transport and the footer stay exactly where they were (Music
+    // keeps them fixed), so a toggle never moves a control under a thumb.
     final qFooterY = bigFooterY;
-    final qTransportY = qFooterY - JamSpace.md - transportH;
-    final qScrubY = qTransportY - scrubH - JamSpace.xs;
+    final qTransportY = bigTransportY;
+    final qScrubY = bigScrubY;
     const qThumbY = JamSpace.sm;
     final qTitleY = math.max(qThumbY, qThumbY + (_kThumb - titleH) / 2);
     final rowBottom = math.max(qThumbY + _kThumb, qTitleY + titleH);
@@ -941,6 +1036,11 @@ class _StageLayout extends MultiChildLayoutDelegate {
       old.margin != margin ||
       old.maxContent != maxContent ||
       old.bottomInset != bottomInset;
+}
+
+/// What [_StageLayout] remembers between frames.
+class _StageMemo {
+  double? bigTitleH;
 }
 
 /// The side-on stage: cover (or the queue) on the left, the title and every
@@ -1060,6 +1160,7 @@ class _Header extends StatelessWidget {
     required this.guest,
     required this.session,
     required this.showGrabber,
+    required this.grabberVisible,
     required this.onClose,
     required this.onInvite,
     required this.onDiagnostics,
@@ -1069,13 +1170,31 @@ class _Header extends StatelessWidget {
   final JamGuestEngine? guest;
   final JamSessionController session;
   final bool showGrabber;
+  final bool grabberVisible;
   final VoidCallback onClose;
   final VoidCallback? onInvite;
   final VoidCallback onDiagnostics;
 
+  /// The button row: a 44 target plus a little air.
+  static const double _rowHeight = JamMetrics.hitTarget + JamSpace.xs * 2;
+
+  /// The glass circles' inset inside their 44 targets.
+  static const double _glassInset =
+      (JamMetrics.hitTarget - JamMetrics.glassButton) / 2;
+
   @override
   Widget build(BuildContext context) {
     final invite = onInvite;
+    final scaler = MediaQuery.textScalerOf(context);
+    // The name holds one baseline whether or not a status line is showing:
+    // centred on the buttons, with the status line's slot reserved under it
+    // (empty when all is well), so a line coming or going moves nothing.
+    final nameHeight = scaler.scale(22); // headline: 17 / 22
+    final statusHeight = scaler.scale(18); // footnote: 13 / 18
+    final nameTop = math.max(0.0, (_rowHeight - nameHeight) / 2);
+    final height = math.max(_rowHeight, nameTop + nameHeight + statusHeight);
+    final reduced = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
+
     return Column(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1085,12 +1204,16 @@ class _Header extends StatelessWidget {
             padding: const EdgeInsets.only(top: JamSpace.xs),
             child: Center(
               child: ExcludeSemantics(
-                child: Container(
-                  width: JamMetrics.grabber.width,
-                  height: JamMetrics.grabber.height,
-                  decoration: const ShapeDecoration(
-                    color: JamNowPlayingColors.tertiary,
-                    shape: StadiumBorder(),
+                child: AnimatedOpacity(
+                  opacity: grabberVisible ? 1 : 0,
+                  duration: reduced ? Duration.zero : JamDuration.fast,
+                  child: Container(
+                    width: JamMetrics.grabber.width,
+                    height: JamMetrics.grabber.height,
+                    decoration: const ShapeDecoration(
+                      color: JamNowPlayingColors.tertiary,
+                      shape: StadiumBorder(),
+                    ),
                   ),
                 ),
               ),
@@ -1099,49 +1222,73 @@ class _Header extends StatelessWidget {
         else
           const SizedBox(height: JamSpace.sm),
         Padding(
-          padding: const EdgeInsets.symmetric(horizontal: JamSpace.sm),
-          child: SizedBox(
-            height: JamMetrics.hitTarget + JamSpace.xs * 2,
+          // The glass circles' visible edges land on the page margin.
+          padding: const EdgeInsets.symmetric(
+            horizontal: JamSpace.page - _glassInset,
+          ),
+          // A floor, not a fixed height: the name's real line box decides
+          // the rest, so no text size can make it overflow.
+          child: ConstrainedBox(
+            constraints: BoxConstraints(minHeight: height),
             child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                JamGlassButton(
-                  icon: CupertinoIcons.chevron_down,
-                  semanticLabel: JamRoomStrings.close,
-                  onArtwork: true,
-                  onPressed: onClose,
-                ),
-                Expanded(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Text(
-                        engine.sessionName,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        textAlign: TextAlign.center,
-                        style: context.jamHeadline.copyWith(
-                          color: JamNowPlayingColors.text,
-                        ),
-                      ),
-                      _StatusLine(
-                        engine: engine,
-                        guest: guest,
-                        session: session,
-                        onShowDetails: onDiagnostics,
-                      ),
-                    ],
+                SizedBox(
+                  height: _rowHeight,
+                  child: Center(
+                    child: JamGlassButton(
+                      icon: CupertinoIcons.chevron_down,
+                      semanticLabel: JamRoomStrings.close,
+                      onArtwork: true,
+                      onPressed: onClose,
+                    ),
                   ),
                 ),
-                if (invite != null)
-                  JamGlassButton(
-                    icon: CupertinoIcons.person_badge_plus,
-                    semanticLabel: JamRoomStrings.invite,
-                    onArtwork: true,
-                    onPressed: invite,
-                  )
-                else
-                  // Keeps the room's name centred on the window.
-                  const SizedBox.square(dimension: JamMetrics.hitTarget),
+                Expanded(
+                  child: Padding(
+                    padding: EdgeInsets.only(top: nameTop),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Text(
+                          engine.sessionName,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          textAlign: TextAlign.center,
+                          style: context.jamHeadline.copyWith(
+                            color: JamNowPlayingColors.text,
+                          ),
+                        ),
+                        SizedBox(
+                          height: statusHeight,
+                          child: _StatusLine(
+                            engine: engine,
+                            guest: guest,
+                            session: session,
+                            onShowDetails: onDiagnostics,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                SizedBox(
+                  height: _rowHeight,
+                  child: Center(
+                    child: invite != null
+                        ? JamGlassButton(
+                            icon: CupertinoIcons.person_badge_plus,
+                            semanticLabel: JamRoomStrings.invite,
+                            onArtwork: true,
+                            onPressed: invite,
+                          )
+                        // Keeps the room's name centred on the window.
+                        : const SizedBox.square(
+                            dimension: JamMetrics.hitTarget,
+                          ),
+                  ),
+                ),
               ],
             ),
           ),
@@ -1460,20 +1607,22 @@ class _TitleBlock extends StatelessWidget {
             // The list right below opens with its own Add Songs row.
             subtitle = null;
           } else if (add != null) {
-            subtitle = Semantics(
-              button: true,
-              label: JamRoomStrings.addSongs,
-              onTap: add,
-              excludeSemantics: true,
-              child: JamPressable(
-                onTap: add,
-                child: Text(
-                  JamRoomStrings.addSongs,
-                  maxLines: 1,
-                  style: subtitleStyle.copyWith(
-                    color: context.jamColors.tint,
-                    fontWeight: FontWeight.w600,
-                  ),
+            // The one call to action of an empty room: a real button, not a
+            // tinted link where the artist would go, and nothing else on
+            // the page repeats it.
+            subtitle = Padding(
+              padding: const EdgeInsets.only(top: JamSpace.md),
+              child: Align(
+                alignment: AlignmentDirectional.centerStart,
+                child: JamButton(
+                  label: JamRoomStrings.addSongs,
+                  icon: CupertinoIcons.plus,
+                  variant: JamButtonVariant.gray,
+                  size: JamButtonSize.small,
+                  // White on the glass-grey ground, like every other control
+                  // on the backdrop.
+                  color: JamNowPlayingColors.text,
+                  onPressed: add,
                 ),
               ),
             );
@@ -1528,7 +1677,12 @@ class _TitleBlock extends StatelessWidget {
               ),
             ),
             const SizedBox(width: JamSpace.sm),
-            menu,
+            // The 30 circle sits in a 44 target: nudged so the circle's edge,
+            // not the target's, lines up with the cover's right edge.
+            Transform.translate(
+              offset: const Offset((JamMetrics.hitTarget - 30) / 2, 0),
+              child: menu,
+            ),
           ],
         );
       },
@@ -1551,6 +1705,19 @@ class _Scrubber extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final item = engine.currentItem;
+    // Nothing playing: no "0:00 … --:--" timeline to a song that is not
+    // there. The slot keeps its height so the controls do not move when the
+    // first song lands.
+    return Visibility(
+      visible: item != null,
+      maintainSize: true,
+      maintainAnimation: true,
+      maintainState: true,
+      child: _timeline(item),
+    );
+  }
+
+  Widget _timeline(MediaItem? item) {
     final ticker = session.position;
     void seek(int us) => unawaited(session.act((e) => e.transportSeek(us)));
     // The length follows the loaded file as well as the clock: a track whose
@@ -1644,13 +1811,15 @@ class _TransportArea extends StatelessWidget {
       // sentence: a host with an empty room is not being told that somebody
       // else is in charge, and a guest whose host is asleep is not being
       // told the rules changed.
+      // An empty room says so once, in the title block ("Nothing Playing"
+      // and its Add Songs) — not again under a dimmed transport.
       gatedMessage: !canControl
           ? jamHostControlsPlayback
           : !canSend
           ? (session.hostAway
                 ? JamRoomStrings.waitForHost
                 : JamRoomStrings.waitForReconnect)
-          : JamRoomStrings.nothingToPlay,
+          : null,
       onPlayPause: suspended
           ? () => unawaited(engine.resumeLocalOutput())
           : () => unawaited(
@@ -1669,10 +1838,11 @@ class _TransportArea extends StatelessWidget {
 }
 
 /// Apple Music's three footer icons, LocalJam's way: the people in the room
-/// (faces and a count) → People; Sound Offset; Up Next → the queue in place.
+/// (their faces) → People; Sound Offset; Up Next → the queue in place.
 class _Footer extends StatelessWidget {
   const _Footer({
     required this.roster,
+    required this.rosterKeys,
     required this.cutout,
     required this.queueSelected,
     required this.peopleSelected,
@@ -1683,6 +1853,9 @@ class _Footer extends StatelessWidget {
   });
 
   final List<String> roster;
+
+  /// [roster]'s colour keys (peer ids), parallel to it.
+  final List<String> rosterKeys;
   final Color cutout;
 
   /// Wide windows: the docked panel's view. Phones follow [queue] instead.
@@ -1699,6 +1872,9 @@ class _Footer extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final count = roster.length;
+    final reduced = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
+    // The faces are the count (§10.1): no number beside a lone avatar, and
+    // past three the pile's own "+N".
     final people = Semantics(
       container: true,
       button: true,
@@ -1710,29 +1886,33 @@ class _Footer extends StatelessWidget {
         onTap: onPeople,
         child: ConstrainedBox(
           constraints: const BoxConstraints(minHeight: JamMetrics.hitTarget),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              JamAvatarStack(
+          child: Center(
+            widthFactor: 1,
+            child: AnimatedContainer(
+              duration: reduced ? Duration.zero : JamDuration.fast,
+              curve: JamCurve.standard,
+              padding: const EdgeInsets.symmetric(
+                horizontal: JamSpace.sm,
+                vertical: JamSpace.xs,
+              ),
+              // Wide windows: the docked panel is showing People.
+              decoration: ShapeDecoration(
+                color: peopleSelected
+                    ? JamNowPlayingColors.placeholderGround
+                    : JamNowPlayingColors.clear,
+                shape: const StadiumBorder(),
+              ),
+              child: JamAvatarStack(
                 names: roster,
+                colorKeys: rosterKeys.length == roster.length
+                    ? rosterKeys
+                    : null,
                 size: JamAvatarSize.strip,
                 maxVisible: 3,
                 cutoutColor: cutout,
                 overflowColor: JamNowPlayingColors.secondary,
               ),
-              if (roster.length <= 3) ...[
-                const SizedBox(width: JamSpace.xs + 2),
-                Text(
-                  '$count',
-                  style: jamTabular(context.jamFootnote).copyWith(
-                    color: peopleSelected
-                        ? JamNowPlayingColors.text
-                        : JamNowPlayingColors.secondary,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ],
-            ],
+            ),
           ),
         ),
       ),
@@ -1753,8 +1933,10 @@ class _Footer extends StatelessWidget {
           Expanded(child: Center(child: people)),
           Expanded(
             child: Center(
+              // Not a speaker: in that slot a speaker reads as volume
+              // (§10.1).
               child: _FooterIcon(
-                icon: CupertinoIcons.speaker_2,
+                icon: CupertinoIcons.slider_horizontal_3,
                 semanticLabel: JamRoomStrings.soundOffset,
                 onPressed: onSoundOffset,
               ),
@@ -1886,10 +2068,12 @@ class _DockedPanel extends StatelessWidget {
                     engine: engine,
                     showHeader: false,
                   ),
-                  _PanelView.people => RoomPanel(
-                    engine: engine,
-                    selfName: selfName,
-                    network: network,
+                  _PanelView.people => _OnBackdrop(
+                    child: RoomPanel(
+                      engine: engine,
+                      selfName: selfName,
+                      network: network,
+                    ),
                   ),
                 },
               ),
@@ -1988,7 +2172,7 @@ class JamSessionEndedView extends StatelessWidget {
       // The host said goodbye on purpose (§3.4). Nothing to try again for —
       // the room they would rejoin does not exist any more.
       JamSessionEndReason.hostEnded => (
-        CupertinoIcons.moon,
+        CupertinoIcons.stop_circle,
         JamRoomStrings.hostEndedTitle,
         JamRoomStrings.hostEndedBody,
       ),
@@ -2021,37 +2205,28 @@ class JamSessionEndedView extends StatelessWidget {
     final message = error;
 
     // One primary per screen: getting back in, or starting again, when
-    // either is possible; otherwise the way home.
-    final List<Widget> actions;
+    // either is possible — with the way home as the plain second; otherwise
+    // the way home alone, as a quiet grey button (leaving is not the loud
+    // action on a screen that just told you something ended).
+    final String actionLabel;
+    final VoidCallback? action;
+    final JamButtonVariant variant;
+    String? secondaryLabel = JamRoomStrings.back;
     if (retry != null || retrying) {
-      actions = [
-        JamButton.filled(
-          label: JamRoomStrings.tryAgain,
-          onPressed: retrying ? null : retry,
-          loading: retrying,
-          expand: true,
-        ),
-        const SizedBox(height: JamSpace.xs),
-        JamButton.plain(label: JamRoomStrings.back, onPressed: onDone),
-      ];
+      actionLabel = JamRoomStrings.tryAgain;
+      // Kept non-null while the retry spins, so the button stays in place
+      // (the spinner swallows taps).
+      action = retry ?? _busy;
+      variant = JamButtonVariant.filled;
     } else if (startNew != null) {
-      actions = [
-        JamButton.filled(
-          label: JamRoomStrings.startNew,
-          onPressed: startNew,
-          expand: true,
-        ),
-        const SizedBox(height: JamSpace.xs),
-        JamButton.plain(label: JamRoomStrings.back, onPressed: onDone),
-      ];
+      actionLabel = JamRoomStrings.startNew;
+      action = startNew;
+      variant = JamButtonVariant.filled;
     } else {
-      actions = [
-        JamButton.filled(
-          label: JamRoomStrings.back,
-          onPressed: onDone,
-          expand: true,
-        ),
-      ];
+      actionLabel = JamRoomStrings.back;
+      action = onDone;
+      variant = JamButtonVariant.gray;
+      secondaryLabel = null;
     }
 
     return AnnotatedRegion<SystemUiOverlayStyle>(
@@ -2061,56 +2236,70 @@ class JamSessionEndedView extends StatelessWidget {
         child: SafeArea(
           child: Center(
             child: SingleChildScrollView(
-              padding: const EdgeInsets.symmetric(
-                horizontal: JamSpace.xxxl,
-                vertical: JamSpace.xxl,
-              ),
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 360),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Icon(icon, size: 48, color: colors.tertiaryLabel),
-                    const SizedBox(height: JamSpace.lg),
-                    Semantics(
-                      header: true,
-                      child: Text(
-                        title,
-                        textAlign: TextAlign.center,
-                        style: context.jamTitle2,
-                      ),
-                    ),
-                    const SizedBox(height: JamSpace.sm),
-                    Text(
-                      detail,
-                      textAlign: TextAlign.center,
-                      style: context.jamSubheadline.copyWith(
-                        color: colors.secondaryLabel,
-                      ),
-                    ),
-                    if (message != null) ...[
-                      const SizedBox(height: JamSpace.md),
-                      Semantics(
-                        liveRegion: true,
-                        child: Text(
-                          message,
-                          textAlign: TextAlign.center,
-                          style: context.jamFootnote.copyWith(
-                            color: colors.danger,
-                          ),
-                        ),
-                      ),
-                    ],
-                    const SizedBox(height: JamSpace.xxl),
-                    ...actions,
-                  ],
+              padding: const EdgeInsets.symmetric(vertical: JamSpace.xxl),
+              // Why a "Try Again" failed replaces the reason it was offered
+              // for: it is the newer news, and said out loud.
+              child: Semantics(
+                liveRegion: message != null,
+                child: JamEmptyState(
+                  icon: icon,
+                  title: title,
+                  body: message ?? detail,
+                  actionLabel: actionLabel,
+                  onAction: action,
+                  actionVariant: variant,
+                  actionLoading: retrying,
+                  secondaryActionLabel: secondaryLabel,
+                  onSecondaryAction: secondaryLabel == null ? null : onDone,
                 ),
               ),
             ),
           ),
         ),
       ),
+    );
+  }
+
+  static void _busy() {}
+}
+
+/// The docked People panel's content on the immersive backdrop (wide
+/// windows): its grouped rows become translucent white over the cover's
+/// colours instead of opaque dark cards pasted onto it, with the backdrop's
+/// own secondary and hairline colours — and white, not raspberry, for what
+/// can be tapped, like every other control on Now Playing.
+class _OnBackdrop extends StatelessWidget {
+  const _OnBackdrop({required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colors = context.jamColors;
+    final onBackdrop = colors.copyWith(
+      background: JamNowPlayingColors.clear,
+      groupedBackground: JamNowPlayingColors.clear,
+      elevatedGroupedBackground: JamNowPlayingColors.clear,
+      groupedSurface: JamNowPlayingColors.groupedRow,
+      elevatedGroupedSurface: JamNowPlayingColors.groupedRow,
+      separator: JamNowPlayingColors.separator,
+      label: JamNowPlayingColors.text,
+      secondaryLabel: JamNowPlayingColors.secondary,
+      tertiaryLabel: JamNowPlayingColors.tertiary,
+      fillPressed: JamNowPlayingColors.pressed,
+      tint: JamNowPlayingColors.text,
+      tintPressed: JamNowPlayingColors.secondary,
+    );
+    return Theme(
+      data: theme.copyWith(
+        extensions: [
+          for (final extension in theme.extensions.values)
+            if (extension is! JamColors) extension,
+          onBackdrop,
+        ],
+      ),
+      child: child,
     );
   }
 }

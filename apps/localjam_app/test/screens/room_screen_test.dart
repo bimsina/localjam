@@ -15,6 +15,7 @@ import 'package:localjam_app/src/widgets/artwork.dart';
 import 'package:localjam_app/src/widgets/avatar.dart';
 import 'package:localjam_app/src/widgets/buttons.dart';
 import 'package:localjam_app/src/widgets/drag_to_dismiss.dart';
+import 'package:localjam_app/src/widgets/empty_state.dart';
 import 'package:localjam_app/src/widgets/queue_sheet.dart';
 import 'package:localjam_app/src/widgets/room_sheet.dart';
 import 'package:localjam_app/src/widgets/sheet.dart';
@@ -48,15 +49,43 @@ void main() {
 
     expect(find.byType(DragToDismiss), findsOneWidget);
     expect(find.text('Van Jam'), findsWidgets);
-    // An empty room says what to do rather than showing a dead player.
+    // An empty room says what to do, once, rather than showing a dead
+    // player: one Add Songs button, no sentence under the transport, no
+    // timeline to a song that is not there.
     expect(find.text(JamRoomStrings.nothingPlaying), findsOneWidget);
     expect(find.text(JamRoomStrings.addSongs), findsOneWidget);
-    // The footer: the people in the room, Sound Offset, Up Next.
+    expect(
+      find.ancestor(
+        of: find.text(JamRoomStrings.addSongs),
+        matching: find.byType(JamButton),
+      ),
+      findsOneWidget,
+    );
+    expect(find.text(JamRoomStrings.nothingToPlay), findsNothing);
+    expect(
+      tester
+          .widget<Visibility>(
+            find
+                .ancestor(
+                  of: find.byType(JamScrubber),
+                  matching: find.byType(Visibility),
+                )
+                .first,
+          )
+          .visible,
+      isFalse,
+    );
+    // The footer: the people in the room, Sound Offset, Up Next. A lone
+    // face is its own count — no "1" beside it.
     expect(find.byType(JamAvatarStack), findsOneWidget);
     expect(
       find.bySemanticsLabel('${JamRoomStrings.people}, 1'),
       findsOneWidget,
     );
+    expect(find.text('1'), findsNothing);
+    // Sound Offset is a slider, not a speaker (a speaker reads as volume).
+    expect(find.byIcon(CupertinoIcons.slider_horizontal_3), findsOneWidget);
+    expect(find.byIcon(CupertinoIcons.speaker_2), findsNothing);
     expect(find.bySemanticsLabel(JamRoomStrings.soundOffset), findsOneWidget);
     expect(find.bySemanticsLabel(JamRoomStrings.queue), findsOneWidget);
     // An iOS pull-down, not a Material popup.
@@ -599,6 +628,37 @@ void main() {
     await leaveTestSession(tester, session);
   });
 
+  testWidgets('on an iPad the cover grows with the pane and the footer stays '
+      'with the controls (§10.12)', (tester) async {
+    final session = testSession();
+    await tester.runAsync(() async {
+      await session.startHost(
+        sessionName: 'Tablet Jam',
+        discoverable: false,
+        paths: makeTestTracks(count: 1),
+      );
+      await session.hostImport!.done;
+      session.hostEngine!.pause();
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+    });
+    // A 13" iPad in portrait: player plus the docked panel.
+    await resize(tester, const Size(1032, 1376));
+    await pumpRoom(tester, session);
+    expect(tester.takeException(), isNull);
+
+    final cover = tester.getSize(find.byType(JamArtworkTile).first);
+    expect(cover.width, greaterThan(500), reason: 'not a phone-sized cover');
+    final transport = tester.getRect(find.byType(JamTransport));
+    final footer = tester.getRect(find.byIcon(CupertinoIcons.list_bullet));
+    expect(
+      footer.top - transport.bottom,
+      lessThan(100),
+      reason: 'the footer is part of the player, not stranded at the bottom',
+    );
+
+    await leaveTestSession(tester, session);
+  });
+
   testWidgets('ending the jam lives in the ••• menu, behind a confirmation', (
     tester,
   ) async {
@@ -613,14 +673,17 @@ void main() {
 
     await tester.tap(find.bySemanticsLabel(JamRoomStrings.more));
     await tester.pumpAndSettle();
+    // Every action appears once (§10.1): the ••• holds only what has no
+    // control of its own on the screen.
+    for (final item in [JamRoomStrings.diagnostics, JamRoomStrings.endJam]) {
+      expect(find.text(item), findsOneWidget, reason: item);
+    }
     for (final item in [
       JamRoomStrings.invite,
       JamRoomStrings.people,
-      JamRoomStrings.menuSoundOffset,
-      JamRoomStrings.diagnostics,
-      JamRoomStrings.endJam,
+      JamRoomStrings.soundOffset,
     ]) {
-      expect(find.text(item), findsOneWidget, reason: item);
+      expect(find.text(item), findsNothing, reason: item);
     }
 
     await tester.tap(find.text(JamRoomStrings.endJam));
@@ -633,8 +696,8 @@ void main() {
     await leaveTestSession(tester, session);
   });
 
-  testWidgets('a guest invites too: the header button and the menu item '
-      'open the same Invite sheet, with the link they joined by', (
+  testWidgets('a guest invites too: the header button opens the Invite '
+      'sheet, with the link they joined by, and the menu does not repeat it', (
     tester,
   ) async {
     final host = testSession();
@@ -660,11 +723,8 @@ void main() {
 
     await tester.tap(find.bySemanticsLabel(JamRoomStrings.more));
     await tester.pumpAndSettle();
-    expect(find.text(JamRoomStrings.invite), findsOneWidget);
+    expect(find.text(JamRoomStrings.invite), findsNothing);
     expect(find.text(JamRoomStrings.leaveJam), findsOneWidget);
-    await tester.tap(find.text(JamRoomStrings.invite));
-    await tester.pumpAndSettle();
-    expect(find.byType(InvitePanel), findsOneWidget);
 
     await tester.pumpWidget(const SizedBox.shrink());
     await tester.runAsync(() async {
@@ -691,6 +751,8 @@ void main() {
     expect(find.byType(QueuePanel), findsNothing);
     final cover = tester.getSize(find.byType(JamArtworkTile).first);
     expect(cover.width, greaterThan(300));
+    final scrubber = tester.getRect(find.byType(JamScrubber));
+    final transport = tester.getRect(find.byType(JamTransport));
 
     await tester.tap(find.bySemanticsLabel(JamRoomStrings.queue));
     await tester.pumpAndSettle();
@@ -701,6 +763,10 @@ void main() {
     expect(tester.getSize(find.byType(JamArtworkTile).first).width, 56);
     expect(find.byType(JamTransport), findsOneWidget);
     expect(find.text(QueueSheetStrings.title), findsOneWidget);
+    // Music keeps the controls where they were: a toggle never moves the
+    // scrubber or the transport under a thumb.
+    expect(tester.getRect(find.byType(JamScrubber)), scrubber);
+    expect(tester.getRect(find.byType(JamTransport)), transport);
 
     // The thumbnail restores the big cover.
     await tester.tap(find.byType(JamArtworkTile).first);
@@ -956,6 +1022,17 @@ void main() {
       expect(find.text(JamRoomStrings.kickedTitle), findsOneWidget);
       expect(find.text(JamRoomStrings.tryAgain), findsNothing);
       expect(find.text(JamRoomStrings.back), findsOneWidget);
+      // The one shared empty/ended state (§10.6), and leaving is the quiet
+      // grey button, not a loud full-width bar.
+      expect(find.byType(JamEmptyState), findsOneWidget);
+      final back = tester.widget<JamButton>(
+        find.ancestor(
+          of: find.text(JamRoomStrings.back),
+          matching: find.byType(JamButton),
+        ),
+      );
+      expect(back.variant, JamButtonVariant.gray);
+      expect(back.expand, isFalse);
     });
 
     testWidgets('a host who ended the jam says so, on either palette', (
