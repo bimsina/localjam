@@ -197,3 +197,22 @@ Plus Jakarta Sans + `assets/fonts`; all gradients except the D4 backdrop; jam-st
 5. Does every engine state and terminal state still render and read as plain language?
 6. At 1.3× text, does anything clip?
 7. Does the screen still do everything it did before (compare with the feature list in §6)?
+
+---
+
+## 10. v3.1 amendments (2026-10-19, after the first review round)
+
+These override earlier sections where they conflict.
+
+1. **Now Playing actions appear once.** Header: dismiss (chevron or grabber drag) and Invite. Footer: People, Sound Offset, Queue. The ••• menu holds only **Diagnostics** and **End Jam / Leave Jam**. Diagnostics shows Sound Offset as a read-only row that opens the Sound Offset sheet — no second slider. No count next to a lone avatar in the face pile. Sound Offset's footer icon is `slider_horizontal_3`, not a speaker (a speaker reads as volume).
+2. **Sheet header rule.** Leading slot: Cancel (when the sheet edits something) or nothing. Trailing slot: Done, or the sheet's action verb (Start, Join). Close-only sheets use a trailing glass xmark, never both X and Done. Secondary actions (Copy, Reset) live in the content, not the header.
+3. **One iOS era: iOS 26.** Alerts rebuilt in the iOS 26 style (radius ~34, capsule buttons side by side, preferred button filled tint, destructive filled red); menus radius ~22; floating medium sheets radius 38 with side insets, large sheets follow the device corner. One radius table in tokens.
+4. **Presentation rules.** Task flows that create something (Start a Jam) = page sheet that makes the page behind recede. Content sheets (People, Invite, Sound Offset, Diagnostics, library picker) = the shared detent sheet. Scan = full-screen cover sliding up, closed with X. Now Playing = slides up from the mini player (artwork continuity if cheap). On wide layouts (≥ 700 pt) sheets present as centred form sheets (max 540 × 620), not bottom-attached.
+5. **Notices never cover a control.** Copy actions confirm in place (label becomes "Copied" with a checkmark for 1.5 s). Remaining notices present at the top (below the status bar / sheet grabber) when on `/room` or when a sheet is open; elsewhere above the mini player / bottom button. A notice with an Undo action is neutral, not a warning. No "Jam ended" toast when the screen already says so.
+6. **One empty/ended state.** Every empty, ended, error and denied state uses `JamEmptyState`; buttons hug their label (min width 140), never full-width bars in mid-page.
+7. **Contrast on the backdrop.** Overlay solved for secondary text (white 70%) at ≥ 4.5:1, not just primary white. Saturation boosted before darkening so pale/bright covers don't go muddy. Status lines on Now Playing are white with a leading glyph (no orange/red text on art). Placeholder cover: the backdrop is a deep neutral with a faint radial lift, not flat grey.
+8. **System appearance follows the in-app setting**: keyboardAppearance on every text field, and on iOS the window's overrideUserInterfaceStyle via a tiny method channel, so keyboards, share sheets and pickers match.
+9. **Copy glossary.** Say "jam", never "room", in UI text. "Songs", never "tracks". Contractions everywhere ("Couldn't", "Can't"). No cute lines ("That's everyone home safely"). Section headers sentence case. Count headers "12 songs" (sentence case, spec §6.2's "12 Songs" is wrong).
+10. **Avatars**: colour assigned by stable client id, and within one jam no two people share a colour while the palette lasts. At ≤ 24 pt show one initial.
+11. Settings stays a pushed page (sidebar destination on wide). Sound Offset and Diagnostics stay in the jam (§6.8's Playback/Help sections are dropped). Back buttons: bare chevron everywhere, no back labels.
+12. iPad: Now Playing scales the cover with the space (no 340 cap) and keeps the footer with the controls; reading columns are sized from the pane, not the window.
