@@ -8,7 +8,7 @@
 /// driving the route's own animation, which `ModalRoute` does not expose.
 library;
 
-import 'package:flutter/material.dart';
+import 'package:flutter/widgets.dart';
 
 import '../design/tokens.dart';
 
@@ -111,7 +111,7 @@ class _DragToDismissState extends State<DragToDismiss>
         ? widget.child
         : ClipRRect(
             borderRadius: BorderRadius.vertical(
-              top: Radius.circular(JamRadius.xl * progress),
+              top: Radius.circular(JamRadius.sheetFloating * progress),
             ),
             child: widget.child,
           );

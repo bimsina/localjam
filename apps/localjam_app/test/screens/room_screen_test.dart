@@ -4,14 +4,18 @@ library;
 
 import 'dart:io';
 
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:localjam_app/src/design/theme.dart';
+import 'package:localjam_app/src/design/tokens.dart';
 import 'package:localjam_app/src/screens/room_screen.dart';
 import 'package:localjam_app/src/state/session_controller.dart';
+import 'package:localjam_app/src/widgets/artwork.dart';
 import 'package:localjam_app/src/widgets/avatar.dart';
 import 'package:localjam_app/src/widgets/buttons.dart';
 import 'package:localjam_app/src/widgets/drag_to_dismiss.dart';
+import 'package:localjam_app/src/widgets/queue_sheet.dart';
 import 'package:localjam_app/src/widgets/room_sheet.dart';
 import 'package:localjam_app/src/widgets/transport.dart';
 import 'package:localjam_client/localjam_client.dart';
@@ -44,17 +48,21 @@ void main() {
     expect(find.byType(DragToDismiss), findsOneWidget);
     expect(find.text('Van Jam'), findsWidgets);
     // An empty room says what to do rather than showing a dead player.
-    expect(find.text('Nothing queued'), findsOneWidget);
-    expect(find.text('Add music'), findsOneWidget);
-    // The people strip is the door to both sheets, and both doors are
-    // labelled — §8 check 3 forbids bare integers standing in for words.
+    expect(find.text(JamRoomStrings.nothingPlaying), findsOneWidget);
+    expect(find.text(JamRoomStrings.addSongs), findsOneWidget);
+    // The footer: the people in the room, Sound Offset, Up Next.
     expect(find.byType(JamAvatarStack), findsOneWidget);
-    expect(find.text('1 in the room'), findsOneWidget);
-    expect(find.text('0 queued'), findsOneWidget);
-    expect(find.byIcon(Icons.queue_music_rounded), findsOneWidget);
-    // §6.1: three unrelated things behind an ellipsis is a tool, not a room.
+    expect(
+      find.bySemanticsLabel('${JamRoomStrings.people}, 1'),
+      findsOneWidget,
+    );
+    expect(find.bySemanticsLabel(JamRoomStrings.soundOffset), findsOneWidget);
+    expect(find.bySemanticsLabel(JamRoomStrings.queue), findsOneWidget);
+    // An iOS pull-down, not a Material popup.
     expect(find.byType(PopupMenuButton<Object?>), findsNothing);
-    expect(find.byIcon(Icons.more_horiz_rounded), findsNothing);
+    expect(find.bySemanticsLabel(JamRoomStrings.more), findsOneWidget);
+    // Quiet when correct: nothing says "in sync".
+    expect(find.textContaining('sync'), findsNothing);
     // The transport is present even with nothing to play — a host sees the
     // controls they are about to use.
     expect(find.byType(JamTransport), findsOneWidget);
@@ -96,11 +104,10 @@ void main() {
     expect(find.text('Nearby'), findsOneWidget);
   });
 
-  testWidgets('a screen reader can press the people strip: its two doors '
+  testWidgets('a screen reader can press the footer: People and Up Next '
       'carry their tap, not just a label', (tester) async {
-    // Their InkWells' taps went out with their excluded semantics: each
-    // read as a button that did nothing when pressed — the same fault the
-    // 2026-10-17 run found on the room sheet.
+    // A tap that goes out with excluded semantics reads as a button that
+    // does nothing when pressed — the fault the 2026-10-17 run found.
     final session = testSession();
     final router = await pumpApp(tester, session);
     await startTestHost(tester, session, 'Reader Jam');
@@ -109,21 +116,25 @@ void main() {
     final handle = tester.ensureSemantics();
     await tester.pump();
 
-    final people = tester.getSemantics(find.text('1 in the room'));
+    final people = tester.getSemantics(
+      find.bySemanticsLabel('${JamRoomStrings.people}, 1'),
+    );
     expect(
       people,
       matchesSemantics(
         label: '${JamRoomStrings.people}, 1',
         isButton: true,
         hasTapAction: true,
+        hasSelectedState: true,
       ),
     );
     expect(
-      tester.getSemantics(find.text(JamRoomStrings.queued(0))),
+      tester.getSemantics(find.bySemanticsLabel(JamRoomStrings.queue)),
       matchesSemantics(
-        label: '${JamRoomStrings.queue}, ${JamRoomStrings.queued(0)}',
+        label: JamRoomStrings.queue,
         isButton: true,
         hasTapAction: true,
+        hasSelectedState: true,
       ),
     );
 
@@ -210,7 +221,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byType(DragToDismiss), findsOneWidget);
 
-    await tester.tap(find.byIcon(Icons.keyboard_arrow_down_rounded));
+    await tester.tap(find.bySemanticsLabel(JamRoomStrings.close));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 100));
 
@@ -333,7 +344,6 @@ void main() {
     JamSessionController session, {
     ThemeData? theme,
   }) async {
-    resetJamCelebration();
     await tester.pumpWidget(
       JamSession(
         controller: session,
@@ -399,7 +409,6 @@ void main() {
     ) async {
       tester.view.physicalSize = size * tester.view.devicePixelRatio;
       addTearDown(tester.view.resetPhysicalSize);
-      resetJamCelebration();
       await tester.pumpWidget(
         JamSession(
           controller: session,
@@ -432,7 +441,7 @@ void main() {
       EdgeInsets insets,
       Map<String, Finder> finders,
     ) {
-      final ceiling = insets.top + 72; // The room's own bar.
+      final ceiling = insets.top + 56; // The room's own header.
       final floor = size.height - insets.bottom;
       for (final MapEntry(key: what, value: finder) in finders.entries) {
         expect(finder, findsOneWidget, reason: what);
@@ -481,7 +490,7 @@ void main() {
 
         final scale = expectAllOnScreen(tester, size, insets, {
           'the faces': find.byType(JamAvatarStack),
-          'the queue count': find.text(JamRoomStrings.queued(1)),
+          'Up Next': find.byIcon(CupertinoIcons.list_bullet),
           'the transport': find.byType(JamTransport),
           'the timeline': find.byType(JamScrubber),
           'the title': find.text('Golf Long'),
@@ -583,13 +592,13 @@ void main() {
     await pumpRoom(tester, session, theme: jamDarkTheme());
 
     expect(tester.takeException(), isNull);
-    expect(find.text('Nothing queued'), findsOneWidget);
+    expect(find.text(JamRoomStrings.nothingPlaying), findsOneWidget);
     expect(find.byType(JamAvatarStack), findsOneWidget);
 
     await leaveTestSession(tester, session);
   });
 
-  testWidgets('ending the jam lives in the People sheet, not the app bar', (
+  testWidgets('ending the jam lives in the ••• menu, behind a confirmation', (
     tester,
   ) async {
     final session = testSession();
@@ -597,31 +606,155 @@ void main() {
     await resize(tester, const Size(390, 844));
     await pumpRoom(tester, session);
 
-    // §6.1: no ellipsis, and no second red way out beside the room's name
-    // either — the chevron minimises, it never ends anything.
-    expect(find.byType(PopupMenuButton<Object?>), findsNothing);
-    expect(find.text('End jam'), findsNothing);
+    // The chevron minimises; it never ends anything, and no red way out sits
+    // on the screen itself.
+    expect(find.text(JamRoomStrings.endJam), findsNothing);
 
-    // The faces are the door: they open the sheet the End row lives in, and
-    // it asks before it does anything. The row is the last thing in a long
-    // sheet, under the invite and the switches, so it has to be scrolled to.
-    await tester.tap(find.text('1 in the room'));
+    await tester.tap(find.bySemanticsLabel(JamRoomStrings.more));
     await tester.pumpAndSettle();
-    await tester.scrollUntilVisible(
-      find.text('End jam'),
-      300,
-      scrollable: find.byType(Scrollable).last,
-    );
-    await tester.pumpAndSettle();
-    expect(find.text('End jam'), findsOneWidget);
+    for (final item in [
+      JamRoomStrings.invite,
+      JamRoomStrings.people,
+      JamRoomStrings.menuSoundOffset,
+      JamRoomStrings.diagnostics,
+      JamRoomStrings.endJam,
+    ]) {
+      expect(find.text(item), findsOneWidget, reason: item);
+    }
 
-    await tester.tap(find.text('End jam'));
+    await tester.tap(find.text(JamRoomStrings.endJam));
     await tester.pumpAndSettle();
-    expect(find.text('End this jam?'), findsOneWidget);
-    await tester.tap(find.text('Stay'));
+    expect(find.text(JamRoomStrings.endTitle), findsOneWidget);
+    await tester.tap(find.text(JamRoomStrings.cancel));
     await tester.pumpAndSettle();
     expect(session.isLive, isTrue);
 
+    await leaveTestSession(tester, session);
+  });
+
+  testWidgets('the queue opens in place and the thumbnail brings the cover '
+      'back', (tester) async {
+    final session = testSession();
+    await tester.runAsync(() async {
+      await session.startHost(
+        sessionName: 'Queue Jam',
+        discoverable: false,
+        paths: makeTestTracks(),
+      );
+      await session.hostImport!.done;
+      session.hostEngine!.pause();
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+    });
+    await resize(tester, const Size(390, 844));
+    await pumpRoom(tester, session);
+    expect(find.byType(QueuePanel), findsNothing);
+    final cover = tester.getSize(find.byType(JamArtworkTile).first);
+    expect(cover.width, greaterThan(300));
+
+    await tester.tap(find.bySemanticsLabel(JamRoomStrings.queue));
+    await tester.pumpAndSettle();
+    // In place: no sheet, no new route — the list on the same page, the
+    // cover shrunk to the 56 thumbnail, the transport still there.
+    expect(find.byType(QueuePanel), findsOneWidget);
+    expect(find.byType(DraggableScrollableSheet), findsNothing);
+    expect(tester.getSize(find.byType(JamArtworkTile).first).width, 56);
+    expect(find.byType(JamTransport), findsOneWidget);
+    expect(find.text(QueueSheetStrings.title), findsOneWidget);
+
+    // The thumbnail restores the big cover.
+    await tester.tap(find.byType(JamArtworkTile).first);
+    await tester.pumpAndSettle();
+    expect(find.byType(QueuePanel), findsNothing);
+    expect(tester.getSize(find.byType(JamArtworkTile).first), cover);
+
+    await leaveTestSession(tester, session);
+  });
+
+  testWidgets('a paused cover springs back to 0.86', (tester) async {
+    final session = testSession();
+    await tester.runAsync(() async {
+      await session.startHost(
+        sessionName: 'Pause Jam',
+        discoverable: false,
+        paths: makeTestTracks(count: 1),
+      );
+      await session.hostImport!.done;
+      session.hostEngine!.pause();
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+    });
+    await resize(tester, const Size(390, 844));
+    await pumpRoom(tester, session);
+
+    final scale = tester
+        .widgetList<Transform>(
+          find.ancestor(
+            of: find.byType(JamArtworkTile).first,
+            matching: find.byType(Transform),
+          ),
+        )
+        .map((t) => t.transform.entry(0, 0))
+        .toList();
+    expect(scale, contains(closeTo(0.86, 0.001)));
+
+    await leaveTestSession(tester, session);
+  });
+
+  testWidgets('1.3× text on a small phone clips nothing, queue open or not', (
+    tester,
+  ) async {
+    final session = testSession();
+    await tester.runAsync(() async {
+      await session.startHost(
+        sessionName: 'A Rather Long Name For A Jam',
+        discoverable: false,
+        paths: makeTestTracks(),
+      );
+      await session.hostImport!.done;
+      session.hostEngine!.pause();
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+    });
+    tester.view.physicalSize =
+        const Size(375, 667) * tester.view.devicePixelRatio;
+    addTearDown(tester.view.resetPhysicalSize);
+    await tester.pumpWidget(
+      JamSession(
+        controller: session,
+        child: MaterialApp(
+          theme: jamLightTheme(),
+          builder: (context, child) => MediaQuery(
+            data: MediaQuery.of(
+              context,
+            ).copyWith(textScaler: const TextScaler.linear(1.3)),
+            child: child!,
+          ),
+          home: const RoomScreen(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+
+    await tester.tap(find.bySemanticsLabel(JamRoomStrings.queue));
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+    expect(find.byType(QueuePanel), findsOneWidget);
+
+    await leaveTestSession(tester, session);
+  });
+
+  testWidgets('the immersive page looks the same on either app theme', (
+    tester,
+  ) async {
+    final session = testSession();
+    await startTestHost(tester, session, 'Theme Jam');
+    await resize(tester, const Size(390, 844));
+    for (final theme in [jamLightTheme(), jamDarkTheme()]) {
+      await pumpRoom(tester, session, theme: theme);
+      expect(
+        tester.widget<Text>(find.text('Theme Jam')).style!.color,
+        JamNowPlayingColors.text,
+      );
+    }
     await leaveTestSession(tester, session);
   });
 
@@ -714,23 +847,31 @@ void main() {
       // Addendum §2: the host probably went to sleep, and the sha-keyed
       // cache means getting back in re-fetches nothing.
       await pumpEnded(tester, JamSessionEndReason.hostGone);
-      expect(find.text('The room closed'), findsOneWidget);
-      expect(find.text('Try again'), findsOneWidget);
-      expect(find.text('Back to nearby'), findsOneWidget);
+      expect(find.text(JamRoomStrings.hostGoneTitle), findsOneWidget);
+      expect(find.text(JamRoomStrings.tryAgain), findsOneWidget);
+      expect(find.text(JamRoomStrings.back), findsOneWidget);
 
       final primary = tester.widget<JamButton>(
         find.ancestor(
-          of: find.text('Try again'),
+          of: find.text(JamRoomStrings.tryAgain),
           matching: find.byType(JamButton),
         ),
       );
       expect(primary.variant, JamButtonVariant.filled);
+      // §6.3: the way home is the plain one beside it.
+      final back = tester.widget<JamButton>(
+        find.ancestor(
+          of: find.text(JamRoomStrings.back),
+          matching: find.byType(JamButton),
+        ),
+      );
+      expect(back.variant, JamButtonVariant.plain);
     });
 
     testWidgets('a rejected rejoin offers a rejoin too', (tester) async {
       await pumpEnded(tester, JamSessionEndReason.rejected);
       expect(find.text(JamRoomStrings.rejectedTitle), findsOneWidget);
-      expect(find.text('Try again'), findsOneWidget);
+      expect(find.text(JamRoomStrings.tryAgain), findsOneWidget);
     });
 
     testWidgets('a refusal says which, and only offers a retry that could '
@@ -771,9 +912,9 @@ void main() {
 
     testWidgets('a kick never invites you back', (tester) async {
       await pumpEnded(tester, JamSessionEndReason.kicked);
-      expect(find.text('You were removed'), findsOneWidget);
-      expect(find.text('Try again'), findsNothing);
-      expect(find.text('Back to nearby'), findsOneWidget);
+      expect(find.text(JamRoomStrings.kickedTitle), findsOneWidget);
+      expect(find.text(JamRoomStrings.tryAgain), findsNothing);
+      expect(find.text(JamRoomStrings.back), findsOneWidget);
     });
 
     testWidgets('a host who ended the jam says so, on either palette', (
@@ -786,9 +927,9 @@ void main() {
         JamSessionEndReason.hostEnded,
         theme: jamDarkTheme(),
       );
-      expect(find.text('The host ended the jam'), findsOneWidget);
-      expect(find.text('Try again'), findsNothing);
-      expect(find.text('Back to nearby'), findsOneWidget);
+      expect(find.text(JamRoomStrings.hostEndedTitle), findsOneWidget);
+      expect(find.text(JamRoomStrings.tryAgain), findsNothing);
+      expect(find.text(JamRoomStrings.back), findsOneWidget);
       expect(tester.takeException(), isNull);
     });
 
@@ -796,8 +937,8 @@ void main() {
       tester,
     ) async {
       await pumpEnded(tester, null, onRetry: null);
-      expect(find.text('Jam ended'), findsOneWidget);
-      expect(find.text('Back to nearby'), findsOneWidget);
+      expect(find.text(JamRoomStrings.endedTitle), findsOneWidget);
+      expect(find.text(JamRoomStrings.back), findsOneWidget);
     });
   });
 }

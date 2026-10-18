@@ -1,7 +1,8 @@
-/// The strip under the room's app bar: its sentence is never cut short, and
+/// The engine-state capsule under Now Playing's header: its sentence is never cut short, and
 /// at large text sizes its action moves under it instead of squeezing it.
 library;
 
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -31,7 +32,7 @@ void main() {
             body: Column(
               children: [
                 JamRoomBanner(
-                  icon: Icons.error_outline_rounded,
+                  icon: CupertinoIcons.exclamationmark_circle,
                   message: message,
                   actionLabel: JamRoomBannerStrings.resume,
                   onAction: onAction ?? () {},
@@ -84,7 +85,7 @@ void main() {
     tester,
   ) async {
     double gapBelow() =>
-        tester.getTopLeft(find.byType(TextButton)).dy -
+        tester.getTopLeft(find.text(JamRoomBannerStrings.resume)).dy -
         tester.getTopLeft(find.text(JamRoomBannerStrings.outputLost)).dy;
 
     await pumpBanner(
@@ -94,7 +95,7 @@ void main() {
       message: JamRoomBannerStrings.outputLost,
     );
     expect(
-      tester.getTopLeft(find.byType(TextButton)).dx,
+      tester.getTopLeft(find.text(JamRoomBannerStrings.resume)).dx,
       greaterThan(
         tester.getTopRight(find.text(JamRoomBannerStrings.outputLost)).dx - 1,
       ),

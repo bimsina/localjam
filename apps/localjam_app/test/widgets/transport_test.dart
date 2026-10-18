@@ -1,3 +1,4 @@
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:localjam_app/src/design/theme.dart';
@@ -36,9 +37,9 @@ void main() {
       expect(find.bySemanticsLabel('Next'), findsOneWidget);
       expect(find.bySemanticsLabel('Previous'), findsOneWidget);
 
-      await tester.tap(find.byIcon(Icons.play_arrow_rounded));
-      await tester.tap(find.byIcon(Icons.skip_next_rounded));
-      await tester.tap(find.byIcon(Icons.skip_previous_rounded));
+      await tester.tap(find.byIcon(CupertinoIcons.play_fill));
+      await tester.tap(find.byIcon(CupertinoIcons.forward_fill));
+      await tester.tap(find.byIcon(CupertinoIcons.backward_fill));
       expect([play, next, previous], [1, 1, 1]);
     });
 
@@ -51,20 +52,22 @@ void main() {
         ),
       );
       expect(find.bySemanticsLabel('Pause'), findsOneWidget);
-      expect(find.byIcon(Icons.pause_rounded), findsOneWidget);
+      expect(find.byIcon(CupertinoIcons.pause_fill), findsOneWidget);
 
       await tester.pumpWidget(
         _host(JamTransport(state: JamPlaybackState.paused, onPlayPause: () {})),
       );
       await tester.pump(const Duration(milliseconds: 70));
       // Mid-transition both glyphs are on screen: a cross-fade, not a swap.
-      expect(find.byIcon(Icons.pause_rounded), findsOneWidget);
-      expect(find.byIcon(Icons.play_arrow_rounded), findsOneWidget);
+      expect(find.byIcon(CupertinoIcons.pause_fill), findsOneWidget);
+      expect(find.byIcon(CupertinoIcons.play_fill), findsOneWidget);
       await tester.pumpAndSettle();
-      expect(find.byIcon(Icons.pause_rounded), findsNothing);
+      expect(find.byIcon(CupertinoIcons.pause_fill), findsNothing);
     });
 
-    testWidgets('loading shows a ring and swallows the tap', (tester) async {
+    testWidgets('loading shows an activity indicator and swallows the tap', (
+      tester,
+    ) async {
       var play = 0;
       await tester.pumpWidget(
         _host(
@@ -74,9 +77,9 @@ void main() {
           ),
         ),
       );
-      expect(find.byType(CircularProgressIndicator), findsOneWidget);
+      expect(find.byType(CupertinoActivityIndicator), findsOneWidget);
       await tester.tap(
-        find.byType(CircularProgressIndicator),
+        find.byType(CupertinoActivityIndicator),
         warnIfMissed: false,
       );
       expect(play, 0);
@@ -98,21 +101,21 @@ void main() {
       );
 
       expect(find.text(jamHostControlsPlayback), findsOneWidget);
-      expect(
-        tester
-            .widget<Opacity>(
-              find.descendant(
-                of: find.byType(JamTransport),
-                matching: find.byType(Opacity),
-              ),
-            )
-            .opacity,
-        0.38,
-      );
+      // All three glyphs at 30% (§6.3).
+      final opacities = tester
+          .widgetList<Opacity>(
+            find.descendant(
+              of: find.byType(JamTransport),
+              matching: find.byType(Opacity),
+            ),
+          )
+          .map((o) => o.opacity);
+      expect(opacities, everyElement(0.3));
+      expect(opacities, hasLength(3));
       // Never hidden — visible, and inert.
-      expect(find.byIcon(Icons.play_arrow_rounded), findsOneWidget);
+      expect(find.byIcon(CupertinoIcons.play_fill), findsOneWidget);
       await tester.tap(
-        find.byIcon(Icons.play_arrow_rounded),
+        find.byIcon(CupertinoIcons.play_fill),
         warnIfMissed: false,
       );
       expect(play, 0);
@@ -131,10 +134,10 @@ void main() {
         ),
       );
       await tester.tap(
-        find.byIcon(Icons.skip_next_rounded),
+        find.byIcon(CupertinoIcons.forward_fill),
         warnIfMissed: false,
       );
-      await tester.tap(find.byIcon(Icons.play_arrow_rounded));
+      await tester.tap(find.byIcon(CupertinoIcons.play_fill));
       expect(play, 1);
     });
   });
@@ -186,18 +189,34 @@ void main() {
         Offset(track.left + 20, track.center.dy),
       );
       await tester.pump();
-      await gesture.moveTo(Offset(track.right - 11, track.center.dy));
+      await gesture.moveTo(Offset(track.right + 20, track.center.dy));
       await tester.pump();
 
       // The ticker keeps publishing while the finger is down; the thumb and
       // the readout must follow the finger, not the ticker.
       await tester.pumpWidget(build(_minute ~/ 10));
       await tester.pump();
-      expect(find.text('01:00'), findsOneWidget);
+      expect(find.text('1:00'), findsOneWidget);
 
       await gesture.up();
       await tester.pumpAndSettle();
       expect(seeked, _minute);
+    });
+
+    testWidgets('the track thickens while held and has no thumb', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        _host(JamScrubber(positionUs: 0, durationUs: _minute, onSeek: (_) {})),
+      );
+      final track = find.byKey(jamScrubberTrackKey);
+      expect(tester.getSize(track).height, 6);
+      final gesture = await tester.startGesture(tester.getCenter(track));
+      await tester.pumpAndSettle();
+      expect(tester.getSize(track).height, 10);
+      await gesture.up();
+      await tester.pumpAndSettle();
+      expect(tester.getSize(track).height, 6);
     });
 
     testWidgets('shows elapsed and remaining in tabular figures', (
@@ -212,9 +231,10 @@ void main() {
           ),
         ),
       );
-      expect(find.text('00:30'), findsOneWidget);
-      expect(find.text('-01:30'), findsOneWidget);
-      final style = tester.widget<Text>(find.text('00:30')).style!;
+      expect(find.text('0:30'), findsOneWidget);
+      // A real minus sign, the Music app's m:ss.
+      expect(find.text('\u22121:30'), findsOneWidget);
+      final style = tester.widget<Text>(find.text('0:30')).style!;
       expect(style.fontFeatures, contains(const FontFeature.tabularFigures()));
     });
 
@@ -269,9 +289,9 @@ void main() {
       final node = tester.getSemantics(
         find.bySemanticsLabel('Playback position'),
       );
-      expect(node.value, '00:30 of 02:00');
-      expect(node.increasedValue, '00:35 of 02:00');
-      expect(node.decreasedValue, '00:25 of 02:00');
+      expect(node.value, '0:30 of 2:00');
+      expect(node.increasedValue, '0:35 of 2:00');
+      expect(node.decreasedValue, '0:25 of 2:00');
       handle.dispose();
     });
   });

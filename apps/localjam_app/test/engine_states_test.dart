@@ -112,7 +112,7 @@ void main() {
       expect(copy(JamOutputSuspendReason.playbackError), 'Playback error');
       expect(
         copy(JamOutputSuspendReason.playbackError, retry: true),
-        contains('retrying'),
+        contains('Retrying'),
       );
     });
 
@@ -265,7 +265,7 @@ void main() {
       });
       final router = await pumpApp(tester, guest);
       router.push('/room');
-      // One frame for the push to land, then the jam-started moment's 700 ms.
+      // One frame for the push to land, then let the room settle.
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 800));
       expect(
@@ -280,10 +280,10 @@ void main() {
       });
       await tester.pump();
 
-      expect(inRoom(JamRoomBannerStrings.hostAsleep), findsOneWidget);
-      expect(find.text(JamRoomBannerStrings.reconnecting), findsNothing);
-      expect(find.text(JamSyncStrings.hostAsleep), findsOneWidget);
-      expect(find.text(JamSyncStrings.reconnecting), findsNothing);
+      // One calm line under the room's name — not a banner, and not
+      // "Reconnecting…".
+      expect(inRoom(JamSyncStrings.hostAsleep), findsOneWidget);
+      expect(inRoom(JamSyncStrings.reconnecting), findsNothing);
       // The room lets this guest play and skip — but nobody is listening on
       // the other end, so the controls are held, with the reason under them.
       final transport = tester.widget<JamTransport>(find.byType(JamTransport));
@@ -295,14 +295,14 @@ void main() {
         expect(await _waitFor(() => !guest.hostAway), isTrue);
       });
       await tester.pump();
-      expect(find.text(JamRoomBannerStrings.hostAsleep), findsNothing);
+      expect(inRoom(JamSyncStrings.hostAsleep), findsNothing);
 
       await _endApp(tester, [guest, host]);
     });
   });
 
   group('this phone’s sound', () {
-    testWidgets('a suspended output offers "Resume audio" until it clears', (
+    testWidgets('a suspended output offers "Resume Audio" until it clears', (
       tester,
     ) async {
       final session = testSession();
@@ -326,7 +326,10 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.byType(RoomScreen), findsNothing);
       expect(find.text(JamRoomBannerStrings.focusLost), findsOneWidget);
-      expect(find.byTooltip(JamRoomBannerStrings.resume), findsOneWidget);
+      expect(
+        find.bySemanticsLabel(JamRoomBannerStrings.resume),
+        findsOneWidget,
+      );
 
       router.push('/room');
       await tester.pumpAndSettle();
@@ -486,7 +489,7 @@ void main() {
       await tester.pump();
       expect(find.text(JamRoomBannerStrings.focusLost), findsOneWidget);
 
-      await tester.tap(find.byTooltip(JamRoomBannerStrings.resume));
+      await tester.tap(find.bySemanticsLabel(JamRoomBannerStrings.resume));
       await _settleReal(tester);
       expect(session.engine!.outputSuspension.value, isNull);
       expect(
@@ -548,7 +551,7 @@ void main() {
 
       final router = await pumpApp(tester, guest);
       router.push('/room');
-      // One frame for the push to land, then the jam-started moment's 700 ms.
+      // One frame for the push to land, then let the room settle.
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 800));
 
@@ -556,7 +559,7 @@ void main() {
       expect(find.text(JamRoomStrings.retry), findsOneWidget);
       // Heard on its own, "Retry" would not say what it retries.
       expect(find.bySemanticsLabel(JamRoomStrings.retryFetch), findsOneWidget);
-      expect(find.textContaining('Getting this track'), findsNothing);
+      expect(find.textContaining('Getting this song'), findsNothing);
       // Anyone the room lets skip keeps the skip button: a track that will
       // not come down is exactly when someone wants "next".
       expect(find.byType(JamTransport), findsOneWidget);
@@ -565,8 +568,8 @@ void main() {
         isTrue,
       );
 
-      // A listen-only guest has no transport to keep: the failure stands in
-      // for it, still with its Retry.
+      // A listen-only guest keeps the dimmed transport (gated, never hidden)
+      // and the failure keeps its Try Again.
       await tester.runAsync(() async {
         host.hostEngine!.setPolicy(JamPolicy.listenOnly);
         expect(
@@ -577,16 +580,19 @@ void main() {
         );
       });
       await tester.pump();
-      expect(find.byType(JamTransport), findsNothing);
+      expect(
+        tester.widget<JamTransport>(find.byType(JamTransport)).enabled,
+        isFalse,
+      );
       expect(find.text(JamRoomStrings.fetchFailed), findsOneWidget);
       expect(find.text(JamRoomStrings.retry), findsOneWidget);
 
-      // Retry goes back to "getting this track" at once...
+      // Try Again goes back to "Getting this song…" at once...
       final states = guest.guestEngine!.prefetchStates;
       await tester.tap(find.text(JamRoomStrings.retry));
       await tester.pump();
       expect(find.text(JamRoomStrings.fetchFailed), findsNothing);
-      expect(find.textContaining('Getting this track'), findsOneWidget);
+      expect(find.textContaining('Getting this song'), findsOneWidget);
       // ...and a retry that fails again comes back to Retry, rather than
       // sitting on a percentage that will never move.
       for (var i = 0; i < 80; i++) {
@@ -758,7 +764,7 @@ void main() {
       });
       final router = await pumpApp(tester, guest);
       router.push('/room');
-      // One frame for the push to land, then the jam-started moment's 700 ms.
+      // One frame for the push to land, then let the room settle.
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 800));
 

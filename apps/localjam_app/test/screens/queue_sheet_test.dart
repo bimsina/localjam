@@ -1,5 +1,5 @@
-/// The queue sheet: the two groups §5 asks for, the reorder maths behind
-/// them, and the capability gate that must never silently remove a control.
+/// The queue in place (DESIGN_SPEC v3 §6.3 D5): Up Next in play order, the
+/// reorder maths behind it, and the capability gates on every control.
 library;
 
 import 'dart:io';
@@ -10,8 +10,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:localjam_app/src/design/theme.dart';
 import 'package:localjam_app/src/state/session_controller.dart';
 import 'package:localjam_app/src/util/format.dart';
-import 'package:localjam_app/src/widgets/buttons.dart';
-import 'package:localjam_app/src/widgets/empty_state.dart';
+import 'package:localjam_app/src/design/tokens.dart';
 import 'package:localjam_app/src/widgets/queue_sheet.dart';
 import 'package:localjam_app/src/widgets/track_row.dart';
 import 'package:localjam_client/localjam_client.dart';
@@ -209,13 +208,14 @@ void main() {
     });
   });
 
-  testWidgets('a host queue splits into NOW PLAYING and NEXT UP', (
-    tester,
-  ) async {
+  Future<JamSessionController> hostWithQueue(
+    WidgetTester tester, {
+    bool hold = false,
+  }) async {
     final host = testSession();
     await tester.runAsync(() async {
-      // `startHost` cues the first track, which is what gives the sheet a
-      // NOW PLAYING group to pin.
+      // `startHost` cues the first track: it is the cover above the list,
+      // and Up Next is the rest.
       await host.startHost(
         sessionName: 'Van Jam',
         discoverable: false,
@@ -223,27 +223,44 @@ void main() {
       );
       // The files import behind the already-open room.
       await host.hostImport!.done;
+      if (hold) {
+        // A running position ticker is a live `Ticker` that `pumpAndSettle`
+        // waits on forever; freeze the transport in the zone it runs in.
+        host.hostEngine!.pause();
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+      }
     });
     await tester.pump();
+    return host;
+  }
+
+  testWidgets('a host queue lists Up Next after the current track, with Add '
+      'Songs first and a grip on every row', (tester) async {
+    final host = await hostWithQueue(tester);
     expect(host.engine!.playlist.length, 3);
 
     await _pump(tester, host, QueuePanel(engine: host.engine!));
     await tester.pump();
 
-    expect(find.text(QueueSheetStrings.nowPlaying), findsOneWidget);
-    expect(find.text(QueueSheetStrings.nextUp), findsOneWidget);
-    expect(find.byType(JamTrackRow), findsNWidgets(3));
-    expect(find.text(QueueSheetStrings.count(3)), findsOneWidget);
-
-    // Reorderable, and the grip is visible rather than a hidden long-press.
+    expect(find.text(QueueSheetStrings.title), findsOneWidget);
+    expect(find.text(QueueSheetStrings.count(2)), findsOneWidget);
+    expect(find.text(QueueSheetStrings.addSongs), findsOneWidget);
+    // The current track is the cover above the list, not a row in it.
+    expect(find.byType(JamTrackRow), findsNWidgets(2));
     expect(find.byType(SliverReorderableList), findsOneWidget);
     expect(find.byIcon(CupertinoIcons.line_horizontal_3), findsNWidgets(2));
+    // White on the backdrop, whatever the app theme.
+    expect(
+      tester.widget<Text>(find.text(QueueSheetStrings.title)).style!.color,
+      JamNowPlayingColors.text,
+    );
 
     await tester.runAsync(host.leave);
   });
 
-  testWidgets('NEXT UP lists what plays next once the room has gone round, '
-      'and the pinned track is not a button', (tester) async {
+  testWidgets('Up Next lists what plays next once the room has gone round', (
+    tester,
+  ) async {
     final host = testSession();
     await tester.runAsync(() async {
       await host.startHost(
@@ -263,25 +280,17 @@ void main() {
     await tester.pump();
 
     double top(String title) => tester.getTopLeft(find.text(title)).dy;
-    expect(top(titles[1]), lessThan(top(titles[2])), reason: 'pinned first');
+    expect(find.text(titles[1]), findsNothing, reason: 'the current track');
     expect(
       top(titles[2]),
       lessThan(top(titles[0])),
       reason: 'the last track plays next, then round to the first',
     );
-    // Picking the track that is on changes nothing (§5.2), so it is inert.
-    final pinned = tester.widget<JamTrackRow>(
-      find.ancestor(
-        of: find.text(titles[1]),
-        matching: find.byType(JamTrackRow),
-      ),
-    );
-    expect(pinned.onTap, isNull);
 
     await tester.runAsync(host.leave);
   });
 
-  testWidgets('an empty queue offers the one thing to do', (tester) async {
+  testWidgets('an empty queue says so and offers Add Songs', (tester) async {
     final host = testSession();
     await tester.runAsync(
       () => host.startHost(sessionName: 'Quiet Jam', discoverable: false),
@@ -291,19 +300,13 @@ void main() {
     await _pump(tester, host, QueuePanel(engine: host.engine!));
     await tester.pump();
 
-    expect(find.byType(JamEmptyState), findsOneWidget);
-    expect(find.text(QueueSheetStrings.emptyTitle), findsOneWidget);
-    expect(find.text(QueueSheetStrings.emptyCanAdd), findsOneWidget);
-    expect(find.text(QueueSheetStrings.addMusic), findsOneWidget);
+    expect(find.text(QueueSheetStrings.empty), findsOneWidget);
+    expect(find.text(QueueSheetStrings.addSongs), findsOneWidget);
 
     await tester.runAsync(host.leave);
   });
 
-  testWidgets('a guest who may not add is told so, not quietly stripped', (
-    tester,
-  ) async {
-    // The iOS report: the Add control simply vanished, which reads as a bug
-    // rather than as a rule the host set.
+  testWidgets('a guest who may not add is told so', (tester) async {
     final host = testSession();
     final guest = testSession();
     final cache = _tempCache();
@@ -326,50 +329,54 @@ void main() {
     await tester.pump();
 
     expect(find.text(QueueSheetStrings.hostRunsQueue), findsOneWidget);
-    final add = tester.widget<JamButton>(
-      find.widgetWithText(JamButton, QueueSheetStrings.add),
-    );
-    expect(add.variant, JamButtonVariant.plain);
-    expect(add.onPressed, isNull);
+    // §6.3: the Add Songs row is only there with `addTracks`.
+    expect(find.text(QueueSheetStrings.addSongs), findsNothing);
+    expect(find.byIcon(CupertinoIcons.line_horizontal_3), findsNothing);
 
     await tester.runAsync(guest.leave);
     await tester.runAsync(host.leave);
   });
 
-  testWidgets('the grip picks a row up instead of dragging the sheet', (
-    tester,
-  ) async {
-    // On Android the drag fell through to the sheet, which grew instead of
-    // lifting the row: `ReorderableDragStartListener` wraps its child in a
-    // hit-test-deferring `Listener`, and the grip's box was empty.
-    final host = testSession();
-    await tester.runAsync(() async {
-      await host.startHost(
-        sessionName: 'Van Jam',
-        discoverable: false,
-        paths: _media(),
-      );
-      await host.hostImport!.done;
-    });
-    await tester.pump();
+  testWidgets('a long press offers Play Next and Remove', (tester) async {
+    final host = await hostWithQueue(tester, hold: true);
     final engine = host.engine!;
-    // Starting a jam with a queue now starts the music, and a running
-    // position ticker is a live `Ticker` that `pumpAndSettle` waits on
-    // forever. This test is about the drag; freeze the transport. In the
-    // real zone: the engine (and the ticker's subscription to its states)
-    // were created there, and the paused snapshot that stops the ticker is
-    // delivered there too — the import now starts the music from that zone.
-    await tester.runAsync(() async {
-      host.hostEngine!.pause();
-      await Future<void>.delayed(const Duration(milliseconds: 50));
-    });
+    final last = engine.playlist.last;
+    final first = engine.playlist.first.mediaId;
+
+    await _pump(tester, host, QueuePanel(engine: engine));
     await tester.pump();
+
+    await tester.longPress(find.text(jamDisplayTitle(last)));
+    await tester.pumpAndSettle();
+    expect(find.text(QueueSheetStrings.playNext), findsOneWidget);
+    expect(find.text(QueueSheetStrings.remove), findsOneWidget);
+
+    await tester.tap(find.text(QueueSheetStrings.playNext));
+    await tester.pumpAndSettle();
+    await tester.runAsync(() async {
+      expect(
+        await _waitFor(() => engine.playlist[1].mediaId == last.mediaId),
+        isTrue,
+        reason: 'Play Next puts it straight after the current track',
+      );
+    });
+    expect(engine.playlist.first.mediaId, first);
+
+    await tester.runAsync(host.leave);
+  });
+
+  testWidgets('the grip picks a row up', (tester) async {
+    // On Android the drag once fell through to the sheet underneath:
+    // `ReorderableDragStartListener` wraps its child in a hit-test-deferring
+    // `Listener`, and the grip's box was empty.
+    final host = await hostWithQueue(tester, hold: true);
+    final engine = host.engine!;
     final before = [for (final item in engine.playlist) item.name];
 
     await _pump(tester, host, QueuePanel(engine: engine));
     await tester.pump();
 
-    // The grip on the last NEXT UP row, dragged onto the one above it.
+    // The grip on the last Up Next row, dragged onto the one above it.
     final grip = find.byIcon(CupertinoIcons.line_horizontal_3).last;
     final drag = await tester.startGesture(tester.getCenter(grip));
     await tester.pump(const Duration(milliseconds: 200));
@@ -386,7 +393,7 @@ void main() {
               before.join(),
         ),
         isTrue,
-        reason: 'the drag should have reordered the queue, not the sheet',
+        reason: 'the drag should have reordered the queue',
       );
     });
 
@@ -426,7 +433,7 @@ void main() {
 
     await _pump(tester, guest, QueuePanel(engine: engine));
     await tester.pump();
-    expect(find.byType(JamTrackRow), findsNWidgets(3));
+    expect(find.byType(JamTrackRow), findsNWidgets(2));
 
     await tester.drag(
       find.byKey(ValueKey<String>('queue-dismiss-$victim')),
@@ -437,7 +444,7 @@ void main() {
     }
     expect(
       find.byType(JamTrackRow),
-      findsNWidgets(3),
+      findsNWidgets(2),
       reason: 'refused: the row stays',
     );
     expect(heard, contains(kJamHostAsleepTryLater));
@@ -449,45 +456,21 @@ void main() {
     });
   });
 
-  testWidgets('the sheet opens at the spec height and renders dark', (
-    tester,
-  ) async {
-    final host = testSession();
-    await tester.runAsync(
-      () => host.startHost(sessionName: 'Dark Jam', discoverable: false),
-    );
-    await tester.pump();
-
-    late BuildContext sheetContext;
+  testWidgets('renders the same on a dark app theme', (tester) async {
+    final host = await hostWithQueue(tester);
     await _pump(
       tester,
       host,
-      Builder(
-        builder: (context) {
-          sheetContext = context;
-          return const SizedBox.shrink();
-        },
-      ),
+      QueuePanel(engine: host.engine!),
       theme: jamDarkTheme(),
     );
-
-    unawaitedShow(sheetContext, host.engine!);
-    await tester.pumpAndSettle();
-
-    final sheet = tester.widget<DraggableScrollableSheet>(
-      find.byType(DraggableScrollableSheet),
+    await tester.pump();
+    expect(
+      tester.widget<Text>(find.text(QueueSheetStrings.title)).style!.color,
+      JamNowPlayingColors.text,
     );
-    // Opens at the large detent, clamped under the status bar.
-    expect(sheet.initialChildSize, sheet.maxChildSize);
-    expect(sheet.maxChildSize, greaterThan(0.9));
-    expect(find.text(QueueSheetStrings.title), findsOneWidget);
     expect(tester.takeException(), isNull);
 
     await tester.runAsync(host.leave);
   });
-}
-
-/// `showQueueSheet` without the analyzer complaining about the dropped future.
-void unawaitedShow(BuildContext context, JamEngine engine) {
-  showQueueSheet(context, engine).ignore();
 }

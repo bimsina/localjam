@@ -1,3 +1,7 @@
+/// The sync line under the room's name: silent when fine, one plain sentence
+/// when not (DESIGN_SPEC v3 §1.2) — no dot, no pulse.
+library;
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:localjam_app/src/design/theme.dart';
@@ -7,40 +11,36 @@ import 'package:localjam_app/src/widgets/sync_indicator.dart';
 Widget _host(
   JamSyncState state, {
   VoidCallback? onShowDetails,
+  JamStatusLine? fallback,
   bool dark = false,
-  bool reduceMotion = false,
-  double height = 44,
-}) => MediaQuery(
-  data: MediaQueryData(disableAnimations: reduceMotion),
-  child: MaterialApp(
-    theme: dark ? jamDarkTheme() : jamLightTheme(),
-    home: Scaffold(
-      body: Center(
-        child: JamSyncIndicator(
-          state: state,
-          onShowDetails: onShowDetails,
-          height: height,
-        ),
+}) => MaterialApp(
+  theme: dark ? jamDarkTheme() : jamLightTheme(),
+  home: Scaffold(
+    body: Center(
+      child: JamSyncIndicator(
+        state: state,
+        fallback: fallback,
+        onShowDetails: onShowDetails,
       ),
     ),
   ),
 );
 
-Color _dotColor(WidgetTester tester) {
-  final box = tester.widget<DecoratedBox>(
-    find
-        .descendant(
-          of: find.byType(JamSyncIndicator),
-          matching: find.byType(DecoratedBox),
-        )
-        .first,
-  );
-  return (box.decoration as BoxDecoration).color!;
-}
+Color? _colorOf(WidgetTester tester, String text) =>
+    tester.widget<Text>(find.text(text)).style!.color;
 
 void main() {
-  testWidgets('idle renders nothing at all', (tester) async {
-    await tester.pumpWidget(_host(JamSyncState.idle));
+  testWidgets('in sync and idle say nothing at all', (tester) async {
+    for (final state in [JamSyncState.inSync, JamSyncState.idle]) {
+      await tester.pumpWidget(_host(state));
+      await tester.pumpAndSettle();
+      expect(find.byType(Text), findsNothing, reason: '$state');
+    }
+  });
+
+  testWidgets('no dot: the indicator paints no decoration', (tester) async {
+    await tester.pumpWidget(_host(JamSyncState.reconnecting));
+    await tester.pumpAndSettle();
     expect(
       find.descendant(
         of: find.byType(JamSyncIndicator),
@@ -50,62 +50,56 @@ void main() {
     );
   });
 
-  testWidgets('in sync is a quiet dot and a quiet word', (tester) async {
-    await tester.pumpWidget(_host(JamSyncState.inSync));
-    await tester.pumpAndSettle();
-    // A lone 6 dp dot read as a speck of dust on a review build, so the calm
-    // state says so — in `textSecondary`, with no colour of its own.
-    expect(find.text(JamSyncStrings.inSync), findsOneWidget);
-    expect(_dotColor(tester), JamColors.light.secondaryLabel);
-    expect(tester.getSize(find.byType(JamSyncIndicator)).height, 44);
-  });
-
-  testWidgets('the room can pack the indicator into a shorter slot', (
-    tester,
-  ) async {
-    await tester.pumpWidget(_host(JamSyncState.inSync, height: 28));
-    await tester.pumpAndSettle();
-    expect(tester.getSize(find.byType(JamSyncIndicator)).height, 28);
-  });
-
-  testWidgets('catching up pairs an apricot dot with a readable word', (
-    tester,
-  ) async {
+  testWidgets('trouble is warning text; a wait is calm white', (tester) async {
     await tester.pumpWidget(_host(JamSyncState.catchingUp));
     await tester.pumpAndSettle();
-    expect(find.text('Catching up'), findsOneWidget);
-    expect(_dotColor(tester), JamColors.light.warning);
+    expect(find.text(JamSyncStrings.catchingUp), findsOneWidget);
+    expect(_colorOf(tester, JamSyncStrings.catchingUp), JamColors.dark.warning);
+
+    await tester.pumpWidget(_host(JamSyncState.reconnecting));
+    await tester.pumpAndSettle();
     expect(
-      tester.widget<Text>(find.text('Catching up')).style!.color,
-      JamColors.light.warning,
+      _colorOf(tester, JamSyncStrings.reconnecting),
+      JamColors.dark.warning,
+    );
+
+    await tester.pumpWidget(_host(JamSyncState.hostAway));
+    await tester.pumpAndSettle();
+    expect(
+      _colorOf(tester, JamSyncStrings.hostAsleep),
+      JamNowPlayingColors.secondary,
     );
   });
 
   testWidgets('out of sync is the only red state', (tester) async {
     await tester.pumpWidget(_host(JamSyncState.offSync));
     await tester.pumpAndSettle();
-    expect(find.text('Out of sync'), findsOneWidget);
-    expect(_dotColor(tester), JamColors.light.danger);
+    expect(_colorOf(tester, JamSyncStrings.offSync), JamColors.dark.danger);
   });
 
-  testWidgets('reconnecting and syncing pulse; a settled state does not', (
-    tester,
-  ) async {
-    await tester.pumpWidget(_host(JamSyncState.reconnecting));
-    expect(find.text('Reconnecting…'), findsOneWidget);
-    // A repeating controller never settles.
-    expect(tester.hasRunningAnimations, isTrue);
-
-    await tester.pumpWidget(_host(JamSyncState.inSync));
+  testWidgets('the same colours in either app theme (D4)', (tester) async {
+    await tester.pumpWidget(_host(JamSyncState.offSync, dark: true));
     await tester.pumpAndSettle();
+    expect(_colorOf(tester, JamSyncStrings.offSync), JamColors.dark.danger);
+  });
+
+  testWidgets('nothing animates on its own', (tester) async {
+    await tester.pumpWidget(_host(JamSyncState.syncing));
+    await tester.pumpAndSettle();
+    expect(find.text(JamSyncStrings.syncing), findsOneWidget);
     expect(tester.hasRunningAnimations, isFalse);
   });
 
-  testWidgets('the pulse stops entirely under reduced motion', (tester) async {
-    await tester.pumpWidget(_host(JamSyncState.syncing, reduceMotion: true));
+  testWidgets('a sync problem outranks the fallback line', (tester) async {
+    const news = JamStatusLine('Getting this song… 40%');
+    await tester.pumpWidget(_host(JamSyncState.inSync, fallback: news));
     await tester.pumpAndSettle();
-    expect(find.text('Syncing…'), findsOneWidget);
-    expect(tester.hasRunningAnimations, isFalse);
+    expect(find.text(news.text), findsOneWidget);
+
+    await tester.pumpWidget(_host(JamSyncState.reconnecting, fallback: news));
+    await tester.pumpAndSettle();
+    expect(find.text(news.text), findsNothing);
+    expect(find.text(JamSyncStrings.reconnecting), findsOneWidget);
   });
 
   testWidgets('long-press opens the numbers; a tap does not', (tester) async {
@@ -113,18 +107,27 @@ void main() {
     await tester.pumpWidget(
       _host(JamSyncState.offSync, onShowDetails: () => opened++),
     );
-    await tester.tap(find.byType(JamSyncIndicator));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text(JamSyncStrings.offSync));
     await tester.pump();
     expect(opened, 0);
 
-    await tester.longPress(find.byType(JamSyncIndicator));
+    await tester.longPress(find.text(JamSyncStrings.offSync));
     await tester.pump();
     expect(opened, 1);
   });
 
-  testWidgets('dark reads its own palette', (tester) async {
-    await tester.pumpWidget(_host(JamSyncState.offSync, dark: true));
-    await tester.pumpAndSettle();
-    expect(_dotColor(tester), JamColors.dark.danger);
+  test('every problem has words, and the calm states have none', () {
+    expect(jamSyncStatusLine(JamSyncState.inSync), isNull);
+    expect(jamSyncStatusLine(JamSyncState.idle), isNull);
+    for (final state in [
+      JamSyncState.syncing,
+      JamSyncState.reconnecting,
+      JamSyncState.hostAway,
+      JamSyncState.catchingUp,
+      JamSyncState.offSync,
+    ]) {
+      expect(jamSyncStatusLine(state)?.text, isNotEmpty, reason: '$state');
+    }
   });
 }
