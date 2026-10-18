@@ -361,6 +361,73 @@ void main() {
       );
     });
 
+    test('a registration confirmed after the room gave up on it is withdrawn '
+        'again, so a closed jam does not stay on the network', () async {
+      // Android's NsdManager (through bonsoir) only unregisters what it has
+      // confirmed: the stop sent at give-up time overtakes the confirmation
+      // and is dropped. When the confirmation lands late, the room has to be
+      // taken back a second time — the host otherwise lists its own ended
+      // jam under Nearby for as long as the process lives.
+      final calls = <String>[];
+      MockStreamHandlerEventSink? sink;
+      Map<String, Object?> service = const {};
+      var registered = false;
+      _mockBonsoir((call) async {
+        calls.add(call.method);
+        final arguments = Map<String, Object?>.from(call.arguments as Map);
+        switch (call.method) {
+          case 'broadcast.initialize':
+            service = {
+              for (final entry in arguments.entries)
+                if (entry.key.startsWith('service.')) entry.key: entry.value,
+            };
+            final channel = EventChannel(
+              'fr.skyost.bonsoir.broadcast.${arguments['id']}',
+            );
+            TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+                .setMockStreamHandler(
+                  channel,
+                  MockStreamHandler.inline(
+                    onListen: (Object? _, MockStreamHandlerEventSink s) =>
+                        sink = s,
+                  ),
+                );
+            addTearDown(
+              () => TestDefaultBinaryMessengerBinding
+                  .instance
+                  .defaultBinaryMessenger
+                  .setMockStreamHandler(channel, null),
+            );
+          case 'broadcast.stop':
+            // Like bonsoir_android's dispose(): a no-op until registered.
+            if (registered) registered = false;
+        }
+        return true;
+      });
+
+      final advertiser = await JamRoomAdvertiser.start(
+        sessionName: 'Van Jam',
+        port: 44100,
+        token: 'cafebabecafebabe',
+        timeout: const Duration(milliseconds: 200),
+      );
+      addTearDown(() async => advertiser?.stop());
+      expect(advertiser?.transport, anyOf(isNull, 'builtin'));
+      final stopsAtGiveUp = calls.where((c) => c == 'broadcast.stop').length;
+      expect(stopsAtGiveUp, 1);
+
+      // The daemon gets round to it after all.
+      registered = true;
+      sink!.success(<String, Object?>{
+        'id': 'broadcastStarted',
+        'service': service,
+      });
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+
+      expect(calls.where((c) => c == 'broadcast.stop').length, 2);
+      expect(registered, isFalse, reason: 'the late registration is gone');
+    });
+
     test('a daemon that refuses hands over without wedging the path', () async {
       _mockBonsoir((call) async => throw PlatformException(code: 'nope'));
       final advertiser = await JamRoomAdvertiser.start(
