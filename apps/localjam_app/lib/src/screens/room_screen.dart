@@ -37,7 +37,6 @@ import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 import 'package:localjam_client/localjam_client.dart';
 
-import '../design/artwork_tint.dart';
 import '../design/breakpoints.dart';
 import '../design/theme.dart';
 import '../design/tokens.dart';
@@ -48,6 +47,7 @@ import '../util/format.dart';
 import '../util/network.dart';
 import '../widgets/artwork.dart';
 import '../widgets/avatar.dart';
+import '../widgets/peer_row.dart';
 import '../widgets/buttons.dart';
 import '../widgets/diagnostics_sheet.dart';
 import '../widgets/dialogs.dart';
@@ -434,19 +434,9 @@ class _RoomScreenState extends State<RoomScreen>
   /// The host holds the reserved peer id "host" and is never in `peers`, so
   /// a guest has to add it back or the room looks a person short.
   List<String> _roster(JamEngine engine) => <String>[
-    if (_identity.isNotEmpty) _identity,
+    _identity.isNotEmpty ? _identity : JamPeerRowStrings.you,
     if (engine is JamGuestEngine) _hostName(engine),
     for (final peer in engine.peers) jamPeerName(peer),
-  ];
-
-  /// The stable ids [_roster]'s faces take their colours from (§10.10),
-  /// parallel to it: each person's peer id — the one id every phone in the
-  /// jam knows them by (client ids never leave the host).
-  List<String> _rosterKeys(JamEngine engine) => <String>[
-    if (_identity.isNotEmpty) engine.selfPeerId,
-    if (engine is JamGuestEngine)
-      engine.hostPeer?.peerId ?? JamPermissions.hostPeerId,
-    for (final peer in engine.peers) peer.peerId,
   ];
 
   /// The host, by name: the one the welcome frame carried, and the role
@@ -508,7 +498,8 @@ class _RoomScreenState extends State<RoomScreen>
     final guest = engine is JamGuestEngine ? engine : null;
     final isHost = engine is JamHostEngine;
     final roster = _roster(engine);
-    final rosterKeys = _rosterKeys(engine);
+    // Parallel to [roster]: the ids its faces are coloured over (§10.10).
+    final rosterKeys = jamRosterPeerIds(engine);
     final canAdd = engine.can(JamCapability.addTracks);
     // A sheet over the player (People, Sound Offset) brings its own grabber;
     // two stacked bars read as one broken one.
@@ -544,7 +535,7 @@ class _RoomScreenState extends State<RoomScreen>
       ],
     );
 
-    Widget player(JamBackdrop backdrop, {required bool showGrabber}) => _Player(
+    Widget player({required bool showGrabber}) => _Player(
       engine: engine,
       guest: guest,
       session: session,
@@ -557,7 +548,6 @@ class _RoomScreenState extends State<RoomScreen>
       menu: menu,
       roster: roster,
       rosterKeys: rosterKeys,
-      cutout: backdrop.base,
       queueSelected: wide && _panel == _PanelView.queue,
       peopleSelected: wide && _panel == _PanelView.people,
       onClose: _minimise,
@@ -602,13 +592,10 @@ class _RoomScreenState extends State<RoomScreen>
                     child: Stack(
                       fit: StackFit.expand,
                       children: [
-                        _PlaceholderLift(visible: backdrop.isPlaceholder),
                         if (wide)
                           Row(
                             children: [
-                              Expanded(
-                                child: player(backdrop, showGrabber: false),
-                              ),
+                              Expanded(child: player(showGrabber: false)),
                               _DockedPanel(
                                 engine: engine,
                                 view: _panel,
@@ -619,46 +606,12 @@ class _RoomScreenState extends State<RoomScreen>
                             ],
                           )
                         else
-                          player(backdrop, showGrabber: true),
+                          player(showGrabber: true),
                       ],
                     ),
                   ),
                 ),
               ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-/// A song without a cover: the deep neutral backdrop gets a faint radial
-/// lift behind where the cover sits (§10.7), so it still reads as Now
-/// Playing and not as a screen waiting to load. Part of the backdrop — the
-/// one surface allowed a gradient.
-class _PlaceholderLift extends StatelessWidget {
-  const _PlaceholderLift({required this.visible});
-
-  final bool visible;
-
-  @override
-  Widget build(BuildContext context) {
-    final reduced = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
-    return IgnorePointer(
-      child: AnimatedOpacity(
-        opacity: visible ? 1 : 0,
-        duration: reduced ? Duration.zero : JamDuration.crossfade,
-        curve: JamCurve.standard,
-        child: const DecoratedBox(
-          decoration: BoxDecoration(
-            gradient: RadialGradient(
-              center: Alignment(0, -0.3),
-              radius: 0.85,
-              colors: [
-                JamNowPlayingColors.backdropPlaceholderLift,
-                JamNowPlayingColors.clear,
-              ],
             ),
           ),
         ),
@@ -683,7 +636,6 @@ class _Player extends StatelessWidget {
     required this.menu,
     required this.roster,
     required this.rosterKeys,
-    required this.cutout,
     required this.queueSelected,
     required this.peopleSelected,
     required this.onClose,
@@ -711,9 +663,6 @@ class _Player extends StatelessWidget {
 
   /// [roster]'s colour keys (peer ids), parallel to it.
   final List<String> rosterKeys;
-
-  /// The ground the face pile's cutouts are punched in.
-  final Color cutout;
 
   /// Wide only: which docked view the footer's buttons are showing.
   final bool queueSelected;
@@ -774,7 +723,6 @@ class _Player extends StatelessWidget {
     final footer = _Footer(
       roster: roster,
       rosterKeys: rosterKeys,
-      cutout: cutout,
       queueSelected: queueSelected,
       peopleSelected: peopleSelected,
       queue: wide ? null : queue,
@@ -1442,7 +1390,10 @@ class _EngineCapsule extends StatelessWidget {
                   // is already being fetched again); a tap that did nothing
                   // visible deserves a word.
                   if (!fetcher.retryFetch(mediaId)) {
-                    session.notify(kJamIntentFailed);
+                    session.notify(
+                      kJamIntentFailed,
+                      tone: JamNoticeTone.warning,
+                    );
                   }
                 },
               ),
@@ -1847,7 +1798,6 @@ class _Footer extends StatelessWidget {
   const _Footer({
     required this.roster,
     required this.rosterKeys,
-    required this.cutout,
     required this.queueSelected,
     required this.peopleSelected,
     required this.queue,
@@ -1860,7 +1810,6 @@ class _Footer extends StatelessWidget {
 
   /// [roster]'s colour keys (peer ids), parallel to it.
   final List<String> rosterKeys;
-  final Color cutout;
 
   /// Wide windows: the docked panel's view. Phones follow [queue] instead.
   final bool queueSelected;
@@ -1908,12 +1857,9 @@ class _Footer extends StatelessWidget {
               ),
               child: JamAvatarStack(
                 names: roster,
-                colorKeys: rosterKeys.length == roster.length
-                    ? rosterKeys
-                    : null,
+                colorKeys: rosterKeys,
                 size: JamAvatarSize.strip,
                 maxVisible: 3,
-                cutoutColor: cutout,
                 overflowColor: JamNowPlayingColors.secondary,
               ),
             ),

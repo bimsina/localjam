@@ -39,6 +39,7 @@ import 'empty_state.dart';
 import 'guests_can.dart';
 import 'list.dart';
 import 'menu.dart';
+import 'avatar.dart';
 import 'peer_row.dart';
 import 'section.dart';
 import 'sheet.dart';
@@ -307,7 +308,9 @@ class _RoomPanelState extends State<RoomPanel> {
     } catch (e) {
       debugPrint('localjam: host action failed: $e');
       if (!mounted) return;
-      JamSession.read(context).notify(RoomSheetStrings.actionFailed);
+      JamSession.read(
+        context,
+      ).notify(RoomSheetStrings.actionFailed, tone: JamNoticeTone.error);
     }
   }
 
@@ -336,11 +339,18 @@ class _RoomPanelState extends State<RoomPanel> {
     // is two people bigger than the list from that side.
     final count = peers.length + (isHost ? 1 : 2);
 
+    // Coloured over the same ordered ids as the face pile, so a person is
+    // one colour on every screen of the jam (§10.10).
+    final roster = jamRosterPeerIds(_engine);
+    final faces = jamAvatarColors(roster);
+    Color faceOf(String peerId) => faces[roster.indexOf(peerId)];
+
     final people = <Widget>[
       // This device first, so you can see your own standing.
       JamPeerRow(
         name: widget.selfName,
         colorKey: _engine.selfPeerId,
+        color: faceOf(_engine.selfPeerId),
         role: isHost
             ? JamPeerRole.host
             : _roleOf(permissions.roleOf(_engine.selfPeerId)),
@@ -353,12 +363,14 @@ class _RoomPanelState extends State<RoomPanel> {
         JamPeerRow(
           name: _hostName(_engine),
           colorKey: _engine.hostPeer?.peerId ?? JamPermissions.hostPeerId,
+          color: faces[1],
           role: JamPeerRole.host,
         ),
       for (final peer in peers)
         JamPeerRow(
           name: jamPeerName(peer),
           colorKey: peer.peerId,
+          color: faceOf(peer.peerId),
           role: _roleOf(permissions.roleOf(peer.peerId)),
           detail: _overrideDetail(permissions, peer.peerId),
           // Only the host can observe whether somebody actually has the
@@ -407,9 +419,10 @@ class _RoomPanelState extends State<RoomPanel> {
                 // (another sheet, the docked panel): what the tap asked for is
                 // true, so there is nothing to report.
                 if (!host.unkickPeer(peer.peerId)) return;
-                JamSession.read(
-                  context,
-                ).notify(RoomSheetStrings.letBackInDone(jamPeerName(peer)));
+                JamSession.read(context).notify(
+                  RoomSheetStrings.letBackInDone(jamPeerName(peer)),
+                  tone: JamNoticeTone.done,
+                );
               }),
             ),
         ],
@@ -551,7 +564,9 @@ class _RoomPanelState extends State<RoomPanel> {
       cancelLabel: RoomSheetStrings.cancel,
     );
     if (!confirmed || !mounted) return;
-    _guarded(() => host.kickPeer(peer.peerId));
+    // Through the session, so the departure that follows is told as the
+    // host's own act ("Removed Okon"), not as theirs ("Okon left").
+    _guarded(() => JamSession.read(context).removePeer(peer.peerId));
   }
 }
 
@@ -946,7 +961,7 @@ class _Invite extends StatelessWidget {
       );
     } catch (e) {
       debugPrint('localjam: share sheet failed: $e');
-      session.notify(RoomSheetStrings.shareFailed);
+      session.notify(RoomSheetStrings.shareFailed, tone: JamNoticeTone.error);
     }
   }
 

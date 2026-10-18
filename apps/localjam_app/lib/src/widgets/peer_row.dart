@@ -60,6 +60,7 @@ class JamPeerRow extends StatelessWidget implements JamSelfSeparatingRow {
     this.dimmed = false,
     this.onTap,
     this.colorKey,
+    this.color,
   });
 
   /// Display name — the face's initials come from it (and its colour, when
@@ -69,6 +70,11 @@ class JamPeerRow extends StatelessWidget implements JamSelfSeparatingRow {
   /// A stable id for the face's colour (`JamAvatar.colorKey`): the peer id,
   /// which every device in the jam sees the same.
   final String? colorKey;
+
+  /// The face's colour as the jam assigned it (`jamAvatarColors` over
+  /// `jamRosterPeerIds`), so this row matches the face pile. Wins over
+  /// [colorKey].
+  final Color? color;
 
   /// Host, co-host or guest. Host and co-host are said in the subtitle.
   final JamPeerRole role;
@@ -138,6 +144,7 @@ class JamPeerRow extends StatelessWidget implements JamSelfSeparatingRow {
         child: JamAvatar(
           name: name,
           colorKey: colorKey,
+          color: color,
           size: JamAvatarSize.sheet,
           dimmed: dimmed,
         ),

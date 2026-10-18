@@ -222,7 +222,6 @@ class JamAvatarStack extends StatelessWidget {
     required this.names,
     this.size = JamAvatarSize.strip,
     this.maxVisible = 3,
-    this.cutoutColor,
     this.overflowColor,
     this.semanticLabel,
     this.colorKeys,
@@ -245,10 +244,6 @@ class JamAvatarStack extends StatelessWidget {
 
   /// Faces before the "+N".
   final int maxVisible;
-
-  /// Ignored: the gap between faces is a true knockout, so it always shows
-  /// the real surface behind the pile. Kept for older call sites.
-  final Color? cutoutColor;
 
   /// The "+N" colour (default `secondaryLabel`).
   final Color? overflowColor;

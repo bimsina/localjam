@@ -101,6 +101,21 @@ String jamPeerName(PeerInfo peer) {
   return name.isEmpty ? kJamUnnamedPeer : name;
 }
 
+/// Everyone in [engine]'s jam by peer id, in roster order: this device,
+/// then (from a guest) the host, then everyone in `peers`.
+///
+/// The one order every face in the jam is coloured over
+/// (`jamAvatarColors`), so a person has the same colour in the face pile,
+/// the People sheet and the docked panel. Peer ids, because they are the
+/// one id every phone in the jam knows a person by (client ids never leave
+/// the host).
+List<String> jamRosterPeerIds(JamEngine engine) => <String>[
+  engine.selfPeerId,
+  if (engine is JamGuestEngine)
+    engine.hostPeer?.peerId ?? JamPermissions.hostPeerId,
+  for (final peer in engine.peers) peer.peerId,
+];
+
 /// [JamEngine.addedByLabel] against the engine's own roster, in the app's
 /// words for a contributor who shared no name — "added by Guest", never
 /// "added by p-7f3a".
