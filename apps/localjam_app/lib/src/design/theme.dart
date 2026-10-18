@@ -41,16 +41,32 @@ final SystemUiOverlayStyle jamOverlayStyleOnDark = jamOverlayStyle(
   Brightness.dark,
 );
 
-/// The light theme.
-ThemeData jamLightTheme({TargetPlatform? platform}) => _build(
-  JamColors.light,
+/// The light theme; [highContrast] for the system's Increase Contrast.
+ThemeData jamLightTheme({
+  TargetPlatform? platform,
+  bool highContrast = false,
+}) => _build(
+  highContrast ? JamColors.lightHighContrast : JamColors.light,
   Brightness.light,
   platform ?? defaultTargetPlatform,
 );
 
-/// The dark theme.
-ThemeData jamDarkTheme({TargetPlatform? platform}) =>
-    _build(JamColors.dark, Brightness.dark, platform ?? defaultTargetPlatform);
+/// The dark theme; [highContrast] for the system's Increase Contrast.
+ThemeData jamDarkTheme({TargetPlatform? platform, bool highContrast = false}) =>
+    _build(
+      highContrast ? JamColors.darkHighContrast : JamColors.dark,
+      Brightness.dark,
+      platform ?? defaultTargetPlatform,
+    );
+
+/// The keyboard to raise over [context]: the app's appearance, not the
+/// device's. Every text field passes this explicitly — `CupertinoTextField`
+/// only falls back to it, and a field inside a route that resets the
+/// Cupertino theme would otherwise get the system's keyboard. (On iOS the
+/// window's `overrideUserInterfaceStyle` is set as well — see
+/// `JamSystemAppearance` — so share sheets and pickers agree too.)
+Brightness jamKeyboardAppearance(BuildContext context) =>
+    Theme.of(context).brightness;
 
 ThemeData _build(JamColors c, Brightness brightness, TargetPlatform platform) {
   final type = buildJamTypeScale(platform: platform, color: c.label);
@@ -209,10 +225,10 @@ ThemeData _build(JamColors c, Brightness brightness, TargetPlatform platform) {
     ),
 
     filledButtonTheme: FilledButtonThemeData(
-      style: buttonBase(foreground: c.onTint, background: c.tint),
+      style: buttonBase(foreground: c.onTint, background: c.tintFilled),
     ),
     elevatedButtonTheme: ElevatedButtonThemeData(
-      style: buttonBase(foreground: c.onTint, background: c.tint),
+      style: buttonBase(foreground: c.onTint, background: c.tintFilled),
     ),
     outlinedButtonTheme: OutlinedButtonThemeData(
       style: buttonBase(foreground: c.tint),
