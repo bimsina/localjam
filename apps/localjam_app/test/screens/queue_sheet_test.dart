@@ -3,6 +3,7 @@
 library;
 
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
@@ -290,7 +291,9 @@ void main() {
     await tester.runAsync(host.leave);
   });
 
-  testWidgets('an empty queue says so and offers Add Songs', (tester) async {
+  testWidgets('an empty queue that can be added to is just the Add Songs row', (
+    tester,
+  ) async {
     final host = testSession();
     await tester.runAsync(
       () => host.startHost(sessionName: 'Quiet Jam', discoverable: false),
@@ -300,8 +303,9 @@ void main() {
     await _pump(tester, host, QueuePanel(engine: host.engine!));
     await tester.pump();
 
-    expect(find.text(QueueSheetStrings.empty), findsOneWidget);
+    // One prompt, not an action followed by a sentence on another axis.
     expect(find.text(QueueSheetStrings.addSongs), findsOneWidget);
+    expect(find.text(QueueSheetStrings.empty), findsNothing);
 
     await tester.runAsync(host.leave);
   });
@@ -331,6 +335,8 @@ void main() {
     expect(find.text(QueueSheetStrings.hostRunsQueue), findsOneWidget);
     // §6.3: the Add Songs row is only there with `addTracks`.
     expect(find.text(QueueSheetStrings.addSongs), findsNothing);
+    // With nothing to do about it, the empty queue is one centred line.
+    expect(find.text(QueueSheetStrings.empty), findsOneWidget);
     expect(find.byIcon(CupertinoIcons.line_horizontal_3), findsNothing);
 
     await tester.runAsync(guest.leave);
@@ -346,10 +352,41 @@ void main() {
     await _pump(tester, host, QueuePanel(engine: engine));
     await tester.pump();
 
+    final pressed = tester.getRect(find.text(jamDisplayTitle(last)));
     await tester.longPress(find.text(jamDisplayTitle(last)));
     await tester.pumpAndSettle();
     expect(find.text(QueueSheetStrings.playNext), findsOneWidget);
     expect(find.text(QueueSheetStrings.remove), findsOneWidget);
+
+    // A context menu, not a pull-down: the pressed row lifts out in place
+    // (a second copy of its title, over the dimmed list), and the menu
+    // attaches to it rather than to whatever row happens to be below.
+    final titles = find.text(jamDisplayTitle(last));
+    expect(titles, findsNWidgets(2));
+    final lifted = tester.getRect(titles.last);
+    expect(lifted.center.dy, closeTo(pressed.center.dy, 4));
+    final menu = tester.getRect(
+      find
+          .ancestor(
+            of: find.text(QueueSheetStrings.playNext),
+            matching: find.byType(Column),
+          )
+          .first,
+    );
+    expect(
+      menu.top >= lifted.bottom || menu.bottom <= lifted.top,
+      isTrue,
+      reason: 'the menu sits against the lifted row, never over it',
+    );
+    expect(
+      math.min(
+        (menu.top - lifted.bottom).abs(),
+        (lifted.top - menu.bottom).abs(),
+      ),
+      // Measured from the title's line, which sits inside the 60 pt row.
+      lessThan(kJamTrackRowHeight),
+      reason: 'and right against it',
+    );
 
     await tester.tap(find.text(QueueSheetStrings.playNext));
     await tester.pumpAndSettle();

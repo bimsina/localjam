@@ -16,9 +16,10 @@ library;
 import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
-import 'dart:typed_data';
+import 'dart:ui' show ImageFilter;
 
 import 'package:flutter/cupertino.dart';
+import 'package:flutter/services.dart';
 import 'package:localjam_client/localjam_client.dart';
 
 import '../design/tokens.dart';
@@ -27,6 +28,7 @@ import '../state/session_controller.dart';
 import '../util/format.dart';
 import '../util/media_picking.dart';
 import 'artwork.dart';
+import 'glass.dart';
 import 'menu.dart';
 import 'pressable.dart';
 import 'progress.dart';
@@ -361,7 +363,10 @@ class _QueuePanelState extends State<QueuePanel> {
                       onTap: canSend ? () => unawaited(_add()) : null,
                     ),
                   ),
-                if (upNext.isEmpty)
+                // Empty: with Add Songs above, that row is the whole story —
+                // no second sentence on another axis. Without it, one centred
+                // line is all there is.
+                if (upNext.isEmpty && !canAdd)
                   SliverToBoxAdapter(
                     child: Padding(
                       padding: EdgeInsets.fromLTRB(
@@ -379,6 +384,8 @@ class _QueuePanelState extends State<QueuePanel> {
                       ),
                     ),
                   )
+                else if (upNext.isEmpty)
+                  const SliverToBoxAdapter(child: SizedBox.shrink())
                 else if (canEdit)
                   SliverReorderableList(
                     itemCount: upNext.length,
@@ -705,8 +712,19 @@ class _QueueRow extends StatelessWidget {
         ),
     ];
 
-    Widget track(VoidCallback? onLongPress) => FutureBuilder<Uint8List?>(
-      future: item.artworkId == null ? null : engine.artworkFor(item),
+    // The row's artwork, fetched once and shared by the row and its lifted
+    // copy (the long-press preview).
+    final artwork = item.artworkId == null ? null : engine.artworkFor(item);
+
+    /// The row. [preview] is the copy that lifts out of the list under the
+    /// long-press menu: the same content at the same place, with nothing to
+    /// tap and no grip, inside a platter [previewPadding] in from its edges.
+    Widget track({
+      VoidCallback? onLongPress,
+      bool preview = false,
+      EdgeInsets? previewPadding,
+    }) => FutureBuilder<Uint8List?>(
+      future: artwork,
       builder: (context, snapshot) => JamTrackRow(
         onBackdrop: true,
         title: jamDisplayTitle(item),
@@ -724,28 +742,46 @@ class _QueueRow extends StatelessWidget {
         prefetchProgress: fetching ? (prefetch?.progress ?? 0) : null,
         hasError: failed,
         errorText: QueueSheetStrings.fetchFailed,
-        showDragHandle: index != null,
-        onTap: onTap,
+        showDragHandle: index != null && !preview,
+        onTap: preview ? null : onTap,
         onLongPress: onLongPress,
-        trailing: showRetry ? _RetryButton(onPressed: retry) : null,
-        contentPadding: EdgeInsets.only(
-          left: horizontalPadding,
-          // The grip sits in its own 44 box at the edge; without one the row
-          // keeps the side margin.
-          right: index != null
-              ? math.max(0, horizontalPadding - 12)
-              : horizontalPadding,
-        ),
+        trailing: showRetry && !preview ? _RetryButton(onPressed: retry) : null,
+        contentPadding:
+            previewPadding ??
+            EdgeInsets.only(
+              left: horizontalPadding,
+              // The grip sits in its own 44 box at the edge; without one the
+              // row keeps the side margin.
+              right: index != null
+                  ? math.max(0, horizontalPadding - 12)
+                  : horizontalPadding,
+            ),
       ),
     );
 
+    // The long-press menu is a context menu, not a pull-down: the pressed
+    // row lifts out of the list onto a platter, everything else dims, and
+    // the menu attaches to the lifted row — so it can only ever be read as
+    // acting on that row, and never covers another row's title.
+    final platterInset = math.max(0.0, horizontalPadding - _kPlatterPadding);
     Widget row = menu.isEmpty
-        ? track(null)
-        : JamMenuButton(
-            groups: [menu],
-            // The queue only ever sits on the Now Playing backdrop.
-            brightness: Brightness.dark,
-            builder: (context, open) => track(open),
+        ? track()
+        : Builder(
+            builder: (rowContext) => track(
+              onLongPress: () => unawaited(
+                _showRowMenu(
+                  rowContext,
+                  items: menu,
+                  inset: platterInset,
+                  preview: track(
+                    preview: true,
+                    previewPadding: const EdgeInsets.symmetric(
+                      horizontal: _kPlatterPadding,
+                    ),
+                  ),
+                ),
+              ),
+            ),
           );
 
     if (index != null) {
@@ -859,6 +895,315 @@ class _InsertRevealState extends State<_InsertReveal>
       child: FadeTransition(opacity: curved, child: widget.child),
     );
   }
+}
+
+/// How far the lifted row's platter reaches past its content.
+const double _kPlatterPadding = 12;
+
+/// How much the lifted row grows.
+const double _kLiftScale = 1.03;
+
+/// The context menu's width (iOS's).
+const double _kRowMenuWidth = 250;
+
+/// Between the lifted row and its menu, and from the window's edges.
+const double _kRowMenuGap = 8;
+
+/// Strings the row menu says to a screen reader.
+abstract final class QueueRowMenuStrings {
+  static const String dismiss = 'Dismiss';
+  static const String actions = 'Song actions';
+}
+
+/// Opens [items] as a context menu on the queue row at [rowContext]: the
+/// row lifts onto a platter in place, the rest of the screen blurs and dims,
+/// and the menu attaches under it (or over it, near the bottom). The chosen
+/// action runs after the menu has closed.
+Future<void> _showRowMenu(
+  BuildContext rowContext, {
+  required List<JamMenuItem> items,
+  required Widget preview,
+  required double inset,
+}) async {
+  final navigator = Navigator.of(rowContext, rootNavigator: true);
+  final box = rowContext.findRenderObject();
+  final overlay = navigator.overlay?.context.findRenderObject();
+  if (box is! RenderBox || overlay is! RenderBox || !box.hasSize) return;
+  final rect = MatrixUtils.transformRect(
+    box.getTransformTo(overlay),
+    Offset.zero & box.size,
+  );
+  unawaited(HapticFeedback.mediumImpact());
+  final action = await navigator.push<VoidCallback?>(
+    _RowMenuRoute(
+      rect: rect,
+      inset: inset,
+      preview: preview,
+      items: items,
+      // The queue sits on Now Playing's dark subtree; the menu, drawn in the
+      // root overlay, keeps its themes.
+      themes: InheritedTheme.capture(from: rowContext, to: navigator.context),
+    ),
+  );
+  action?.call();
+}
+
+class _RowMenuRoute extends PopupRoute<VoidCallback?> {
+  _RowMenuRoute({
+    required this.rect,
+    required this.inset,
+    required this.preview,
+    required this.items,
+    required this.themes,
+  });
+
+  /// The pressed row, in the overlay's coordinates.
+  final Rect rect;
+  final double inset;
+  final Widget preview;
+  final List<JamMenuItem> items;
+  final CapturedThemes themes;
+
+  @override
+  Color? get barrierColor => null;
+
+  @override
+  bool get barrierDismissible => true;
+
+  @override
+  String? get barrierLabel => QueueRowMenuStrings.dismiss;
+
+  @override
+  Duration get transitionDuration => JamDuration.fast;
+
+  @override
+  Widget buildPage(
+    BuildContext context,
+    Animation<double> animation,
+    Animation<double> secondaryAnimation,
+  ) => themes.wrap(_RowMenuPage(route: this, animation: animation));
+}
+
+class _RowMenuPage extends StatelessWidget {
+  const _RowMenuPage({required this.route, required this.animation});
+
+  final _RowMenuRoute route;
+  final Animation<double> animation;
+
+  @override
+  Widget build(BuildContext context) {
+    final reduced = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
+    final padding = MediaQuery.paddingOf(context);
+    final colors = context.jamColors;
+    void dismiss() => Navigator.of(context).pop();
+
+    final menu = Semantics(
+      scopesRoute: true,
+      namesRoute: true,
+      explicitChildNodes: true,
+      label: QueueRowMenuStrings.actions,
+      child: JamBlurSurface(
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(JamRadius.menu),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            for (var i = 0; i < route.items.length; i++) ...[
+              if (i > 0) Container(height: 0.5, color: colors.separator),
+              _RowMenuItem(
+                item: route.items[i],
+                onPressed: () =>
+                    Navigator.of(context).pop(route.items[i].onPressed),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+
+    return AnimatedBuilder(
+      animation: animation,
+      builder: (context, _) {
+        final t = reduced
+            ? (animation.value > 0 ? 1.0 : 0.0)
+            : JamCurve.standard.transform(animation.value);
+        return Stack(
+          fit: StackFit.expand,
+          children: [
+            // Everything but the row, blurred and dimmed; a tap anywhere on
+            // it closes the menu.
+            GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: dismiss,
+              child: BackdropFilter(
+                filter: ImageFilter.blur(sigmaX: 12 * t, sigmaY: 12 * t),
+                child: ColoredBox(
+                  color: JamNowPlayingColors.contextScrim.withValues(
+                    alpha: JamNowPlayingColors.contextScrim.a * t,
+                  ),
+                ),
+              ),
+            ),
+            CustomMultiChildLayout(
+              delegate: _RowMenuLayout(
+                rect: route.rect,
+                inset: route.inset,
+                padding: padding,
+                t: t,
+              ),
+              children: [
+                LayoutId(
+                  id: _RowMenuSlot.preview,
+                  child: IgnorePointer(
+                    child: Transform.scale(
+                      scale: 1 + (_kLiftScale - 1) * t,
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          color: JamNowPlayingColors.liftedRow,
+                          borderRadius: BorderRadius.circular(JamRadius.md),
+                        ),
+                        child: route.preview,
+                      ),
+                    ),
+                  ),
+                ),
+                LayoutId(
+                  id: _RowMenuSlot.menu,
+                  child: Opacity(
+                    opacity: t,
+                    child: Transform.scale(scale: 0.9 + 0.1 * t, child: menu),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _RowMenuItem extends StatelessWidget {
+  const _RowMenuItem({required this.item, required this.onPressed});
+
+  final JamMenuItem item;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.jamColors;
+    final color = item.destructive ? colors.danger : colors.label;
+    final enabled = item.onPressed != null;
+    return Semantics(
+      container: true,
+      button: true,
+      enabled: enabled,
+      label: item.title,
+      onTap: enabled ? onPressed : null,
+      excludeSemantics: true,
+      child: JamPressable(
+        onTap: enabled ? onPressed : null,
+        style: JamPressStyle.highlight,
+        highlightColor: colors.fillPressed,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(minHeight: JamMetrics.menuRow),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(
+              horizontal: JamSpace.page,
+              vertical: JamSpace.sm,
+            ),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    item.title,
+                    style: context.jamBody.copyWith(color: color),
+                  ),
+                ),
+                if (item.icon != null) ...[
+                  const SizedBox(width: JamSpace.md),
+                  Icon(item.icon, size: 20, color: color),
+                ],
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+enum _RowMenuSlot { preview, menu }
+
+/// Puts the lifted row where it was and the menu against it: below when it
+/// fits, else above, else the row slides up just enough for the menu to fit
+/// under it.
+class _RowMenuLayout extends MultiChildLayoutDelegate {
+  _RowMenuLayout({
+    required this.rect,
+    required this.inset,
+    required this.padding,
+    required this.t,
+  });
+
+  final Rect rect;
+  final double inset;
+  final EdgeInsets padding;
+  final double t;
+
+  @override
+  void performLayout(Size size) {
+    final row = Rect.fromLTRB(
+      rect.left + inset,
+      rect.top,
+      math.max(rect.left + inset, rect.right - inset),
+      rect.bottom,
+    );
+    final width = math.min(_kRowMenuWidth, size.width - JamSpace.page * 2);
+    final menu = layoutChild(
+      _RowMenuSlot.menu,
+      BoxConstraints(
+        minWidth: math.max(0, width),
+        maxWidth: math.max(0, width),
+        maxHeight: math.max(0, size.height - padding.vertical),
+      ),
+    );
+    final top = padding.top + _kRowMenuGap;
+    final bottom = size.height - padding.bottom - _kRowMenuGap;
+
+    var rowTop = row.top;
+    double menuTop;
+    if (row.bottom + _kRowMenuGap + menu.height <= bottom) {
+      menuTop = row.bottom + _kRowMenuGap;
+    } else if (row.top - _kRowMenuGap - menu.height >= top) {
+      menuTop = row.top - _kRowMenuGap - menu.height;
+    } else {
+      rowTop = math.max(top, bottom - menu.height - _kRowMenuGap - row.height);
+      menuTop = rowTop + row.height + _kRowMenuGap;
+    }
+    // The row eases to where it has to be, from where it was pressed.
+    final shownRowTop = row.top + (rowTop - row.top) * t;
+    final shift = shownRowTop - rowTop;
+
+    layoutChild(_RowMenuSlot.preview, BoxConstraints.tight(row.size));
+    positionChild(_RowMenuSlot.preview, Offset(row.left, shownRowTop));
+    final left = row.left
+        .clamp(
+          JamSpace.page,
+          math.max(JamSpace.page, size.width - width - JamSpace.page),
+        )
+        .toDouble();
+    positionChild(_RowMenuSlot.menu, Offset(left, menuTop + shift));
+  }
+
+  @override
+  bool shouldRelayout(_RowMenuLayout old) =>
+      old.rect != rect ||
+      old.inset != inset ||
+      old.padding != padding ||
+      old.t != t;
 }
 
 /// Picks a source, picks files, and hands them to the controller.
