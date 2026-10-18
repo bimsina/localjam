@@ -14,6 +14,7 @@ import 'package:localjam_app/src/design/theme.dart';
 import 'package:localjam_app/src/state/session_controller.dart';
 import 'package:localjam_app/src/util/format.dart';
 import 'package:localjam_app/src/util/network.dart';
+import 'package:localjam_app/src/widgets/guests_can.dart';
 import 'package:localjam_app/src/widgets/peer_row.dart';
 import 'package:localjam_app/src/widgets/room_sheet.dart';
 import 'package:localjam_app/src/widgets/sheet.dart';
@@ -127,12 +128,9 @@ void main() {
 
     // The preset and the three switches it stands for, summarised in a
     // sentence — `jam` is what `startHost` defaults to.
-    expect(find.text(RoomSheetStrings.guestsCan), findsOneWidget);
+    expect(find.text(JamPresetStrings.guestsCan), findsOneWidget);
     expect(find.byType(JamSwitch), findsNWidgets(3));
-    expect(
-      find.text(RoomSheetStrings.presetFootnote(JamPolicy.jam)),
-      findsOneWidget,
-    );
+    expect(find.text(JamPresetStrings.summary(JamPolicy.jam)), findsOneWidget);
     // Invite-only room: said, with how it was decided.
     expect(find.text(RoomSheetStrings.nearby), findsOneWidget);
     expect(find.text(RoomSheetStrings.off), findsOneWidget);
@@ -168,15 +166,15 @@ void main() {
     await tester.pump();
     await _pump(tester, host, _panel(host));
 
-    expect(find.text(RoomSheetStrings.presetAddMusic), findsWidgets);
+    expect(find.text(JamPresetStrings.addMusic), findsWidgets);
     // The first switch is Add Music.
     await tester.tap(find.byType(JamSwitch).first);
     await tester.pump();
 
     final policy = host.engine!.permissions.policy;
     expect(policy.addTracks, isFalse);
-    expect(find.text(RoomSheetStrings.presetCustom), findsOneWidget);
-    expect(find.text(RoomSheetStrings.presetFootnote(policy)), findsOneWidget);
+    expect(find.text(JamPresetStrings.custom), findsOneWidget);
+    expect(find.text(JamPresetStrings.summary(policy)), findsOneWidget);
     expect(find.textContaining('Preset:'), findsNothing);
 
     await tester.runAsync(host.leave);
@@ -190,17 +188,14 @@ void main() {
     await tester.pump();
     await _pump(tester, host, _panel(host));
 
-    await tester.tap(find.text(RoomSheetStrings.guestsCan));
+    await tester.tap(find.text(JamPresetStrings.guestsCan));
     await tester.pumpAndSettle();
-    expect(find.text(RoomSheetStrings.presetEverythingDetail), findsOneWidget);
-    await tester.tap(find.text(RoomSheetStrings.presetEverything));
+    expect(find.text(JamPresetStrings.everythingDetail), findsOneWidget);
+    await tester.tap(find.text(JamPresetStrings.everything));
     await tester.pumpAndSettle();
 
     expect(host.engine!.permissions.policy, JamPolicy.open);
-    expect(
-      find.text(RoomSheetStrings.presetFootnote(JamPolicy.open)),
-      findsOneWidget,
-    );
+    expect(find.text(JamPresetStrings.summary(JamPolicy.open)), findsOneWidget);
 
     await tester.runAsync(host.leave);
   });
@@ -223,14 +218,8 @@ void main() {
     // No switches, no nearby setting — a summary of what the room allows.
     expect(find.byType(JamSwitch), findsNothing);
     expect(find.text(RoomSheetStrings.nearby), findsNothing);
-    expect(
-      find.text(RoomSheetStrings.presetName(JamPolicy.open)),
-      findsOneWidget,
-    );
-    expect(
-      find.text(RoomSheetStrings.guestSummary(JamPolicy.open)),
-      findsOneWidget,
-    );
+    expect(find.text(JamPresetStrings.name(JamPolicy.open)), findsOneWidget);
+    expect(find.text(JamPresetStrings.summary(JamPolicy.open)), findsOneWidget);
     expect(find.text(RoomSheetStrings.leaveJam), findsOneWidget);
     expect(find.text(RoomSheetStrings.endJam), findsNothing);
     // Guests can invite too, with the link they joined by.

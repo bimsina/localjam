@@ -4,11 +4,13 @@ library;
 
 import 'package:flutter/cupertino.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:localjam_client/localjam_client.dart';
 import 'package:localjam_app/src/design/theme.dart';
 import 'package:localjam_app/src/router.dart';
 import 'package:localjam_app/src/screens/home_screen.dart';
 import 'package:localjam_app/src/screens/host_setup_screen.dart';
 import 'package:localjam_app/src/widgets/buttons.dart';
+import 'package:localjam_app/src/widgets/guests_can.dart';
 import 'package:localjam_app/src/widgets/list.dart';
 import 'package:localjam_app/src/widgets/track_row.dart';
 
@@ -92,24 +94,40 @@ void main() {
     router.push('/host');
     await tester.pumpAndSettle();
 
-    // The engine's own default, not the old screen's `open`.
-    expect(find.text(HostSetupStrings.guestsCan), findsOneWidget);
-    expect(find.text(HostSetupStrings.presetAddMusic), findsOneWidget);
-    expect(find.text(HostSetupStrings.presetAddMusicDetail), findsOneWidget);
+    // The engine's own default, not the old screen's `open`, in the same
+    // words the People sheet uses.
+    expect(find.text(JamPresetStrings.guestsCan), findsOneWidget);
+    expect(find.text(JamPresetStrings.addMusic), findsOneWidget);
+    expect(find.text(JamPresetStrings.summary(JamPolicy.jam)), findsOneWidget);
 
-    await tester.tap(find.text(HostSetupStrings.guestsCan));
+    await tester.tap(find.text(JamPresetStrings.guestsCan));
     await tester.pumpAndSettle();
-    for (final label in [
-      HostSetupStrings.presetControl,
-      HostSetupStrings.presetListen,
-    ]) {
-      expect(find.text(label), findsOneWidget);
+    final items = find.byType(CupertinoMenuItem);
+    expect(items, findsNWidgets(kJamPresets.length));
+    for (final preset in kJamPresets) {
+      expect(
+        find.descendant(
+          of: items,
+          matching: find.text(JamPresetStrings.name(preset)),
+        ),
+        findsOneWidget,
+      );
+      expect(find.text(JamPresetStrings.detail(preset)!), findsOneWidget);
     }
 
-    await tester.tap(find.text(HostSetupStrings.presetListen));
+    await tester.tap(
+      find.descendant(
+        of: items,
+        matching: find.text(JamPresetStrings.listenOnly),
+      ),
+    );
     await tester.pumpAndSettle();
-    expect(find.text(HostSetupStrings.presetListenDetail), findsOneWidget);
-    expect(find.text(HostSetupStrings.presetAddMusic), findsNothing);
+    expect(
+      find.text(JamPresetStrings.summary(JamPolicy.listenOnly)),
+      findsOneWidget,
+    );
+    expect(find.text(JamPresetStrings.listenOnly), findsOneWidget);
+    expect(find.text(JamPresetStrings.addMusic), findsNothing);
   });
 
   testWidgets('Show to People Nearby is a switch, on by default', (

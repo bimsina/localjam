@@ -18,8 +18,6 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter/cupertino.dart';
-import 'package:flutter/material.dart' show Scaffold;
-import 'package:flutter/semantics.dart' show CustomSemanticsAction;
 import 'package:go_router/go_router.dart';
 import 'package:localjam_client/localjam_client.dart';
 
@@ -35,9 +33,9 @@ import '../widgets/dialogs.dart';
 import '../widgets/empty_state.dart';
 import '../widgets/list.dart';
 import '../widgets/menu.dart';
-import '../widgets/pressable.dart';
 import '../widgets/scaffold.dart';
 import '../widgets/session_gate.dart';
+import '../widgets/swipe_action.dart';
 import '../widgets/track_row.dart';
 
 /// Every user-facing string on these pages, in one place.
@@ -127,8 +125,8 @@ abstract final class HistoryStrings {
 /// one).
 ///
 /// Lives here rather than in `util/format.dart` because it is presentation,
-/// not formatting of engine data — and Home's Recent section is its only
-/// other caller.
+/// not formatting of engine data; Home's Recent section reaches it through
+/// [jamHistorySummary].
 String jamRelativeTime(DateTime time, {DateTime? now}) {
   final at = time.toLocal();
   final current = (now ?? DateTime.now()).toLocal();
@@ -144,11 +142,18 @@ String jamRelativeTime(DateTime time, {DateTime? now}) {
   return at.year == current.year ? date : '$date, ${at.year}';
 }
 
-/// "You hosted · 12 songs · Yesterday" — a record's one-line summary.
-String jamHistorySummary(JamHistoryRecord record, {bool withCount = true}) => [
+/// "You hosted · 12 songs · Yesterday" — a record's one-line summary, on
+/// Past Jams, the detail page and Home's Recent section alike. A jam that
+/// never had a song says nothing about songs rather than "0 songs".
+String jamHistorySummary(
+  JamHistoryRecord record, {
+  bool withCount = true,
+  DateTime? now,
+}) => [
   record.wasHost ? HistoryStrings.youHosted : HistoryStrings.youJoined,
-  if (withCount) HistoryStrings.songs(record.tracks.length),
-  jamRelativeTime(record.updatedAt),
+  if (withCount && record.tracks.isNotEmpty)
+    HistoryStrings.songs(record.tracks.length),
+  jamRelativeTime(record.updatedAt, now: now),
 ].join(' · ');
 
 // ---------------------------------------------------------------------------
@@ -443,15 +448,18 @@ class _HistoryScreenState extends State<HistoryScreen> {
     if (!await _confirmForget(context, record)) return false;
     JamHaptics.destructive();
     await _delete(record);
-    if (mounted) {
-      setState(
-        () => _records = [
-          for (final r in _records ?? const <JamHistoryRecord>[])
-            if (r.sessionId != record.sessionId) r,
-        ],
-      );
-    }
     return true;
+  }
+
+  /// Takes a forgotten record's row out of the list once it has collapsed.
+  void _drop(JamHistoryRecord record) {
+    if (!mounted) return;
+    setState(
+      () => _records = [
+        for (final r in _records ?? const <JamHistoryRecord>[])
+          if (r.sessionId != record.sessionId) r,
+      ],
+    );
   }
 
   Future<void> _open(JamHistoryRecord record) async {
@@ -502,11 +510,12 @@ class _HistoryScreenState extends State<HistoryScreen> {
               itemCount: records.length,
               itemBuilder: (context, index) {
                 final record = records[index];
-                return _SwipeToForget(
+                return JamSwipeAction(
                   key: ValueKey<String>(record.sessionId),
                   label: HistoryStrings.forget,
                   semanticLabel: HistoryStrings.forgetHint(record.sessionName),
                   onAction: () => _forget(record),
+                  onRemoved: () => _drop(record),
                   child: _RecordRow(
                     record: record,
                     separator: index < records.length - 1,
@@ -549,163 +558,6 @@ class _RecordRow extends StatelessWidget {
     separator: separator,
     onTap: onTap,
   );
-}
-
-/// The iOS trailing swipe action: drag a row left to reveal a red button,
-/// tap it (or swipe all the way) to run it. The row slides back when the
-/// action is declined.
-class _SwipeToForget extends StatefulWidget {
-  const _SwipeToForget({
-    super.key,
-    required this.child,
-    required this.label,
-    required this.semanticLabel,
-    required this.onAction,
-  });
-
-  final Widget child;
-  final String label;
-  final String semanticLabel;
-
-  /// Runs the action; true when the row is gone.
-  final Future<bool> Function() onAction;
-
-  @override
-  State<_SwipeToForget> createState() => _SwipeToForgetState();
-}
-
-class _SwipeToForgetState extends State<_SwipeToForget>
-    with SingleTickerProviderStateMixin {
-  /// The revealed button's width.
-  static const double _actionWidth = 88;
-
-  /// Past this share of the row, letting go runs the action.
-  static const double _fullSwipe = 0.6;
-
-  late final AnimationController _offset = AnimationController(
-    vsync: this,
-    lowerBound: 0,
-    upperBound: double.infinity,
-    value: 0,
-  )..addListener(() => setState(() {}));
-
-  double _width = 1;
-  bool _busy = false;
-
-  @override
-  void dispose() {
-    _offset.dispose();
-    super.dispose();
-  }
-
-  Duration get _duration => MediaQuery.disableAnimationsOf(context)
-      ? Duration.zero
-      : JamDuration.base;
-
-  Future<void> _animateTo(double target) =>
-      _offset.animateTo(target, duration: _duration, curve: JamCurve.standard);
-
-  void _onDragUpdate(DragUpdateDetails details) {
-    if (_busy) return;
-    final next = (_offset.value - details.primaryDelta!).clamp(0.0, _width);
-    _offset.value = next;
-  }
-
-  void _onDragEnd(DragEndDetails details) {
-    if (_busy) return;
-    final velocity = details.primaryVelocity ?? 0;
-    final value = _offset.value;
-    if (value > _width * _fullSwipe || (velocity < -2500 && value > 0)) {
-      unawaited(_run(full: true));
-    } else if (value > _actionWidth / 2 || velocity < -400) {
-      unawaited(_animateTo(_actionWidth));
-    } else {
-      unawaited(_animateTo(0));
-    }
-  }
-
-  Future<void> _run({bool full = false}) async {
-    if (_busy) return;
-    _busy = true;
-    if (full) {
-      JamHaptics.selection();
-      await _animateTo(_width);
-    }
-    final gone = await widget.onAction();
-    _busy = false;
-    if (!gone && mounted) await _animateTo(0);
-  }
-
-  void _close() => unawaited(_animateTo(0));
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.jamColors;
-    final open = _offset.value;
-    return Semantics(
-      customSemanticsActions: {
-        CustomSemanticsAction(label: widget.semanticLabel): () =>
-            unawaited(_run()),
-      },
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          _width = constraints.maxWidth;
-          return GestureDetector(
-            behavior: HitTestBehavior.translucent,
-            onHorizontalDragUpdate: _onDragUpdate,
-            onHorizontalDragEnd: _onDragEnd,
-            child: Stack(
-              children: [
-                if (open > 0)
-                  Positioned(
-                    top: 0,
-                    bottom: 0,
-                    right: 0,
-                    width: open < _actionWidth ? _actionWidth : open,
-                    child: ExcludeSemantics(
-                      child: JamPressable(
-                        style: JamPressStyle.none,
-                        onTap: () => unawaited(_run()),
-                        child: ColoredBox(
-                          color: colors.danger,
-                          child: Align(
-                            alignment: Alignment.centerLeft,
-                            child: SizedBox(
-                              width: _actionWidth,
-                              child: Text(
-                                widget.label,
-                                textAlign: TextAlign.center,
-                                maxLines: 1,
-                                style: context.jamBody.copyWith(
-                                  color: colors.onTint,
-                                ),
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                Transform.translate(
-                  offset: Offset(-open, 0),
-                  child: ColoredBox(
-                    color: colors.background,
-                    child: open > 0
-                        ? JamPressable(
-                            style: JamPressStyle.none,
-                            onTap: _close,
-                            child: AbsorbPointer(child: widget.child),
-                          )
-                        : widget.child,
-                  ),
-                ),
-              ],
-            ),
-          );
-        },
-      ),
-    );
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -935,34 +787,12 @@ class _HistoryDetailScreenState extends State<HistoryDetailScreen> {
       ],
     );
 
-    // A plain Scaffold under the inline nav bar rather than a non-large-title
-    // JamScaffold: the content must start below the bar, and only a context
-    // inside the Scaffold sees the bar's height in its top padding.
-    return CupertinoPageScaffoldBackgroundColor(
-      color: colors.background,
-      child: Scaffold(
-        backgroundColor: colors.background,
-        extendBodyBehindAppBar: true,
-        appBar: JamNavBar(
-          title: _titleShown ? record.sessionName : '',
-          trailing: [menu],
-        ),
-        body: Builder(
-          builder: (context) {
-            final padding = MediaQuery.paddingOf(context);
-            return CustomScrollView(
-              controller: _scroll,
-              slivers: [
-                SliverToBoxAdapter(child: SizedBox(height: padding.top)),
-                content,
-                SliverToBoxAdapter(
-                  child: SizedBox(height: JamSpace.xxxl + padding.bottom),
-                ),
-              ],
-            );
-          },
-        ),
-      ),
+    return JamScaffold(
+      title: _titleShown ? record.sessionName : '',
+      largeTitle: false,
+      controller: _scroll,
+      trailing: [menu],
+      slivers: [content],
     );
   }
 }

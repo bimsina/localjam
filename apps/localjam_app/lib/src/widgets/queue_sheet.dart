@@ -30,6 +30,7 @@ import 'artwork.dart';
 import 'menu.dart';
 import 'pressable.dart';
 import 'progress.dart';
+import 'swipe_action.dart';
 import 'track_row.dart';
 
 /// Everything the queue says out loud.
@@ -106,7 +107,7 @@ class _QueuePanelState extends State<QueuePanel> {
 
   /// Rows swiped away whose removal the room has not confirmed yet.
   ///
-  /// A swiped [Dismissible] has to leave the tree when its animation ends,
+  /// A swiped row has to leave the tree once it has collapsed,
   /// but a guest's removal is only a request: the playlist broadcast that
   /// actually drops the row comes later — or never, if the host says no. So
   /// the row is held out of the list here until the broadcast lands, and
@@ -334,15 +335,16 @@ class _QueuePanelState extends State<QueuePanel> {
         Expanded(
           child: ShaderMask(
             // The list fades out under its top and bottom edges rather than
-            // being cut by them — the scrubber sits right below.
+            // being cut by them — the scrubber sits right below. An alpha
+            // mask (only the opacity is used), not a painted gradient.
             shaderCallback: (rect) => const LinearGradient(
               begin: Alignment.topCenter,
               end: Alignment.bottomCenter,
               colors: [
-                Color(0x00FFFFFF),
-                Color(0xFFFFFFFF),
-                Color(0xFFFFFFFF),
-                Color(0x00FFFFFF),
+                JamFixedColors.clear,
+                JamFixedColors.white,
+                JamFixedColors.white,
+                JamFixedColors.clear,
               ],
               stops: [0, 0.03, 0.92, 1],
             ).createShader(rect),
@@ -504,7 +506,7 @@ class _AddSongsRow extends StatelessWidget {
         child: JamPressable(
           onTap: enabled ? onTap : null,
           style: JamPressStyle.highlight,
-          highlightColor: const Color(0x1AFFFFFF),
+          highlightColor: JamNowPlayingColors.pressed,
           child: SizedBox(
             height: kJamTrackRowHeight,
             child: Padding(
@@ -741,22 +743,10 @@ class _QueueRow extends StatelessWidget {
         ? track(null)
         : JamMenuButton(
             groups: [menu],
+            // The queue only ever sits on the Now Playing backdrop.
+            brightness: Brightness.dark,
             builder: (context, open) => track(open),
           );
-
-    if (canRemove) {
-      row = Dismissible(
-        key: ValueKey<String>('queue-dismiss-${item.mediaId}'),
-        direction: DismissDirection.endToStart,
-        dismissThresholds: const {DismissDirection.endToStart: 0.45},
-        background: const _RemoveBackground(),
-        // Decided before the row goes: a removal the room refused springs
-        // back instead of vanishing from this phone only.
-        confirmDismiss: (_) => _removeAndSay(context),
-        onDismissed: (_) => onRemoved(),
-        child: row,
-      );
-    }
 
     if (index != null) {
       row = Stack(
@@ -774,11 +764,25 @@ class _QueueRow extends StatelessWidget {
               label: QueueSheetStrings.reorder,
               child: ReorderableDragStartListener(
                 index: index,
-                child: const ColoredBox(color: Color(0x00000000)),
+                child: const ColoredBox(color: JamFixedColors.clear),
               ),
             ),
           ),
         ],
+      );
+    }
+
+    // Outside the grip, so the grip slides away with the row and the
+    // uncovered button is what a tap at the edge reaches.
+    if (canRemove) {
+      row = JamSwipeAction(
+        key: ValueKey<String>('queue-dismiss-${item.mediaId}'),
+        label: QueueSheetStrings.remove,
+        // Decided before the row goes: a removal the room refused springs
+        // back instead of vanishing from this phone only.
+        onAction: () => _removeAndSay(context),
+        onRemoved: onRemoved,
+        child: row,
       );
     }
 
@@ -807,29 +811,6 @@ class _RetryButton extends StatelessWidget {
           CupertinoIcons.arrow_clockwise,
           size: 20,
           color: JamNowPlayingColors.text,
-        ),
-      ),
-    ),
-  );
-}
-
-/// What a row slides off to reveal: the iOS red swipe action.
-class _RemoveBackground extends StatelessWidget {
-  const _RemoveBackground();
-
-  @override
-  Widget build(BuildContext context) => ColoredBox(
-    color: JamColors.dark.danger,
-    child: Align(
-      alignment: Alignment.centerRight,
-      child: Padding(
-        padding: const EdgeInsets.only(right: JamSpace.xl),
-        child: Text(
-          QueueSheetStrings.remove,
-          style: context.jamSubheadline.copyWith(
-            color: JamNowPlayingColors.text,
-            fontWeight: FontWeight.w600,
-          ),
         ),
       ),
     ),

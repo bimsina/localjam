@@ -32,6 +32,7 @@ import '../util/network.dart';
 import 'buttons.dart';
 import 'dialogs.dart';
 import 'empty_state.dart';
+import 'guests_can.dart';
 import 'list.dart';
 import 'menu.dart';
 import 'peer_row.dart';
@@ -52,48 +53,10 @@ abstract final class RoomSheetStrings {
   /// display name.
   static const String host = 'Host';
 
-  // What guests can do.
-  static const String guestsCan = 'Guests Can';
+  // What guests can do: the preset's words live in `JamPresetStrings`.
   static const String addMusic = 'Add Music';
   static const String controlPlayback = 'Control Playback';
   static const String editQueue = 'Edit the Queue';
-
-  static const String presetEverything = 'Everything';
-  static const String presetAddMusic = 'Add Music';
-  static const String presetListen = 'Listen Only';
-  static const String presetCustom = 'Custom';
-
-  static const String presetEverythingDetail =
-      'Add music, control playback and edit the queue';
-  static const String presetAddMusicDetail = 'Add music and edit the queue';
-  static const String presetListenDetail = 'Only you control the music';
-
-  /// The preset [policy] matches, or [presetCustom] once a switch diverges.
-  static String presetName(JamPolicy policy) => switch (policy) {
-    JamPolicy.open => presetEverything,
-    JamPolicy.jam => presetAddMusic,
-    JamPolicy.listenOnly => presetListen,
-    _ => presetCustom,
-  };
-
-  /// What the room allows, said as a sentence (the section's footer).
-  static String presetFootnote(JamPolicy policy) => guestSummary(policy);
-
-  /// What a guest is told the room allows, in a sentence.
-  static String guestSummary(JamPolicy policy) {
-    final allowed = [
-      if (policy.addTracks) 'add music',
-      if (policy.controlPlayback) 'play, pause and skip',
-      if (policy.editQueue) 'edit the queue',
-    ];
-    if (allowed.isEmpty) {
-      return 'The host runs this jam. Everyone else listens along.';
-    }
-    final last = allowed.removeLast();
-    return allowed.isEmpty
-        ? 'Everyone can $last.'
-        : 'Everyone can ${allowed.join(', ')} and $last.';
-  }
 
   // Show to people nearby.
   static const String nearby = 'Show to People Nearby';
@@ -409,11 +372,11 @@ class _RoomPanelState extends State<RoomPanel> {
         )
       else
         JamSection(
-          footer: RoomSheetStrings.guestSummary(permissions.policy),
+          footer: JamPresetStrings.summary(permissions.policy),
           children: [
             JamRow(
-              title: RoomSheetStrings.guestsCan,
-              value: RoomSheetStrings.presetName(permissions.policy),
+              title: JamPresetStrings.guestsCan,
+              value: JamPresetStrings.name(permissions.policy),
             ),
           ],
         ),
@@ -452,13 +415,11 @@ class _RoomPanelState extends State<RoomPanel> {
     );
 
     if (widget.inSheet) return list;
-    // Docked beside the player: paint the grouped ground ourselves, so the
-    // sections read as sections whatever the panel behind them is.
-    final colors = context.jamColors;
-    return ColoredBox(
-      color: colors.groupedBackground,
-      child: JamGroupedSurface(elevated: false, child: list),
-    );
+    // Docked beside the player (D7): the panel's shade over the backdrop is
+    // the ground, as it is for Up Next beside it — an opaque grouped ground
+    // here read as a black slab cut out of the Now Playing colours. The
+    // sections bring their own surface.
+    return JamGroupedSurface(elevated: false, child: list);
   }
 
   double? _fetchProgress(JamHostEngine? host, String peerId, String? mediaId) {
@@ -692,60 +653,11 @@ class _GuestsCan extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final colors = context.jamColors;
-    JamMenuItem preset(String title, String detail, JamPolicy value) =>
-        JamMenuItem(
-          title: title,
-          subtitle: detail,
-          checked: policy == value,
-          onPressed: () => onChanged(value),
-        );
     return JamSection(
-      footer: RoomSheetStrings.presetFootnote(policy),
+      footer: JamPresetStrings.summary(policy),
       children: [
-        JamMenuButton(
-          semanticLabel: RoomSheetStrings.guestsCan,
-          groups: [
-            [
-              preset(
-                RoomSheetStrings.presetEverything,
-                RoomSheetStrings.presetEverythingDetail,
-                JamPolicy.open,
-              ),
-              preset(
-                RoomSheetStrings.presetAddMusic,
-                RoomSheetStrings.presetAddMusicDetail,
-                JamPolicy.jam,
-              ),
-              preset(
-                RoomSheetStrings.presetListen,
-                RoomSheetStrings.presetListenDetail,
-                JamPolicy.listenOnly,
-              ),
-            ],
-          ],
-          builder: (context, open) => JamRow(
-            title: RoomSheetStrings.guestsCan,
-            // The section draws the hairline under a non-row child.
-            separator: false,
-            trailing: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  RoomSheetStrings.presetName(policy),
-                  style: context.jamBody.copyWith(color: colors.secondaryLabel),
-                ),
-                const SizedBox(width: JamSpace.xs),
-                Icon(
-                  CupertinoIcons.chevron_up_chevron_down,
-                  size: 14,
-                  color: colors.secondaryLabel,
-                ),
-              ],
-            ),
-            onTap: open,
-          ),
-        ),
+        // The section draws the hairline under a non-row child.
+        JamGuestsCanRow(policy: policy, onChanged: onChanged, separator: false),
         JamRow.toggle(
           title: RoomSheetStrings.addMusic,
           value: policy.addTracks,
@@ -943,7 +855,7 @@ class _Invite extends StatelessWidget {
               child: Container(
                 padding: const EdgeInsets.all(_platePadding),
                 decoration: BoxDecoration(
-                  color: const Color(0xFFFFFFFF),
+                  color: JamFixedColors.white,
                   borderRadius: BorderRadius.circular(_plateRadius),
                 ),
                 child: QrImageView(
@@ -954,14 +866,14 @@ class _Invite extends StatelessWidget {
                   data: joinUri.toString(),
                   size: _qrSize,
                   padding: EdgeInsets.zero,
-                  backgroundColor: const Color(0xFFFFFFFF),
+                  backgroundColor: JamFixedColors.white,
                   eyeStyle: const QrEyeStyle(
                     eyeShape: QrEyeShape.square,
-                    color: Color(0xFF000000),
+                    color: JamFixedColors.black,
                   ),
                   dataModuleStyle: const QrDataModuleStyle(
                     dataModuleShape: QrDataModuleShape.square,
-                    color: Color(0xFF000000),
+                    color: JamFixedColors.black,
                   ),
                   // The scanning phone is often across a room; a sparser code
                   // reads better at distance.

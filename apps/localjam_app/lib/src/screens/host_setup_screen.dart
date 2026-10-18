@@ -16,7 +16,6 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/cupertino.dart';
-import 'package:flutter/semantics.dart';
 import 'package:go_router/go_router.dart';
 import 'package:localjam_client/localjam_client.dart';
 
@@ -28,10 +27,12 @@ import '../util/format.dart';
 import '../util/media_picking.dart';
 import '../util/network.dart';
 import '../widgets/buttons.dart';
+import '../widgets/guests_can.dart';
 import '../widgets/list.dart';
 import '../widgets/section.dart';
 import '../widgets/session_gate.dart';
 import '../widgets/sheet.dart';
+import '../widgets/swipe_action.dart';
 import '../widgets/track_row.dart';
 
 /// Everything this screen says out loud.
@@ -58,17 +59,6 @@ abstract final class HostSetupStrings {
       'Optional. Everyone can add songs once the jam starts.';
   static const String remove = 'Remove';
 
-  static const String guestsCan = 'Guests Can';
-  static const String presetAddMusic = 'Add Music';
-  static const String presetControl = 'Control Playback';
-  static const String presetListen = 'Listen Only';
-  static const String presetAddMusicDetail =
-      'Guests can add songs and reorder the queue. Playback stays with you.';
-  static const String presetControlDetail =
-      'Guests can add songs, reorder the queue, play, pause and skip.';
-  static const String presetListenDetail =
-      'Guests listen along. You choose the music.';
-
   static const String discoverable = 'Show to People Nearby';
   static const String discoverableOn =
       'People on this Wi‑Fi can see and join this jam.';
@@ -82,28 +72,7 @@ abstract final class HostSetupStrings {
       'start.';
 
   static const String couldNotStart = 'Couldn’t start the jam.';
-
-  /// The preset's name, for the Guests Can row.
-  static String presetName(JamPolicy policy) => switch (policy) {
-    JamPolicy.open => presetControl,
-    JamPolicy.listenOnly => presetListen,
-    _ => presetAddMusic,
-  };
-
-  /// The one sentence under the Guests Can row.
-  static String detailFor(JamPolicy policy) => switch (policy) {
-    JamPolicy.open => presetControlDetail,
-    JamPolicy.listenOnly => presetListenDetail,
-    _ => presetAddMusicDetail,
-  };
 }
-
-/// The presets, in menu order.
-const List<JamPolicy> _kPresets = [
-  JamPolicy.jam,
-  JamPolicy.open,
-  JamPolicy.listenOnly,
-];
 
 class HostSetupScreen extends StatefulWidget {
   const HostSetupScreen({
@@ -329,9 +298,9 @@ class _HostSetupScreenState extends State<HostSetupScreen> {
         _songsSection(),
         const SizedBox(height: JamSpace.section),
         JamSection(
-          footer: HostSetupStrings.detailFor(_policy),
+          footer: JamPresetStrings.summary(_policy),
           children: [
-            _GuestsCanRow(
+            JamGuestsCanRow(
               policy: _policy,
               onChanged: (p) => setState(() => _policy = p),
             ),
@@ -417,9 +386,11 @@ class _HostSetupScreenState extends State<HostSetupScreen> {
         // Documents sweep hands one back — only paths — and a dash where a
         // length should be is worse than a clean trailing edge.
         for (final path in _paths)
-          _SwipeToRemove(
+          JamSwipeAction(
             key: ValueKey(path),
-            onRemove: () => _remove(path),
+            label: HostSetupStrings.remove,
+            onAction: () async => true,
+            onRemoved: () => _remove(path),
             child: JamTrackRow(title: stripAudioExtension(_basename(path))),
           ),
       ],
@@ -471,80 +442,6 @@ class _NameField extends StatelessWidget {
   }
 }
 
-/// The Guests Can row: the preset's name as the value, and a pull-down menu
-/// of the three presets with a checkmark on the current one.
-class _GuestsCanRow extends StatelessWidget {
-  const _GuestsCanRow({required this.policy, required this.onChanged});
-
-  final JamPolicy policy;
-  final ValueChanged<JamPolicy> onChanged;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.jamColors;
-    // The menu is built on `CupertinoMenuAnchor` here rather than through
-    // `JamMenuButton`: the shared one draws in the root overlay with no
-    // ambient text style, so its titles picked up the debug yellow underline.
-    // Each title below carries its own complete style.
-    final itemStyle = context.jamBody.copyWith(
-      color: colors.label,
-      decoration: TextDecoration.none,
-    );
-    return CupertinoMenuAnchor(
-      useRootOverlay: true,
-      consumeOutsideTaps: true,
-      menuChildren: [
-        for (final preset in _kPresets)
-          CupertinoMenuItem(
-            leading: preset == policy
-                ? Icon(CupertinoIcons.checkmark, size: 17, color: colors.label)
-                : const SizedBox.shrink(),
-            onPressed: () {
-              if (preset == policy) return;
-              JamHaptics.selection();
-              onChanged(preset);
-            },
-            child: Text(HostSetupStrings.presetName(preset), style: itemStyle),
-          ),
-      ],
-      builder: (context, controller, _) {
-        void open() =>
-            controller.isOpen ? controller.close() : controller.open();
-        return Semantics(
-          container: true,
-          button: true,
-          label:
-              '${HostSetupStrings.guestsCan}, '
-              '${HostSetupStrings.presetName(policy)}',
-          onTap: open,
-          excludeSemantics: true,
-          child: JamRow(
-            title: HostSetupStrings.guestsCan,
-            // Value, then the pop-up chevrons — iOS's pull-down row.
-            trailing: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  HostSetupStrings.presetName(policy),
-                  maxLines: 1,
-                  style: context.jamBody.copyWith(color: colors.secondaryLabel),
-                ),
-                const SizedBox(width: JamSpace.xs + 2),
-                Icon(
-                  CupertinoIcons.chevron_up_chevron_down,
-                  size: 14,
-                  color: colors.tertiaryLabel,
-                ),
-              ],
-            ),
-            onTap: open,
-          ),
-        );
-      },
-    );
-  }
-}
-
 /// "Looking for music on this device…" while the Documents sweep runs — a
 /// system spinner in the row where the songs will land.
 class _LookingRow extends StatelessWidget implements JamSelfSeparatingRow {
@@ -564,48 +461,6 @@ class _LookingRow extends StatelessWidget implements JamSelfSeparatingRow {
         ),
         leadingWidth: JamMetrics.rowIconBox,
         enabled: false,
-      ),
-    );
-  }
-}
-
-/// A song row the host can swipe away, with "Remove" as a screen-reader
-/// action. Keeps the track row's own inset separator.
-class _SwipeToRemove extends StatelessWidget implements JamSelfSeparatingRow {
-  const _SwipeToRemove({
-    super.key,
-    required this.onRemove,
-    required this.child,
-  });
-
-  final VoidCallback onRemove;
-  final Widget child;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.jamColors;
-    return Semantics(
-      customSemanticsActions: {
-        const CustomSemanticsAction(label: HostSetupStrings.remove): onRemove,
-      },
-      child: Dismissible(
-        key: key ?? ValueKey(child),
-        direction: DismissDirection.endToStart,
-        onDismissed: (_) => onRemove(),
-        background: ColoredBox(
-          color: colors.danger,
-          child: Align(
-            alignment: AlignmentDirectional.centerEnd,
-            child: Padding(
-              padding: const EdgeInsetsDirectional.only(end: JamSpace.xl),
-              child: Text(
-                HostSetupStrings.remove,
-                style: context.jamBody.copyWith(color: colors.onTint),
-              ),
-            ),
-          ),
-        ),
-        child: child,
       ),
     );
   }
