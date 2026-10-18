@@ -1,7 +1,7 @@
 /// One jam at a time, said out loud.
 ///
 /// Every way into a session — a nearby room, a scanned code, a pasted or
-/// deep link, "Start a jam", "Host it again" — used to call into the
+/// deep link, "Start a jam", "Host Again" — used to call into the
 /// controller while a jam was already running, where the start was refused
 /// (`canStart` is false while live) and nothing said so: the tap simply did
 /// nothing. This is the one gate they all pass through: idle and ended go
@@ -22,8 +22,8 @@ abstract final class JamSessionGateStrings {
       'everyone listening.';
   static String leaveTitle(String room) => 'Leave $room first?';
   static const String leaveBody = 'You can only be in one jam at a time.';
-  static const String endJam = 'End jam';
-  static const String leave = 'Leave';
+  static const String endJam = 'End Jam';
+  static const String leave = 'Leave Jam';
   static const String stay = 'Stay';
 }
 

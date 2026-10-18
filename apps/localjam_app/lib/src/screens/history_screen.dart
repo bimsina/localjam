@@ -1,14 +1,25 @@
-/// Past jams: every session leaves a record (queue + who added what + who was
-/// there); tracks still on this device can seed a new room in one tap.
+/// Past Jams: every session leaves a record (queue + who added what + who
+/// was there); tracks still on this device can seed a new jam in one tap.
 ///
-/// A record ages visibly. The mosaic tiles for tracks that have since left the
-/// device fade to 35%, and the "Host it again" button says how much of the
-/// queue is still there — so a six-month-old jam looks like one.
+/// An Apple Music list: plain rows (cover 56, name, "You hosted · 12 songs ·
+/// Yesterday", chevron), swipe to Forget, tap for the detail page — a centred
+/// 200 cover, the name, **Host Again** and the queue with who added what
+/// (DESIGN_SPEC v3 §6.7).
+///
+/// History records carry no artwork bytes — a `JamHistoryTrack` is a
+/// `MediaItem` and a path — so covers are read back out of the files that are
+/// still on this device (a host's sources, a guest's cache), off the UI
+/// isolate, and cached by `artworkId`.
 library;
 
 import 'dart:async';
+import 'dart:collection';
+import 'dart:io';
+import 'dart:typed_data';
 
-import 'package:flutter/material.dart';
+import 'package:flutter/cupertino.dart';
+import 'package:flutter/material.dart' show Scaffold;
+import 'package:flutter/semantics.dart' show CustomSemanticsAction;
 import 'package:go_router/go_router.dart';
 import 'package:localjam_client/localjam_client.dart';
 
@@ -16,150 +27,364 @@ import '../design/breakpoints.dart';
 import '../design/tokens.dart';
 import '../design/typography.dart';
 import '../router.dart';
-import '../util/format.dart';
 import '../state/session_controller.dart';
-import '../widgets/session_gate.dart';
+import '../util/format.dart';
 import '../widgets/artwork.dart';
-import '../widgets/avatar.dart';
 import '../widgets/buttons.dart';
 import '../widgets/dialogs.dart';
 import '../widgets/empty_state.dart';
+import '../widgets/list.dart';
+import '../widgets/menu.dart';
+import '../widgets/pressable.dart';
+import '../widgets/scaffold.dart';
+import '../widgets/session_gate.dart';
 import '../widgets/track_row.dart';
 
-/// Every user-facing string on this screen, in one place.
+/// Every user-facing string on these pages, in one place.
 abstract final class HistoryStrings {
-  static const String title = 'Past jams';
+  static const String title = 'Past Jams';
   static const String forget = 'Forget';
-  static const String hostAgain = 'Host it again';
+  static const String hostAgain = 'Host Again';
   static const String youHosted = 'You hosted';
   static const String youJoined = 'You joined';
-  static const String noneLeft = 'No tracks left on this device';
+  static const String noneLeft = 'None of these songs are on this device now.';
   static String someLeft(int replayable, int total) =>
-      '$replayable of $total still on this device';
-  static String tracks(int n) => '$n ${n == 1 ? 'track' : 'tracks'}';
-  static String more(int n) => '+ $n more';
+      '$replayable of $total songs are still on this device.';
+  static String songs(int n) => '$n ${n == 1 ? 'song' : 'songs'}';
 
-  static const String forgetTitle = 'Forget this jam?';
+  /// "12 songs, 48 minutes" — the footer under the detail page's queue.
+  static String songsAndLength(int n, Duration length) {
+    final minutes = length.inMinutes;
+    if (minutes < 1) return songs(n);
+    if (minutes < 60) {
+      return '${songs(n)}, $minutes ${minutes == 1 ? 'minute' : 'minutes'}';
+    }
+    final hours = length.inHours;
+    final rest = minutes - hours * 60;
+    final h = '$hours ${hours == 1 ? 'hour' : 'hours'}';
+    return rest == 0
+        ? '${songs(n)}, $h'
+        : '${songs(n)}, $h $rest ${rest == 1 ? 'minute' : 'minutes'}';
+  }
+
+  /// "With Mia", "With Mia and Neon Walrus", "With Mia, Neon Walrus and 2
+  /// others".
+  static String withPeople(List<String> names) {
+    if (names.isEmpty) return '';
+    if (names.length == 1) return 'With ${names[0]}';
+    if (names.length == 2) return 'With ${names[0]} and ${names[1]}';
+    final others = names.length - 2;
+    return 'With ${names[0]}, ${names[1]} and $others '
+        '${others == 1 ? 'other' : 'others'}';
+  }
+
+  static const String forgetTitle = 'Forget This Jam?';
   static String forgetBody(String name) =>
       'The record of $name goes away. The music on this device stays.';
   static const String forgetConfirm = 'Forget';
 
-  static const String emptyTitle = 'No jams yet';
-  static const String emptyBody =
-      'Every room you host or join shows up here, queue and all.';
+  static const String emptyTitle = 'No Past Jams';
+  static const String emptyBody = 'Jams you host or join show up here.';
 
   static const String justNow = 'Just now';
+  static const String today = 'Today';
+  static const String yesterday = 'Yesterday';
+  static const List<String> weekdays = [
+    'Monday',
+    'Tuesday',
+    'Wednesday',
+    'Thursday',
+    'Friday',
+    'Saturday',
+    'Sunday',
+  ];
+  static const List<String> months = [
+    'Jan',
+    'Feb',
+    'Mar',
+    'Apr',
+    'May',
+    'Jun',
+    'Jul',
+    'Aug',
+    'Sep',
+    'Oct',
+    'Nov',
+    'Dec',
+  ];
 
-  /// Announced for a mosaic, which is decorative on its own.
+  /// Announced for a cover or mosaic, which is decorative on its own.
   static String cover(String name) => 'Cover art from $name';
+  static String forgetHint(String name) => '$forget $name';
+  static const String more = 'More';
+
+  /// What the store writes against this device's own tracks.
+  static const String storedYou = 'You';
 }
 
-/// How many track rows a card shows before it stops listing and counts.
-const int _previewTracks = 3;
-
-/// The loading shimmer's beat, and the fade inside it. The fade is shorter
-/// than the beat on purpose: the still moment between them is what keeps the
-/// frame scheduler from running forever while a page waits on disk.
-const Duration _shimmerBeat = Duration(milliseconds: 800);
-const Duration _shimmerFade = Duration(milliseconds: 600);
-
-/// A relative "when", short enough for a footnote.
+/// A relative "when", Apple style: "Just now", "Today", "Yesterday", a
+/// weekday within the week, then "Oct 12" (and the year once it is not this
+/// one).
 ///
 /// Lives here rather than in `util/format.dart` because it is presentation,
-/// not formatting of engine data — and the recents rail on home is its only
+/// not formatting of engine data — and Home's Recent section is its only
 /// other caller.
-String jamRelativeTime(DateTime time) {
-  final difference = DateTime.now().difference(time);
-  if (difference.inMinutes < 1) return HistoryStrings.justNow;
-  if (difference.inHours < 1) return '${difference.inMinutes} min ago';
-  if (difference.inDays < 1) return '${difference.inHours} h ago';
-  if (difference.inDays < 30) return '${difference.inDays} d ago';
-  return '${time.year}-${time.month.toString().padLeft(2, '0')}-'
-      '${time.day.toString().padLeft(2, '0')}';
+String jamRelativeTime(DateTime time, {DateTime? now}) {
+  final at = time.toLocal();
+  final current = (now ?? DateTime.now()).toLocal();
+  if (current.difference(at).inMinutes.abs() < 1) return HistoryStrings.justNow;
+  final today = DateTime(current.year, current.month, current.day);
+  final day = DateTime(at.year, at.month, at.day);
+  // Calendar days, not 24-hour spans; DST-safe via rounding.
+  final days = (today.difference(day).inHours / 24).round();
+  if (days <= 0) return HistoryStrings.today;
+  if (days == 1) return HistoryStrings.yesterday;
+  if (days < 7) return HistoryStrings.weekdays[at.weekday - 1];
+  final date = '${HistoryStrings.months[at.month - 1]} ${at.day}';
+  return at.year == current.year ? date : '$date, ${at.year}';
 }
 
-/// A 2×2 grid of a past jam's covers.
+/// "You hosted · 12 songs · Yesterday" — a record's one-line summary.
+String jamHistorySummary(JamHistoryRecord record, {bool withCount = true}) => [
+  record.wasHost ? HistoryStrings.youHosted : HistoryStrings.youJoined,
+  if (withCount) HistoryStrings.songs(record.tracks.length),
+  jamRelativeTime(record.updatedAt),
+].join(' · ');
+
+// ---------------------------------------------------------------------------
+// Covers
+// ---------------------------------------------------------------------------
+
+/// Covers read back out of files still on this device, by `artworkId`.
 ///
-/// History records carry no artwork bytes — a `JamHistoryTrack` is a
-/// `MediaItem` and a path, and the cover lived in the engine that is long
-/// gone — so every tile draws the brand placeholder. That is the point: the
-/// grid is a *shape* that identifies a record, and tracks no longer on this
-/// device drop to 35% so a record visibly ages.
-class JamArtworkMosaic extends StatelessWidget {
+/// Reads run in `readAudioTags`' short-lived isolate, two at a time, and the
+/// newest [_capacity] results (including "no cover") are kept, so scrolling
+/// back up a long list never reads a file twice.
+abstract final class _HistoryCovers {
+  static final LinkedHashMap<String, Future<Uint8List?>> _cache =
+      LinkedHashMap<String, Future<Uint8List?>>();
+  static const int _capacity = 96;
+
+  /// A cover is a picture, not a payload: anything bigger is not read.
+  static const int _maxBytes = 8 * 1024 * 1024;
+
+  static int _running = 0;
+  static const int _parallel = 2;
+  static final Queue<Completer<void>> _waiting = Queue<Completer<void>>();
+
+  /// One track per distinct cover, in queue order, among tracks whose file
+  /// is still here.
+  static List<JamHistoryTrack> distinct(
+    Iterable<JamHistoryTrack> tracks, {
+    int limit = 4,
+  }) {
+    final seen = <String>{};
+    final out = <JamHistoryTrack>[];
+    for (final track in tracks) {
+      final id = track.item.artworkId;
+      if (id == null || seen.contains(id)) continue;
+      if (!track.existsLocally) continue;
+      seen.add(id);
+      out.add(track);
+      if (out.length >= limit) break;
+    }
+    return out;
+  }
+
+  /// The cached result for [track], if a read already finished or started.
+  static Future<Uint8List?>? peek(JamHistoryTrack track) {
+    final id = track.item.artworkId;
+    return id == null ? null : _cache[id];
+  }
+
+  /// The cover of [track], or null when it has none or its file is gone.
+  static Future<Uint8List?> load(JamHistoryTrack track) {
+    final id = track.item.artworkId;
+    final path = track.localPath;
+    if (id == null || path == null) return Future<Uint8List?>.value();
+    final hit = _cache.remove(id);
+    if (hit != null) {
+      _cache[id] = hit; // Most recently used goes last.
+      return hit;
+    }
+    final read = _limited(() => _read(path));
+    _cache[id] = read;
+    while (_cache.length > _capacity) {
+      _cache.remove(_cache.keys.first);
+    }
+    return read;
+  }
+
+  static Future<Uint8List?> _read(String path) async {
+    final file = File(path);
+    if (!file.existsSync()) return null;
+    final tags = await readAudioTags(file, maxMetadataBytes: _maxBytes);
+    return tags.hasArtwork ? tags.artworkBytes : null;
+  }
+
+  static Future<T> _limited<T>(Future<T> Function() task) async {
+    while (_running >= _parallel) {
+      final turn = Completer<void>();
+      _waiting.add(turn);
+      await turn.future;
+    }
+    _running++;
+    try {
+      return await task();
+    } finally {
+      _running--;
+      if (_waiting.isNotEmpty) _waiting.removeFirst().complete();
+    }
+  }
+}
+
+/// Decodes [bytes] at the size it is drawn, not at the file's 1400 px.
+ImageProvider _coverImage(BuildContext context, Uint8List bytes, double size) {
+  final px = (size * MediaQuery.devicePixelRatioOf(context)).round();
+  return ResizeImage(MemoryImage(bytes), width: px, height: px);
+}
+
+/// A past jam's cover: a 2×2 mosaic when the queue has at least four
+/// distinct real covers still on this device, otherwise the first cover, and
+/// otherwise the plain placeholder.
+///
+/// Used by Past Jams, the detail page and Home's Recent section.
+class JamArtworkMosaic extends StatefulWidget {
   const JamArtworkMosaic({
     super.key,
     required this.tracks,
     required this.size,
     this.semanticLabel,
+    this.shadow = false,
   });
 
   final List<JamHistoryTrack> tracks;
 
-  /// Edge length of the whole grid.
+  /// Edge length of the whole tile.
   final double size;
 
   final String? semanticLabel;
 
-  /// The gap between tiles.
-  static const double _gap = 2;
+  /// `JamShadow.artwork` under it — only for the large detail cover.
+  final bool shadow;
+
+  @override
+  State<JamArtworkMosaic> createState() => _JamArtworkMosaicState();
+}
+
+class _JamArtworkMosaicState extends State<JamArtworkMosaic> {
+  /// Loaded covers, in queue order. Null until the reads finish.
+  List<Uint8List>? _covers;
+  Object? _token;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_load());
+  }
+
+  @override
+  void didUpdateWidget(JamArtworkMosaic old) {
+    super.didUpdateWidget(old);
+    if (!identical(old.tracks, widget.tracks)) unawaited(_load());
+  }
+
+  Future<void> _load() async {
+    final token = _token = Object();
+    final candidates = _HistoryCovers.distinct(widget.tracks);
+    if (candidates.isEmpty) {
+      if (_covers != null && mounted) setState(() => _covers = null);
+      return;
+    }
+    // Fewer than four distinct covers can only ever show the first one, so
+    // only that one is read.
+    final wanted = candidates.length >= 4 ? candidates : [candidates.first];
+    final results = await Future.wait([
+      for (final track in wanted) _HistoryCovers.load(track),
+    ]);
+    if (!mounted || token != _token) return;
+    setState(() => _covers = [...results.nonNulls]);
+  }
 
   @override
   Widget build(BuildContext context) {
-    final tile = (size - _gap) / 2;
-    final cells = [
-      for (var i = 0; i < 4; i++) i < tracks.length ? tracks[i] : null,
-    ];
+    final size = widget.size;
+    final covers = _covers ?? const <Uint8List>[];
+    final radius = BorderRadius.circular(JamRadius.artwork(size));
 
-    final colors = context.jamColors;
-
-    Widget cell(JamHistoryTrack? track) {
-      // An empty cell is *absence*, not a faded track: a ghosted brand mark
-      // in the fourth slot made a three-track jam look like a four-track one
-      // whose cover failed to load.
-      if (track == null) {
-        return Container(
-          width: tile,
-          height: tile,
-          decoration: BoxDecoration(
-            color: colors.fillSecondary,
-            borderRadius: BorderRadius.circular(JamRadius.artwork(tile)),
-          ),
-        );
-      }
-      final art = JamArtworkTile(size: tile);
-      return track.existsLocally ? art : Opacity(opacity: 0.35, child: art);
+    if (covers.length < 4) {
+      return JamArtworkTile(
+        size: size,
+        image: covers.isEmpty ? null : _coverImage(context, covers.first, size),
+        imageKey: covers.isEmpty ? null : identityHashCode(covers.first),
+        semanticLabel: widget.semanticLabel,
+        shadow: widget.shadow && covers.isNotEmpty,
+      );
     }
 
-    return Semantics(
-      image: true,
-      label: semanticLabel,
-      child: ExcludeSemantics(
-        child: SizedBox(
-          width: size,
-          height: size,
-          child: Column(
-            children: [
-              Row(
-                children: [
-                  cell(cells[0]),
-                  const SizedBox(width: _gap),
-                  cell(cells[1]),
-                ],
-              ),
-              const SizedBox(height: _gap),
-              Row(
-                children: [
-                  cell(cells[2]),
-                  const SizedBox(width: _gap),
-                  cell(cells[3]),
-                ],
-              ),
-            ],
-          ),
+    final half = size / 2;
+    Widget quad(Uint8List bytes) => Image(
+      image: _coverImage(context, bytes, half),
+      width: half,
+      height: half,
+      fit: BoxFit.cover,
+      gaplessPlayback: true,
+    );
+    Widget grid = ClipRRect(
+      borderRadius: radius,
+      child: SizedBox.square(
+        dimension: size,
+        child: Column(
+          children: [
+            Row(children: [quad(covers[0]), quad(covers[1])]),
+            Row(children: [quad(covers[2]), quad(covers[3])]),
+          ],
         ),
       ),
     );
+    if (widget.shadow) {
+      grid = DecoratedBox(
+        decoration: BoxDecoration(
+          borderRadius: radius,
+          boxShadow: JamShadow.artwork,
+        ),
+        child: grid,
+      );
+    }
+    return Semantics(
+      image: true,
+      label: widget.semanticLabel,
+      child: ExcludeSemantics(child: grid),
+    );
   }
+}
+
+// ---------------------------------------------------------------------------
+// Past Jams
+// ---------------------------------------------------------------------------
+
+/// Deletes [record] from the on-disk store.
+Future<void> _forgetFromStore(JamHistoryRecord record) async {
+  final store = await JamHistoryStore.open();
+  await store?.delete(record.sessionId);
+}
+
+/// Asks before a record goes; true when the user said Forget.
+Future<bool> _confirmForget(BuildContext context, JamHistoryRecord record) =>
+    JamDialogs.confirmDestructive(
+      context,
+      title: HistoryStrings.forgetTitle,
+      message: HistoryStrings.forgetBody(record.sessionName),
+      confirmLabel: HistoryStrings.forgetConfirm,
+    );
+
+/// Side padding that holds a list to a reading column on wide windows.
+EdgeInsets _readingPadding(BuildContext context) {
+  final width = MediaQuery.sizeOf(context).width;
+  final side = width > JamContentWidth.reading
+      ? (width - JamContentWidth.reading) / 2
+      : 0.0;
+  return EdgeInsets.symmetric(horizontal: side);
 }
 
 class HistoryScreen extends StatefulWidget {
@@ -184,49 +409,10 @@ class _HistoryScreenState extends State<HistoryScreen> {
   JamHistoryStore? _store;
   List<JamHistoryRecord>? _records;
 
-  /// This device's display name. The store writes the literal 'You' against
-  /// your own tracks, and a face lettered from the word "You" is not a face —
-  /// so the credit stays "You" and the avatar comes from here.
-  String _selfName = '';
-
-  /// One beat for the whole screen's shimmer, not one per placeholder.
-  Timer? _shimmer;
-  bool _shimmerLit = true;
-
   @override
   void initState() {
     super.initState();
     unawaited(_load());
-    unawaited(_loadIdentity());
-  }
-
-  Future<void> _loadIdentity() async {
-    final name = await JamIdentity.displayName();
-    if (mounted && name != _selfName) setState(() => _selfName = name);
-  }
-
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    final still = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
-    if (_records != null || still) {
-      _stopShimmer();
-      return;
-    }
-    _shimmer ??= Timer.periodic(_shimmerBeat, (_) {
-      if (mounted) setState(() => _shimmerLit = !_shimmerLit);
-    });
-  }
-
-  void _stopShimmer() {
-    _shimmer?.cancel();
-    _shimmer = null;
-  }
-
-  @override
-  void dispose() {
-    _stopShimmer();
-    super.dispose();
   }
 
   Future<void> _load() async {
@@ -239,419 +425,598 @@ class _HistoryScreenState extends State<HistoryScreen> {
       records = store == null ? const <JamHistoryRecord>[] : await store.list();
     }
     if (!mounted) return;
-    _stopShimmer();
     setState(() => _records = records);
   }
 
-  Future<void> _forget(JamHistoryRecord record) async {
-    final confirmed = await JamDialogs.confirmDestructive(
-      context,
-      title: HistoryStrings.forgetTitle,
-      message: HistoryStrings.forgetBody(record.sessionName),
-      confirmLabel: HistoryStrings.forgetConfirm,
-    );
-    if (!confirmed) return;
-    JamHaptics.destructive();
+  Future<void> _delete(JamHistoryRecord record) async {
     final forget = widget.forgetRecord;
     if (forget != null) {
       await forget(record);
     } else {
-      await _store?.delete(record.sessionId);
+      final store = _store ??= await JamHistoryStore.open();
+      await store?.delete(record.sessionId);
     }
-    await _load();
   }
 
-  Future<void> _hostAgain(JamHistoryRecord record) async {
-    // A jam still running is ended first, on the user's say-so; "Host it
-    // again" used to open setup on a start that could only be refused.
-    final session = JamSession.read(context);
-    if (!await jamReadyForNewSession(context, session) || !mounted) return;
-    final args = HostSetupArgs(
-      paths: [for (final track in record.replayableTracks) track.localPath!],
-      name: record.sessionName,
-    );
-    // Also held by the controller: route `extra` alone can be lost.
-    session.hostSetupDraft = (name: args.name, paths: args.paths);
-    context.push('/host', extra: args);
+  /// The swipe action: asks, then forgets. False keeps the row.
+  Future<bool> _forget(JamHistoryRecord record) async {
+    if (!await _confirmForget(context, record)) return false;
+    JamHaptics.destructive();
+    await _delete(record);
+    if (mounted) {
+      setState(
+        () => _records = [
+          for (final r in _records ?? const <JamHistoryRecord>[])
+            if (r.sessionId != record.sessionId) r,
+        ],
+      );
+    }
+    return true;
+  }
+
+  Future<void> _open(JamHistoryRecord record) async {
+    final forgotten = await _pushDetail(context, record, forget: _delete);
+    if (forgotten && mounted) await _load();
   }
 
   @override
   Widget build(BuildContext context) {
     final records = _records;
-
-    return Scaffold(
-      // The title is a large one in the page itself (§3), not a 19 dp app-bar
-      // label — the bar carries only the way back.
-      appBar: AppBar(toolbarHeight: 56),
-      body: SafeArea(
-        top: false,
-        child: Center(
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(
-              maxWidth: JamContentWidth.reading,
-            ),
-            child: switch (records) {
-              // A spinner in the middle of a page says "wait"; the shape of
-              // what is coming says "nearly there".
-              null => ListView(
-                padding: _pagePadding,
-                children: [
-                  const _LargeTitle(),
-                  for (var i = 0; i < 2; i++) ...[
-                    const SizedBox(height: JamSpace.section),
-                    _ShimmerCard(lit: _shimmerLit),
-                  ],
-                ],
-              ),
-              [] => const Column(
-                children: [
-                  Padding(
-                    padding: EdgeInsets.fromLTRB(
-                      JamSpace.page,
-                      JamSpace.sm,
-                      JamSpace.page,
-                      0,
-                    ),
-                    child: Align(
-                      alignment: Alignment.centerLeft,
-                      child: _LargeTitle(),
-                    ),
-                  ),
-                  Expanded(
-                    child: JamEmptyState(
-                      icon: Icons.history_rounded,
+    return JamScaffold(
+      title: HistoryStrings.title,
+      slivers: [
+        switch (records) {
+          // Read off disk in a moment; a spinner would only flash.
+          null => const SliverToBoxAdapter(child: SizedBox.shrink()),
+          [] => SliverLayoutBuilder(
+            builder: (context, constraints) {
+              // Fill what is left of the screen (minus the scaffold's own
+              // bottom spacer), so the empty state sits in the middle
+              // without making an empty page scroll.
+              final bottom =
+                  JamSpace.xxxl + MediaQuery.paddingOf(context).bottom;
+              final height =
+                  constraints.viewportMainAxisExtent -
+                  constraints.precedingScrollExtent -
+                  bottom;
+              final fill = height < 280 ? 280.0 : height;
+              return SliverToBoxAdapter(
+                child: SizedBox(
+                  height: fill,
+                  // Optically centred: a touch above the true middle.
+                  child: Padding(
+                    padding: EdgeInsets.only(bottom: fill * 0.15),
+                    child: const JamEmptyState(
+                      icon: CupertinoIcons.clock,
                       title: HistoryStrings.emptyTitle,
                       body: HistoryStrings.emptyBody,
                     ),
                   ),
-                ],
-              ),
-              _ => ListView.separated(
-                padding: _pagePadding,
-                itemCount: records.length + 1,
-                separatorBuilder: (_, _) =>
-                    const SizedBox(height: JamSpace.section),
-                itemBuilder: (context, index) => index == 0
-                    ? const _LargeTitle()
-                    : _RecordCard(
-                        record: records[index - 1],
-                        selfName: _selfName,
-                        onForget: () => unawaited(_forget(records[index - 1])),
-                        onHostAgain: () =>
-                            unawaited(_hostAgain(records[index - 1])),
-                      ),
-              ),
+                ),
+              );
             },
           ),
-        ),
-      ),
-    );
-  }
-
-  static const EdgeInsets _pagePadding = EdgeInsets.fromLTRB(
-    JamSpace.page,
-    JamSpace.sm,
-    JamSpace.page,
-    JamSpace.huge,
-  );
-}
-
-/// "Past jams", set as a page title rather than an app-bar label.
-class _LargeTitle extends StatelessWidget {
-  const _LargeTitle();
-
-  @override
-  Widget build(BuildContext context) => Semantics(
-    header: true,
-    child: Text(HistoryStrings.title, style: context.jamLargeTitle),
-  );
-}
-
-/// The card shell every record and every placeholder shares.
-class _Card extends StatelessWidget {
-  const _Card({required this.child});
-
-  final Widget child;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.jamColors;
-    return Container(
-      clipBehavior: Clip.antiAlias,
-      decoration: BoxDecoration(
-        color: colors.groupedSurface,
-        borderRadius: BorderRadius.circular(JamRadius.lg),
-        border: Border.all(color: colors.separator, width: 0.5),
-      ),
-      child: child,
+          _ => SliverPadding(
+            padding: _readingPadding(context),
+            sliver: SliverList.builder(
+              itemCount: records.length,
+              itemBuilder: (context, index) {
+                final record = records[index];
+                return _SwipeToForget(
+                  key: ValueKey<String>(record.sessionId),
+                  label: HistoryStrings.forget,
+                  semanticLabel: HistoryStrings.forgetHint(record.sessionName),
+                  onAction: () => _forget(record),
+                  child: _RecordRow(
+                    record: record,
+                    separator: index < records.length - 1,
+                    onTap: () => unawaited(_open(record)),
+                  ),
+                );
+              },
+            ),
+          ),
+        },
+      ],
     );
   }
 }
 
-class _RecordCard extends StatelessWidget {
-  const _RecordCard({
+/// One past jam in the list.
+class _RecordRow extends StatelessWidget {
+  const _RecordRow({
     required this.record,
-    required this.selfName,
-    required this.onForget,
-    required this.onHostAgain,
+    required this.separator,
+    required this.onTap,
   });
 
   final JamHistoryRecord record;
+  final bool separator;
+  final VoidCallback onTap;
 
-  /// This device's display name, for the "you" face on your own rows.
-  final String selfName;
+  @override
+  Widget build(BuildContext context) => JamRow(
+    leading: JamArtworkMosaic(
+      tracks: record.tracks,
+      size: JamArtworkSize.list,
+      semanticLabel: HistoryStrings.cover(record.sessionName),
+    ),
+    leadingWidth: JamArtworkSize.list,
+    title: record.sessionName,
+    subtitle: jamHistorySummary(record),
+    subtitleMaxLines: 1,
+    chevron: true,
+    separator: separator,
+    onTap: onTap,
+  );
+}
 
-  final VoidCallback onForget;
-  final VoidCallback onHostAgain;
+/// The iOS trailing swipe action: drag a row left to reveal a red button,
+/// tap it (or swipe all the way) to run it. The row slides back when the
+/// action is declined.
+class _SwipeToForget extends StatefulWidget {
+  const _SwipeToForget({
+    super.key,
+    required this.child,
+    required this.label,
+    required this.semanticLabel,
+    required this.onAction,
+  });
+
+  final Widget child;
+  final String label;
+  final String semanticLabel;
+
+  /// Runs the action; true when the row is gone.
+  final Future<bool> Function() onAction;
+
+  @override
+  State<_SwipeToForget> createState() => _SwipeToForgetState();
+}
+
+class _SwipeToForgetState extends State<_SwipeToForget>
+    with SingleTickerProviderStateMixin {
+  /// The revealed button's width.
+  static const double _actionWidth = 88;
+
+  /// Past this share of the row, letting go runs the action.
+  static const double _fullSwipe = 0.6;
+
+  late final AnimationController _offset = AnimationController(
+    vsync: this,
+    lowerBound: 0,
+    upperBound: double.infinity,
+    value: 0,
+  )..addListener(() => setState(() {}));
+
+  double _width = 1;
+  bool _busy = false;
+
+  @override
+  void dispose() {
+    _offset.dispose();
+    super.dispose();
+  }
+
+  Duration get _duration => MediaQuery.disableAnimationsOf(context)
+      ? Duration.zero
+      : JamDuration.base;
+
+  Future<void> _animateTo(double target) =>
+      _offset.animateTo(target, duration: _duration, curve: JamCurve.standard);
+
+  void _onDragUpdate(DragUpdateDetails details) {
+    if (_busy) return;
+    final next = (_offset.value - details.primaryDelta!).clamp(0.0, _width);
+    _offset.value = next;
+  }
+
+  void _onDragEnd(DragEndDetails details) {
+    if (_busy) return;
+    final velocity = details.primaryVelocity ?? 0;
+    final value = _offset.value;
+    if (value > _width * _fullSwipe || (velocity < -2500 && value > 0)) {
+      unawaited(_run(full: true));
+    } else if (value > _actionWidth / 2 || velocity < -400) {
+      unawaited(_animateTo(_actionWidth));
+    } else {
+      unawaited(_animateTo(0));
+    }
+  }
+
+  Future<void> _run({bool full = false}) async {
+    if (_busy) return;
+    _busy = true;
+    if (full) {
+      JamHaptics.selection();
+      await _animateTo(_width);
+    }
+    final gone = await widget.onAction();
+    _busy = false;
+    if (!gone && mounted) await _animateTo(0);
+  }
+
+  void _close() => unawaited(_animateTo(0));
 
   @override
   Widget build(BuildContext context) {
     final colors = context.jamColors;
-    final replayable = record.replayableTracks.length;
-    final total = record.tracks.length;
-    final preview = record.tracks.take(_previewTracks).toList();
-
-    return _Card(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          _Header(record: record),
-          Divider(height: 0.5, thickness: 0.5, color: colors.separator),
-          for (final track in preview)
-            JamTrackRow(
-              title: jamDisplayTitle(track.item),
-              byline: track.item.artist,
-              addedByName: track.addedByName,
-              // Every row is credited, yours included — a past jam with no
-              // faces on it is a playlist. The store writes the literal 'You'
-              // for this device, so the label stays "You" and the face is
-              // drawn from this device's own name with the apricot ring.
-              addedByYou: track.addedByName == 'You',
-              addedByAvatarName: track.addedByName == 'You' ? selfName : null,
-              // Faded is the whole signal that a track has left the device;
-              // saying it again on every row turns a card into a warning.
-              dimmed: !track.existsLocally,
-              trailing: const SizedBox.shrink(),
-              contentPadding: const EdgeInsets.symmetric(
-                horizontal: JamSpace.card,
-              ),
-            ),
-          if (total > preview.length)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(
-                JamSpace.card,
-                0,
-                JamSpace.card,
-                JamSpace.md,
-              ),
-              child: Text(
-                HistoryStrings.more(total - preview.length),
-                style: context.jamFootnote.copyWith(
-                  color: colors.tertiaryLabel,
-                ),
-              ),
-            ),
-          Divider(height: 0.5, thickness: 0.5, color: colors.separator),
-          Padding(
-            padding: const EdgeInsets.all(JamSpace.md),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              mainAxisSize: MainAxisSize.min,
+    final open = _offset.value;
+    return Semantics(
+      customSemanticsActions: {
+        CustomSemanticsAction(label: widget.semanticLabel): () =>
+            unawaited(_run()),
+      },
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          _width = constraints.maxWidth;
+          return GestureDetector(
+            behavior: HitTestBehavior.translucent,
+            onHorizontalDragUpdate: _onDragUpdate,
+            onHorizontalDragEnd: _onDragEnd,
+            child: Stack(
               children: [
-                Row(
-                  children: [
-                    JamButton.plain(
-                      label: HistoryStrings.forget,
-                      onPressed: onForget,
-                      semanticLabel:
-                          '${HistoryStrings.forget} ${record.sessionName}',
-                    ),
-                    const Spacer(),
-                    // Always the same label: interpolating the count read as
-                    // "Host 0 again" on a record whose files are all gone,
-                    // which is a sentence, not a button. What is missing goes
-                    // in the footnote under it.
-                    JamButton.filled(
-                      label: HistoryStrings.hostAgain,
-                      onPressed: replayable == 0 ? null : onHostAgain,
-                      semanticLabel:
-                          '${HistoryStrings.hostAgain}: '
-                          '${record.sessionName}',
-                    ),
-                  ],
-                ),
-                if (replayable < total) ...[
-                  const SizedBox(height: JamSpace.sm),
-                  Text(
-                    replayable == 0
-                        ? HistoryStrings.noneLeft
-                        : HistoryStrings.someLeft(replayable, total),
-                    textAlign: TextAlign.end,
-                    style: context.jamFootnote.copyWith(
-                      color: colors.tertiaryLabel,
+                if (open > 0)
+                  Positioned(
+                    top: 0,
+                    bottom: 0,
+                    right: 0,
+                    width: open < _actionWidth ? _actionWidth : open,
+                    child: ExcludeSemantics(
+                      child: JamPressable(
+                        style: JamPressStyle.none,
+                        onTap: () => unawaited(_run()),
+                        child: ColoredBox(
+                          color: colors.danger,
+                          child: Align(
+                            alignment: Alignment.centerLeft,
+                            child: SizedBox(
+                              width: _actionWidth,
+                              child: Text(
+                                widget.label,
+                                textAlign: TextAlign.center,
+                                maxLines: 1,
+                                style: context.jamBody.copyWith(
+                                  color: colors.onTint,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
                     ),
                   ),
-                ],
+                Transform.translate(
+                  offset: Offset(-open, 0),
+                  child: ColoredBox(
+                    color: colors.background,
+                    child: open > 0
+                        ? JamPressable(
+                            style: JamPressStyle.none,
+                            onTap: _close,
+                            child: AbsorbPointer(child: widget.child),
+                          )
+                        : widget.child,
+                  ),
+                ),
               ],
             ),
-          ),
-        ],
+          );
+        },
       ),
     );
   }
 }
 
-/// The 96 dp strip: what the jam looked like, what it was called, and who
-/// was in it.
-class _Header extends StatelessWidget {
-  const _Header({required this.record});
-
-  final JamHistoryRecord record;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.jamColors;
-    final total = record.tracks.length;
-
-    return SizedBox(
-      height: 96,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: JamSpace.card),
-        child: Row(
-          children: [
-            JamArtworkMosaic(
-              tracks: record.tracks,
-              size: 64,
-              semanticLabel: HistoryStrings.cover(record.sessionName),
-            ),
-            const SizedBox(width: JamSpace.md),
-            Expanded(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          record.sessionName,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: context.jamHeadline,
-                        ),
-                      ),
-                      const SizedBox(width: JamSpace.sm),
-                      Text(
-                        jamRelativeTime(record.updatedAt),
-                        style: context.jamFootnote.copyWith(
-                          color: colors.tertiaryLabel,
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: JamSpace.xxs),
-                  Text(
-                    '${record.wasHost ? HistoryStrings.youHosted : HistoryStrings.youJoined}'
-                    ' · ${HistoryStrings.tracks(total)}',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: context.jamSubheadline.copyWith(
-                      color: context.jamColors.secondaryLabel,
-                    ),
-                  ),
-                  if (record.peerNames.isNotEmpty) ...[
-                    const SizedBox(height: JamSpace.sm),
-                    JamAvatarStack(
-                      names: record.peerNames,
-                      size: JamAvatarSize.strip,
-                      maxVisible: 4,
-                    ),
-                  ],
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-/// The shape of a record, sweeping, while the store is read off disk.
-class _ShimmerCard extends StatelessWidget {
-  const _ShimmerCard({required this.lit});
-
-  /// Which half of the beat this is.
-  final bool lit;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.jamColors;
-
-    Widget block(double width, double height) => Container(
-      width: width,
-      height: height,
-      decoration: BoxDecoration(
-        color: colors.fillSecondary,
-        borderRadius: BorderRadius.circular(JamRadius.xs),
-      ),
-    );
-
-    return ExcludeSemantics(
-      child: AnimatedOpacity(
-        opacity: lit ? 1 : 0.55,
-        duration: _shimmerFade,
-        curve: JamCurve.standard,
-        child: _Card(
-          child: Padding(
-            padding: const EdgeInsets.all(JamSpace.card),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Container(
-                      width: 64,
-                      height: 64,
-                      decoration: BoxDecoration(
-                        color: colors.fillSecondary,
-                        borderRadius: BorderRadius.circular(
-                          JamRadius.artwork(64),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: JamSpace.md),
-                    Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        block(140, 17),
-                        const SizedBox(height: JamSpace.sm),
-                        block(96, 13),
-                      ],
-                    ),
-                  ],
-                ),
-                const SizedBox(height: JamSpace.xl),
-                for (var i = 0; i < 3; i++) ...[
-                  if (i > 0) const SizedBox(height: JamSpace.md),
-                  block(double.infinity, 20),
-                ],
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
+// ---------------------------------------------------------------------------
+// Detail
+// ---------------------------------------------------------------------------
 
 /// Opens one past jam's detail page.
 ///
-/// Placeholder for the redesign; the history pass replaces the body, the
-/// signature stays. Home's Recent section calls it.
+/// Home's Recent section and the Past Jams list both land here. Forgetting
+/// from the page deletes the record from the on-disk store and pops.
 Future<void> showJamHistoryDetail(
   BuildContext context,
   JamHistoryRecord record,
 ) async {
-  await context.push('/history');
+  await _pushDetail(context, record);
+}
+
+/// Pushes the detail page; true when the record was forgotten from it.
+Future<bool> _pushDetail(
+  BuildContext context,
+  JamHistoryRecord record, {
+  Future<void> Function(JamHistoryRecord record)? forget,
+}) async {
+  final forgotten = await Navigator.of(context).push<bool>(
+    CupertinoPageRoute<bool>(
+      builder: (context) =>
+          HistoryDetailScreen(record: record, forgetRecord: forget),
+    ),
+  );
+  return forgotten ?? false;
+}
+
+/// One past jam: its cover, what it was, Host Again, and the queue.
+class HistoryDetailScreen extends StatefulWidget {
+  const HistoryDetailScreen({
+    super.key,
+    required this.record,
+    this.forgetRecord,
+  });
+
+  final JamHistoryRecord record;
+
+  /// How the record is forgotten. Defaults to deleting it from the store.
+  final Future<void> Function(JamHistoryRecord record)? forgetRecord;
+
+  @override
+  State<HistoryDetailScreen> createState() => _HistoryDetailScreenState();
+}
+
+class _HistoryDetailScreenState extends State<HistoryDetailScreen> {
+  final ScrollController _scroll = ScrollController();
+
+  /// The inline nav title appears once the name has scrolled under the bar.
+  bool _titleShown = false;
+
+  /// Where the name's baseline sits in the scroll view (cover + gaps).
+  static const double _titleScrollThreshold =
+      JamSpace.xxl + JamArtworkSize.detail + JamSpace.xl + 28;
+
+  @override
+  void initState() {
+    super.initState();
+    _scroll.addListener(_onScroll);
+  }
+
+  @override
+  void dispose() {
+    _scroll
+      ..removeListener(_onScroll)
+      ..dispose();
+    super.dispose();
+  }
+
+  void _onScroll() {
+    final shown = _scroll.offset > _titleScrollThreshold;
+    if (shown != _titleShown) setState(() => _titleShown = shown);
+  }
+
+  JamHistoryRecord get _record => widget.record;
+
+  Future<void> _forget() async {
+    if (!await _confirmForget(context, _record)) return;
+    JamHaptics.destructive();
+    await (widget.forgetRecord ?? _forgetFromStore)(_record);
+    if (mounted) Navigator.of(context).pop(true);
+  }
+
+  Future<void> _hostAgain() async {
+    // A jam still running is ended first, on the user's say-so.
+    final session = JamSession.read(context);
+    if (!await jamReadyForNewSession(context, session) || !mounted) return;
+    final args = HostSetupArgs(
+      paths: [for (final track in _record.replayableTracks) track.localPath!],
+      name: _record.sessionName,
+    );
+    // Also held by the controller: route `extra` alone can be lost.
+    session.hostSetupDraft = (name: args.name, paths: args.paths);
+    unawaited(context.push('/host', extra: args));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.jamColors;
+    final record = _record;
+    final tracks = record.tracks;
+    final replayable = record.replayableTracks.length;
+    final total = tracks.length;
+    final length = Duration(
+      microseconds: tracks.fold<int>(
+        0,
+        (sum, t) => sum + (t.item.durationUs ?? 0),
+      ),
+    );
+    final secondary = context.jamSubheadline.copyWith(
+      color: colors.secondaryLabel,
+    );
+    final footnote = context.jamFootnote.copyWith(color: colors.secondaryLabel);
+
+    final menu = JamMenuButton(
+      semanticLabel: HistoryStrings.more,
+      groups: [
+        [
+          JamMenuItem(
+            title: HistoryStrings.forget,
+            icon: CupertinoIcons.trash,
+            destructive: true,
+            onPressed: () => unawaited(_forget()),
+          ),
+        ],
+      ],
+    );
+
+    final content = SliverMainAxisGroup(
+      slivers: [
+        SliverPadding(
+          padding: _readingPadding(context),
+          sliver: SliverList.list(
+            children: [
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: JamSpace.page),
+                child: Column(
+                  children: [
+                    const SizedBox(height: JamSpace.xxl),
+                    JamArtworkMosaic(
+                      tracks: tracks,
+                      size: JamArtworkSize.detail,
+                      shadow: true,
+                      semanticLabel: HistoryStrings.cover(record.sessionName),
+                    ),
+                    const SizedBox(height: JamSpace.xl),
+                    Semantics(
+                      header: true,
+                      child: Text(
+                        record.sessionName,
+                        textAlign: TextAlign.center,
+                        style: context.jamTitle2,
+                      ),
+                    ),
+                    const SizedBox(height: JamSpace.xs),
+                    Text(
+                      jamHistorySummary(record, withCount: false),
+                      textAlign: TextAlign.center,
+                      style: secondary,
+                    ),
+                    if (record.peerNames.isNotEmpty) ...[
+                      const SizedBox(height: JamSpace.xxs),
+                      Text(
+                        HistoryStrings.withPeople(record.peerNames),
+                        textAlign: TextAlign.center,
+                        style: secondary,
+                      ),
+                    ],
+                    const SizedBox(height: JamSpace.xl),
+                    ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 360),
+                      child: JamButton.gray(
+                        label: HistoryStrings.hostAgain,
+                        icon: CupertinoIcons.play_fill,
+                        expand: true,
+                        // Always the same label; what is missing is said in
+                        // the footnote under it.
+                        onPressed: replayable == 0
+                            ? null
+                            : () => unawaited(_hostAgain()),
+                        semanticLabel:
+                            '${HistoryStrings.hostAgain}: '
+                            '${record.sessionName}',
+                      ),
+                    ),
+                    if (replayable < total) ...[
+                      const SizedBox(height: JamSpace.sm),
+                      Text(
+                        replayable == 0
+                            ? HistoryStrings.noneLeft
+                            : HistoryStrings.someLeft(replayable, total),
+                        textAlign: TextAlign.center,
+                        style: footnote,
+                      ),
+                    ],
+                    const SizedBox(height: JamSpace.xxl),
+                  ],
+                ),
+              ),
+              if (tracks.isNotEmpty) ...[
+                const JamHairline(indent: kJamRowInset),
+                for (var i = 0; i < tracks.length; i++)
+                  _HistoryTrackRow(
+                    track: tracks[i],
+                    separator: i < tracks.length - 1,
+                  ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(
+                    kJamRowInset,
+                    JamSpace.md,
+                    kJamRowInset,
+                    0,
+                  ),
+                  child: Text(
+                    HistoryStrings.songsAndLength(total, length),
+                    style: footnote,
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ],
+    );
+
+    // A plain Scaffold under the inline nav bar rather than a non-large-title
+    // JamScaffold: the content must start below the bar, and only a context
+    // inside the Scaffold sees the bar's height in its top padding.
+    return CupertinoPageScaffoldBackgroundColor(
+      color: colors.background,
+      child: Scaffold(
+        backgroundColor: colors.background,
+        extendBodyBehindAppBar: true,
+        appBar: JamNavBar(
+          title: _titleShown ? record.sessionName : '',
+          trailing: [menu],
+        ),
+        body: Builder(
+          builder: (context) {
+            final padding = MediaQuery.paddingOf(context);
+            return CustomScrollView(
+              controller: _scroll,
+              slivers: [
+                SliverToBoxAdapter(child: SizedBox(height: padding.top)),
+                content,
+                SliverToBoxAdapter(
+                  child: SizedBox(height: JamSpace.xxxl + padding.bottom),
+                ),
+              ],
+            );
+          },
+        ),
+      ),
+    );
+  }
+}
+
+/// A queue row on the detail page, with its cover read back off disk.
+class _HistoryTrackRow extends StatefulWidget {
+  const _HistoryTrackRow({required this.track, required this.separator});
+
+  final JamHistoryTrack track;
+  final bool separator;
+
+  @override
+  State<_HistoryTrackRow> createState() => _HistoryTrackRowState();
+}
+
+class _HistoryTrackRowState extends State<_HistoryTrackRow> {
+  Uint8List? _cover;
+  late final bool _local = widget.track.existsLocally;
+
+  @override
+  void initState() {
+    super.initState();
+    if (_local && widget.track.item.artworkId != null) {
+      final pending =
+          _HistoryCovers.peek(widget.track) ??
+          _HistoryCovers.load(widget.track);
+      unawaited(
+        pending.then((bytes) {
+          if (mounted && bytes != null) setState(() => _cover = bytes);
+        }),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final track = widget.track;
+    final adder = track.addedByName;
+    final cover = _cover;
+    final durationUs = track.item.durationUs;
+    return JamTrackRow(
+      title: jamDisplayTitle(track.item),
+      byline: track.item.artist,
+      artworkImage: cover == null
+          ? null
+          : _coverImage(context, cover, JamArtworkSize.row),
+      artworkId: track.item.artworkId,
+      addedByName: adder,
+      // The store writes the literal 'You' against this device's tracks.
+      addedByYou: adder == HistoryStrings.storedYou,
+      duration: durationUs == null ? null : Duration(microseconds: durationUs),
+      // Faded is the whole signal that a track has left the device.
+      dimmed: !_local,
+      separator: widget.separator,
+    );
+  }
 }

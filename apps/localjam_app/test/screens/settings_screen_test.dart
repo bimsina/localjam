@@ -1,7 +1,8 @@
-/// Settings is three groups and nothing else: who you are, how it looks, and
-/// where it came from.
+/// Settings is three inset groups and nothing else: who you are, how it
+/// looks, and where it came from.
 library;
 
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:localjam_app/src/widgets/rename_dialog.dart';
@@ -10,6 +11,7 @@ import 'package:localjam_app/src/screens/settings_screen.dart';
 import 'package:localjam_app/src/state/app_settings.dart';
 import 'package:localjam_app/src/state/session_controller.dart';
 import 'package:localjam_app/src/widgets/avatar.dart';
+import 'package:localjam_app/src/widgets/list.dart';
 
 import '../harness.dart';
 
@@ -40,7 +42,7 @@ void main() {
     final session = testSession();
     await pumpSettings(tester, session);
 
-    expect(find.text(SettingsStrings.you), findsOneWidget);
+    expect(find.text(SettingsStrings.title), findsWidgets);
     expect(find.text(SettingsStrings.appearance), findsOneWidget);
     expect(find.text(SettingsStrings.about), findsOneWidget);
 
@@ -50,6 +52,7 @@ void main() {
     final avatar = tester.widget<JamAvatar>(find.byType(JamAvatar).first);
     expect(avatar.size, JamAvatarSize.profile);
 
+    expect(find.text(SettingsStrings.version), findsOneWidget);
     expect(find.text(kAppVersion), findsOneWidget);
     expect(find.text(SettingsStrings.openSource), findsOneWidget);
     expect(find.text(SettingsStrings.licences), findsOneWidget);
@@ -72,9 +75,7 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('every appearance choice is previewed, not just labelled', (
-    tester,
-  ) async {
+  testWidgets('appearance is three plain checkmark rows', (tester) async {
     final session = testSession();
     final settings = await pumpSettings(tester, session);
 
@@ -85,21 +86,19 @@ void main() {
     ]) {
       expect(find.text(label), findsOneWidget);
     }
-    // One 44×28 live preview per row, not just a radio.
-    final swatches = find
-        .byType(Container)
-        .evaluate()
-        .map((e) => e.renderObject)
-        .whereType<RenderBox>()
-        .where((b) => b.hasSize && b.size == const Size(44, 28))
-        .length;
-    expect(swatches, 3);
-
+    // No preview thumbnails, no radio circles: one checkmark on the choice.
+    bool checked(String label) =>
+        tester.widget<JamRow>(find.widgetWithText(JamRow, label)).checked;
     expect(settings.themeMode, ThemeMode.system);
+    expect(checked(SettingsStrings.system), isTrue);
+    expect(find.byIcon(CupertinoIcons.checkmark), findsOneWidget);
+
     await tester.tap(find.text(SettingsStrings.dark));
     await tester.pumpAndSettle();
     expect(settings.themeMode, ThemeMode.dark);
-    expect(find.byIcon(Icons.check_circle_rounded), findsOneWidget);
+    expect(checked(SettingsStrings.dark), isTrue);
+    expect(checked(SettingsStrings.system), isFalse);
+    expect(find.byIcon(CupertinoIcons.checkmark), findsOneWidget);
   });
 
   testWidgets('the licences page opens', (tester) async {

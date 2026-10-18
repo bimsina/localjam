@@ -1,5 +1,5 @@
-/// The intro is a courtesy: three panels, skippable from the first, and it
-/// writes the flag exactly once however you leave it.
+/// The intro is a courtesy: one "Welcome to LocalJam" page, one way on, and
+/// it writes the flag exactly once.
 library;
 
 import 'package:flutter/material.dart';
@@ -7,6 +7,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:localjam_app/src/design/theme.dart';
 import 'package:localjam_app/src/screens/onboarding_screen.dart';
 import 'package:localjam_app/src/state/onboarding_prefs.dart';
+import 'package:localjam_app/src/widgets/buttons.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 Future<JamOnboardingPrefs> pumpOnboarding(
@@ -35,44 +36,54 @@ Future<JamOnboardingPrefs> pumpOnboarding(
 }
 
 void main() {
-  testWidgets('three panels, in order, with one way on', (tester) async {
+  testWidgets('one page: a title, three features and Continue', (tester) async {
     await pumpOnboarding(tester);
 
-    expect(find.text(OnboardingStrings.oneTitle), findsOneWidget);
-    expect(find.text(OnboardingStrings.next), findsOneWidget);
-    expect(find.text(OnboardingStrings.skip), findsOneWidget);
-
-    await tester.tap(find.text(OnboardingStrings.next));
-    await tester.pumpAndSettle();
-    expect(find.text(OnboardingStrings.twoTitle), findsOneWidget);
-
-    await tester.tap(find.text(OnboardingStrings.next));
-    await tester.pumpAndSettle();
-    expect(find.text(OnboardingStrings.threeTitle), findsOneWidget);
-    // The last panel names the end of the road.
-    expect(find.text(OnboardingStrings.getStarted), findsOneWidget);
-    expect(find.text(OnboardingStrings.next), findsNothing);
+    expect(find.text(OnboardingStrings.title), findsOneWidget);
+    for (final text in [
+      OnboardingStrings.oneTitle,
+      OnboardingStrings.oneBody,
+      OnboardingStrings.twoTitle,
+      OnboardingStrings.twoBody,
+      OnboardingStrings.threeTitle,
+      OnboardingStrings.threeBody,
+    ]) {
+      expect(find.text(text), findsOneWidget);
+    }
+    // No carousel, no page dots, one button.
+    expect(find.byType(PageView), findsNothing);
+    expect(find.byType(JamButton), findsOneWidget);
+    expect(find.text(OnboardingStrings.continueLabel), findsOneWidget);
   });
 
-  testWidgets('finishing marks the flag and hands back to the caller', (
+  testWidgets('continuing marks the flag and hands back to the caller', (
     tester,
   ) async {
     var done = 0;
     final prefs = await pumpOnboarding(tester, onDone: () => done++);
     expect(prefs.seen, isFalse);
 
-    await tester.tap(find.text(OnboardingStrings.next));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text(OnboardingStrings.next));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text(OnboardingStrings.getStarted));
+    await tester.tap(find.text(OnboardingStrings.continueLabel));
     await tester.pumpAndSettle();
 
     expect(prefs.seen, isTrue);
     expect(done, 1);
   });
 
-  testWidgets('skipping counts as seen — this is not a gate', (tester) async {
+  testWidgets('a double tap still writes and leaves once', (tester) async {
+    var done = 0;
+    await pumpOnboarding(tester, onDone: () => done++);
+
+    await tester.tap(find.text(OnboardingStrings.continueLabel));
+    await tester.tap(find.text(OnboardingStrings.continueLabel));
+    await tester.pumpAndSettle();
+
+    expect(done, 1);
+  });
+
+  testWidgets('the skip the router relies on is the same one tap', (
+    tester,
+  ) async {
     var done = 0;
     final prefs = await pumpOnboarding(tester, onDone: () => done++);
 
@@ -102,19 +113,35 @@ void main() {
     expect(tester.takeException(), isNull);
     expect(find.text(OnboardingStrings.oneTitle), findsOneWidget);
     // Content is held to a column rather than stretched across the window.
-    final headline = tester.getSize(find.text(OnboardingStrings.oneTitle));
+    final headline = tester.getSize(find.text(OnboardingStrings.oneBody));
     expect(headline.width, lessThanOrEqualTo(480));
   });
 
   testWidgets('no permission sheet is chained behind it', (tester) async {
-    await pumpOnboarding(tester);
+    final prefs = await pumpOnboarding(tester);
 
-    await tester.tap(find.text(OnboardingStrings.skip));
+    await tester.tap(find.text(OnboardingStrings.continueLabel));
     await tester.pumpAndSettle();
 
     // Permissions are asked for at the moment they are needed, not here.
+    expect(prefs.seen, isTrue);
     expect(find.textContaining('local network'), findsNothing);
-    expect(find.text('Continue'), findsNothing);
+    expect(find.text('Not Now'), findsNothing);
     expect(find.text('Not now'), findsNothing);
+  });
+
+  testWidgets('1.3× text scrolls rather than clips', (tester) async {
+    tester.platformDispatcher.textScaleFactorTestValue = 1.3;
+    addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+    await pumpOnboarding(tester, size: const Size(320, 568));
+
+    expect(tester.takeException(), isNull);
+    expect(find.text(OnboardingStrings.continueLabel), findsOneWidget);
+  });
+
+  testWidgets('renders on the dark palette', (tester) async {
+    await pumpOnboarding(tester, theme: jamDarkTheme());
+    expect(tester.takeException(), isNull);
+    expect(find.text(OnboardingStrings.title), findsOneWidget);
   });
 }

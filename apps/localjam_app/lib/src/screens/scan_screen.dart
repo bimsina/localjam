@@ -1,22 +1,23 @@
 /// Full-screen QR scanner for `localjam://join?...` codes. Pops with the
-/// scanned URI string, or null when dismissed.
+/// scanned URI string, or null when dismissed (DESIGN_SPEC v3 §6.10).
 ///
-/// Camera-first: no app bar, no chrome, nothing between you and the code. A
-/// 60% scrim with a 260 dp hole punched in it does the aiming, four raspberry
-/// L-brackets say where to point, and the moment a code lands they snap
-/// apricot and the phone taps your hand. Everything else — the title, the
-/// hint, the close button, the way through when there is no camera — floats
-/// over the feed.
+/// Camera-first, like the system Code Scanner: the feed fills the screen on
+/// black, a rounded white viewfinder outline sits in the middle with the
+/// rest of the feed dimmed, a caption under it says what to do, a glass
+/// xmark closes, and **Enter Link** at the bottom is the way through when
+/// there is nothing to scan.
 ///
 /// The camera is the one part of joining that can simply not be available —
-/// denied, missing, or busy — so this screen carries its own dead ends: it
-/// says which one happened, offers Settings, and always offers the paste
-/// field as a way through.
+/// denied, missing, or busy — so this screen carries its own dead ends on
+/// the same black page: it says which one happened, offers Settings or
+/// another go where that can help, and always offers the link.
 library;
 
 import 'dart:async';
+import 'dart:math' as math;
 
-import 'package:flutter/material.dart';
+import 'package:flutter/cupertino.dart';
+import 'package:flutter/material.dart' show Scaffold, Theme, ThemeData;
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
@@ -29,49 +30,58 @@ import '../util/network.dart';
 import '../util/permissions.dart';
 import '../widgets/buttons.dart';
 import '../widgets/empty_state.dart';
+import '../widgets/glass.dart';
 import '../widgets/join_link_dialog.dart';
 
 /// Every user-facing string this screen can show.
 abstract final class JamScanStrings {
-  static const String title = 'Scan to join';
-  static const String hint = 'Point at the host’s code';
-  static const String wrongCode = 'That isn’t a jam code.';
-  static const String found = 'Got it — joining…';
-  static const String enterLink = 'Enter link instead';
+  /// Announced for the viewfinder.
+  static const String title = 'Scan a Code';
+  static const String hint = 'Point at a LocalJam code';
+  static const String wrongCode = 'That isn’t a LocalJam code.';
+  static const String found = 'Joining…';
+  static const String enterLink = 'Enter Link';
   static const String close = 'Close';
-  static const String torchOn = 'Turn on the torch';
-  static const String torchOff = 'Turn off the torch';
+  static const String torchOn = 'Turn On Flashlight';
+  static const String torchOff = 'Turn Off Flashlight';
 
-  static const String deniedTitle = 'No camera access';
+  static const String deniedTitle = 'No Camera Access';
   static const String deniedBody = JamPermissionCopy.cameraDenied;
+  static const String openSettings = 'Open Settings';
 
   /// The rationale sheet was answered with Back or "Not now", so the OS was
   /// never asked and there is nothing in Settings to turn on. Telling this
   /// user to "turn on camera access in Settings" sends them to a switch that
   /// is already where it should be, to fix a permission they never denied.
-  static const String declinedTitle = 'Camera is off for now';
+  static const String declinedTitle = 'Camera Is Off for Now';
   static const String declinedBody =
       'You haven’t let LocalJam use the camera yet. Try again to see the '
       'system’s ask, or join with a link instead.';
-  static const String unsupportedTitle = 'No scanner here';
+  static const String unsupportedTitle = 'No Scanner Here';
   static const String unsupportedBody =
-      'This device cannot scan QR codes. Join with a link instead.';
-  static const String failedTitle = 'The camera didn’t start';
+      'This device can’t scan codes. Join with a link instead.';
+  static const String failedTitle = 'The Camera Didn’t Start';
   static const String failedBody =
       'Something else may be using it. Try again, or join with a link.';
-  static const String retry = 'Try again';
+  static const String retry = 'Try Again';
 }
 
-/// The side of the clear square the camera aims through.
-const double kScanWindow = 260;
+/// The viewfinder's share of the screen's shorter side…
+const double kScanWindowFraction = 0.7;
 
-/// How much of the feed the scrim eats.
-const double _scrimOpacity = 0.6;
+/// …held to this on tablets and desktops.
+const double kScanWindowMax = 320;
 
-/// Bracket geometry: a 32 dp arm, 3 dp thick, on a 14 dp corner radius.
-const double _bracketArm = 32;
-const double _bracketWidth = 3;
-const double _bracketRadius = 14;
+/// The viewfinder's corner radius and outline (§6.10).
+const double kScanWindowRadius = 24;
+const double _outlineWidth = 2;
+
+/// How much the feed outside the viewfinder is dimmed.
+const double _dimOpacity = 0.5;
+
+/// The viewfinder side for a screen of [size].
+double scanWindowFor(Size size) =>
+    math.min(size.shortestSide * kScanWindowFraction, kScanWindowMax);
 
 class ScanScreen extends StatefulWidget {
   const ScanScreen({super.key});
@@ -103,7 +113,7 @@ class _ScanScreenState extends State<ScanScreen> {
   /// scanner is not built until then, which is the whole point: leaving
   /// `mobile_scanner` to ask meant its denial arrived as an `errorBuilder`
   /// widget *inside* the viewfinder stack, so the dead-end page rendered
-  /// under the scrim, behind the brackets, inside a 260 dp cut-out, with the
+  /// under the scrim, inside the viewfinder cut-out, with the
   /// scanner's own close button stacked on top of its own. The permission is
   /// this screen's state now, not the camera widget's error.
   bool _cameraAllowed = false;
@@ -205,7 +215,7 @@ class _ScanScreenState extends State<ScanScreen> {
         _flagWrongCode();
         continue;
       }
-      // The brackets go apricot for a beat before the route pops, so the
+      // The caption says "Joining…" for a beat before the route pops, so the
       // scan is something you *saw* happen rather than a screen that
       // vanished. One frame is not enough to read; 220 ms is.
       setState(() => _done = true);
@@ -289,328 +299,276 @@ class _ScanScreenState extends State<ScanScreen> {
   @override
   Widget build(BuildContext context) {
     final failure = _scanFailure;
-    // The dead-end page is an ordinary screen on the app's own canvas, so it
-    // keeps the app's own status-bar treatment; the viewfinder is a dark
-    // surface and needs light glyphs over it.
-    if (failure != null || !_checkedCamera || !_cameraAllowed) {
-      return Scaffold(
-        body: failure == null
-            ? const SizedBox.shrink()
-            : ScannerUnavailableView(
-                error: failure,
-                declined: _cameraDeclined,
-                onLink: _joinWithLink,
-                onRetry: () => unawaited(_retry()),
-              ),
+    if (failure != null) {
+      return AnnotatedRegion<SystemUiOverlayStyle>(
+        value: jamOverlayStyleOnDark,
+        child: ScannerUnavailableView(
+          error: failure,
+          declined: _cameraDeclined,
+          onLink: _joinWithLink,
+          onRetry: () => unawaited(_retry()),
+          onClose: _close,
+        ),
       );
     }
+    final scanning = _checkedCamera && _cameraAllowed;
 
     return AnnotatedRegion<SystemUiOverlayStyle>(
       value: jamOverlayStyleOnDark,
-      child: Scaffold(
-        backgroundColor: Colors.black,
-        // No app bar: the camera is the screen, and everything else floats.
-        body: Stack(
-          fit: StackFit.expand,
-          children: [
-            MobileScanner(
-              // A retry swaps the controller; the key makes the widget
-              // rebuild its own state around the new one instead of holding
-              // the disposed one.
-              key: ValueKey<MobileScannerController>(_controller),
-              controller: _controller,
-              onDetect: _onDetect,
-              // The barcode stream's error events, which the package
-              // otherwise rethrows into the zone frame after frame.
-              onDetectError: (error, _) => _fail(error),
-              errorBuilder: (context, error) {
-                _fail(error);
-                return const SizedBox.shrink();
-              },
-            ),
-            // The aiming mask: one scrim with a hole in it, so the feed
-            // stays bright exactly where the code goes.
-            IgnorePointer(
-              child: CustomPaint(
-                painter: const _ScrimPainter(window: kScanWindow),
-                size: Size.infinite,
+      child: _OnBlack(
+        child: Scaffold(
+          backgroundColor: const Color(0xFF000000),
+          // No app bar: the camera is the screen, and everything else floats.
+          body: Stack(
+            fit: StackFit.expand,
+            children: [
+              if (scanning) ...[
+                MobileScanner(
+                  // A retry swaps the controller; the key makes the widget
+                  // rebuild its own state around the new one instead of
+                  // holding the disposed one.
+                  key: ValueKey<MobileScannerController>(_controller),
+                  controller: _controller,
+                  onDetect: _onDetect,
+                  // The barcode stream's error events, which the package
+                  // otherwise rethrows into the zone frame after frame.
+                  onDetectError: (error, _) => _fail(error),
+                  errorBuilder: (context, error) {
+                    _fail(error);
+                    return const SizedBox.shrink();
+                  },
+                ),
+                IgnorePointer(
+                  child: Semantics(
+                    label: JamScanStrings.title,
+                    image: true,
+                    child: CustomPaint(
+                      painter: _ViewfinderPainter(),
+                      size: Size.infinite,
+                    ),
+                  ),
+                ),
+                _Caption(
+                  text: _done
+                      ? JamScanStrings.found
+                      : _wrongCode ?? JamScanStrings.hint,
+                ),
+              ],
+              _ScanChrome(
+                controller: scanning ? _controller : null,
+                onClose: _close,
+                onLink: () => unawaited(_joinWithLink()),
               ),
-            ),
-            Center(
-              child: _Brackets(size: kScanWindow, found: _done),
-            ),
-            _ScanChrome(
-              hint: _wrongCode ?? JamScanStrings.hint,
-              found: _done,
-              controller: _controller,
-              onClose: _close,
-              onLink: () => unawaited(_joinWithLink()),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
   }
 }
 
-/// The floating controls and copy over the feed. White on a dark scrim, so
-/// none of the palette's cream/plum text lands here — it would be unreadable
-/// over a camera.
-class _ScanChrome extends StatelessWidget {
-  const _ScanChrome({
-    required this.hint,
-    required this.found,
-    required this.controller,
-    required this.onClose,
-    required this.onLink,
-  });
+/// The dark palette for everything on the black camera page, whatever the
+/// app's appearance: light-mode greys on black would be unreadable.
+class _OnBlack extends StatelessWidget {
+  const _OnBlack({required this.child});
 
-  final String hint;
-  final bool found;
-  final MobileScannerController controller;
-  final VoidCallback onClose;
-  final VoidCallback onLink;
+  final Widget child;
+
+  static final Map<TargetPlatform, ThemeData> _themes = {};
 
   @override
   Widget build(BuildContext context) {
-    const white = Colors.white;
-    return SafeArea(
-      child: Padding(
-        padding: const EdgeInsets.all(JamSpace.page),
-        child: Column(
+    final platform = Theme.of(context).platform;
+    return Theme(
+      data: _themes.putIfAbsent(
+        platform,
+        () => jamDarkTheme(platform: platform),
+      ),
+      child: child,
+    );
+  }
+}
+
+/// The line under the viewfinder: what to do, or what just happened.
+class _Caption extends StatelessWidget {
+  const _Caption({required this.text});
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    final reduceMotion = MediaQuery.disableAnimationsOf(context);
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final size = constraints.biggest;
+        final top = size.height / 2 + scanWindowFor(size) / 2 + JamSpace.xxl;
+        return Stack(
           children: [
-            Row(
-              children: [
-                _GlassButton(
-                  icon: Icons.close_rounded,
-                  label: JamScanStrings.close,
-                  onPressed: onClose,
-                ),
-                const Spacer(),
-                ValueListenableBuilder<MobileScannerState>(
-                  valueListenable: controller,
-                  builder: (context, state, _) {
-                    if (state.torchState == TorchState.unavailable) {
-                      return const SizedBox.shrink();
-                    }
-                    final on = state.torchState == TorchState.on;
-                    return _GlassButton(
-                      icon: on
-                          ? Icons.flash_on_rounded
-                          : Icons.flash_off_rounded,
-                      label: on
-                          ? JamScanStrings.torchOff
-                          : JamScanStrings.torchOn,
-                      // The torch is a platform call like any other, and an
-                      // unhandled rejection here reached the global handler.
-                      onPressed: () => unawaited(
-                        controller.toggleTorch().catchError(
-                          (Object e) =>
-                              debugPrint('localjam: torch failed: $e'),
-                        ),
-                      ),
-                    );
-                  },
-                ),
-              ],
-            ),
-            const SizedBox(height: JamSpace.xxl),
-            Text(
-              JamScanStrings.title,
-              textAlign: TextAlign.center,
-              style: context.jamTitle2.copyWith(
-                color: white,
-                shadows: const [Shadow(blurRadius: 12, color: Colors.black54)],
-              ),
-            ),
-            const Spacer(),
-            // Below the cut-out: the hint, then the way through when the
-            // camera is not going to work out.
-            SizedBox(
-              height: 44,
-              child: Center(
+            Positioned(
+              top: top,
+              left: JamSpace.xxl,
+              right: JamSpace.xxl,
+              child: Semantics(
+                liveRegion: true,
                 child: AnimatedSwitcher(
-                  duration: JamDuration.fast,
+                  duration: reduceMotion ? Duration.zero : JamDuration.fast,
                   child: Text(
-                    found ? JamScanStrings.found : hint,
-                    key: ValueKey<String>(found ? JamScanStrings.found : hint),
+                    text,
+                    key: ValueKey<String>(text),
                     textAlign: TextAlign.center,
                     style: context.jamSubheadline.copyWith(
-                      color: white.withValues(alpha: 0.8),
-                      shadows: const [
-                        Shadow(blurRadius: 10, color: Colors.black54),
-                      ],
+                      color: JamNowPlayingColors.text,
                     ),
                   ),
                 ),
               ),
             ),
-            const SizedBox(height: JamSpace.sm),
-            // Tertiary, in white rather than the accent: raspberry on a live
-            // camera feed reads as an alert.
-            TextButton(
-              onPressed: onLink,
-              style: TextButton.styleFrom(
-                foregroundColor: white,
-                textStyle: context.jamHeadline,
-                minimumSize: const Size(0, 44),
-              ),
-              child: const Text(JamScanStrings.enterLink),
-            ),
           ],
-        ),
-      ),
+        );
+      },
     );
   }
 }
 
-/// A 44 dp circular control that stays legible over anything the camera sees.
-class _GlassButton extends StatelessWidget {
-  const _GlassButton({
-    required this.icon,
-    required this.label,
-    required this.onPressed,
+/// The floating controls over the feed: the glass xmark, the flashlight
+/// when there is one, and Enter Link at the bottom.
+class _ScanChrome extends StatelessWidget {
+  const _ScanChrome({
+    required this.controller,
+    required this.onClose,
+    required this.onLink,
+    this.showLink = true,
   });
 
-  final IconData icon;
-  final String label;
-  final VoidCallback onPressed;
+  /// Null until the camera is running (no flashlight to offer yet).
+  final MobileScannerController? controller;
+  final VoidCallback onClose;
+  final VoidCallback onLink;
+
+  /// Enter Link at the bottom (off where it is already the primary).
+  final bool showLink;
 
   @override
   Widget build(BuildContext context) {
-    return Semantics(
-      button: true,
-      label: label,
-      child: Material(
-        color: const Color(0x66000000),
-        shape: const CircleBorder(),
-        clipBehavior: Clip.antiAlias,
-        child: InkWell(
-          onTap: onPressed,
-          child: SizedBox(
-            width: 44,
-            height: 44,
-            child: Icon(icon, size: 22, color: Colors.white),
+    final controller = this.controller;
+    return SafeArea(
+      child: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.symmetric(
+              horizontal: JamSpace.sm,
+              vertical: JamSpace.xs,
+            ),
+            child: Row(
+              children: [
+                JamGlassButton(
+                  icon: CupertinoIcons.xmark,
+                  semanticLabel: JamScanStrings.close,
+                  onArtwork: true,
+                  onPressed: onClose,
+                ),
+                const Spacer(),
+                if (controller != null)
+                  ValueListenableBuilder<MobileScannerState>(
+                    valueListenable: controller,
+                    builder: (context, state, _) {
+                      if (state.torchState == TorchState.unavailable) {
+                        return const SizedBox.shrink();
+                      }
+                      final on = state.torchState == TorchState.on;
+                      return JamGlassButton(
+                        icon: on
+                            ? CupertinoIcons.bolt_fill
+                            : CupertinoIcons.bolt_slash_fill,
+                        semanticLabel: on
+                            ? JamScanStrings.torchOff
+                            : JamScanStrings.torchOn,
+                        onArtwork: true,
+                        selected: on,
+                        // The torch is a platform call like any other, and an
+                        // unhandled rejection here reached the global handler.
+                        onPressed: () => unawaited(
+                          controller.toggleTorch().catchError(
+                            (Object e) =>
+                                debugPrint('localjam: torch failed: $e'),
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+              ],
+            ),
           ),
-        ),
+          const Spacer(),
+          if (showLink)
+            Padding(
+              padding: const EdgeInsets.only(bottom: JamSpace.lg),
+              child: JamButton.plain(
+                label: JamScanStrings.enterLink,
+                color: JamNowPlayingColors.text,
+                onPressed: onLink,
+              ),
+            ),
+        ],
       ),
     );
   }
 }
 
-/// The scrim with the cut-out. One paint, even-odd filled, rather than four
-/// rectangles that never quite meet at the corners.
-class _ScrimPainter extends CustomPainter {
-  const _ScrimPainter({required this.window});
-
-  final double window;
+/// The dim outside the viewfinder and its rounded white outline, in one
+/// paint: the dim is even-odd filled around the hole, so the feed stays
+/// bright exactly where the code goes.
+class _ViewfinderPainter extends CustomPainter {
+  const _ViewfinderPainter();
 
   @override
   void paint(Canvas canvas, Size size) {
-    final side = window.clamp(0.0, size.shortestSide);
-    final hole = RRect.fromRectAndRadius(
+    final side = scanWindowFor(size);
+    final window = RRect.fromRectAndRadius(
       Rect.fromCenter(
         center: size.center(Offset.zero),
         width: side,
         height: side,
       ),
-      const Radius.circular(_bracketRadius),
+      const Radius.circular(kScanWindowRadius),
     );
-    final path = Path.combine(
-      PathOperation.difference,
-      Path()..addRect(Offset.zero & size),
-      Path()..addRRect(hole),
-    );
-    canvas.drawPath(
-      path,
-      Paint()..color = Colors.black.withValues(alpha: _scrimOpacity),
-    );
-  }
-
-  @override
-  bool shouldRepaint(_ScrimPainter old) => old.window != window;
-}
-
-/// Four L-brackets around the cut-out. Raspberry while hunting; they snap to
-/// apricot and thicken the instant a jam code lands.
-class _Brackets extends StatelessWidget {
-  const _Brackets({required this.size, required this.found});
-
-  final double size;
-  final bool found;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.jamColors;
-    return Semantics(
-      label: JamScanStrings.title,
-      excludeSemantics: true,
-      child: TweenAnimationBuilder<double>(
-        tween: Tween<double>(end: found ? 1 : 0),
-        duration: JamDuration.fast,
-        curve: JamCurve.standard,
-        builder: (context, t, _) => CustomPaint(
-          size: Size.square(size),
-          painter: _BracketPainter(
-            color: Color.lerp(colors.tint, colors.warning, t)!,
-            width: _bracketWidth + t * 1.5,
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _BracketPainter extends CustomPainter {
-  const _BracketPainter({required this.color, required this.width});
-
-  final Color color;
-  final double width;
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = color
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = width
-      ..strokeCap = StrokeCap.round;
-    final w = size.width;
-    final h = size.height;
-    const r = _bracketRadius;
-    const arm = _bracketArm;
-
-    Path corner(double x, double y, double sx, double sy) => Path()
-      ..moveTo(x + sx * arm, y)
-      ..lineTo(x + sx * r, y)
-      ..quadraticBezierTo(x, y, x, y + sy * r)
-      ..lineTo(x, y + sy * arm);
-
     canvas
-      ..drawPath(corner(0, 0, 1, 1), paint)
-      ..drawPath(corner(w, 0, -1, 1), paint)
-      ..drawPath(corner(0, h, 1, -1), paint)
-      ..drawPath(corner(w, h, -1, -1), paint);
+      ..drawPath(
+        Path.combine(
+          PathOperation.difference,
+          Path()..addRect(Offset.zero & size),
+          Path()..addRRect(window),
+        ),
+        Paint()..color = const Color(0xFF000000).withValues(alpha: _dimOpacity),
+      )
+      ..drawRRect(
+        window,
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = _outlineWidth
+          ..color = const Color(0xFFFFFFFF),
+      );
   }
 
   @override
-  bool shouldRepaint(_BracketPainter old) =>
-      old.color != color || old.width != width;
+  bool shouldRepaint(_ViewfinderPainter old) => false;
 }
 
 /// What to do when there is no camera to scan with. A denial and a device
 /// without a camera need different sentences and only one of them can be
 /// fixed in Settings.
 ///
-/// On the app's own canvas, not black: once the camera is out of the picture
-/// this is an ordinary screen, and a black one would read as a crash. It is
-/// mounted *instead of* the viewfinder stack, never inside it — there is no
-/// scrim over it, no brackets across it and exactly one close button.
+/// The same black page as the viewfinder (§6.10), with the same xmark and
+/// the same Enter Link at the bottom, so a dead end reads as the scanner
+/// saying why, not as a different screen. It is mounted *instead of* the
+/// viewfinder stack, never inside it.
 class ScannerUnavailableView extends StatelessWidget {
   const ScannerUnavailableView({
     super.key,
     required this.error,
     required this.onLink,
     this.onRetry,
+    this.onClose,
     this.declined = false,
   });
 
@@ -632,9 +590,11 @@ class ScannerUnavailableView extends StatelessWidget {
   /// device with no scanner never will and a denial needs Settings first.
   final VoidCallback? onRetry;
 
+  /// The xmark. Defaults to popping the route (or going home).
+  final VoidCallback? onClose;
+
   @override
   Widget build(BuildContext context) {
-    final colors = context.jamColors;
     final denied =
         !declined && error.errorCode == MobileScannerErrorCode.permissionDenied;
     final unsupported = error.errorCode == MobileScannerErrorCode.unsupported;
@@ -646,57 +606,47 @@ class ScannerUnavailableView extends StatelessWidget {
         ? (JamScanStrings.unsupportedTitle, JamScanStrings.unsupportedBody)
         : (JamScanStrings.failedTitle, JamScanStrings.failedBody);
     final canRetry = onRetry != null && !denied && !unsupported;
+    // Where nothing else can help, the link *is* the primary and the bottom
+    // button would repeat it.
+    final linkAtBottom = denied || canRetry;
 
-    return ColoredBox(
-      color: colors.background,
-      child: SafeArea(
-        child: Column(
+    return _OnBlack(
+      child: ColoredBox(
+        color: const Color(0xFF000000),
+        child: Stack(
+          fit: StackFit.expand,
           children: [
-            Align(
-              alignment: Alignment.centerLeft,
-              child: Padding(
-                padding: const EdgeInsets.all(JamSpace.sm),
-                child: IconButton(
-                  tooltip: JamScanStrings.close,
-                  icon: const Icon(Icons.close_rounded),
-                  onPressed: () =>
-                      context.canPop() ? context.pop() : context.go('/'),
-                ),
-              ),
+            JamEmptyState(
+              icon: denied || declined
+                  ? CupertinoIcons.camera
+                  : CupertinoIcons.qrcode_viewfinder,
+              title: title,
+              body: body,
+              foregroundColor: JamNowPlayingColors.text,
+              secondaryColor: JamNowPlayingColors.secondary,
+              actionVariant: JamButtonVariant.tinted,
+              // One primary action per screen: Settings where Settings can
+              // fix it, another go at the camera where that is the thing
+              // most likely to work, the link where nothing else can.
+              actionLabel: denied
+                  ? JamScanStrings.openSettings
+                  : canRetry
+                  ? JamScanStrings.retry
+                  : JamScanStrings.enterLink,
+              onAction: denied
+                  ? () => unawaited(openAppSettings())
+                  : canRetry
+                  ? onRetry
+                  : () => unawaited(onLink()),
             ),
-            Expanded(
-              child: JamEmptyState(
-                icon: denied || declined
-                    ? Icons.no_photography_rounded
-                    : Icons.qr_code_scanner_rounded,
-                title: title,
-                body: body,
-                // One primary action per screen: Settings where Settings can
-                // fix it, another go at the camera where that is the thing
-                // most likely to work, the link field where nothing else can.
-                actionLabel: denied
-                    ? JamPermissionCopy.openSettings
-                    : canRetry
-                    ? JamScanStrings.retry
-                    : JamScanStrings.enterLink,
-                onAction: denied
-                    ? () => unawaited(openAppSettings())
-                    : canRetry
-                    ? onRetry
-                    : () => unawaited(onLink()),
-              ),
+            _ScanChrome(
+              controller: null,
+              onClose:
+                  onClose ??
+                  () => context.canPop() ? context.pop() : context.go('/'),
+              onLink: () => unawaited(onLink()),
+              showLink: linkAtBottom,
             ),
-            // Every dead end still needs the way through; it just is not the
-            // loudest thing on it. (Where nothing else can help, "Enter link
-            // instead" *is* the primary and this would repeat it.)
-            if (denied || canRetry)
-              Padding(
-                padding: const EdgeInsets.only(bottom: JamSpace.xxl),
-                child: JamButton.plain(
-                  label: JamScanStrings.enterLink,
-                  onPressed: () => unawaited(onLink()),
-                ),
-              ),
           ],
         ),
       ),
