@@ -1,24 +1,28 @@
-/// Why LocalJam is about to ask the OS for something.
+/// Why LocalJam is about to ask the OS for something (DESIGN_SPEC v3 §6.6).
 ///
 /// Shown *before* the system prompt and never after a denial — once the OS has
 /// said no for good, the only honest thing left is a route into Settings, and
-/// that is a notice's job, not this sheet's.
+/// that is a notice's job, not this sheet's. Contextual only, never chained
+/// after onboarding.
 ///
-/// The wording lives in [JamPermissionCopy] (`util/permissions.dart`), which
-/// is where the functional pass put it so the redesign could lift it without
-/// hunting through call sites. This file adds only the two bullets — what we
-/// do with the permission, and what we never do — because the promise is part
-/// of the ask.
+/// The look is Apple's privacy primer: a 48 tint glyph, a title2 title, the
+/// body, two short rows — what LocalJam does with the permission and what it
+/// never does — then **Continue** (filled) and **Not Now** (plain).
+///
+/// The body copy lives in [JamPermissionCopy] (`util/permissions.dart`); the
+/// titles, the two promises and the buttons live here.
 library;
 
-import 'package:flutter/material.dart';
+import 'package:flutter/cupertino.dart';
+import 'package:flutter/material.dart' show showModalBottomSheet;
 
 import '../design/tokens.dart';
 import '../design/typography.dart';
 import '../util/permissions.dart';
+import 'buttons.dart';
 import 'sheet.dart';
 
-/// One permission's case, assembled from [JamPermissionCopy].
+/// One permission's case.
 ///
 /// A value rather than a widget so a screen can decide *whether* to ask
 /// without building anything, and so the copy stays testable.
@@ -34,39 +38,38 @@ class JamPermissionRationale {
     this.dismissLabel = JamPermissionSheetStrings.dismissLabel,
   });
 
-  /// The 64 dp glyph in the accent-soft square.
+  /// The 48 tint glyph.
   final IconData icon;
 
-  /// `jamSheetTitle`.
+  /// Title Case, title2.
   final String title;
 
-  /// `jamBody`.
+  /// The body sentence(s).
   final String body;
 
-  /// "What we do with it."
+  /// "What LocalJam does."
   final String doesBullet;
 
-  /// "What we never do." The half people actually want to read.
+  /// "What LocalJam never does." The half people actually want to read.
   final String neverBullet;
 
   final String continueLabel;
+
+  /// Empty when there is nothing to decline (one button).
   final String dismissLabel;
 
-  /// The two local-network bullets, shared by the Android rationale and the
-  /// Apple one: it is the same permission and the same promise, and two
-  /// copies of a sentence about privacy are two chances for them to drift
-  /// apart.
+  /// The two local-network promises, shared by the Android rationale and the
+  /// Apple one: the same permission and the same promise.
   static const String _localNetworkDoes =
-      'Talk to the other phones on this Wi-Fi or hotspot, so everyone '
+      'Talk to the other phones on this Wi‑Fi or hotspot, so everyone '
       'hears the same second of the same song.';
   static const String _localNetworkNever =
-      'Reach the internet. A jam never leaves the network you are '
-      'standing on.';
+      'Reach the internet. A jam never leaves the network you’re on.';
 
   /// Android 17's `ACCESS_LOCAL_NETWORK`, asked before hosting or joining.
   static const JamPermissionRationale localNetwork = JamPermissionRationale(
-    icon: Icons.wifi_rounded,
-    title: JamPermissionCopy.localNetworkTitle,
+    icon: CupertinoIcons.wifi,
+    title: JamPermissionSheetStrings.localNetworkTitle,
     body: JamPermissionCopy.localNetworkDetail,
     doesBullet: _localNetworkDoes,
     neverBullet: _localNetworkNever,
@@ -75,12 +78,12 @@ class JamPermissionRationale {
   /// The same thing on iOS and macOS, where the system does the asking.
   ///
   /// One button, because there is nothing to decline: the OS alert is coming
-  /// either way the moment the first socket opens, and a "Not now" that
+  /// either way the moment the first socket opens, and a "Not Now" that
   /// cannot stop it would be a lie.
   static const JamPermissionRationale localNetworkApple =
       JamPermissionRationale(
-        icon: Icons.wifi_rounded,
-        title: JamPermissionCopy.localNetworkTitle,
+        icon: CupertinoIcons.wifi,
+        title: JamPermissionSheetStrings.localNetworkTitle,
         body: JamPermissionCopy.localNetworkAppleDetail,
         doesBullet: _localNetworkDoes,
         neverBullet: _localNetworkNever,
@@ -90,32 +93,32 @@ class JamPermissionRationale {
 
   /// Android 13+'s `POST_NOTIFICATIONS`, asked before the media card.
   static const JamPermissionRationale notifications = JamPermissionRationale(
-    icon: Icons.play_circle_outline_rounded,
-    title: JamPermissionCopy.notificationsTitle,
+    icon: CupertinoIcons.play_rectangle,
+    title: JamPermissionSheetStrings.notificationsTitle,
     body: JamPermissionCopy.notificationsDetail,
     doesBullet:
-        'Put a playback card on your lock screen so you can pause and skip '
+        'Put a playback card on your Lock Screen so you can pause and skip '
         'without unlocking.',
-    neverBullet: 'Send you anything else. No promotions, no reminders, ever.',
+    neverBullet: 'Send you anything else. No promotions, no reminders.',
   );
 
   /// Android's `READ_MEDIA_AUDIO`, asked before the first library browse.
   static const JamPermissionRationale audioLibrary = JamPermissionRationale(
-    icon: Icons.library_music_rounded,
-    title: JamPermissionCopy.audioLibraryTitle,
+    icon: CupertinoIcons.music_albums,
+    title: JamPermissionSheetStrings.audioLibraryTitle,
     body: JamPermissionCopy.audioLibraryDetail,
     doesBullet: 'List the songs already on this phone so you can queue them.',
     neverBullet:
-        'Upload your library, or look at it while you are not picking a '
-        'track.',
+        'Upload your library, or look at it while you’re not picking a '
+        'song.',
   );
 
   /// The camera, asked before the first QR scan.
   static const JamPermissionRationale camera = JamPermissionRationale(
-    icon: Icons.qr_code_scanner_rounded,
+    icon: CupertinoIcons.qrcode_viewfinder,
     title: JamPermissionSheetStrings.cameraTitle,
     body: JamPermissionSheetStrings.cameraDetail,
-    doesBullet: "Read a room's QR code, which is how you join without typing.",
+    doesBullet: 'Read a jam’s code, which is how you join without typing.',
     neverBullet: 'Record, keep or send anything the camera sees.',
   );
 
@@ -131,20 +134,24 @@ class JamPermissionRationale {
       };
 }
 
-/// Strings this sheet owns, because they have no home in `permissions.dart`.
+/// Strings this sheet owns.
 abstract final class JamPermissionSheetStrings {
   static const String continueLabel = 'Continue';
-  static const String dismissLabel = 'Not now';
+  static const String dismissLabel = 'Not Now';
 
   /// The single-button variant, for a sheet that only announces something.
-  static const String gotItLabel = 'Got it';
-  static const String doesHeading = 'What we do';
-  static const String neverHeading = 'What we never do';
+  static const String gotItLabel = 'Continue';
 
-  static const String cameraTitle = 'Point the camera at a code';
+  static const String doesHeading = 'What LocalJam Does';
+  static const String neverHeading = 'What LocalJam Never Does';
+
+  static const String localNetworkTitle = 'Let LocalJam Use This Network';
+  static const String notificationsTitle = 'Show the Playback Card';
+  static const String audioLibraryTitle = 'Reach Your Music';
+  static const String cameraTitle = 'Scan to Join';
   static const String cameraDetail =
-      'Joining a jam means reading the room’s QR code. The camera opens '
-      'only while the scanner is on screen.';
+      'Joining a jam means reading its code. The camera is on only while the '
+      'scanner is on screen.';
 }
 
 /// Shows the rationale and resolves to whether the user wants to go on.
@@ -159,7 +166,9 @@ Future<bool> showJamPermissionSheet(
     await showModalBottomSheet<bool>(
       context: context,
       isScrollControlled: true,
-      backgroundColor: Colors.transparent,
+      useSafeArea: true,
+      barrierColor: context.jamColors.scrim,
+      backgroundColor: const Color(0x00000000),
       elevation: 0,
       showDragHandle: false,
       constraints: const BoxConstraints(maxWidth: 640),
@@ -167,7 +176,7 @@ Future<bool> showJamPermissionSheet(
     ) ??
     false;
 
-/// The rationale sheet's body. Pops true for Continue, false for Not now.
+/// The rationale sheet's body. Pops true for Continue, false for Not Now.
 class JamPermissionSheet extends StatelessWidget {
   const JamPermissionSheet({super.key, required this.rationale});
 
@@ -176,91 +185,72 @@ class JamPermissionSheet extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = context.jamColors;
-    const radius = BorderRadius.vertical(top: Radius.circular(JamRadius.xl));
-
-    return DecoratedBox(
-      decoration: BoxDecoration(color: colors.elevated, borderRadius: radius),
-      child: Material(
-        color: Colors.transparent,
-        clipBehavior: Clip.antiAlias,
-        shape: const RoundedRectangleBorder(borderRadius: radius),
-        child: SafeArea(
-          top: false,
-          child: JamSheetScaffold(
-            header: const SizedBox.shrink(),
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.fromLTRB(
-                JamSpace.xl,
-                JamSpace.xxl,
-                JamSpace.xl,
-                JamSpace.xl,
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Container(
-                    width: 64,
-                    height: 64,
-                    decoration: BoxDecoration(
-                      color: colors.tintFill,
-                      borderRadius: BorderRadius.circular(JamRadius.lg),
-                    ),
-                    child: Icon(
-                      rationale.icon,
-                      size: 32,
-                      color: colors.tint,
-                      semanticLabel: '',
-                    ),
+    return JamSheetSurface(
+      child: SafeArea(
+        top: false,
+        child: JamSheetScaffold(
+          header: const SizedBox(height: JamSpace.sm),
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.fromLTRB(
+              JamSpace.xxxl,
+              JamSpace.xxl,
+              JamSpace.xxxl,
+              JamSpace.lg,
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                ExcludeSemantics(
+                  child: Icon(rationale.icon, size: 48, color: colors.tint),
+                ),
+                const SizedBox(height: JamSpace.lg),
+                Semantics(
+                  header: true,
+                  child: Text(
+                    rationale.title,
+                    textAlign: TextAlign.center,
+                    style: context.jamTitle2,
                   ),
-                  const SizedBox(height: JamSpace.xl),
-                  Semantics(
-                    header: true,
-                    child: Text(rationale.title, style: context.jamTitle2),
+                ),
+                const SizedBox(height: JamSpace.sm),
+                Text(
+                  rationale.body,
+                  textAlign: TextAlign.center,
+                  style: context.jamSubheadline.copyWith(
+                    color: colors.secondaryLabel,
                   ),
-                  const SizedBox(height: JamSpace.md),
-                  Text(
-                    rationale.body,
-                    style: context.jamBody.copyWith(
-                      color: colors.secondaryLabel,
-                    ),
+                ),
+                const SizedBox(height: JamSpace.xxl),
+                _Promise(
+                  icon: CupertinoIcons.checkmark_circle,
+                  heading: JamPermissionSheetStrings.doesHeading,
+                  detail: rationale.doesBullet,
+                ),
+                const SizedBox(height: JamSpace.lg),
+                _Promise(
+                  icon: CupertinoIcons.hand_raised,
+                  heading: JamPermissionSheetStrings.neverHeading,
+                  detail: rationale.neverBullet,
+                ),
+                const SizedBox(height: JamSpace.xxxl),
+                JamButton.filled(
+                  label: rationale.continueLabel,
+                  expand: true,
+                  onPressed: () => Navigator.of(context).pop(true),
+                ),
+                // An empty dismiss label means there is nothing to decline
+                // (the Apple local-network primer): one button, not a choice
+                // that does not exist.
+                if (rationale.dismissLabel.isNotEmpty) ...[
+                  const SizedBox(height: JamSpace.sm),
+                  JamButton.plain(
+                    label: rationale.dismissLabel,
+                    expand: true,
+                    onPressed: () => Navigator.of(context).pop(false),
                   ),
-                  const SizedBox(height: JamSpace.xl),
-                  _Bullet(
-                    icon: Icons.check_rounded,
-                    tint: colors.tint,
-                    heading: JamPermissionSheetStrings.doesHeading,
-                    detail: rationale.doesBullet,
-                  ),
-                  const SizedBox(height: JamSpace.md),
-                  _Bullet(
-                    icon: Icons.block_rounded,
-                    tint: colors.tertiaryLabel,
-                    heading: JamPermissionSheetStrings.neverHeading,
-                    detail: rationale.neverBullet,
-                  ),
-                  const SizedBox(height: JamSpace.xxl),
-                  SizedBox(
-                    width: double.infinity,
-                    child: FilledButton(
-                      onPressed: () => Navigator.of(context).pop(true),
-                      child: Text(rationale.continueLabel),
-                    ),
-                  ),
-                  // An empty dismiss label means there is nothing to decline
-                  // (the iOS local-network sheet): one button, not a choice
-                  // that does not exist.
-                  if (rationale.dismissLabel.isNotEmpty) ...[
-                    const SizedBox(height: JamSpace.sm),
-                    Center(
-                      child: TextButton(
-                        onPressed: () => Navigator.of(context).pop(false),
-                        child: Text(rationale.dismissLabel),
-                      ),
-                    ),
-                  ],
                 ],
-              ),
+              ],
             ),
           ),
         ),
@@ -269,16 +259,15 @@ class JamPermissionSheet extends StatelessWidget {
   }
 }
 
-class _Bullet extends StatelessWidget {
-  const _Bullet({
+/// One promise: a tint glyph, a headline, a sentence.
+class _Promise extends StatelessWidget {
+  const _Promise({
     required this.icon,
-    required this.tint,
     required this.heading,
     required this.detail,
   });
 
   final IconData icon;
-  final Color tint;
   final String heading;
   final String detail;
 
@@ -291,26 +280,18 @@ class _Bullet extends StatelessWidget {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Padding(
-            padding: const EdgeInsets.only(top: JamSpace.xxs),
-            child: Icon(icon, size: 20, color: tint),
-          ),
+          SizedBox(width: 30, child: Icon(icon, size: 24, color: colors.tint)),
           const SizedBox(width: JamSpace.md),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  heading.toUpperCase(),
-                  style: context.jamCaption2.copyWith(
-                    color: colors.tertiaryLabel,
-                  ),
-                ),
+                Text(heading, style: context.jamHeadline),
                 const SizedBox(height: JamSpace.xxs),
                 Text(
                   detail,
                   style: context.jamSubheadline.copyWith(
-                    color: context.jamColors.secondaryLabel,
+                    color: colors.secondaryLabel,
                   ),
                 ),
               ],

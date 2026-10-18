@@ -1,20 +1,23 @@
-/// The People / Room sheet: who is here, the way in, and the two label rules
-/// an iOS pass found broken — a role that read as a status, and a raw
-/// `localjam://` URI printed on a page about people (§6.8).
+/// The People and Invite sheets (§6.5): who is here and what they may do,
+/// and the code that lets more people in — without the machine text of a
+/// raw `localjam://` URI anywhere on a page about people.
 library;
 
 import 'dart:io';
 
-import 'package:flutter/material.dart';
+import 'package:flutter/cupertino.dart';
+import 'package:flutter/material.dart' show MaterialApp, Scaffold, ThemeData;
+import 'package:flutter/rendering.dart' show SemanticsAction;
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:localjam_app/src/design/theme.dart';
 import 'package:localjam_app/src/state/session_controller.dart';
 import 'package:localjam_app/src/util/format.dart';
 import 'package:localjam_app/src/util/network.dart';
-import 'package:localjam_app/src/widgets/chip.dart';
 import 'package:localjam_app/src/widgets/peer_row.dart';
-import 'package:localjam_app/src/widgets/buttons.dart';
 import 'package:localjam_app/src/widgets/room_sheet.dart';
+import 'package:localjam_app/src/widgets/sheet.dart';
+import 'package:localjam_app/src/widgets/switch.dart';
 import 'package:localjam_client/localjam_client.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
@@ -63,82 +66,96 @@ Future<void> _pump(
   await tester.pump();
 }
 
+RoomPanel _panel(
+  JamSessionController session, {
+  String self = 'Silky Puffin',
+}) => RoomPanel(
+  engine: session.engine!,
+  selfName: self,
+  network: JamNetworkStatus.offline,
+);
+
+/// Starts a host and joins one guest called [name]; returns the guest.
+Future<JamSessionController> _hostWithGuest(
+  WidgetTester tester,
+  JamSessionController host, {
+  String name = 'Ana',
+  JamPolicy policy = JamPolicy.jam,
+}) async {
+  final guest = testSession();
+  final cache = _tempCache();
+  await tester.runAsync(() async {
+    await host.startHost(
+      sessionName: 'Van Jam',
+      policy: policy,
+      discoverable: false,
+    );
+    expect(
+      await guest.join(host.joinUri!, clientName: name, mediaCacheDir: cache),
+      isTrue,
+    );
+    expect(await _waitFor(() => host.engine!.peers.isNotEmpty), isTrue);
+    expect(await _waitFor(() => guest.engine != null), isTrue);
+  });
+  await tester.pump();
+  return guest;
+}
+
+/// A pull-down item by its title (the toggle rows share some titles).
+Finder _menuItem(String title) => find.widgetWithText(CupertinoMenuItem, title);
+
 void main() {
-  testWidgets('a host sees the room, the way in, and the way out', (
+  testWidgets('a host sees the people, what guests can do, and the way out', (
     tester,
   ) async {
-    // A LAN of the test's choosing: whether the runner has Wi-Fi must not
-    // decide whether there is a code to show.
-    fakeLan([
-      FakeInterface('en0', ['192.168.77.10']),
-    ]);
     final host = testSession();
     await tester.runAsync(
       () => host.startHost(sessionName: 'Van Jam', discoverable: false),
     );
     await tester.pump();
+    await _pump(tester, host, _panel(host));
 
-    await _pump(
-      tester,
-      host,
-      RoomPanel(
-        engine: host.engine!,
-        selfName: 'Silky Puffin',
-        network: JamNetworkStatus.offline,
-      ),
-    );
-    await tester.pump();
-
-    expect(find.text(RoomSheetStrings.inTheRoom(1)), findsOneWidget);
+    expect(find.text(RoomSheetStrings.invitePeople), findsOneWidget);
+    expect(find.text(RoomSheetStrings.peopleCount(1)), findsOneWidget);
     expect(find.byType(JamPeerRow), findsOneWidget);
-    expect(find.text(JamPeerRowStrings.host), findsOneWidget);
+    // "Host" is plain secondary text on the row, not a pill.
+    expect(find.text('Host · You'), findsOneWidget);
 
-    // The invite, without the machine text (§6.8, §8 check 3).
-    expect(find.byType(QrImageView), findsOneWidget);
-    expect(find.text('Van Jam'), findsOneWidget);
-    expect(find.text(RoomSheetStrings.roomCode), findsOneWidget);
-    expect(find.text(RoomSheetStrings.shareLink), findsOneWidget);
+    // The code lives in the Invite sheet now, not on this page.
+    expect(find.byType(QrImageView), findsNothing);
     expect(find.textContaining('localjam://'), findsNothing);
 
-    // Three switches over the policy, summarised in a sentence — `jam` is
-    // what `startHost` defaults to (§5 "Host setup"). `JamSwitchRow`, not
-    // `SwitchListTile`: the stock tile fills its track with the accent and
-    // three of those out-shouted the sheet's own primary action.
-    expect(find.byType(JamSwitchRow), findsNWidgets(3));
+    // The preset and the three switches it stands for, summarised in a
+    // sentence — `jam` is what `startHost` defaults to.
+    expect(find.text(RoomSheetStrings.guestsCan), findsOneWidget);
+    expect(find.byType(JamSwitch), findsNWidgets(3));
     expect(
       find.text(RoomSheetStrings.presetFootnote(JamPolicy.jam)),
       findsOneWidget,
     );
+    // Invite-only room: said, with how it was decided.
+    expect(find.text(RoomSheetStrings.nearby), findsOneWidget);
+    expect(find.text(RoomSheetStrings.off), findsOneWidget);
 
-    // §6.1: Leave is a labelled row here, not a third item behind an ellipsis.
+    // The way out, a row a screen reader can press.
     expect(find.text(RoomSheetStrings.endJam), findsOneWidget);
-
-    // The code is a button of its own a screen reader can press — not part
-    // of the invite's paragraph, as the 2026-10-17 run found it.
+    expect(find.text(RoomSheetStrings.leaveJam), findsNothing);
     final semantics = tester.ensureSemantics();
     await tester.pump();
-    final codeRow = tester.getSemantics(find.text(RoomSheetStrings.roomCode));
-    expect(
-      codeRow,
-      matchesSemantics(
-        label: codeRow.label,
-        isButton: true,
-        hasTapAction: true,
-      ),
-    );
-    expect(codeRow.label, startsWith(RoomSheetStrings.roomCode));
-    expect(codeRow.label, isNot(contains(RoomSheetStrings.invite)));
-    // And the way out can be pressed too: its tap used to go with its
-    // excluded semantics.
-    expect(
-      tester.getSemantics(find.text(RoomSheetStrings.endJam)),
-      matchesSemantics(
-        label: RoomSheetStrings.endJam,
-        isButton: true,
-        hasTapAction: true,
-      ),
-    );
+    final end = tester
+        .getSemantics(find.text(RoomSheetStrings.endJam))
+        .getSemanticsData();
+    expect(end.label, RoomSheetStrings.endJam);
+    expect(end.hasAction(SemanticsAction.tap), isTrue);
     semantics.dispose();
+
+    // End Jam asks first; Cancel keeps the room.
+    await tester.tap(find.text(RoomSheetStrings.endJam));
+    await tester.pumpAndSettle();
+    expect(find.text(RoomSheetStrings.endTitle), findsOneWidget);
+    await tester.tap(find.text(RoomSheetStrings.cancel));
+    await tester.pumpAndSettle();
+    expect(host.isLive, isTrue);
 
     await tester.runAsync(host.leave);
   });
@@ -149,194 +166,134 @@ void main() {
       () => host.startHost(sessionName: 'Van Jam', discoverable: false),
     );
     await tester.pump();
+    await _pump(tester, host, _panel(host));
 
-    await _pump(
-      tester,
-      host,
-      RoomPanel(
-        engine: host.engine!,
-        selfName: 'Silky Puffin',
-        network: JamNetworkStatus.offline,
-      ),
-    );
+    expect(find.text(RoomSheetStrings.presetAddMusic), findsWidgets);
+    // The first switch is Add Music.
+    await tester.tap(find.byType(JamSwitch).first);
     await tester.pump();
 
-    // `startHost` opens on JamPolicy.open; dropping one right leaves a
-    // combination no preset names.
-    await tester.tap(find.text(RoomSheetStrings.addMusic));
-    await tester.pump();
-
-    expect(host.engine!.permissions.policy.addTracks, isFalse);
-    // "Preset: Custom" was the enum showing through. The summary says what
-    // the room actually allows, whether or not a preset happens to name it.
-    expect(
-      find.text(
-        RoomSheetStrings.presetFootnote(host.engine!.permissions.policy),
-      ),
-      findsOneWidget,
-    );
+    final policy = host.engine!.permissions.policy;
+    expect(policy.addTracks, isFalse);
+    expect(find.text(RoomSheetStrings.presetCustom), findsOneWidget);
+    expect(find.text(RoomSheetStrings.presetFootnote(policy)), findsOneWidget);
     expect(find.textContaining('Preset:'), findsNothing);
 
     await tester.runAsync(host.leave);
   });
 
-  testWidgets('a guest gets a read-only room and never a bogus role', (
+  testWidgets('the Guests Can pull-down applies a preset', (tester) async {
+    final host = testSession();
+    await tester.runAsync(
+      () => host.startHost(sessionName: 'Van Jam', discoverable: false),
+    );
+    await tester.pump();
+    await _pump(tester, host, _panel(host));
+
+    await tester.tap(find.text(RoomSheetStrings.guestsCan));
+    await tester.pumpAndSettle();
+    expect(find.text(RoomSheetStrings.presetEverythingDetail), findsOneWidget);
+    await tester.tap(find.text(RoomSheetStrings.presetEverything));
+    await tester.pumpAndSettle();
+
+    expect(host.engine!.permissions.policy, JamPolicy.open);
+    expect(
+      find.text(RoomSheetStrings.presetFootnote(JamPolicy.open)),
+      findsOneWidget,
+    );
+
+    await tester.runAsync(host.leave);
+  });
+
+  testWidgets('a guest gets a read-only page and never a bogus role', (
     tester,
   ) async {
     final host = testSession();
-    final guest = testSession();
-    final cache = _tempCache();
-
-    await tester.runAsync(() async {
-      await host.startHost(
-        sessionName: 'Open Room',
-        policy: JamPolicy.open,
-        discoverable: false,
-      );
-      expect(
-        await guest.join(
-          host.joinUri!,
-          clientName: 'Ana',
-          mediaCacheDir: cache,
-        ),
-        isTrue,
-      );
-      expect(await _waitFor(() => guest.engine != null), isTrue);
-    });
-    await tester.pump();
-
-    await _pump(
-      tester,
-      guest,
-      RoomPanel(
-        engine: guest.engine!,
-        selfName: 'Ana',
-        network: JamNetworkStatus.offline,
-      ),
-    );
-    await tester.pump();
+    final guest = await _hostWithGuest(tester, host, policy: JamPolicy.open);
+    await _pump(tester, guest, _panel(guest, self: 'Ana'));
 
     // You, then the host.
-    expect(find.text(RoomSheetStrings.inTheRoom(2)), findsOneWidget);
+    expect(find.text(RoomSheetStrings.peopleCount(2)), findsOneWidget);
     expect(find.byType(JamPeerRow), findsNWidgets(2));
+    expect(find.text(JamPeerRowStrings.you), findsOneWidget);
     expect(find.text(JamPeerRowStrings.host), findsOneWidget);
+    // Readiness is the host's to observe.
+    expect(find.text(JamPeerRowStrings.loading), findsNothing);
 
-    // The iOS report: a guest with every right read "Listening" as if that
-    // were their standing in the room. Readiness is the host's to observe.
-    expect(find.text(JamPeerRowStrings.listening), findsNothing);
-
-    // No invite, no switches — a summary of what the room allows instead.
-    expect(find.byType(QrImageView), findsNothing);
-    expect(find.byType(JamSwitchRow), findsNothing);
+    // No switches, no nearby setting — a summary of what the room allows.
+    expect(find.byType(JamSwitch), findsNothing);
+    expect(find.text(RoomSheetStrings.nearby), findsNothing);
+    expect(
+      find.text(RoomSheetStrings.presetName(JamPolicy.open)),
+      findsOneWidget,
+    );
     expect(
       find.text(RoomSheetStrings.guestSummary(JamPolicy.open)),
       findsOneWidget,
     );
     expect(find.text(RoomSheetStrings.leaveJam), findsOneWidget);
     expect(find.text(RoomSheetStrings.endJam), findsNothing);
+    // Guests can invite too, with the link they joined by.
+    expect(find.text(RoomSheetStrings.invitePeople), findsOneWidget);
 
     await tester.runAsync(guest.leave);
     await tester.runAsync(host.leave);
   });
 
-  testWidgets('a blocked guest gets a badge and a capability chip', (
+  testWidgets('a co-host with a blocked capability reads as plain words', (
     tester,
   ) async {
     final host = testSession();
-    final guest = testSession();
-    final cache = _tempCache();
-
-    await tester.runAsync(() async {
-      await host.startHost(sessionName: 'Van Jam', discoverable: false);
-      expect(
-        await guest.join(
-          host.joinUri!,
-          clientName: 'Ana',
-          mediaCacheDir: cache,
-        ),
-        isTrue,
-      );
-      expect(await _waitFor(() => host.engine!.peers.isNotEmpty), isTrue);
-      final peerId = host.engine!.peers.first.peerId;
-      host.hostEngine!
-        ..promotePeer(peerId)
-        ..setCapabilityOverride(
-          peerId,
-          JamCapability.addTracks,
-          allowed: false,
-        );
-    });
+    final guest = await _hostWithGuest(tester, host);
+    final peerId = host.engine!.peers.first.peerId;
+    host.hostEngine!
+      ..promotePeer(peerId)
+      ..setCapabilityOverride(peerId, JamCapability.addTracks, allowed: false);
     await tester.pump();
 
-    await _pump(
-      tester,
-      host,
-      RoomPanel(
-        engine: host.engine!,
-        selfName: 'Silky Puffin',
-        network: JamNetworkStatus.offline,
-      ),
-    );
-    await tester.pump();
+    await _pump(tester, host, _panel(host));
+    expect(find.text('Co-host · Can’t add music'), findsOneWidget);
 
-    // The old row crammed both into one line: "Co-host · Cannot add".
+    await tester.runAsync(guest.leave);
+    await tester.runAsync(host.leave);
+  });
+
+  testWidgets('the per-guest menu flips one capability, and flips it back to '
+      'the room default rather than pinning it', (tester) async {
+    final host = testSession();
+    final guest = await _hostWithGuest(tester, host);
+    final peerId = host.engine!.peers.first.peerId;
+    await _pump(tester, host, _panel(host));
+
+    // `jam`: guests cannot control playback; the menu grants it to Ana.
+    await tester.tap(find.byIcon(CupertinoIcons.ellipsis_circle));
+    await tester.pumpAndSettle();
+    expect(find.text(RoomSheetStrings.makeCohost), findsOneWidget);
+    await tester.tap(_menuItem(RoomSheetStrings.controlPlayback));
+    await tester.pumpAndSettle();
+    var permissions = host.engine!.permissions;
+    expect(permissions.overrides[peerId]?[JamCapability.controlPlayback], true);
+    expect(find.text('Can control playback'), findsOneWidget);
+
+    // And back: the override goes, so a later policy change still reaches
+    // her.
+    await tester.tap(find.byIcon(CupertinoIcons.ellipsis_circle));
+    await tester.pumpAndSettle();
+    await tester.tap(_menuItem(RoomSheetStrings.controlPlayback));
+    await tester.pumpAndSettle();
+    permissions = host.engine!.permissions;
+    expect(permissions.overrides[peerId]?[JamCapability.controlPlayback], null);
+    expect(find.text('Can control playback'), findsNothing);
+
+    // Make Co-host.
+    await tester.tap(find.byIcon(CupertinoIcons.ellipsis_circle));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text(RoomSheetStrings.makeCohost));
+    await tester.pumpAndSettle();
+    expect(host.engine!.permissions.roleOf(peerId), JamRole.cohost);
     expect(find.text(JamPeerRowStrings.cohost), findsOneWidget);
-    expect(find.widgetWithText(JamChip, RoomSheetStrings.cannotAdd), findsOne);
-    expect(find.text('Co-host · Cannot add'), findsNothing);
 
     await tester.runAsync(guest.leave);
-    await tester.runAsync(host.leave);
-  });
-
-  testWidgets('no network, no code — and the code turns up by itself', (
-    tester,
-  ) async {
-    // Airplane mode, or a phone about to start its hotspot: there is no
-    // address a guest could reach, so a QR would be a lie.
-    fakeLan(const []);
-    final host = testSession();
-    await tester.runAsync(
-      () => host.startHost(sessionName: 'Van Jam', discoverable: false),
-    );
-    final engine = host.hostEngine!;
-    expect(engine.hasLanAddress, isFalse);
-
-    await _pump(
-      tester,
-      host,
-      RoomPanel(
-        engine: engine,
-        selfName: 'Silky Puffin',
-        network: JamNetworkStatus.offline,
-      ),
-    );
-    expect(find.byType(QrImageView), findsNothing);
-    expect(find.text(RoomSheetStrings.noNetworkTitle), findsOneWidget);
-    expect(find.text(RoomSheetStrings.shareLink), findsNothing);
-
-    // Wi-Fi comes up. Nobody reopens anything: the engine re-scans and the
-    // code appears.
-    fakeLan([
-      FakeInterface('en0', ['192.168.77.10']),
-    ]);
-    await tester.runAsync(engine.refreshLanAddresses);
-    await tester.pump();
-    expect(engine.hasLanAddress, isTrue);
-    expect(find.text(RoomSheetStrings.noNetworkTitle), findsNothing);
-    expect(find.byKey(ValueKey('${engine.joinUri}')), findsOneWidget);
-    expect('${engine.joinUri}', contains('192.168.77.10'));
-
-    // The phone moves to another network: the code follows the link, not
-    // the network it was first drawn for.
-    fakeLan([
-      FakeInterface('en0', ['192.168.88.20']),
-    ]);
-    await tester.runAsync(engine.refreshLanAddresses);
-    await tester.pump();
-    expect('${engine.joinUri}', contains('192.168.88.20'));
-    expect(find.byKey(ValueKey('${engine.joinUri}')), findsOneWidget);
-    expect(find.byType(QrImageView), findsOneWidget);
-
     await tester.runAsync(host.leave);
   });
 
@@ -344,64 +301,36 @@ void main() {
     tester,
   ) async {
     final host = testSession();
-    final guest = testSession();
-    final cache = _tempCache();
-    late String peerId;
+    final guest = await _hostWithGuest(tester, host, name: '');
+    final peerId = host.engine!.peers.single.peerId;
+    await _pump(tester, host, _panel(host));
 
-    await tester.runAsync(() async {
-      await host.startHost(sessionName: 'Van Jam', discoverable: false);
-      // A client that shared no display name at all.
-      expect(
-        await guest.join(host.joinUri!, clientName: '', mediaCacheDir: cache),
-        isTrue,
-      );
-      expect(await _waitFor(() => host.engine!.peers.isNotEmpty), isTrue);
-      peerId = host.engine!.peers.single.peerId;
-    });
-
-    await _pump(
-      tester,
-      host,
-      RoomPanel(
-        engine: host.engine!,
-        selfName: 'Silky Puffin',
-        network: JamNetworkStatus.offline,
-      ),
-    );
     // Never the wire id standing in for a name.
     expect(find.text(kJamUnnamedPeer), findsOneWidget);
     expect(find.textContaining(peerId), findsNothing);
     expect(find.text(RoomSheetStrings.removed), findsNothing);
 
-    // Removed: they are listed, by the same friendly name, with the one
-    // way back in (§5.6 — a kicked device stays out until then).
+    // Removed: listed by the same friendly name, with the one way back in
+    // (§5.6 — a removed device stays out until then).
     await tester.runAsync(() async {
       host.hostEngine!.kickPeer(peerId);
       expect(await _waitFor(() => host.engine!.peers.isEmpty), isTrue);
     });
     await tester.pump();
     expect(find.text(RoomSheetStrings.removed), findsOneWidget);
+    expect(find.text(RoomSheetStrings.removedDetail), findsOneWidget);
     expect(find.text(kJamUnnamedPeer), findsOneWidget);
     expect(find.text(RoomSheetStrings.letBackIn), findsOneWidget);
-    // A button of its own — not folded into the "Removed" paragraph around
-    // it, as the 2026-10-17 run found — named by the words on it, then whom
-    // it lets back in.
+    // One element a screen reader can press, saying whom and what.
     final semantics = tester.ensureSemantics();
     await tester.pump();
-    expect(
-      tester.getSemantics(find.text(RoomSheetStrings.letBackIn)),
-      matchesSemantics(
-        label: RoomSheetStrings.letBackInFor(kJamUnnamedPeer),
-        isButton: true,
-        isEnabled: true,
-        hasEnabledState: true,
-        hasTapAction: true,
-      ),
-    );
-    expect(
-      RoomSheetStrings.letBackInFor(kJamUnnamedPeer),
-      startsWith(RoomSheetStrings.letBackIn),
-    );
+    final node = tester
+        .getSemantics(find.text(RoomSheetStrings.letBackIn))
+        .getSemanticsData();
+    expect(node.label, contains(kJamUnnamedPeer));
+    expect(node.label, contains(RoomSheetStrings.letBackIn));
+    expect(node.hasAction(SemanticsAction.tap), isTrue);
+    expect(node.flagsCollection.isButton, isTrue);
     semantics.dispose();
 
     await tester.tap(find.text(RoomSheetStrings.letBackIn));
@@ -413,36 +342,13 @@ void main() {
     await tester.runAsync(host.leave);
   });
 
-  testWidgets('removing someone says what a removal is now: out until you '
-      'let them back in — not "they can come back with the room code"', (
-    tester,
-  ) async {
+  testWidgets('removing someone says what a removal is: out until you let '
+      'them back in', (tester) async {
     final host = testSession();
-    final guest = testSession();
-    final cache = _tempCache();
-    await tester.runAsync(() async {
-      await host.startHost(sessionName: 'Van Jam', discoverable: false);
-      expect(
-        await guest.join(
-          host.joinUri!,
-          clientName: 'Ana',
-          mediaCacheDir: cache,
-        ),
-        isTrue,
-      );
-      expect(await _waitFor(() => host.engine!.peers.isNotEmpty), isTrue);
-    });
-    await _pump(
-      tester,
-      host,
-      RoomPanel(
-        engine: host.engine!,
-        selfName: 'Silky Puffin',
-        network: JamNetworkStatus.offline,
-      ),
-    );
+    final guest = await _hostWithGuest(tester, host);
+    await _pump(tester, host, _panel(host));
 
-    await tester.tap(find.byIcon(Icons.more_horiz_rounded));
+    await tester.tap(find.byIcon(CupertinoIcons.ellipsis_circle));
     await tester.pumpAndSettle();
     await tester.tap(find.text(RoomSheetStrings.removePeer));
     await tester.pumpAndSettle();
@@ -465,36 +371,16 @@ void main() {
   testWidgets('letting in someone already let back in elsewhere just '
       'redraws — it is not a failure', (tester) async {
     final host = testSession();
-    final guest = testSession();
-    final cache = _tempCache();
     final heard = <String>[];
     final sub = host.notices.listen((n) => heard.add(n.message));
     addTearDown(sub.cancel);
-    late String peerId;
+    final guest = await _hostWithGuest(tester, host);
+    final peerId = host.engine!.peers.single.peerId;
     await tester.runAsync(() async {
-      await host.startHost(sessionName: 'Van Jam', discoverable: false);
-      expect(
-        await guest.join(
-          host.joinUri!,
-          clientName: 'Ana',
-          mediaCacheDir: cache,
-        ),
-        isTrue,
-      );
-      expect(await _waitFor(() => host.engine!.peers.isNotEmpty), isTrue);
-      peerId = host.engine!.peers.single.peerId;
       host.hostEngine!.kickPeer(peerId);
       expect(await _waitFor(() => host.engine!.peers.isEmpty), isTrue);
     });
-    await _pump(
-      tester,
-      host,
-      RoomPanel(
-        engine: host.engine!,
-        selfName: 'Silky Puffin',
-        network: JamNetworkStatus.offline,
-      ),
-    );
+    await _pump(tester, host, _panel(host));
     expect(find.text(RoomSheetStrings.letBackIn), findsOneWidget);
 
     // Let back in from somewhere else; this sheet has not redrawn yet.
@@ -509,9 +395,11 @@ void main() {
     await tester.runAsync(host.leave);
   });
 
-  testWidgets('the sheet opens at the spec height, on the dark palette', (
-    tester,
-  ) async {
+  testWidgets('the People sheet opens at the medium detent, on the dark '
+      'palette, and Invite People opens the Invite sheet', (tester) async {
+    fakeLan([
+      FakeInterface('en0', ['192.168.77.10']),
+    ]);
     final host = testSession();
     await tester.runAsync(
       () => host.startHost(sessionName: 'Dark Jam', discoverable: false),
@@ -542,23 +430,143 @@ void main() {
     final sheet = tester.widget<DraggableScrollableSheet>(
       find.byType(DraggableScrollableSheet),
     );
-    // Opens at the large detent, clamped under the status bar.
-    expect(sheet.initialChildSize, sheet.maxChildSize);
+    expect(sheet.initialChildSize, kJamSheetMediumSize);
     expect(sheet.maxChildSize, greaterThan(0.9));
-    expect(find.text(RoomSheetStrings.inTheRoom(1)), findsOneWidget);
+    expect(find.text(RoomSheetStrings.title), findsOneWidget);
+    expect(find.text(RoomSheetStrings.done), findsOneWidget);
     expect(tester.takeException(), isNull);
+
+    await tester.tap(find.text(RoomSheetStrings.invitePeople));
+    await tester.pumpAndSettle();
+    expect(find.text(RoomSheetStrings.inviteTitle), findsWidgets);
+    expect(find.byType(QrImageView), findsOneWidget);
+    expect(find.byType(JamSheetCloseButton), findsOneWidget);
 
     await tester.runAsync(host.leave);
   });
 
-  testWidgets('ending the jam with the sheet open: a part of it built again '
-      'on the way out reads the last code, it does not subscribe', (
+  testWidgets('the Invite sheet: the code on white, the name, Share and Copy, '
+      'and never the machine text', (tester) async {
+    fakeLan([
+      FakeInterface('en0', ['192.168.77.10']),
+    ]);
+    final host = testSession();
+    final heard = <String>[];
+    final sub = host.notices.listen((n) => heard.add(n.message));
+    addTearDown(sub.cancel);
+    String? copied;
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(SystemChannels.platform, (call) async {
+      if (call.method == 'Clipboard.setData') {
+        copied = (call.arguments as Map)['text'] as String?;
+      }
+      return null;
+    });
+    addTearDown(
+      () => messenger.setMockMethodCallHandler(SystemChannels.platform, null),
+    );
+
+    await tester.runAsync(
+      () => host.startHost(sessionName: 'Van Jam', discoverable: false),
+    );
+    await tester.pump();
+    await _pump(
+      tester,
+      host,
+      InvitePanel(engine: host.engine!, network: JamNetworkStatus.offline),
+    );
+
+    expect(find.byType(QrImageView), findsOneWidget);
+    final qr = tester.widget<QrImageView>(find.byType(QrImageView));
+    expect(qr.backgroundColor, const Color(0xFFFFFFFF));
+    expect(find.text('Van Jam'), findsOneWidget);
+    expect(find.text(RoomSheetStrings.inviteOnNetwork), findsOneWidget);
+    expect(find.text(RoomSheetStrings.shareLink), findsOneWidget);
+    expect(find.text(RoomSheetStrings.copyLink), findsOneWidget);
+    expect(find.textContaining('localjam://'), findsNothing);
+
+    await tester.tap(find.text(RoomSheetStrings.copyLink));
+    await tester.pump();
+    await tester.runAsync(pumpEventQueue);
+    expect(copied, '${host.joinUri}');
+    expect(heard, contains(RoomSheetStrings.copied));
+
+    await tester.runAsync(host.leave);
+  });
+
+  testWidgets('no network, no code — and the code turns up by itself', (
     tester,
   ) async {
-    // 2026-10-17 run: End jam sits under the invite, so the invite had been
-    // scrolled out of the lazy list; the sheet animating away built it again
-    // after the engine had released its listenables, and a fresh
-    // subscription tripped "ValueNotifier used after being disposed".
+    // Airplane mode, or a phone about to start its hotspot: there is no
+    // address a guest could reach, so a QR would be a lie.
+    fakeLan(const []);
+    final host = testSession();
+    await tester.runAsync(
+      () => host.startHost(sessionName: 'Van Jam', discoverable: false),
+    );
+    final engine = host.hostEngine!;
+    expect(engine.hasLanAddress, isFalse);
+
+    await _pump(
+      tester,
+      host,
+      InvitePanel(engine: engine, network: JamNetworkStatus.offline),
+    );
+    expect(find.byType(QrImageView), findsNothing);
+    expect(find.text(RoomSheetStrings.noNetworkTitle), findsOneWidget);
+    expect(find.text(RoomSheetStrings.shareLink), findsNothing);
+
+    // Wi-Fi comes up. Nobody reopens anything: the engine re-scans and the
+    // code appears.
+    fakeLan([
+      FakeInterface('en0', ['192.168.77.10']),
+    ]);
+    await tester.runAsync(engine.refreshLanAddresses);
+    await tester.pump();
+    expect(engine.hasLanAddress, isTrue);
+    expect(find.text(RoomSheetStrings.noNetworkTitle), findsNothing);
+    expect(find.byKey(ValueKey('${engine.joinUri}')), findsOneWidget);
+    expect('${engine.joinUri}', contains('192.168.77.10'));
+
+    // The phone moves to another network: the code follows the link.
+    fakeLan([
+      FakeInterface('en0', ['192.168.88.20']),
+    ]);
+    await tester.runAsync(engine.refreshLanAddresses);
+    await tester.pump();
+    expect('${engine.joinUri}', contains('192.168.88.20'));
+    expect(find.byKey(ValueKey('${engine.joinUri}')), findsOneWidget);
+    expect(find.byType(QrImageView), findsOneWidget);
+
+    await tester.runAsync(host.leave);
+  });
+
+  testWidgets('a guest invites with the link they joined by', (tester) async {
+    final host = testSession();
+    final guest = await _hostWithGuest(tester, host);
+    await _pump(
+      tester,
+      guest,
+      InvitePanel(engine: guest.engine!, network: JamNetworkStatus.offline),
+    );
+    expect(
+      find.byKey(ValueKey('${guest.guestEngine!.joinUri}')),
+      findsOneWidget,
+    );
+    expect(find.text('Van Jam'), findsOneWidget);
+
+    await tester.runAsync(guest.leave);
+    await tester.runAsync(host.leave);
+  });
+
+  testWidgets('ending the jam with the Invite sheet open: a part of it built '
+      'again on the way out reads the last code, it does not subscribe', (
+    tester,
+  ) async {
+    // 2026-10-17 run: a sheet animating away built the code again after the
+    // engine had released its listenables, and a fresh subscription tripped
+    // "ValueNotifier used after being disposed".
     fakeLan([
       FakeInterface('en0', ['192.168.77.10']),
     ]);
@@ -568,12 +576,10 @@ void main() {
     );
     await tester.pump();
     final engine = host.hostEngine!;
-    Widget panel(int generation) => RoomPanel(
-      // A new key mounts every row afresh, as the lazy list does for a row
-      // scrolled back into view.
+    Widget panel(int generation) => InvitePanel(
+      // A new key mounts everything afresh, as a rebuilt sheet does.
       key: ValueKey(generation),
       engine: engine,
-      selfName: 'Silky Puffin',
       network: JamNetworkStatus.offline,
     );
     await _pump(tester, host, panel(1));
@@ -582,12 +588,6 @@ void main() {
 
     await tester.runAsync(host.leave);
     expect(engine.sessionEnded.value, JamSessionEndReason.closedLocally);
-    await tester.pump();
-    expect(
-      find.byType(ValueListenableBuilder<Uri>),
-      findsNothing,
-      reason: 'the end rebuilt the page off the listenables',
-    );
 
     await _pump(tester, host, panel(2));
     expect(tester.takeException(), isNull);
@@ -597,5 +597,65 @@ void main() {
       find.byType(ValueListenableBuilder<List<InternetAddress>>),
       findsNothing,
     );
+  });
+
+  testWidgets('the People page survives the end of the jam it shows', (
+    tester,
+  ) async {
+    final host = testSession();
+    await tester.runAsync(
+      () => host.startHost(sessionName: 'Van Jam', discoverable: false),
+    );
+    await tester.pump();
+    await _pump(tester, host, _panel(host));
+    await tester.runAsync(host.leave);
+    await tester.pump();
+    expect(tester.takeException(), isNull);
+    expect(find.byType(ValueListenableBuilder<List<PeerInfo>>), findsNothing);
+  });
+
+  testWidgets('at 1.3x text on a phone, nothing clips', (tester) async {
+    fakeLan([
+      FakeInterface('en0', ['192.168.77.10']),
+    ]);
+    final host = testSession();
+    final guest = await _hostWithGuest(
+      tester,
+      host,
+      name: 'Anastasia Montgomery',
+    );
+    tester.view.physicalSize =
+        const Size(375, 812) * tester.view.devicePixelRatio;
+    addTearDown(tester.view.resetPhysicalSize);
+    for (final child in <Widget>[
+      _panel(host),
+      SingleChildScrollView(
+        child: InvitePanel(
+          engine: host.engine!,
+          network: JamNetworkStatus.offline,
+        ),
+      ),
+    ]) {
+      await tester.pumpWidget(
+        JamSession(
+          controller: host,
+          child: MaterialApp(
+            theme: jamLightTheme(),
+            home: MediaQuery(
+              data: const MediaQueryData(
+                size: Size(375, 812),
+                textScaler: TextScaler.linear(1.3),
+              ),
+              child: Scaffold(body: child),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      expect(tester.takeException(), isNull);
+    }
+
+    await tester.runAsync(guest.leave);
+    await tester.runAsync(host.leave);
   });
 }

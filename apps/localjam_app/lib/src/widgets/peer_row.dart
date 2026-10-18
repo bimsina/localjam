@@ -1,36 +1,41 @@
-/// A person in the room.
+/// A person in the room (DESIGN_SPEC v3 §6.5).
 ///
-/// The People sheet is the one place faces get names, roles and a state of
-/// their own, so this row carries all three: the ring says whose device this
-/// is and who owns the room, the badge says what they may do, and the detail
-/// line says whether they can actually hear the current track.
+/// An ordinary list row: a 40 avatar, the name, and a subtitle only when it
+/// says something — "Host", "You", "Host · You", "Co-host", what the host
+/// changed for this person ("Can’t add music"), or, in `warning`, that they
+/// are still loading the song. No pills, no rings, no "Listening": a person
+/// who is simply fine gets a name and nothing else (§1.2).
+///
+/// The host gets a trailing "•••" pull-down per guest ([JamPeerRow.menu]).
 ///
 /// Engine-free: map `JamPermissions.roleOf` and `MediaReadiness` to the plain
 /// enums below at the call site.
 library;
 
-import 'package:flutter/material.dart';
+import 'package:flutter/cupertino.dart';
 
 import '../design/tokens.dart';
-import '../design/typography.dart';
 import 'avatar.dart';
+import 'list.dart';
+import 'menu.dart';
 
 /// Strings this row can put in front of a person.
 abstract final class JamPeerRowStrings {
-  static const String host = 'HOST';
-  static const String cohost = 'CO-HOST';
-  static const String listening = 'Listening';
-  static const String fetching = 'Getting the track';
-  static const String missing = 'Missing the track';
-  static const String more = 'More options for';
+  static const String host = 'Host';
+  static const String cohost = 'Co-host';
+  static const String you = 'You';
+
+  /// The one warning a person row carries: they cannot hear this song yet.
+  static const String loading = 'Still loading songs…';
+  static String loadingProgress(int percent) =>
+      'Still loading songs… $percent%';
+
+  /// Joins the parts of a subtitle: "Host · You".
+  static const String joiner = ' · ';
+
+  /// The "•••" button's spoken name.
+  static String more(String name) => 'More for $name';
 }
-
-/// The fixed row height.
-const double kJamPeerRowHeight = 64;
-
-const double _avatarSize = JamAvatarSize.sheet;
-const double _menuSize = 44;
-const double _readinessRing = 16;
 
 /// What a person may do in the room — the presentational half of
 /// `JamPermissions.roleOf`.
@@ -40,212 +45,100 @@ enum JamPeerRole { guest, cohost, host }
 /// `MediaReadiness`.
 enum JamPeerReadiness { ready, fetching, missing }
 
-/// One person: their face, their name, their standing, their readiness.
-class JamPeerRow extends StatelessWidget {
+/// One person: face, name, and at most one quiet line about them.
+class JamPeerRow extends StatelessWidget implements JamSelfSeparatingRow {
   const JamPeerRow({
     super.key,
     required this.name,
-    this.detail,
     this.role = JamPeerRole.guest,
     this.isYou = false,
+    this.detail,
     this.readiness,
     this.fetchProgress,
-    this.showMenu = false,
-    this.onMenuTap,
-    this.onTap,
+    this.menu,
+    this.trailing,
     this.dimmed = false,
-    this.contentPadding = const EdgeInsets.symmetric(horizontal: JamSpace.page),
+    this.onTap,
   });
 
   /// Display name — the face's colour and initials come from it.
   final String name;
 
-  /// The line under the name when there is no [readiness] to report.
-  final String? detail;
-
-  /// Host, co-host or guest. Drives the badge and the host ring.
+  /// Host, co-host or guest. Host and co-host are said in the subtitle.
   final JamPeerRole role;
 
-  /// Whether this row is this device. Rings apricot, and wins over [role]'s
-  /// ring: you are you first.
+  /// Whether this row is this device ("You").
   final bool isYou;
 
-  /// Whether this person has the current track. Replaces [detail].
+  /// Extra words after the role ("Can’t add music"), sentence case.
+  final String? detail;
+
+  /// Whether this person has the current track. Anything but ready replaces
+  /// the subtitle with the loading line in `warning`.
   final JamPeerReadiness? readiness;
 
-  /// Their fetch progress, 0–1, while [readiness] is
-  /// [JamPeerReadiness.fetching]. Null draws an indeterminate ring.
+  /// Their fetch progress, 0–1, while [readiness] is fetching.
   final double? fetchProgress;
 
-  /// Whether to offer the overflow menu. Hosts only — gate it on
-  /// `manageMembers` at the call site.
-  final bool showMenu;
+  /// The host's per-guest pull-down. Null: no "•••".
+  final List<List<JamMenuItem>>? menu;
 
-  final VoidCallback? onMenuTap;
-  final VoidCallback? onTap;
+  /// Any other trailing control (used when [menu] is null).
+  final Widget? trailing;
 
-  /// Renders faded, for someone who is reconnecting or has left.
+  /// Fades the face — someone who is not in the room right now.
   final bool dimmed;
 
-  /// Horizontal insets.
-  final EdgeInsets contentPadding;
+  final VoidCallback? onTap;
 
-  /// The badge text for [role], or null for a plain guest.
-  static String? badgeFor(JamPeerRole role) => switch (role) {
-    JamPeerRole.host => JamPeerRowStrings.host,
-    JamPeerRole.cohost => JamPeerRowStrings.cohost,
-    JamPeerRole.guest => null,
-  };
+  /// Whether the subtitle is the loading warning.
+  bool get isLoading =>
+      readiness == JamPeerReadiness.fetching ||
+      readiness == JamPeerReadiness.missing;
+
+  /// The subtitle, or null when there is nothing worth saying.
+  String? get subtitle {
+    if (isLoading) {
+      final progress = fetchProgress;
+      if (readiness == JamPeerReadiness.fetching && progress != null) {
+        final percent = (progress.clamp(0.0, 1.0) * 100).round();
+        return JamPeerRowStrings.loadingProgress(percent);
+      }
+      return JamPeerRowStrings.loading;
+    }
+    final parts =
+        <String>[
+            if (role == JamPeerRole.host) JamPeerRowStrings.host,
+            if (role == JamPeerRole.cohost) JamPeerRowStrings.cohost,
+            if (isYou) JamPeerRowStrings.you,
+            if (detail != null && detail!.isNotEmpty) detail!,
+          ]
+          // A host who shared no name is titled "Host" already.
+          ..remove(name);
+    return parts.isEmpty ? null : parts.join(JamPeerRowStrings.joiner);
+  }
 
   @override
   Widget build(BuildContext context) {
     final colors = context.jamColors;
-    final badge = badgeFor(role);
-
-    Widget person = Semantics(
-      button: onTap != null,
-      label: _semanticLabel(),
-      child: ExcludeSemantics(
-        child: GestureDetector(
-          behavior: HitTestBehavior.opaque,
-          onTap: onTap,
-          child: Row(
-            children: [
-              JamAvatar(name: name, size: _avatarSize),
-              const SizedBox(width: JamSpace.md),
-              Expanded(
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      name,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: context.jamHeadline,
-                    ),
-                    ..._detailLine(context, colors),
-                  ],
-                ),
-              ),
-              if (badge != null) ...[
-                const SizedBox(width: JamSpace.sm),
-                _RoleBadge(text: badge),
-              ],
-            ],
-          ),
-        ),
+    final menu = this.menu;
+    return JamRow(
+      title: name,
+      subtitle: subtitle,
+      subtitleColor: isLoading ? colors.warning : null,
+      subtitleMaxLines: 1,
+      // The name is the row's title; the face must not say it twice.
+      leading: ExcludeSemantics(
+        child: JamAvatar(name: name, size: JamAvatarSize.sheet, dimmed: dimmed),
       ),
-    );
-    if (dimmed) person = Opacity(opacity: 0.5, child: person);
-
-    return SizedBox(
-      height: kJamPeerRowHeight,
-      child: Padding(
-        padding: contentPadding,
-        child: Row(
-          children: [
-            Expanded(child: person),
-            if (showMenu)
-              SizedBox(
-                width: _menuSize,
-                height: _menuSize,
-                child: IconButton(
-                  onPressed: onMenuTap,
-                  iconSize: 20,
-                  padding: EdgeInsets.zero,
-                  tooltip: '${JamPeerRowStrings.more} $name',
-                  icon: Icon(
-                    Icons.more_horiz_rounded,
-                    color: colors.secondaryLabel,
-                  ),
-                ),
-              ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  /// Readiness outranks [detail]: whether someone can hear this track is the
-  /// only thing about them worth a line of its own.
-  List<Widget> _detailLine(BuildContext context, JamColors colors) {
-    final text = _detailText();
-    if (text == null) return const [];
-    final color = switch (readiness) {
-      JamPeerReadiness.fetching => colors.warning,
-      JamPeerReadiness.missing => colors.danger,
-      _ => colors.secondaryLabel,
-    };
-    return [
-      const SizedBox(height: JamSpace.xxs),
-      Row(
-        children: [
-          if (readiness == JamPeerReadiness.fetching) ...[
-            SizedBox(
-              width: _readinessRing,
-              height: _readinessRing,
-              child: CircularProgressIndicator(
-                value: fetchProgress?.clamp(0.0, 1.0),
-                strokeWidth: 2,
-                backgroundColor: colors.fillSecondary,
-                valueColor: AlwaysStoppedAnimation<Color>(colors.warning),
-              ),
-            ),
-            const SizedBox(width: JamSpace.sm),
-          ],
-          Flexible(
-            child: Text(
-              text,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: context.jamFootnote.copyWith(color: color),
-            ),
-          ),
-        ],
-      ),
-    ];
-  }
-
-  String? _detailText() => switch (readiness) {
-    JamPeerReadiness.ready => JamPeerRowStrings.listening,
-    JamPeerReadiness.fetching => JamPeerRowStrings.fetching,
-    JamPeerReadiness.missing => JamPeerRowStrings.missing,
-    null => detail,
-  };
-
-  String _semanticLabel() {
-    final parts = <String>[name];
-    final badge = badgeFor(role);
-    if (badge != null) parts.add(badge);
-    final detailText = _detailText();
-    if (detailText != null && detailText.isNotEmpty) parts.add(detailText);
-    return parts.join(', ');
-  }
-}
-
-/// The HOST / CO-HOST chip.
-class _RoleBadge extends StatelessWidget {
-  const _RoleBadge({required this.text});
-
-  final String text;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.jamColors;
-    return Container(
-      padding: const EdgeInsets.symmetric(
-        horizontal: JamSpace.sm,
-        vertical: JamSpace.xs,
-      ),
-      decoration: BoxDecoration(
-        color: colors.tintFill,
-        borderRadius: BorderRadius.circular(JamRadius.capsule),
-      ),
-      child: Text(
-        text,
-        style: context.jamCaption2.copyWith(color: colors.tint),
-      ),
+      leadingWidth: JamAvatarSize.sheet,
+      trailing: menu != null
+          ? JamMenuButton(
+              groups: menu,
+              semanticLabel: JamPeerRowStrings.more(name),
+            )
+          : trailing,
+      onTap: onTap,
     );
   }
 }
