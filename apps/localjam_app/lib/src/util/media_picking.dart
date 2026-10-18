@@ -7,6 +7,9 @@
 library;
 
 import 'dart:async';
+import 'dart:collection';
+import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/cupertino.dart';
@@ -15,6 +18,7 @@ import 'package:localjam_client/localjam_client.dart';
 import '../design/tokens.dart';
 import '../state/session_controller.dart';
 import '../widgets/library_sheet.dart';
+import 'format.dart';
 import 'permissions.dart';
 
 /// Everything these flows say out loud.
@@ -26,13 +30,117 @@ abstract final class JamPickerStrings {
   static const String files = 'Files';
   static const String cancel = 'Cancel';
 
-  static const String pickerFailed = 'Could not open the file picker.';
-  static const String libraryReadFailed = 'Could not read your music library.';
+  static const String pickerFailed = 'Couldn’t open the file picker.';
+  static const String libraryReadFailed = 'Couldn’t read your music library.';
   static const String libraryEmpty =
-      'No audio files on this device yet. Add music to the phone, or use '
-      'Files to pick from Downloads or cloud storage.';
-  static const String openFailedOne = 'Could not open that track.';
-  static const String openFailedMany = 'Could not open those tracks.';
+      'No songs on this device yet. Add music to the phone, or use Files to '
+      'pick from Downloads or cloud storage.';
+  static const String openFailedOne = 'Couldn’t open that song.';
+  static const String openFailedMany = 'Couldn’t open those songs.';
+}
+
+/// A song picked for a jam that has not started yet: its file, and what to
+/// call it on screen.
+///
+/// Start a Jam lists songs before any engine has read them, and a path alone
+/// put "neon" and "tide" — file names — where Apple Music shows the title,
+/// the artist, the length and the cover. The library already knows the
+/// first three; tags read off the file ([readPickedTrack]) fill in the rest.
+@immutable
+class JamPickedTrack {
+  const JamPickedTrack({
+    required this.path,
+    this.title,
+    this.artist,
+    this.duration,
+    this.artworkBytes,
+    this.tagsRead = false,
+  });
+
+  /// From the device library, which knows title, artist and length.
+  factory JamPickedTrack.fromLibrary(JamLibraryTrack track, String path) {
+    final ms = track.durationMs;
+    final title = track.title.trim();
+    return JamPickedTrack(
+      path: path,
+      title: title.isEmpty ? null : stripAudioExtension(title),
+      artist: track.artist,
+      duration: ms == null || ms <= 0 ? null : Duration(milliseconds: ms),
+    );
+  }
+
+  /// The file the jam will be started with.
+  final String path;
+
+  /// Tag (or library) title; null when the file has none.
+  final String? title;
+  final String? artist;
+  final Duration? duration;
+
+  /// The embedded cover, once the tags have been read.
+  final Uint8List? artworkBytes;
+
+  /// Whether [readPickedTrack] has been over this file — a song with no
+  /// cover is then known to have none, rather than still loading.
+  final bool tagsRead;
+
+  /// The title on screen: the tag title, else the file name without its
+  /// extension.
+  String get displayTitle =>
+      title ?? stripAudioExtension(path.split(Platform.pathSeparator).last);
+
+  /// This song with [tags] filling in whatever it did not know yet. The
+  /// library's own title, artist and length win: MediaStore has usually
+  /// cleaned them up already.
+  JamPickedTrack withTags(JamAudioTags tags) {
+    final us = tags.durationUs;
+    return JamPickedTrack(
+      path: path,
+      title: title ?? tags.title,
+      artist: artist ?? tags.artist,
+      duration: duration ?? (us == null ? null : Duration(microseconds: us)),
+      artworkBytes:
+          artworkBytes ?? (tags.hasArtwork ? tags.artworkBytes : null),
+      tagsRead: true,
+    );
+  }
+}
+
+/// A cover is a picture, not a payload: a tag frame bigger than this is not
+/// read (see [readAudioTags]).
+const int _maxPickedTagBytes = 8 * 1024 * 1024;
+
+/// Tag reads run two at a time, so picking 200 songs does not spawn 200
+/// isolates at once.
+const int _parallelTagReads = 2;
+int _tagReadsRunning = 0;
+final Queue<Completer<void>> _tagReadsWaiting = Queue<Completer<void>>();
+
+/// Reads [track]'s tags and cover, off the UI isolate, and returns it with
+/// them filled in. Never throws; a file with no tags comes back as it went
+/// in, marked read.
+Future<JamPickedTrack> readPickedTrack(JamPickedTrack track) async {
+  while (_tagReadsRunning >= _parallelTagReads) {
+    final turn = Completer<void>();
+    _tagReadsWaiting.add(turn);
+    await turn.future;
+  }
+  _tagReadsRunning++;
+  try {
+    final file = File(track.path);
+    // `readAudioTags` parses in a short-lived isolate and never throws.
+    final tags = await readAudioTags(
+      file,
+      maxMetadataBytes: _maxPickedTagBytes,
+    );
+    return track.withTags(tags);
+  } catch (e) {
+    debugPrint('localjam: could not read tags of ${track.path}: $e');
+    return track.withTags(const JamAudioTags());
+  } finally {
+    _tagReadsRunning--;
+    if (_tagReadsWaiting.isNotEmpty) _tagReadsWaiting.removeFirst().complete();
+  }
 }
 
 /// MIME types for the audio formats [supportedAudioExtensions] covers, plus
@@ -120,7 +228,7 @@ Future<List<String>> pickAudioFiles(BuildContext context) async {
     return [for (final file in files) file.path];
   } catch (e) {
     debugPrint('localjam: file picker failed: $e');
-    session.notify(JamPickerStrings.pickerFailed);
+    session.notify(JamPickerStrings.pickerFailed, tone: JamNoticeTone.error);
     return const [];
   }
 }
@@ -130,7 +238,15 @@ Future<List<String>> pickAudioFiles(BuildContext context) async {
 ///
 /// Every dead end reports itself through the controller's notice channel —
 /// a silent return here is a button that does nothing.
-Future<List<String>> pickLibraryTracks(BuildContext context) async {
+Future<List<String>> pickLibraryTracks(BuildContext context) async => [
+  for (final track in await pickLibraryTrackDetails(context)) track.path,
+];
+
+/// [pickLibraryTracks], keeping what the library already knows about each
+/// song — title, artist, length — instead of throwing it away for a path.
+Future<List<JamPickedTrack>> pickLibraryTrackDetails(
+  BuildContext context,
+) async {
   final session = JamSession.read(context);
   _dismissKeyboard();
 
@@ -144,6 +260,7 @@ Future<List<String>> pickLibraryTracks(BuildContext context) async {
       JamPermissionCopy.audioLibraryDenied,
       actionLabel: permanent ? JamPermissionCopy.openSettings : null,
       onAction: permanent ? () => unawaited(openAppSettings()) : null,
+      tone: JamNoticeTone.warning,
     );
     return const [];
   }
@@ -153,13 +270,16 @@ Future<List<String>> pickLibraryTracks(BuildContext context) async {
     tracks = await JamMediaLibrary.queryAudio();
   } catch (e) {
     debugPrint('localjam: media library query failed: $e');
-    session.notify(JamPickerStrings.libraryReadFailed);
+    session.notify(
+      JamPickerStrings.libraryReadFailed,
+      tone: JamNoticeTone.error,
+    );
     return const [];
   }
   if (tracks.isEmpty) {
     // An empty library used to bail without a word, which on a fresh phone
     // (or an emulator) is every single tap of the Library button.
-    session.notify(JamPickerStrings.libraryEmpty);
+    session.notify(JamPickerStrings.libraryEmpty, tone: JamNoticeTone.neutral);
     return const [];
   }
 
@@ -173,23 +293,24 @@ Future<List<String>> pickLibraryTracks(BuildContext context) async {
   _dismissKeyboard();
   if (chosen == null || chosen.isEmpty) return const [];
 
-  final paths = <String>[];
+  final picked = <JamPickedTrack>[];
   for (final track in chosen) {
     try {
       final path = await JamMediaLibrary.resolve(track);
-      if (path != null) paths.add(path);
+      if (path != null) picked.add(JamPickedTrack.fromLibrary(track, path));
     } catch (e) {
       debugPrint('localjam: could not resolve ${track.title}: $e');
     }
   }
-  if (paths.isEmpty) {
+  if (picked.isEmpty) {
     session.notify(
       chosen.length == 1
           ? JamPickerStrings.openFailedOne
           : JamPickerStrings.openFailedMany,
+      tone: JamNoticeTone.error,
     );
   }
-  return paths;
+  return picked;
 }
 
 /// Drops focus so a picker or sheet does not open over a live keyboard — and,

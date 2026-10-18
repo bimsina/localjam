@@ -23,14 +23,23 @@ String formatPositionUs(int positionUs) {
 /// Two readings that render identically must read identically.
 const double kJamZeroMs = 0.05;
 
-/// Signed milliseconds with one decimal, e.g. `+12.3 ms`, from µs.
+/// The typographic minus (U+2212), the same one the Sound Offset uses.
+const String kJamMinus = '−';
+
+/// Signed milliseconds with one decimal, e.g. `+12.3 ms` / `−12.3 ms`, from
+/// µs. A second or more reads in seconds (`−272.4 s`): a clock offset of
+/// "-272391.4 ms" is a number nobody can read.
 ///
 /// Zero — and anything that rounds to it — is unsigned: `0.0 ms`.
 String formatSignedMs(int us) {
   final ms = us / 1000;
   if (ms.abs() < kJamZeroMs) return '0.0 ms';
-  final sign = ms > 0 ? '+' : '';
-  return '$sign${ms.toStringAsFixed(1)} ms';
+  final sign = ms > 0 ? '+' : kJamMinus;
+  final magnitude = ms.abs();
+  if (magnitude >= 1000) {
+    return '$sign${(magnitude / 1000).toStringAsFixed(1)} s';
+  }
+  return '$sign${magnitude.toStringAsFixed(1)} ms';
 }
 
 /// The sync sheet's drift and clock-offset figures. Same shape as

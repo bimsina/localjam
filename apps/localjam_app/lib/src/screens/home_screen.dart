@@ -24,6 +24,7 @@ import 'package:localjam_client/localjam_client.dart';
 
 import '../design/breakpoints.dart';
 import '../design/tokens.dart';
+import '../design/typography.dart';
 import '../state/session_controller.dart';
 import '../util/capabilities.dart';
 import '../util/network.dart';
@@ -41,6 +42,7 @@ import 'history_screen.dart'
         HistoryStrings,
         JamArtworkMosaic,
         jamHistorySummary,
+        kJamReadingColumn,
         showJamHistoryDetail;
 
 /// Every user-facing string on this screen, in one place.
@@ -71,16 +73,20 @@ abstract final class HomeStrings {
   static const String quietTitle = 'No Jams Nearby';
   static const String quietBody = 'Jams on this Wi‑Fi show up here.';
 
-  /// What home says while *this* device is in a jam. The browse stops while
-  /// one runs, and "No Jams Nearby" over your own live room is a
-  /// contradiction.
-  static const String hostingTitle = 'You’re Hosting';
+  /// The one-line versions, for when Recent is under them: the full empty
+  /// state is for a screen that has nothing else to show.
+  static const String offlineLine = 'Not on Wi‑Fi. Nearby jams need one.';
+  static const String hotspotLine = 'Jams don’t show up over a hotspot.';
+  static const String quietLine = 'No jams nearby on this Wi‑Fi.';
+  static const String scanShort = 'Scan';
+
+  /// What home says while *this* device is in a jam: one quiet line. The
+  /// mini player is the way back in, and the browse stops while a jam runs —
+  /// "No Jams Nearby" over your own live room is a contradiction.
   static String hostingBody(String room) =>
       'Nearby jams show up again when $room ends.';
-  static const String guestingTitle = 'You’re in a Jam';
   static String guestingBody(String room) =>
       'Nearby jams show up again when you leave $room.';
-  static const String openRoom = 'Open Jam';
 
   static const String badCode = 'That code isn’t a jam invite.';
 }
@@ -94,9 +100,15 @@ const int kJamHomeRecents = 3;
 /// How far a newly discovered room rises into place.
 const double _roomEntryOffset = 8;
 
-/// The widest the list grows on a tablet or desktop window. Rows stretched
-/// across 1000 px put the Join button a long way from the name it joins.
-const double _maxContentWidth = 720;
+/// The widest the list grows on a tablet or desktop window, measured against
+/// the pane (not the window). Rows stretched across 1000 px put the Join
+/// button a long way from the name it joins. Leading-aligned, like Past Jams
+/// and Settings, so the content starts on the large title's edge.
+const double _maxContentWidth = kJamReadingColumn;
+
+/// The widest Start a Jam grows once the column is wider than a phone: a
+/// full-width capsule across a desktop pane would be a banner.
+const double _maxButtonWidth = 400;
 
 /// The room name's possessive suffix ("Mia’s Jam"), used to give a nearby
 /// room its host's initials rather than "MJ" for every jam.
@@ -105,6 +117,10 @@ final RegExp _possessiveJam = RegExp(r'^(.+?)[’\x27]s Jam$');
 /// The host's name, when the room name is the default "Mia’s Jam".
 String jamHostNameFromRoom(String room) =>
     _possessiveJam.firstMatch(room.trim())?.group(1) ?? room;
+
+/// Whether [room] names its host ("Mia’s Jam"). Only then does its row get
+/// a face: initials made from "Van Jam" pose as a person called VJ.
+bool jamRoomNamesHost(String room) => _possessiveJam.hasMatch(room.trim());
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -248,7 +264,7 @@ class _HomeScreenState extends State<HomeScreen> {
     setState(() => _probing = null);
     if (!alive) {
       browser.remove(room);
-      session.notify(kJamRoomGone);
+      session.notify(kJamRoomGone, tone: JamNoticeTone.neutral);
       return;
     }
     await _join(room.joinUri, roomName: room.sessionName);
@@ -295,7 +311,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   void _showError(String? message) {
     if (message == null || !mounted) return;
-    JamSession.read(context).notify(message);
+    JamSession.read(context).notify(message, tone: JamNoticeTone.error);
   }
 
   /// Marks which rooms are new, and buzzes for arrivals after the first
@@ -316,11 +332,18 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // The pane, not the window: beside an iPad sidebar the window is 260
+    // wider than what this page has.
+    return LayoutBuilder(
+      builder: (context, constraints) => _build(context, constraints.maxWidth),
+    );
+  }
+
+  Widget _build(BuildContext context, double paneWidth) {
     final session = JamSession.of(context);
     // On a wide window the sidebar already carries identity and the
     // destinations, so repeating them in the nav bar is noise.
     final wide = context.jamBreakpoint.hasSidebar;
-    final width = MediaQuery.sizeOf(context).width;
 
     final Widget? startButton = session.hasRoom
         ? null
@@ -343,6 +366,9 @@ class _HomeScreenState extends State<HomeScreen> {
             semanticLabel: canScanQrCodes
                 ? HomeStrings.scan
                 : HomeStrings.joinWithLink,
+            // The viewfinder glyph draws small inside its em box; at 25 it
+            // holds its own beside the 30 pt avatar.
+            size: 25,
             onPressed: _scanOrLink,
           ),
           if (!wide) ...[
@@ -354,15 +380,23 @@ class _HomeScreenState extends State<HomeScreen> {
             const SizedBox(width: JamSpace.xs),
           ],
         ],
-        // A full-width capsule across a desktop pane would be a banner; on a
-        // wide window it keeps a phone's width, centred.
+        // On a pane wider than the column, the capsule keeps a phone's width
+        // and centres on the *column* — the axis the empty state and the
+        // rows above it are on — not on the pane.
         bottomBar: startButton == null
             ? null
-            : width > _maxContentWidth
-            ? Center(
-                child: ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 400),
-                  child: startButton,
+            : paneWidth > _maxContentWidth
+            ? Padding(
+                padding: EdgeInsetsDirectional.only(
+                  end: paneWidth - _maxContentWidth,
+                ),
+                child: Center(
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(
+                      maxWidth: _maxButtonWidth,
+                    ),
+                    child: startButton,
+                  ),
                 ),
               )
             : startButton,
@@ -385,52 +419,59 @@ class _HomeScreenState extends State<HomeScreen> {
   ) {
     final arrivals = _arrivals(rooms);
     final joining = session.joiningUri;
-    final recents = _recents.isEmpty
+    // The jam this device is in is the mini player's to show. Listing it in
+    // Recent as well put the same jam on screen two or three times.
+    final liveId = session.engine?.sessionId;
+    final records = [
+      for (final record in _recents)
+        if (record.sessionId != liveId) record,
+    ];
+    final recents = records.isEmpty
         ? null
         : Padding(
-            padding: const EdgeInsets.only(top: JamSpace.section),
+            // The header row is a 44 hit target around a 25 line; this
+            // lands its text ~32 under the last row, the section gap.
+            padding: const EdgeInsets.only(top: JamSpace.lg),
             child: _RecentSection(
-              records: _recents,
+              records: records,
               onSeeAll: () => unawaited(context.push('/history')),
               onOpen: (record) => unawaited(_openRecent(record)),
             ),
           );
 
     if (rooms.isEmpty) {
-      final empty = _EmptyNearby(
-        network: _network,
-        hosted: session.isLive
-            ? (session.isHost ? _Hosting.host : _Hosting.guest)
-            : null,
-        roomName: session.engine?.sessionName ?? '',
-        onScan: _scanOrLink,
-        onOpenRoom: () => unawaited(context.push('/room')),
-      );
-      // Alone, the empty state sits in the middle of the page. With recent
-      // jams under it, it keeps to its own height so they are on screen
-      // rather than a scroll away.
-      if (recents == null) {
+      final engine = session.engine;
+      // In a jam, or with Recent to show, "nothing nearby" is one quiet
+      // line rather than a 230 pt block that pushes Recent to mid-screen.
+      if (session.isLive && engine != null) {
         return [
-          SliverFillRemaining(
-            hasScrollBody: false,
-            child: Padding(
-              padding: const EdgeInsets.symmetric(vertical: JamSpace.xxxl),
-              child: empty,
+          SliverToBoxAdapter(
+            child: _NearbyLine(
+              text: session.isHost
+                  ? HomeStrings.hostingBody(engine.sessionName)
+                  : HomeStrings.guestingBody(engine.sessionName),
             ),
           ),
+          if (recents != null) SliverToBoxAdapter(child: recents),
         ];
       }
+      if (recents != null) {
+        return [
+          SliverToBoxAdapter(
+            child: _NearbyLine.forNetwork(_network, onScan: _scanOrLink),
+          ),
+          SliverToBoxAdapter(child: recents),
+        ];
+      }
+      // Alone, the empty state sits in the middle of the page.
       return [
-        SliverToBoxAdapter(
+        SliverFillRemaining(
+          hasScrollBody: false,
           child: Padding(
-            padding: const EdgeInsets.only(
-              top: JamSpace.huge,
-              bottom: JamSpace.lg,
-            ),
-            child: empty,
+            padding: const EdgeInsets.symmetric(vertical: JamSpace.xxxl),
+            child: _EmptyNearby(network: _network, onScan: _scanOrLink),
           ),
         ),
-        SliverToBoxAdapter(child: recents),
       ];
     }
 
@@ -541,10 +582,13 @@ class _RoomRow extends StatelessWidget {
       excludeSemantics: true,
       child: JamRow(
         title: room.sessionName,
-        leading: JamAvatar(
-          name: jamHostNameFromRoom(room.sessionName),
-          size: JamAvatarSize.list,
-        ),
+        leading: jamRoomNamesHost(room.sessionName)
+            ? JamAvatar(
+                name: jamHostNameFromRoom(room.sessionName),
+                size: JamAvatarSize.list,
+              )
+            : const _RoomMark(),
+        leadingWidth: JamAvatarSize.list,
         separator: separator,
         onTap: tap,
         trailing: JamButton.tinted(
@@ -601,8 +645,15 @@ class _RecentSection extends StatelessWidget {
           JamRow(
             key: ValueKey(record.sessionId),
             title: record.sessionName,
-            subtitle: jamHistorySummary(record),
-            subtitleMaxLines: 1,
+            subtitle: jamHistorySummary(
+              record,
+              use24HourFormat: MediaQuery.alwaysUse24HourFormatOf(context),
+            ),
+            // Two lines before an ellipsis: the time at the end is what
+            // tells two jams from one evening apart.
+            subtitleMaxLines: 2,
+            // The same detail page Past Jams pushes, so the same chevron.
+            chevron: true,
             // The same covers Past Jams reads back off this device.
             leading: JamArtworkMosaic(
               tracks: record.tracks,
@@ -617,49 +668,108 @@ class _RecentSection extends StatelessWidget {
   }
 }
 
-/// Which side of a live session this device is on, for the empty state.
-enum _Hosting { host, guest }
+/// A nearby room whose name does not say whose it is: a neutral mark in the
+/// avatar's place, not initials that pose as a person.
+class _RoomMark extends StatelessWidget {
+  const _RoomMark();
 
-/// The "nothing nearby" situations, which need different actions.
-///
-/// Four, not three: the fourth is *you are the reason the list is empty*.
-/// The browse stops while a jam runs, so a host looking at home was told
-/// nobody was hosting over their own live room.
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.jamColors;
+    return Container(
+      width: JamAvatarSize.list,
+      height: JamAvatarSize.list,
+      decoration: BoxDecoration(
+        color: colors.fillSecondary,
+        shape: BoxShape.circle,
+      ),
+      child: Icon(
+        CupertinoIcons.music_note_2,
+        size: JamAvatarSize.list * 0.45,
+        color: colors.tertiaryLabel,
+      ),
+    );
+  }
+}
+
+/// "Nothing nearby" as one quiet line, for a Home that has other things on
+/// it: Recent below, or the mini player of the jam you are in.
+class _NearbyLine extends StatelessWidget {
+  const _NearbyLine({required this.text, this.actionLabel, this.onAction});
+
+  /// The line for this network, with a Scan action where scanning helps.
+  factory _NearbyLine.forNetwork(
+    JamNetworkStatus network, {
+    required VoidCallback onScan,
+  }) {
+    final (text, showScan) = switch (network) {
+      JamNetworkStatus(connected: false) => (HomeStrings.offlineLine, false),
+      JamNetworkStatus(isHotspotHost: true) => (HomeStrings.hotspotLine, true),
+      _ => (HomeStrings.quietLine, true),
+    };
+    return _NearbyLine(
+      text: text,
+      actionLabel: !showScan
+          ? null
+          : canScanQrCodes
+          ? HomeStrings.scanShort
+          : HomeStrings.joinWithLink,
+      onAction: showScan ? onScan : null,
+    );
+  }
+
+  final String text;
+  final String? actionLabel;
+  final VoidCallback? onAction;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.jamColors;
+    final label = actionLabel;
+    return ConstrainedBox(
+      constraints: const BoxConstraints(minHeight: JamMetrics.rowHeight),
+      child: Padding(
+        // The small plain button pads its label by 4: 12 here puts the
+        // label on the 16 margin.
+        padding: EdgeInsetsDirectional.fromSTEB(
+          kJamRowInset,
+          JamSpace.xs,
+          label == null ? kJamRowInset : kJamRowInset - JamSpace.xs,
+          JamSpace.xs,
+        ),
+        child: Row(
+          children: [
+            Expanded(
+              child: Text(
+                text,
+                style: context.jamSubheadline.copyWith(
+                  color: colors.secondaryLabel,
+                ),
+              ),
+            ),
+            if (label != null && onAction != null)
+              JamButton.plain(
+                label: label,
+                size: JamButtonSize.small,
+                onPressed: onAction,
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// The "nothing nearby" situations, which need different actions — on a
+/// Home with nothing else to show.
 class _EmptyNearby extends StatelessWidget {
-  const _EmptyNearby({
-    required this.network,
-    required this.onScan,
-    this.hosted,
-    this.roomName = '',
-    this.onOpenRoom,
-  });
+  const _EmptyNearby({required this.network, required this.onScan});
 
   final JamNetworkStatus network;
   final VoidCallback onScan;
 
-  /// Non-null while this device is in a jam of its own.
-  final _Hosting? hosted;
-  final String roomName;
-  final VoidCallback? onOpenRoom;
-
   @override
   Widget build(BuildContext context) {
-    final live = hosted;
-    if (live != null) {
-      return JamEmptyState(
-        icon: CupertinoIcons.music_note_2,
-        title: live == _Hosting.host
-            ? HomeStrings.hostingTitle
-            : HomeStrings.guestingTitle,
-        body: live == _Hosting.host
-            ? HomeStrings.hostingBody(roomName)
-            : HomeStrings.guestingBody(roomName),
-        actionLabel: onOpenRoom == null ? null : HomeStrings.openRoom,
-        onAction: onOpenRoom,
-        actionVariant: JamButtonVariant.plain,
-      );
-    }
-
     final (icon, title, body, showScan) = switch (network) {
       JamNetworkStatus(connected: false) => (
         CupertinoIcons.wifi_slash,

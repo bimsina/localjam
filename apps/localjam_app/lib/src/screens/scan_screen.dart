@@ -17,7 +17,8 @@ import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/cupertino.dart';
-import 'package:flutter/material.dart' show Scaffold, Theme, ThemeData;
+import 'package:flutter/material.dart'
+    show MaterialBasedCupertinoThemeData, Scaffold, Theme, ThemeData;
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
@@ -29,6 +30,7 @@ import '../design/typography.dart';
 import '../util/network.dart';
 import '../util/permissions.dart';
 import '../widgets/buttons.dart';
+import '../widgets/dialogs.dart';
 import '../widgets/empty_state.dart';
 import '../widgets/glass.dart';
 import '../widgets/join_link_dialog.dart';
@@ -53,18 +55,21 @@ abstract final class JamScanStrings {
   /// never asked and there is nothing in Settings to turn on. Telling this
   /// user to "turn on camera access in Settings" sends them to a switch that
   /// is already where it should be, to fix a permission they never denied.
-  static const String declinedTitle = 'Camera Is Off for Now';
+  static const String declinedTitle = 'Camera Access Needed';
   static const String declinedBody =
-      'You haven’t let LocalJam use the camera yet. Try again to see the '
-      'system’s ask, or join with a link instead.';
-  static const String unsupportedTitle = 'No Scanner Here';
+      'Try Again to allow camera access, or enter a link instead.';
+  static const String unsupportedTitle = 'Camera Unavailable';
   static const String unsupportedBody =
-      'This device can’t scan codes. Join with a link instead.';
+      'This device can’t scan codes. Enter a link instead.';
   static const String failedTitle = 'The Camera Didn’t Start';
   static const String failedBody =
-      'Something else may be using it. Try again, or join with a link.';
+      'Something else may be using it. Try again, or enter a link.';
   static const String retry = 'Try Again';
 }
+
+/// The narrowest a dead end's button gets: it hugs its label (§10.6), but
+/// "Try Again" alone would be a sliver.
+const double _actionMinWidth = 140;
 
 /// The viewfinder's share of the screen's shorter side…
 const double kScanWindowFraction = 0.7;
@@ -288,7 +293,7 @@ class _ScanScreenState extends State<ScanScreen> {
   }
 
   Future<void> _joinWithLink() async {
-    final uri = await promptForJoinLink(context);
+    final uri = await promptForJoinLinkOnBlack(context);
     if (uri == null || !mounted) return;
     _done = true;
     context.pop('$uri');
@@ -367,6 +372,23 @@ class _ScanScreenState extends State<ScanScreen> {
   }
 }
 
+/// The Join with Link alert, as the scanner presents it: always on the dark
+/// palette, like everything else on the black camera page.
+///
+/// The alert is pushed on the root navigator, which carries the app's own
+/// theme; opened from the scanner in Light it rendered light-on-black — an
+/// 80% light material over pure black is a flat mid-grey, with the tint and
+/// the error text at 2–3:1. Same alert, same field; only the palette is the
+/// page's.
+Future<Uri?> promptForJoinLinkOnBlack(BuildContext context) {
+  // The keyboard belongs to the alert now.
+  FocusManager.instance.primaryFocus?.unfocus();
+  return showJamAlert<Uri>(
+    context,
+    builder: (_) => const _OnBlack(child: JoinLinkDialog()),
+  );
+}
+
 /// The dark palette for everything on the black camera page, whatever the
 /// app's appearance: light-mode greys on black would be unreadable.
 class _OnBlack extends StatelessWidget {
@@ -379,12 +401,20 @@ class _OnBlack extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final platform = Theme.of(context).platform;
+    final dark = _themes.putIfAbsent(
+      platform,
+      () => jamDarkTheme(platform: platform),
+    );
     return Theme(
-      data: _themes.putIfAbsent(
-        platform,
-        () => jamDarkTheme(platform: platform),
+      data: dark,
+      // A nested Material theme keeps the *app's* Cupertino theme (it
+      // inherits the nearest one), and every Cupertino surface — the alert's
+      // material, the text field's keyboard — reads its brightness from
+      // there. So the dark Cupertino theme is set here explicitly.
+      child: CupertinoTheme(
+        data: MaterialBasedCupertinoThemeData(materialTheme: dark),
+        child: child,
       ),
-      child: child,
     );
   }
 }
@@ -431,22 +461,19 @@ class _Caption extends StatelessWidget {
 }
 
 /// The floating controls over the feed: the glass xmark, the flashlight
-/// when there is one, and Enter Link at the bottom.
+/// when there is one, and Enter Link at the bottom — on every scan page,
+/// live or dead end, in the same place.
 class _ScanChrome extends StatelessWidget {
   const _ScanChrome({
     required this.controller,
     required this.onClose,
     required this.onLink,
-    this.showLink = true,
   });
 
   /// Null until the camera is running (no flashlight to offer yet).
   final MobileScannerController? controller;
   final VoidCallback onClose;
   final VoidCallback onLink;
-
-  /// Enter Link at the bottom (off where it is already the primary).
-  final bool showLink;
 
   @override
   Widget build(BuildContext context) {
@@ -500,15 +527,14 @@ class _ScanChrome extends StatelessWidget {
             ),
           ),
           const Spacer(),
-          if (showLink)
-            Padding(
-              padding: const EdgeInsets.only(bottom: JamSpace.lg),
-              child: JamButton.plain(
-                label: JamScanStrings.enterLink,
-                color: JamNowPlayingColors.text,
-                onPressed: onLink,
-              ),
+          Padding(
+            padding: const EdgeInsets.only(bottom: JamSpace.lg),
+            child: JamButton.plain(
+              label: JamScanStrings.enterLink,
+              color: JamNowPlayingColors.text,
+              onPressed: onLink,
             ),
+          ),
         ],
       ),
     );
@@ -559,9 +585,12 @@ class _ViewfinderPainter extends CustomPainter {
 /// fixed in Settings.
 ///
 /// The same black page as the viewfinder (§6.10), with the same xmark and
-/// the same Enter Link at the bottom, so a dead end reads as the scanner
-/// saying why, not as a different screen. It is mounted *instead of* the
-/// viewfinder stack, never inside it.
+/// **Enter Link always at the bottom, where the live scanner has it** — so a
+/// dead end reads as the scanner saying why, not as a different screen, and
+/// the way through never moves. The empty state carries at most one other
+/// action, the fix for this dead end, as a neutral capsule that hugs its
+/// label (a tinted fill on black read as a disabled maroon slab). It is
+/// mounted *instead of* the viewfinder stack, never inside it.
 class ScannerUnavailableView extends StatelessWidget {
   const ScannerUnavailableView({
     super.key,
@@ -606,9 +635,14 @@ class ScannerUnavailableView extends StatelessWidget {
         ? (JamScanStrings.unsupportedTitle, JamScanStrings.unsupportedBody)
         : (JamScanStrings.failedTitle, JamScanStrings.failedBody);
     final canRetry = onRetry != null && !denied && !unsupported;
-    // Where nothing else can help, the link *is* the primary and the bottom
-    // button would repeat it.
-    final linkAtBottom = denied || canRetry;
+    // The fix for this dead end, where there is one: Settings where Settings
+    // can fix it, another go at the camera where that is most likely to
+    // work. A device with no camera has none — the link is the way.
+    final (String? actionLabel, VoidCallback? onAction) = denied
+        ? (JamScanStrings.openSettings, () => unawaited(openAppSettings()))
+        : canRetry
+        ? (JamScanStrings.retry, onRetry)
+        : (null, null);
 
     return _OnBlack(
       child: ColoredBox(
@@ -616,28 +650,41 @@ class ScannerUnavailableView extends StatelessWidget {
         child: Stack(
           fit: StackFit.expand,
           children: [
-            JamEmptyState(
-              icon: denied || declined
-                  ? CupertinoIcons.camera
-                  : CupertinoIcons.qrcode_viewfinder,
-              title: title,
-              body: body,
-              foregroundColor: JamNowPlayingColors.text,
-              secondaryColor: JamNowPlayingColors.secondary,
-              actionVariant: JamButtonVariant.tinted,
-              // One primary action per screen: Settings where Settings can
-              // fix it, another go at the camera where that is the thing
-              // most likely to work, the link where nothing else can.
-              actionLabel: denied
-                  ? JamScanStrings.openSettings
-                  : canRetry
-                  ? JamScanStrings.retry
-                  : JamScanStrings.enterLink,
-              onAction: denied
-                  ? () => unawaited(openAppSettings())
-                  : canRetry
-                  ? onRetry
-                  : () => unawaited(onLink()),
+            Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  JamEmptyState(
+                    icon: denied || declined
+                        ? CupertinoIcons.camera
+                        : CupertinoIcons.qrcode_viewfinder,
+                    title: title,
+                    body: body,
+                    foregroundColor: JamNowPlayingColors.text,
+                    secondaryColor: JamNowPlayingColors.secondary,
+                  ),
+                  if (actionLabel != null && onAction != null) ...[
+                    const SizedBox(height: JamSpace.xxl),
+                    // Hugs its label: a centred Container grows to whatever
+                    // width it is offered, so the width is the label's own.
+                    IntrinsicWidth(
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(
+                          minWidth: _actionMinWidth,
+                        ),
+                        // Neutral on black: the dark `fill` capsule with a
+                        // white label.
+                        child: JamButton(
+                          label: actionLabel,
+                          variant: JamButtonVariant.gray,
+                          color: JamNowPlayingColors.text,
+                          onPressed: onAction,
+                        ),
+                      ),
+                    ),
+                  ],
+                ],
+              ),
             ),
             _ScanChrome(
               controller: null,
@@ -645,7 +692,6 @@ class ScannerUnavailableView extends StatelessWidget {
                   onClose ??
                   () => context.canPop() ? context.pop() : context.go('/'),
               onLink: () => unawaited(onLink()),
-              showLink: linkAtBottom,
             ),
           ],
         ),

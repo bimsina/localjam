@@ -328,6 +328,9 @@ class JamRoomAdvertiser {
     }
 
     BonsoirBroadcast? broadcast;
+    // The daemon's confirmation, once asked for — watched past a give-up too,
+    // because a registration can still land after it ([_withdraw]).
+    Future<BonsoirBroadcastEvent>? started;
     // Whether the platform side answered at all. Everything after this point
     // is a daemon that is merely slow or unwilling, not a wedged thread.
     var platformAnswered = false;
@@ -350,16 +353,16 @@ class JamRoomAdvertiser {
       }
       // Subscribed BEFORE start, or the confirmation for a daemon that is
       // quick about it lands before anyone is listening.
-      final started = events.firstWhere(
+      final confirmation = started = events.firstWhere(
         (event) => event is BonsoirBroadcastStartedEvent,
       );
       // It may end up unawaited (a failing start below); a broadcast that
       // errors or ends must not then reach the zone as an unhandled error.
-      unawaited(started.then((_) {}, onError: (Object _) {}));
+      unawaited(confirmation.then((_) {}, onError: (Object _) {}));
       await broadcast.start().timeout(remaining());
       platformAnswered = true;
       unawaited(_clearBreadcrumb(prefs));
-      await started.timeout(remaining());
+      await confirmation.timeout(remaining());
       return broadcast;
     } on TimeoutException {
       if (platformAnswered) {
@@ -380,7 +383,7 @@ class JamRoomAdvertiser {
           '$timeout; advertising through the built-in responder from now on.',
         );
       }
-      unawaited(_stopQuietly(broadcast));
+      unawaited(_withdraw(broadcast, confirmed: started));
       return null;
     } catch (error) {
       // The daemon answered — it just said no. Nothing was left in flight, so
@@ -390,9 +393,43 @@ class JamRoomAdvertiser {
         'localjam: Bonjour registration failed ($error); '
         'falling back to the built-in responder.',
       );
-      unawaited(_stopQuietly(broadcast));
+      unawaited(_withdraw(broadcast, confirmed: started));
       return null;
     }
+  }
+
+  /// How long an abandoned registration is watched for a late confirmation.
+  /// A slow daemon (an emulator, a busy phone) can take seconds; one that has
+  /// not answered in this long is not going to.
+  @visibleForTesting
+  static Duration lateConfirmationWindow = const Duration(minutes: 2);
+
+  /// Takes back a registration this process gave up waiting for.
+  ///
+  /// A stop sent while the registration is still in flight is not enough on
+  /// every platform: Android's `NsdManager` (through bonsoir) only
+  /// unregisters what it has already confirmed, so a stop that overtakes the
+  /// confirmation is dropped, the confirmation lands anyway, and the room
+  /// stays on the network after it has closed — this device even lists its
+  /// own ended jam under Nearby. So the stop is sent now (enough where the
+  /// daemon honours it) and sent again if [confirmed] arrives late.
+  static Future<void> _withdraw(
+    BonsoirBroadcast? broadcast, {
+    Future<BonsoirBroadcastEvent>? confirmed,
+  }) async {
+    if (broadcast == null) return;
+    await _stopQuietly(broadcast);
+    if (confirmed == null) return;
+    try {
+      await confirmed.timeout(lateConfirmationWindow);
+    } catch (_) {
+      return; // Never confirmed: nothing went on the wire.
+    }
+    debugPrint(
+      'localjam: an abandoned Bonjour registration was confirmed late; '
+      'withdrawing it.',
+    );
+    await _stopQuietly(broadcast);
   }
 
   static Future<void> _clearBreadcrumb(SharedPreferences? prefs) async {

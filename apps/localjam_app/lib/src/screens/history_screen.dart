@@ -43,6 +43,11 @@ abstract final class HistoryStrings {
   static const String title = 'Past Jams';
   static const String forget = 'Forget';
   static const String hostAgain = 'Host Again';
+
+  /// A jam you joined was never yours to host *again*.
+  static const String hostThis = 'Host This Jam';
+  static String hostLabel({required bool wasHost}) =>
+      wasHost ? hostAgain : hostThis;
   static const String youHosted = 'You hosted';
   static const String youJoined = 'You joined';
   static const String noneLeft = 'None of these songs are on this device now.';
@@ -78,8 +83,14 @@ abstract final class HistoryStrings {
 
   static const String forgetTitle = 'Forget This Jam?';
   static String forgetBody(String name) =>
-      'The record of $name goes away. The music on this device stays.';
+      '$name will be removed from Past Jams. Songs on this device won’t be '
+      'deleted.';
   static const String forgetConfirm = 'Forget';
+
+  /// The notice after a swipe forgets a jam — the undo is the safety net,
+  /// not a second question.
+  static String forgotten(String name) => 'Forgot $name';
+  static const String undo = 'Undo';
 
   static const String emptyTitle = 'No Past Jams';
   static const String emptyBody = 'Jams you host or join show up here.';
@@ -120,14 +131,21 @@ abstract final class HistoryStrings {
   static const String storedYou = 'You';
 }
 
-/// A relative "when", Apple style: "Just now", "Today", "Yesterday", a
-/// weekday within the week, then "Oct 12" (and the year once it is not this
-/// one).
+/// A relative "when", Apple style: "Just now", "Today, 3:42 PM",
+/// "Yesterday, 9:10 PM", a weekday within the week, then "Oct 12" (and the
+/// year once it is not this one).
+///
+/// Today and yesterday carry the time: two jams in one evening otherwise
+/// read as the same row twice.
 ///
 /// Lives here rather than in `util/format.dart` because it is presentation,
 /// not formatting of engine data; Home's Recent section reaches it through
 /// [jamHistorySummary].
-String jamRelativeTime(DateTime time, {DateTime? now}) {
+String jamRelativeTime(
+  DateTime time, {
+  DateTime? now,
+  bool use24HourFormat = false,
+}) {
   final at = time.toLocal();
   final current = (now ?? DateTime.now()).toLocal();
   if (current.difference(at).inMinutes.abs() < 1) return HistoryStrings.justNow;
@@ -135,25 +153,37 @@ String jamRelativeTime(DateTime time, {DateTime? now}) {
   final day = DateTime(at.year, at.month, at.day);
   // Calendar days, not 24-hour spans; DST-safe via rounding.
   final days = (today.difference(day).inHours / 24).round();
-  if (days <= 0) return HistoryStrings.today;
-  if (days == 1) return HistoryStrings.yesterday;
+  final clock = jamClockTime(at, use24HourFormat: use24HourFormat);
+  if (days <= 0) return '${HistoryStrings.today}, $clock';
+  if (days == 1) return '${HistoryStrings.yesterday}, $clock';
   if (days < 7) return HistoryStrings.weekdays[at.weekday - 1];
   final date = '${HistoryStrings.months[at.month - 1]} ${at.day}';
   return at.year == current.year ? date : '$date, ${at.year}';
 }
 
-/// "You hosted · 12 songs · Yesterday" — a record's one-line summary, on
-/// Past Jams, the detail page and Home's Recent section alike. A jam that
-/// never had a song says nothing about songs rather than "0 songs".
+/// "3:42 PM" (or "15:42" where the device uses a 24-hour clock).
+String jamClockTime(DateTime time, {bool use24HourFormat = false}) {
+  final minute = time.minute.toString().padLeft(2, '0');
+  if (use24HourFormat) {
+    return '${time.hour.toString().padLeft(2, '0')}:$minute';
+  }
+  final hour = time.hour % 12 == 0 ? 12 : time.hour % 12;
+  return '$hour:$minute ${time.hour < 12 ? 'AM' : 'PM'}';
+}
+
+/// "You hosted · 12 songs · Yesterday, 9:10 PM" — a record's one-line
+/// summary, on Past Jams, the detail page and Home's Recent section alike. A
+/// jam that never had a song says nothing about songs rather than "0 songs".
 String jamHistorySummary(
   JamHistoryRecord record, {
   bool withCount = true,
   DateTime? now,
+  bool use24HourFormat = false,
 }) => [
   record.wasHost ? HistoryStrings.youHosted : HistoryStrings.youJoined,
   if (withCount && record.tracks.isNotEmpty)
     HistoryStrings.songs(record.tracks.length),
-  jamRelativeTime(record.updatedAt, now: now),
+  jamRelativeTime(record.updatedAt, now: now, use24HourFormat: use24HourFormat),
 ].join(' · ');
 
 // ---------------------------------------------------------------------------
@@ -383,17 +413,21 @@ Future<bool> _confirmForget(BuildContext context, JamHistoryRecord record) =>
       confirmLabel: HistoryStrings.forgetConfirm,
     );
 
-/// Side padding that holds a list to a reading column on wide windows.
-EdgeInsets _readingPadding(BuildContext context) {
-  final width = MediaQuery.sizeOf(context).width;
-  final side = width > JamContentWidth.reading
-      ? (width - JamContentWidth.reading) / 2
-      : 0.0;
-  return EdgeInsets.symmetric(horizontal: side);
-}
+/// The widest the list grows: a reading column plus the rows' own insets.
+///
+/// Measured against the *pane* this page is laid out in — a sliver's cross
+/// axis — never the window: on an iPad the sidebar takes 260 of the window,
+/// and a column sized from the window squeezed Past Jams into a phone-width
+/// strip that drifted away from its own large title.
+const double kJamReadingColumn = JamContentWidth.reading + 2 * JamSpace.page;
 
 class HistoryScreen extends StatefulWidget {
-  const HistoryScreen({super.key, this.loadRecords, this.forgetRecord});
+  const HistoryScreen({
+    super.key,
+    this.loadRecords,
+    this.forgetRecord,
+    this.restoreRecord,
+  });
 
   /// Where the records come from. Defaults to the on-disk store.
   ///
@@ -405,6 +439,10 @@ class HistoryScreen extends StatefulWidget {
 
   /// How a record is forgotten. Defaults to deleting it from that store.
   final Future<void> Function(JamHistoryRecord record)? forgetRecord;
+
+  /// How a forgotten record comes back (Undo). Defaults to saving it to the
+  /// store again.
+  final Future<void> Function(JamHistoryRecord record)? restoreRecord;
 
   @override
   State<HistoryScreen> createState() => _HistoryScreenState();
@@ -443,12 +481,32 @@ class _HistoryScreenState extends State<HistoryScreen> {
     }
   }
 
-  /// The swipe action: asks, then forgets. False keeps the row.
+  /// The swipe action: forgets at once, like a trailing swipe in Mail or
+  /// Notes — the swipe *was* the decision — and offers Undo, which is the
+  /// safety net a second question used to be.
   Future<bool> _forget(JamHistoryRecord record) async {
-    if (!await _confirmForget(context, record)) return false;
+    final session = JamSession.read(context);
     JamHaptics.destructive();
     await _delete(record);
+    session.notify(
+      HistoryStrings.forgotten(record.sessionName),
+      actionLabel: HistoryStrings.undo,
+      onAction: () => unawaited(_restore(record)),
+      tone: JamNoticeTone.neutral,
+    );
     return true;
+  }
+
+  /// Undo: the record goes back to the store and the list.
+  Future<void> _restore(JamHistoryRecord record) async {
+    final restore = widget.restoreRecord;
+    if (restore != null) {
+      await restore(record);
+    } else {
+      final store = _store ??= await JamHistoryStore.open();
+      await store?.save(record);
+    }
+    if (mounted) await _load();
   }
 
   /// Takes a forgotten record's row out of the list once it has collapsed.
@@ -504,8 +562,9 @@ class _HistoryScreenState extends State<HistoryScreen> {
               );
             },
           ),
-          _ => SliverPadding(
-            padding: _readingPadding(context),
+          _ => SliverConstrainedCrossAxis(
+            // Leading-aligned, so the rows start on the large title's edge.
+            maxExtent: kJamReadingColumn,
             sliver: SliverList.builder(
               itemCount: records.length,
               itemBuilder: (context, index) {
@@ -552,8 +611,13 @@ class _RecordRow extends StatelessWidget {
     ),
     leadingWidth: JamArtworkSize.list,
     title: record.sessionName,
-    subtitle: jamHistorySummary(record),
-    subtitleMaxLines: 1,
+    subtitle: jamHistorySummary(
+      record,
+      use24HourFormat: MediaQuery.alwaysUse24HourFormatOf(context),
+    ),
+    // Two lines before an ellipsis: the time at the end is what tells two
+    // jams from one evening apart, and it is the part that would be cut.
+    subtitleMaxLines: 2,
     chevron: true,
     separator: separator,
     onTap: onTap,
@@ -690,101 +754,109 @@ class _HistoryDetailScreenState extends State<HistoryDetailScreen> {
       ],
     );
 
-    final content = SliverMainAxisGroup(
-      slivers: [
-        SliverPadding(
-          padding: _readingPadding(context),
-          sliver: SliverList.list(
-            children: [
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: JamSpace.page),
-                child: Column(
-                  children: [
-                    const SizedBox(height: JamSpace.xxl),
-                    JamArtworkMosaic(
-                      tracks: tracks,
-                      size: JamArtworkSize.detail,
-                      shadow: true,
-                      semanticLabel: HistoryStrings.cover(record.sessionName),
+    final use24 = MediaQuery.alwaysUse24HourFormatOf(context);
+    final hostLabel = HistoryStrings.hostLabel(wasHost: record.wasHost);
+    final content = SliverLayoutBuilder(
+      // A centred column, sized from the pane this page sits in.
+      builder: (context, constraints) => SliverPadding(
+        padding: EdgeInsets.symmetric(
+          horizontal: constraints.crossAxisExtent > kJamReadingColumn
+              ? (constraints.crossAxisExtent - kJamReadingColumn) / 2
+              : 0,
+        ),
+        sliver: SliverList.list(
+          children: [
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: JamSpace.page),
+              child: Column(
+                children: [
+                  const SizedBox(height: JamSpace.xxl),
+                  JamArtworkMosaic(
+                    tracks: tracks,
+                    size: JamArtworkSize.detail,
+                    shadow: true,
+                    semanticLabel: HistoryStrings.cover(record.sessionName),
+                  ),
+                  const SizedBox(height: JamSpace.xl),
+                  Semantics(
+                    header: true,
+                    child: Text(
+                      record.sessionName,
+                      textAlign: TextAlign.center,
+                      style: context.jamTitle2,
                     ),
-                    const SizedBox(height: JamSpace.xl),
-                    Semantics(
-                      header: true,
-                      child: Text(
-                        record.sessionName,
-                        textAlign: TextAlign.center,
-                        style: context.jamTitle2,
-                      ),
+                  ),
+                  const SizedBox(height: JamSpace.xs),
+                  Text(
+                    jamHistorySummary(
+                      record,
+                      withCount: false,
+                      use24HourFormat: use24,
                     ),
-                    const SizedBox(height: JamSpace.xs),
+                    textAlign: TextAlign.center,
+                    style: secondary,
+                  ),
+                  if (record.peerNames.isNotEmpty) ...[
+                    const SizedBox(height: JamSpace.xxs),
                     Text(
-                      jamHistorySummary(record, withCount: false),
+                      HistoryStrings.withPeople(record.peerNames),
                       textAlign: TextAlign.center,
                       style: secondary,
                     ),
-                    if (record.peerNames.isNotEmpty) ...[
-                      const SizedBox(height: JamSpace.xxs),
-                      Text(
-                        HistoryStrings.withPeople(record.peerNames),
-                        textAlign: TextAlign.center,
-                        style: secondary,
-                      ),
-                    ],
-                    const SizedBox(height: JamSpace.xl),
-                    ConstrainedBox(
-                      constraints: const BoxConstraints(maxWidth: 360),
-                      child: JamButton.gray(
-                        label: HistoryStrings.hostAgain,
-                        icon: CupertinoIcons.play_fill,
-                        expand: true,
-                        // Always the same label; what is missing is said in
-                        // the footnote under it.
-                        onPressed: replayable == 0
-                            ? null
-                            : () => unawaited(_hostAgain()),
-                        semanticLabel:
-                            '${HistoryStrings.hostAgain}: '
-                            '${record.sessionName}',
-                      ),
-                    ),
-                    if (replayable < total) ...[
-                      const SizedBox(height: JamSpace.sm),
-                      Text(
-                        replayable == 0
-                            ? HistoryStrings.noneLeft
-                            : HistoryStrings.someLeft(replayable, total),
-                        textAlign: TextAlign.center,
-                        style: footnote,
-                      ),
-                    ],
-                    const SizedBox(height: JamSpace.xxl),
                   ],
+                  const SizedBox(height: JamSpace.xl),
+                  ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 360),
+                    child: JamButton.gray(
+                      label: hostLabel,
+                      icon: CupertinoIcons.play_fill,
+                      expand: true,
+                      // Always the same label; what is missing is said in
+                      // the footnote under it.
+                      onPressed: replayable == 0
+                          ? null
+                          : () => unawaited(_hostAgain()),
+                      semanticLabel: '$hostLabel: ${record.sessionName}',
+                    ),
+                  ),
+                  if (replayable < total) ...[
+                    const SizedBox(height: JamSpace.sm),
+                    Text(
+                      replayable == 0
+                          ? HistoryStrings.noneLeft
+                          : HistoryStrings.someLeft(replayable, total),
+                      textAlign: TextAlign.center,
+                      style: footnote,
+                    ),
+                  ],
+                  const SizedBox(height: JamSpace.xxl),
+                ],
+              ),
+            ),
+            // No rule above the first song (Apple Music has none); the
+            // rows separate themselves.
+            if (tracks.isNotEmpty) ...[
+              for (var i = 0; i < tracks.length; i++)
+                _HistoryTrackRow(
+                  track: tracks[i],
+                  separator: i < tracks.length - 1,
+                ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(
+                  kJamRowInset,
+                  JamSpace.md,
+                  kJamRowInset,
+                  0,
+                ),
+                child: Text(
+                  HistoryStrings.songsAndLength(total, length),
+                  style: footnote,
                 ),
               ),
-              if (tracks.isNotEmpty) ...[
-                const JamHairline(indent: kJamRowInset),
-                for (var i = 0; i < tracks.length; i++)
-                  _HistoryTrackRow(
-                    track: tracks[i],
-                    separator: i < tracks.length - 1,
-                  ),
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(
-                    kJamRowInset,
-                    JamSpace.md,
-                    kJamRowInset,
-                    0,
-                  ),
-                  child: Text(
-                    HistoryStrings.songsAndLength(total, length),
-                    style: footnote,
-                  ),
-                ),
-              ],
             ],
-          ),
+          ],
         ),
-      ],
+      ),
     );
 
     return JamScaffold(

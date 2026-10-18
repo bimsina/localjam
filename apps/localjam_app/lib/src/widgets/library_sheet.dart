@@ -8,12 +8,17 @@
 /// checkmark circle on each chosen one. The title counts the selection.
 library;
 
+import 'dart:async';
+import 'dart:collection';
+import 'dart:typed_data';
+
 import 'package:flutter/cupertino.dart';
 import 'package:localjam_client/localjam_client.dart';
 
 import '../design/tokens.dart';
 import '../design/typography.dart';
 import '../util/format.dart';
+import '../util/media_picking.dart';
 import 'buttons.dart';
 import 'sheet.dart';
 import 'track_row.dart';
@@ -34,8 +39,36 @@ abstract final class LibrarySheetStrings {
   static String selectedCount(int n) =>
       n == 1 ? '1 Song Selected' : '$n Songs Selected';
 
-  /// "214 Songs".
-  static String available(int n) => n == 1 ? '1 Song' : '$n Songs';
+  /// "214 songs" — a count line, so sentence case (§10.9).
+  static String available(int n) => n == 1 ? '1 song' : '$n songs';
+}
+
+/// Library covers, read out of each song's file the first time its row is
+/// built and kept by MediaStore id, so scrolling back never reads a file
+/// twice. MediaStore has no art column; the cover is in the file.
+abstract final class _LibraryCovers {
+  static final LinkedHashMap<int, Future<Uint8List?>> _cache =
+      LinkedHashMap<int, Future<Uint8List?>>();
+  static const int _capacity = 160;
+
+  static Future<Uint8List?>? peek(JamLibraryTrack track) => _cache[track.id];
+
+  static Future<Uint8List?> load(JamLibraryTrack track) {
+    final hit = _cache.remove(track.id);
+    if (hit != null) return _cache[track.id] = hit;
+    final path = track.path;
+    final Future<Uint8List?> read = path == null
+        ? Future<Uint8List?>.value()
+        // Off the UI isolate, and two at a time (see [readPickedTrack]).
+        : readPickedTrack(
+            JamPickedTrack(path: path),
+          ).then((t) => t.artworkBytes);
+    _cache[track.id] = read;
+    while (_cache.length > _capacity) {
+      _cache.remove(_cache.keys.first);
+    }
+    return read;
+  }
 }
 
 /// Opens the library picker. Pops the chosen tracks, or null when cancelled.
@@ -175,10 +208,13 @@ class _JamLibraryPickerState extends State<JamLibraryPicker> {
           ),
           SliverToBoxAdapter(
             child: Padding(
+              // The small plain button pads its label by 4, so 12 here puts
+              // "Select All" on the same 16 trailing edge as the search field
+              // and the checkmarks.
               padding: const EdgeInsetsDirectional.fromSTEB(
                 JamSpace.page,
                 JamSpace.xs,
-                JamSpace.xs,
+                JamSpace.page - JamSpace.xs,
                 0,
               ),
               child: Row(
@@ -225,33 +261,93 @@ class _JamLibraryPickerState extends State<JamLibraryPicker> {
               itemCount: visible.length,
               itemBuilder: (context, index) {
                 final track = visible[index];
-                final selected = _selected.contains(track.id);
-                final ms = track.durationMs;
-                return Semantics(
-                  selected: selected,
-                  child: JamTrackRow(
-                    key: ValueKey(track.id),
-                    title: stripAudioExtension(track.title),
-                    byline: track.artist ?? LibrarySheetStrings.unknownArtist,
-                    duration: ms == null ? null : Duration(milliseconds: ms),
-                    separator: index < visible.length - 1,
-                    onTap: () => _toggle(track.id),
-                    trailing: Icon(
-                      selected
-                          ? CupertinoIcons.checkmark_circle_fill
-                          : CupertinoIcons.circle,
-                      size: 24,
-                      semanticLabel: selected
-                          ? LibrarySheetStrings.selected
-                          : null,
-                      color: selected ? colors.tint : colors.tertiaryLabel,
-                    ),
-                  ),
+                return _LibraryRow(
+                  key: ValueKey(track.id),
+                  track: track,
+                  selected: _selected.contains(track.id),
+                  separator: index < visible.length - 1,
+                  onTap: () => _toggle(track.id),
                 );
               },
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// One library song: cover, title, "Artist · 3:42" and a checkmark circle.
+/// The cover is read the first time the row is built.
+class _LibraryRow extends StatefulWidget {
+  const _LibraryRow({
+    super.key,
+    required this.track,
+    required this.selected,
+    required this.separator,
+    required this.onTap,
+  });
+
+  final JamLibraryTrack track;
+  final bool selected;
+  final bool separator;
+  final VoidCallback onTap;
+
+  @override
+  State<_LibraryRow> createState() => _LibraryRowState();
+}
+
+class _LibraryRowState extends State<_LibraryRow> {
+  Uint8List? _cover;
+  late bool _loading = widget.track.path != null;
+
+  @override
+  void initState() {
+    super.initState();
+    final pending =
+        _LibraryCovers.peek(widget.track) ?? _LibraryCovers.load(widget.track);
+    unawaited(
+      pending.then((bytes) {
+        if (!mounted) return;
+        setState(() {
+          _cover = bytes;
+          _loading = false;
+        });
+      }),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.jamColors;
+    final track = widget.track;
+    final selected = widget.selected;
+    final ms = track.durationMs;
+    final cover = _cover;
+    final px = (JamArtworkSize.row * MediaQuery.devicePixelRatioOf(context))
+        .round();
+    return Semantics(
+      selected: selected,
+      child: JamTrackRow(
+        title: stripAudioExtension(track.title),
+        byline: track.artist ?? LibrarySheetStrings.unknownArtist,
+        duration: ms == null ? null : Duration(milliseconds: ms),
+        // Decoded at the size it is drawn, not at the file's 1400 px.
+        artworkImage: cover == null
+            ? null
+            : ResizeImage(MemoryImage(cover), width: px, height: px),
+        artworkId: cover == null ? null : identityHashCode(cover),
+        artworkLoading: _loading,
+        separator: widget.separator,
+        onTap: widget.onTap,
+        trailing: Icon(
+          selected
+              ? CupertinoIcons.checkmark_circle_fill
+              : CupertinoIcons.circle,
+          size: 24,
+          semanticLabel: selected ? LibrarySheetStrings.selected : null,
+          color: selected ? colors.tint : colors.tertiaryLabel,
+        ),
       ),
     );
   }

@@ -1,0 +1,65 @@
+/// The Android library picker: Apple Music's "Add Songs" sheet.
+library;
+
+import 'package:flutter/material.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:localjam_app/src/design/theme.dart';
+import 'package:localjam_app/src/widgets/library_sheet.dart';
+import 'package:localjam_app/src/widgets/track_row.dart';
+import 'package:localjam_client/localjam_client.dart';
+
+const _tracks = [
+  JamLibraryTrack(
+    id: 1,
+    title: 'Low Tide',
+    artist: 'Harbour Kids',
+    durationMs: 200000,
+    sizeBytes: 1,
+    contentUri: 'content://media/1',
+  ),
+  JamLibraryTrack(
+    id: 2,
+    title: 'Neon Afterglow.m4a',
+    sizeBytes: 1,
+    contentUri: 'content://media/2',
+  ),
+];
+
+Future<void> _pump(WidgetTester tester, {bool dark = false}) {
+  final theme = dark ? jamDarkTheme() : jamLightTheme();
+  return tester.pumpWidget(
+    MaterialApp(
+      theme: theme,
+      home: const Scaffold(body: JamLibraryPicker(tracks: _tracks)),
+    ),
+  );
+}
+
+void main() {
+  testWidgets('rows carry title, artist and length; the count is sentence '
+      'case; selecting retitles the sheet', (tester) async {
+    await _pump(tester);
+    expect(find.byType(JamTrackRow), findsNWidgets(2));
+    expect(find.text('Low Tide'), findsOneWidget);
+    expect(find.text('Neon Afterglow'), findsOneWidget);
+    expect(find.textContaining('Harbour Kids'), findsOneWidget);
+    expect(find.text(LibrarySheetStrings.available(2)), findsOneWidget);
+    expect(LibrarySheetStrings.available(2), '2 songs');
+
+    await tester.tap(find.text('Low Tide'));
+    await tester.pump();
+    expect(find.text(LibrarySheetStrings.selectedCount(1)), findsOneWidget);
+  });
+
+  testWidgets('"Select All" ends on the page margin', (tester) async {
+    await _pump(tester);
+    final sheet = tester.getRect(find.byType(JamLibraryPicker));
+    final label = tester.getRect(find.text(LibrarySheetStrings.selectAll));
+    expect(sheet.right - label.right, closeTo(16, 0.5));
+  });
+
+  testWidgets('renders on the dark palette', (tester) async {
+    await _pump(tester, dark: true);
+    expect(tester.takeException(), isNull);
+  });
+}

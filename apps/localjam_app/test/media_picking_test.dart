@@ -5,11 +5,15 @@
 /// showed up as "track1.m4a" once it was in.
 library;
 
+import 'dart:io';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:localjam_app/src/util/format.dart';
 import 'package:localjam_app/src/util/media_picking.dart';
 import 'package:localjam_client/localjam_client.dart';
+
+import 'fixtures.dart';
 
 void main() {
   group('jamAudioTypeGroup', () {
@@ -73,6 +77,70 @@ void main() {
 
     test('strips the extension off a filename fallback', () {
       expect(jamDisplayTitle(item()), 'track1');
+    });
+  });
+
+  group('JamPickedTrack', () {
+    test('keeps what the library knew instead of a file name', () {
+      const library = JamLibraryTrack(
+        id: 7,
+        title: 'Low Tide',
+        artist: 'Harbour Kids',
+        durationMs: 200000,
+        sizeBytes: 1,
+        contentUri: 'content://media/7',
+      );
+      final picked = JamPickedTrack.fromLibrary(library, '/cache/tide.m4a');
+      expect(picked.displayTitle, 'Low Tide');
+      expect(picked.artist, 'Harbour Kids');
+      expect(picked.duration, const Duration(seconds: 200));
+      expect(picked.path, '/cache/tide.m4a');
+      expect(picked.tagsRead, isFalse);
+    });
+
+    test('falls back to the file name, without its extension', () {
+      expect(
+        const JamPickedTrack(path: '/music/Night Drive.mp3').displayTitle,
+        'Night Drive',
+      );
+    });
+
+    test('tags fill the gaps but never overwrite the library', () {
+      final cover = Uint8List.fromList([1, 2, 3]);
+      final read = const JamPickedTrack(path: '/a.m4a', title: 'Library Title')
+          .withTags(
+            JamAudioTags(
+              title: 'Tag Title',
+              artist: 'Tag Artist',
+              durationUs: 3000000,
+              artworkBytes: cover,
+            ),
+          );
+      expect(read.title, 'Library Title');
+      expect(read.artist, 'Tag Artist');
+      expect(read.duration, const Duration(seconds: 3));
+      expect(read.artworkBytes, cover);
+      expect(read.tagsRead, isTrue);
+    });
+
+    test('reading a file off the UI isolate gives its length', () async {
+      final dir = Directory.systemTemp.createTempSync('localjam_pick');
+      addTearDown(() => dir.deleteSync(recursive: true));
+      final file = File('${dir.path}${Platform.pathSeparator}tone.wav')
+        ..writeAsBytesSync(wavBytes(ms: 2000));
+      final read = await readPickedTrack(JamPickedTrack(path: file.path));
+      expect(read.tagsRead, isTrue);
+      expect(read.displayTitle, 'tone');
+      expect(read.duration?.inMilliseconds, closeTo(2000, 50));
+    });
+
+    test('a missing file is read as tagless, never thrown', () async {
+      final read = await readPickedTrack(
+        const JamPickedTrack(path: '/nowhere/gone.mp3'),
+      );
+      expect(read.tagsRead, isTrue);
+      expect(read.displayTitle, 'gone');
+      expect(read.artworkBytes, isNull);
     });
   });
 }

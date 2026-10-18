@@ -49,8 +49,9 @@ abstract final class OnboardingStrings {
 /// column rather than a billboard.
 const double _contentWidth = 480;
 
-/// The title's distance from the safe area's top (§6.9: ~60).
-const double _titleTop = 60;
+/// The title's distance from the safe area's top: a little lower than §6.9's
+/// 60, as Apple's own welcome screens sit.
+const double _titleTop = 80;
 
 class OnboardingScreen extends StatefulWidget {
   const OnboardingScreen({super.key, this.prefs, this.onDone});
@@ -84,6 +85,8 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     final colors = context.jamColors;
     final brightness = Theme.of(context).brightness;
     final width = MediaQuery.sizeOf(context).width;
+    // One leading edge for the title, the feature glyphs and Continue —
+    // Apple's welcome screens hold everything to a single margin.
     final side = JamSpace.pageFor(width) + JamSpace.lg;
 
     return AnnotatedRegion<SystemUiOverlayStyle>(
@@ -104,9 +107,12 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                         children: [
                           Semantics(
                             header: true,
+                            // Title 1, not Large Title: at 34 pt "Welcome to
+                            // LocalJam" wrapped on a 402 pt iPhone and fit on
+                            // Android, so the two looked different.
                             child: Text(
                               OnboardingStrings.title,
-                              style: context.jamLargeTitle,
+                              style: context.jamTitle1,
                             ),
                           ),
                           const SizedBox(height: JamSpace.huge),
@@ -131,9 +137,9 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                   ),
                   Padding(
                     padding: EdgeInsets.fromLTRB(
-                      JamSpace.pageFor(width),
+                      side,
                       JamSpace.lg,
-                      JamSpace.pageFor(width),
+                      side,
                       JamSpace.lg,
                     ),
                     child: JamButton.filled(
@@ -152,7 +158,9 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   }
 }
 
-/// One feature: a tint glyph, a headline and one sentence.
+/// One feature: a tint glyph, a headline and one sentence — drawn exactly as
+/// the permission primers draw theirs (24 glyph in a 30 column, 12 to the
+/// text), since a new user sees the two back to back.
 class _Feature extends StatelessWidget {
   const _Feature({required this.icon, required this.title, required this.body});
 
@@ -161,7 +169,8 @@ class _Feature extends StatelessWidget {
   final String body;
 
   /// The glyph column, so every headline starts on the same line.
-  static const double _iconBox = 44;
+  static const double _iconBox = 30;
+  static const double _iconSize = 24;
 
   @override
   Widget build(BuildContext context) {
@@ -174,9 +183,11 @@ class _Feature extends StatelessWidget {
           children: [
             SizedBox(
               width: _iconBox,
-              child: Padding(
-                padding: const EdgeInsets.only(top: JamSpace.xxs),
-                child: Icon(icon, size: 30, color: colors.tint),
+              // Leading-aligned in its column, so the glyph's edge is the
+              // title's edge.
+              child: Align(
+                alignment: AlignmentDirectional.topStart,
+                child: Icon(icon, size: _iconSize, color: colors.tint),
               ),
             ),
             const SizedBox(width: JamSpace.md),

@@ -13,7 +13,6 @@
 library;
 
 import 'dart:async';
-import 'dart:io';
 
 import 'package:flutter/cupertino.dart';
 import 'package:go_router/go_router.dart';
@@ -23,7 +22,6 @@ import '../design/breakpoints.dart';
 import '../design/tokens.dart';
 import '../design/typography.dart';
 import '../state/session_controller.dart';
-import '../util/format.dart';
 import '../util/media_picking.dart';
 import '../util/network.dart';
 import '../widgets/buttons.dart';
@@ -51,12 +49,20 @@ abstract final class HostSetupStrings {
 
   static const String songs = 'Songs';
 
-  /// "12 Songs" — the section header once there are some.
-  static String songCount(int n) => n == 1 ? '1 Song' : '$n Songs';
+  /// "12 songs" — the section header once there are some (sentence case,
+  /// §10.9).
+  static String songCount(int n) => n == 1 ? '1 song' : '$n songs';
   static const String addSongs = 'Add Songs';
   static const String looking = 'Looking for music on this device…';
-  static const String songsFooter =
-      'Optional. Everyone can add songs once the jam starts.';
+
+  /// The Songs footer, true to the chosen preset: under Listen Only nobody
+  /// but the host adds anything.
+  static const String songsFooterGuests =
+      'Optional. Guests can add songs once the jam starts.';
+  static const String songsFooterHost =
+      'Optional. You can add songs once the jam starts.';
+  static String songsFooter(JamPolicy policy) =>
+      policy.addTracks ? songsFooterGuests : songsFooterHost;
   static const String remove = 'Remove';
 
   static const String discoverable = 'Show to People Nearby';
@@ -103,7 +109,11 @@ class HostSetupScreen extends StatefulWidget {
 
 class _HostSetupScreenState extends State<HostSetupScreen> {
   final TextEditingController _name = TextEditingController();
-  final List<String> _paths = [];
+
+  /// The songs, in order, each with whatever is known about it so far: a
+  /// library pick arrives with title, artist and length, a file with only
+  /// its path until its tags have been read ([readPickedTrack]).
+  final List<JamPickedTrack> _tracks = [];
   String _defaultName = HostSetupStrings.fallbackName;
   // "Add Music" is the jam: everyone contributes, the host keeps the
   // transport. Open by default handed a stranger on the same Wi-Fi the pause
@@ -119,7 +129,10 @@ class _HostSetupScreenState extends State<HostSetupScreen> {
   @override
   void initState() {
     super.initState();
-    _paths.addAll(widget.initialPaths ?? const []);
+    _addTracks([
+      for (final path in widget.initialPaths ?? const <String>[])
+        JamPickedTrack(path: path),
+    ], rebuild: false);
     final preset = widget.initialName;
     if (preset != null && preset.isNotEmpty) _name.text = preset;
     unawaited(_loadDefaultName());
@@ -162,12 +175,8 @@ class _HostSetupScreenState extends State<HostSetupScreen> {
       onTimeout: () => const <String>[],
     );
     if (!mounted) return;
-    setState(() {
-      _scanning = false;
-      for (final path in found) {
-        if (!_paths.contains(path)) _paths.add(path);
-      }
-    });
+    setState(() => _scanning = false);
+    _addTracks([for (final path in found) JamPickedTrack(path: path)]);
   }
 
   Future<void> _refreshNetwork() async {
@@ -183,22 +192,42 @@ class _HostSetupScreenState extends State<HostSetupScreen> {
     _dismissKeyboard();
     final source = await chooseAddSource(context);
     if (source == null || !mounted) return;
-    final pick = source == JamAddSource.library
-        ? pickLibraryTracks(context)
-        : pickAudioFiles(context);
-    _addPaths(await pick);
+    final picked = source == JamAddSource.library
+        ? await pickLibraryTrackDetails(context)
+        : [
+            for (final path in await pickAudioFiles(context))
+              JamPickedTrack(path: path),
+          ];
+    _addTracks(picked);
   }
 
-  void _addPaths(List<String> paths) {
-    if (!mounted || paths.isEmpty) return;
-    setState(() {
-      for (final path in paths) {
-        if (!_paths.contains(path)) _paths.add(path);
-      }
-    });
+  /// Appends [picked] (skipping files already in the list) and reads each
+  /// one's tags and cover in the background — off the UI isolate, two at a
+  /// time — so the rows fill in with real titles, artists, lengths and
+  /// covers instead of file names.
+  void _addTracks(List<JamPickedTrack> picked, {bool rebuild = true}) {
+    if (!mounted || picked.isEmpty) return;
+    final fresh = <JamPickedTrack>[
+      for (final track in picked)
+        if (!_tracks.any((t) => t.path == track.path)) track,
+    ];
+    if (fresh.isEmpty) return;
+    void add() => _tracks.addAll(fresh);
+    rebuild ? setState(add) : add();
+    for (final track in fresh) {
+      unawaited(readPickedTrack(track).then(_onTagsRead));
+    }
   }
 
-  void _remove(String path) => setState(() => _paths.remove(path));
+  void _onTagsRead(JamPickedTrack read) {
+    if (!mounted) return;
+    final index = _tracks.indexWhere((t) => t.path == read.path);
+    if (index < 0) return; // Removed while its tags were being read.
+    setState(() => _tracks[index] = read);
+  }
+
+  void _remove(String path) =>
+      setState(() => _tracks.removeWhere((t) => t.path == path));
 
   /// A picker, a sheet or Start must never open over a live keyboard — and
   /// closing one must not pop it back up over the result.
@@ -225,7 +254,7 @@ class _HostSetupScreenState extends State<HostSetupScreen> {
       sessionName: name,
       policy: _policy,
       discoverable: _discoverable,
-      paths: List.of(_paths),
+      paths: [for (final track in _tracks) track.path],
     );
     if (!mounted) return;
     setState(() => _starting = false);
@@ -234,7 +263,10 @@ class _HostSetupScreenState extends State<HostSetupScreen> {
       // lands on home instead of back in the form that created it.
       context.pushReplacement('/room');
     } else {
-      session.notify(session.error ?? HostSetupStrings.couldNotStart);
+      session.notify(
+        session.error ?? HostSetupStrings.couldNotStart,
+        tone: JamNoticeTone.error,
+      );
     }
   }
 
@@ -367,38 +399,71 @@ class _HostSetupScreenState extends State<HostSetupScreen> {
   }
 
   Widget _songsSection() {
+    final colors = context.jamColors;
+    final hasSongs = _tracks.isNotEmpty;
+    final dpr = MediaQuery.devicePixelRatioOf(context);
+    final coverPx = (JamArtworkSize.row * dpr).round();
     return JamSection(
-      header: _paths.isEmpty
-          ? HostSetupStrings.songs
-          : HostSetupStrings.songCount(_paths.length),
-      footer: _paths.isEmpty && !_scanning
-          ? HostSetupStrings.songsFooter
+      header: hasSongs
+          ? HostSetupStrings.songCount(_tracks.length)
+          : HostSetupStrings.songs,
+      footer: !hasSongs && !_scanning
+          ? HostSetupStrings.songsFooter(_policy)
           : null,
       children: [
-        JamRow(
-          title: HostSetupStrings.addSongs,
-          icon: CupertinoIcons.plus_circle_fill,
-          tinted: true,
-          onTap: () => unawaited(_addSongs()),
-        ),
-        if (_scanning && _paths.isEmpty) const _LookingRow(),
-        // No duration on these rows: neither the file picker nor the
-        // Documents sweep hands one back — only paths — and a dash where a
-        // length should be is worse than a clean trailing edge.
-        for (final path in _paths)
+        hasSongs
+            // On the songs' grid once there are songs: the plus sits in a
+            // cover-sized slot, so "Add Songs" starts where the titles do
+            // (Apple Music's playlist editor).
+            ? JamRow(
+                title: HostSetupStrings.addSongs,
+                leading: SizedBox.square(
+                  dimension: JamArtworkSize.row,
+                  child: Icon(
+                    CupertinoIcons.plus_circle_fill,
+                    size: JamMetrics.rowIcon,
+                    color: colors.tint,
+                  ),
+                ),
+                leadingWidth: JamArtworkSize.row,
+                tinted: true,
+                onTap: () => unawaited(_addSongs()),
+              )
+            : JamRow(
+                title: HostSetupStrings.addSongs,
+                icon: CupertinoIcons.plus_circle_fill,
+                tinted: true,
+                onTap: () => unawaited(_addSongs()),
+              ),
+        if (_scanning && !hasSongs) const _LookingRow(),
+        for (final track in _tracks)
           JamSwipeAction(
-            key: ValueKey(path),
+            key: ValueKey(track.path),
             label: HostSetupStrings.remove,
             onAction: () async => true,
-            onRemoved: () => _remove(path),
-            child: JamTrackRow(title: stripAudioExtension(_basename(path))),
+            onRemoved: () => _remove(track.path),
+            child: JamTrackRow(
+              title: track.displayTitle,
+              byline: track.artist,
+              duration: track.duration,
+              // Decoded at the size it is drawn, not at the file's 1400 px.
+              artworkImage: track.artworkBytes == null
+                  ? null
+                  : ResizeImage(
+                      MemoryImage(track.artworkBytes!),
+                      width: coverPx,
+                      height: coverPx,
+                    ),
+              artworkId: track.artworkBytes == null
+                  ? null
+                  : identityHashCode(track.artworkBytes),
+              artworkLoading: !track.tagsRead,
+            ),
           ),
       ],
     );
   }
 }
-
-String _basename(String path) => path.split(Platform.pathSeparator).last;
 
 /// The room name, as a big inline field in its own grouped cell — Apple
 /// Invites' event title. The placeholder is the default name, so leaving it
@@ -423,6 +488,8 @@ class _NameField extends StatelessWidget {
       label: HostSetupStrings.nameField,
       child: CupertinoTextField.borderless(
         controller: controller,
+        // The in-app appearance, not the device's (§10.8).
+        keyboardAppearance: CupertinoTheme.brightnessOf(context),
         placeholder: placeholder,
         placeholderStyle: style.copyWith(color: colors.tertiaryLabel),
         style: style,

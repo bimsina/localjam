@@ -2,6 +2,7 @@
 /// it writes the flag exactly once.
 library;
 
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:localjam_app/src/design/theme.dart';
@@ -137,6 +138,29 @@ void main() {
 
     expect(tester.takeException(), isNull);
     expect(find.text(OnboardingStrings.continueLabel), findsOneWidget);
+  });
+
+  testWidgets('title, feature glyphs and Continue share one leading edge', (
+    tester,
+  ) async {
+    // Four edges before: title 36, glyphs 43, text 92, button 20.
+    await pumpOnboarding(tester, size: const Size(402, 874));
+    final title = tester.getRect(find.text(OnboardingStrings.title));
+    final glyph = tester.getRect(find.byIcon(CupertinoIcons.headphones));
+    final button = tester.getRect(
+      find.widgetWithText(JamButton, OnboardingStrings.continueLabel),
+    );
+    expect(glyph.left, closeTo(title.left, 0.5));
+    expect(button.left, closeTo(title.left, 0.5));
+    // Title 1, the same row pattern as the permission primers.
+    expect(
+      tester.widget<Text>(find.text(OnboardingStrings.title)).style?.fontSize,
+      28,
+    );
+    expect(
+      tester.widget<Icon>(find.byIcon(CupertinoIcons.headphones)).size,
+      24,
+    );
   });
 
   testWidgets('renders on the dark palette', (tester) async {
