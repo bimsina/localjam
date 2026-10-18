@@ -1,16 +1,16 @@
-/// Desktop navigation.
+/// Desktop navigation (DESIGN_SPEC v3 §6.11, D7).
 ///
-/// On a wide window the phone chrome stops working: destinations hidden
-/// behind app-bar icons and a room bar pinned to the bottom of a 1400px
-/// window both read as leftovers from a smaller screen. The sidebar holds
-/// the brand, identity, the destinations, and the live jam, all permanently
-/// visible.
+/// On a wide window the phone chrome stops working: destinations behind
+/// nav-bar icons and a mini player floating over a 1400px window both read as
+/// leftovers from a smaller screen. The sidebar holds identity, the
+/// destinations and the live jam, all permanently visible — a column like
+/// Music's on the Mac: rows of icon and title, the selected one on a tinted
+/// rounded highlight.
 library;
 
 import 'dart:async';
 
-import 'package:flutter/material.dart';
-import 'package:flutter_svg/flutter_svg.dart';
+import 'package:flutter/cupertino.dart';
 import 'package:go_router/go_router.dart';
 
 import '../design/breakpoints.dart';
@@ -18,26 +18,26 @@ import '../design/tokens.dart';
 import '../design/typography.dart';
 import '../state/session_controller.dart';
 import 'avatar.dart';
+import 'list.dart';
+import 'pressable.dart';
 import 'room_bar.dart';
 
 /// Everything the sidebar says out loud.
 abstract final class AppSidebarStrings {
-  static const String wordmark = 'LocalJam';
   static const String nearby = 'Nearby';
-  static const String history = 'Past jams';
+  static const String history = 'Past Jams';
   static const String settings = 'Settings';
-  static const String identityHint = 'Change how you appear in rooms';
+  static const String identityHint = 'Change your name';
 
   /// Shown in the identity row until the stored name has loaded.
   static const String loadingIdentity = '…';
 }
 
-const String _logoAsset = 'assets/brand/logo.svg';
+/// A sidebar row's height (macOS / iPadOS sidebars sit at 32–36).
+const double kJamSidebarRowHeight = 36;
 
-/// The brand lockup's mark size, and the 3×20 bar on the selected nav item.
-const double _markSize = 24;
-const double _selectedBarWidth = 3;
-const double _selectedBarHeight = 20;
+const double _rowRadius = JamRadius.sm;
+const double _rowIcon = 18;
 
 class AppSidebar extends StatelessWidget {
   const AppSidebar({super.key, required this.identity, this.onRename});
@@ -50,148 +50,107 @@ class AppSidebar extends StatelessWidget {
     final colors = context.jamColors;
     final session = JamSession.of(context);
     final location = GoRouterState.of(context).matchedLocation;
+    final light = CupertinoTheme.brightnessOf(context) == Brightness.light;
 
-    return Container(
+    return SizedBox(
       width: JamContentWidth.sidebar,
-      decoration: BoxDecoration(
-        color: colors.groupedSurface,
-        border: Border(right: BorderSide(color: colors.separator, width: 0.5)),
-      ),
-      child: SafeArea(
-        right: false,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            // The brand, 20 above the identity row (§5 "Wide layouts"): a
-            // window this size has room to say whose app this is.
-            const Padding(
-              padding: EdgeInsets.fromLTRB(
-                JamSpace.xl,
-                JamSpace.xl,
-                JamSpace.md,
-                JamSpace.xl,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          // A step off the content's own ground, as a Mac sidebar is: the
+          // grouped grey in light, the raised grey in dark.
+          color: light ? colors.groupedBackground : colors.groupedSurface,
+          border: Border(
+            right: BorderSide(
+              color: colors.separator,
+              width: JamHairline.thicknessOf(context),
+            ),
+          ),
+        ),
+        child: SafeArea(
+          right: false,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const SizedBox(height: JamSpace.lg),
+              _IdentityRow(identity: identity, onTap: onRename),
+              const SizedBox(height: JamSpace.lg),
+              _NavItem(
+                icon: CupertinoIcons.antenna_radiowaves_left_right,
+                label: AppSidebarStrings.nearby,
+                path: '/',
+                current: location,
               ),
-              child: _Wordmark(),
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(
-                JamSpace.md,
-                0,
-                JamSpace.md,
-                JamSpace.xl,
+              _NavItem(
+                icon: CupertinoIcons.clock,
+                label: AppSidebarStrings.history,
+                path: '/history',
+                current: location,
               ),
-              child: Semantics(
-                button: onRename != null,
-                label: identity.isEmpty
-                    ? AppSidebarStrings.identityHint
-                    : '$identity. ${AppSidebarStrings.identityHint}',
-                excludeSemantics: true,
-                child: InkWell(
-                  onTap: onRename,
-                  borderRadius: BorderRadius.circular(JamRadius.md),
-                  child: Padding(
-                    padding: const EdgeInsets.all(JamSpace.sm),
-                    child: Row(
-                      children: [
-                        if (identity.isNotEmpty)
-                          JamAvatar(
-                            name: identity,
-                            size: JamAvatarSize.identity,
-                          ),
-                        const SizedBox(width: JamSpace.md),
-                        Expanded(
-                          child: Text(
-                            identity.isEmpty
-                                ? AppSidebarStrings.loadingIdentity
-                                : identity,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: context.jamHeadline,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
+              _NavItem(
+                icon: CupertinoIcons.gear,
+                label: AppSidebarStrings.settings,
+                path: '/settings',
+                current: location,
               ),
-            ),
-            _NavItem(
-              icon: Icons.podcasts_rounded,
-              label: AppSidebarStrings.nearby,
-              path: '/',
-              current: location,
-            ),
-            _NavItem(
-              icon: Icons.history_rounded,
-              label: AppSidebarStrings.history,
-              path: '/history',
-              current: location,
-            ),
-            _NavItem(
-              icon: Icons.settings_rounded,
-              label: AppSidebarStrings.settings,
-              path: '/settings',
-              current: location,
-            ),
-            const Spacer(),
-            if (session.hasRoom)
-              Padding(
-                padding: const EdgeInsets.all(JamSpace.sm),
-                // The bar clips itself: an outer ClipRRect alone leaves the
-                // 2 dp progress line pinned to its top edge running across
-                // the rounded corner. At 260 dp the bar also collapses to
-                // cover + transport, which is all this width honestly holds.
-                child: RoomBar(
-                  borderRadius: BorderRadius.circular(JamRadius.md),
-                ),
-              ),
-          ],
+              const Spacer(),
+              // The mini player paints its own capsule and margins.
+              if (session.hasRoom) const RoomBar(),
+            ],
+          ),
         ),
       ),
     );
   }
 }
 
-/// The white mark on the raspberry gradient plus the wordmark beside it.
-class _Wordmark extends StatelessWidget {
-  const _Wordmark();
+/// Your face and name at the top of the sidebar; tap to rename.
+class _IdentityRow extends StatelessWidget {
+  const _IdentityRow({required this.identity, this.onTap});
+
+  final String identity;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
-    final colors = context.jamColors;
-    return Semantics(
-      label: AppSidebarStrings.wordmark,
-      header: true,
-      excludeSemantics: true,
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(
-            width: _markSize + JamSpace.sm,
-            height: _markSize + JamSpace.sm,
-            alignment: Alignment.center,
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(JamRadius.sm),
-              gradient: LinearGradient(
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-                colors: [colors.tint, colors.tintPressed],
-              ),
-            ),
-            child: SvgPicture.asset(
-              _logoAsset,
-              width: _markSize * 0.72,
-              height: _markSize * 0.72,
-              fit: BoxFit.contain,
-              colorFilter: const ColorFilter.mode(
-                Colors.white,
-                BlendMode.srcIn,
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: JamSpace.sm),
+      child: Semantics(
+        container: true,
+        button: onTap != null,
+        label: identity.isEmpty
+            ? AppSidebarStrings.identityHint
+            : '$identity. ${AppSidebarStrings.identityHint}',
+        onTap: onTap,
+        excludeSemantics: true,
+        child: JamPressable(
+          onTap: onTap,
+          style: JamPressStyle.highlight,
+          borderRadius: BorderRadius.circular(_rowRadius),
+          child: SizedBox(
+            height: JamMetrics.hitTarget,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: JamSpace.sm),
+              child: Row(
+                children: [
+                  if (identity.isNotEmpty) ...[
+                    JamAvatar(name: identity, size: JamAvatarSize.identity),
+                    const SizedBox(width: JamSpace.md),
+                  ],
+                  Expanded(
+                    child: Text(
+                      identity.isEmpty
+                          ? AppSidebarStrings.loadingIdentity
+                          : identity,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: context.jamHeadline,
+                    ),
+                  ),
+                ],
               ),
             ),
           ),
-          const SizedBox(width: JamSpace.md),
-          Text(AppSidebarStrings.wordmark, style: context.jamTitle3),
-        ],
+        ),
       ),
     );
   }
@@ -214,63 +173,47 @@ class _NavItem extends StatelessWidget {
   Widget build(BuildContext context) {
     final colors = context.jamColors;
     final selected = current == path;
+    final onTap = selected ? null : () => unawaited(_go(context));
     return Padding(
-      padding: const EdgeInsets.symmetric(
-        horizontal: JamSpace.md,
-        vertical: JamSpace.xxs,
-      ),
-      child: Material(
-        color: selected ? colors.tintFill : Colors.transparent,
-        borderRadius: BorderRadius.circular(JamRadius.md),
-        child: InkWell(
-          borderRadius: BorderRadius.circular(JamRadius.md),
-          onTap: selected ? null : () => unawaited(_go(context)),
-          child: Stack(
-            children: [
-              // The 3×20 accent bar the spec asks for, flush to the item's
-              // own left edge rather than inside its padding.
-              if (selected)
-                Positioned(
-                  left: 0,
-                  top: 0,
-                  bottom: 0,
-                  child: Center(
-                    child: Container(
-                      width: _selectedBarWidth,
-                      height: _selectedBarHeight,
-                      decoration: BoxDecoration(
-                        color: colors.tint,
-                        borderRadius: BorderRadius.circular(2),
-                      ),
+      padding: const EdgeInsets.symmetric(horizontal: JamSpace.sm, vertical: 1),
+      child: Semantics(
+        container: true,
+        button: true,
+        selected: selected,
+        label: label,
+        onTap: onTap,
+        excludeSemantics: true,
+        child: JamPressable(
+          onTap: onTap,
+          style: JamPressStyle.highlight,
+          borderRadius: BorderRadius.circular(_rowRadius),
+          child: Container(
+            height: kJamSidebarRowHeight,
+            padding: const EdgeInsets.symmetric(horizontal: JamSpace.sm),
+            decoration: BoxDecoration(
+              color: selected ? colors.tintFill : null,
+              borderRadius: BorderRadius.circular(_rowRadius),
+            ),
+            child: Row(
+              children: [
+                SizedBox(
+                  width: JamMetrics.rowIconBox - 6,
+                  child: Icon(icon, size: _rowIcon, color: colors.tint),
+                ),
+                const SizedBox(width: JamSpace.sm),
+                Expanded(
+                  child: Text(
+                    label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: context.jamBody.copyWith(
+                      color: selected ? colors.tint : colors.label,
+                      fontWeight: selected ? FontWeight.w600 : null,
                     ),
                   ),
                 ),
-              Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: JamSpace.md,
-                  vertical: JamSpace.md,
-                ),
-                child: Row(
-                  children: [
-                    Icon(
-                      icon,
-                      size: 20,
-                      color: selected ? colors.tint : colors.secondaryLabel,
-                    ),
-                    const SizedBox(width: JamSpace.md),
-                    Text(
-                      label,
-                      style: context.jamBody.copyWith(
-                        color: selected ? colors.tint : colors.label,
-                        fontWeight: selected
-                            ? FontWeight.w600
-                            : FontWeight.w400,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ),

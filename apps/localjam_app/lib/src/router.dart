@@ -1,12 +1,11 @@
-/// Routes, and the shell that keeps the docked room bar under everything you
-/// can reach while a jam is running.
+/// Routes, and the shell that floats the mini player over everything you can
+/// reach while a jam is running (DESIGN_SPEC v3 §6.11).
 library;
-
-import 'package:flutter/material.dart';
-import 'package:go_router/go_router.dart';
 
 import 'dart:async';
 
+import 'package:flutter/cupertino.dart';
+import 'package:go_router/go_router.dart';
 import 'package:localjam_client/localjam_client.dart';
 
 import 'design/breakpoints.dart';
@@ -196,14 +195,31 @@ GoRouter _buildRouter(
     ),
     GoRoute(
       path: '/host',
-      builder: (context, state) {
+      // Start a Jam is a sheet (§6.2): it rises over home, which recedes
+      // behind it the way an iOS page sheet does, with Cancel and Start in
+      // its own nav bar. A desktop window gets a plain page instead — a
+      // phone-shaped card over a 1280 px window is a dialog wearing a
+      // costume.
+      pageBuilder: (context, state) {
         // `extra` when the router still has it; the controller's draft when
         // a rebuild dropped it — the same args either way.
         final args = state.extra as HostSetupArgs?;
         final draft = session.hostSetupDraft;
-        return HostSetupScreen(
+        Widget screen([ScrollController? controller]) => HostSetupScreen(
           initialPaths: args?.paths ?? draft?.paths,
           initialName: args?.name ?? draft?.name,
+          scrollController: controller,
+        );
+        if (context.jamBreakpoint.hasSidebar) {
+          return CupertinoPage<void>(
+            key: state.pageKey,
+            fullscreenDialog: true,
+            child: screen(),
+          );
+        }
+        return _JamSheetPage<void>(
+          key: state.pageKey,
+          builder: (context, controller) => screen(controller),
         );
       },
     ),
@@ -211,11 +227,37 @@ GoRouter _buildRouter(
   ],
 );
 
+/// A go_router page that presents its route as an iOS page sheet
+/// ([CupertinoSheetRoute]): the page under it scales back, the sheet keeps a
+/// gap at the top, and a downward drag — on the sheet or on its scroll view
+/// at rest — dismisses it.
+class _JamSheetPage<T> extends Page<T> {
+  const _JamSheetPage({super.key, required this.builder});
+
+  /// Builds the sheet's content; hand the controller to its scroll view so
+  /// the drag-to-dismiss can take over at the top of the scroll.
+  final Widget Function(BuildContext context, ScrollController controller)
+  builder;
+
+  @override
+  Route<T> createRoute(BuildContext context) =>
+      CupertinoSheetRoute<T>(settings: this, scrollableBuilder: builder);
+}
+
+/// How far the floating mini player reaches up from the home indicator: the
+/// 64 capsule and the 8 it floats above the indicator. Screens in the shell
+/// see it as extra bottom padding, so their last row scrolls clear of it.
+const double kJamMiniPlayerReach = JamMetrics.miniPlayerHeight + JamSpace.sm;
+
+/// The gap between the mini player and a notice floating above it.
+const double _kNoticeAboveBar = JamSpace.md;
+
 /// Navigation chrome, per breakpoint.
 ///
 /// Wide windows get a sidebar holding identity, destinations and the live
-/// jam; compact ones keep the docked room bar along the bottom. Both are the
-/// same information — a 1400px window just has somewhere better to put it.
+/// jam; compact and medium ones float the mini player over the bottom of
+/// whatever screen is showing. Both are the same information — a 1400px
+/// window just has somewhere better to put it.
 class _RoomBarShell extends StatefulWidget {
   const _RoomBarShell({required this.child});
 
@@ -234,13 +276,17 @@ class _RoomBarShellState extends State<_RoomBarShell> {
   void initState() {
     super.initState();
     unawaited(_load());
+    // A name changed in Settings (or adopted after a prefs timeout) has to
+    // reach the sidebar's identity row too.
+    JamIdentity.changes.addListener(_onIdentityChanged);
   }
 
-  /// The single place notices become SnackBars.
+  void _onIdentityChanged() => unawaited(_load());
+
+  /// The single place notices are shown.
   ///
-  /// The shell sits under `MaterialApp`'s root ScaffoldMessenger and above
-  /// every screen, so one subscription here covers the whole app and no
-  /// screen has to grow error plumbing of its own.
+  /// The shell sits above every screen, so one subscription here covers the
+  /// whole app and no screen has to grow error plumbing of its own.
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
@@ -253,8 +299,6 @@ class _RoomBarShellState extends State<_RoomBarShell> {
 
   void _show(JamNotice notice) {
     if (!mounted) return;
-    // The designed look — glyph, one action, four seconds — rather than a
-    // stock SnackBar. Everything the app says out loud comes through here.
     showJamNotice(
       context,
       notice,
@@ -271,10 +315,9 @@ class _RoomBarShellState extends State<_RoomBarShell> {
   /// talking about.
   ///
   /// The notice host is the app's root overlay, so it floats at the bottom of
-  /// the *window* regardless of which route is on top — which is how "Ana
-  /// joined" ended up covering the room's people strip and the docked bar's
-  /// transport. Everything it has to clear is known here, in the one place
-  /// that knows both the breakpoint and the current route.
+  /// the *window* regardless of which route is on top. Everything it has to
+  /// clear is known here, in the one place that knows both the breakpoint and
+  /// the current route.
   ///
   /// The safe area is *not* added here: the host applies it, so what these
   /// numbers describe is the chrome sitting above the home indicator.
@@ -282,34 +325,44 @@ class _RoomBarShellState extends State<_RoomBarShell> {
     const base = JamSpace.lg;
     final onRoom = GoRouter.of(context).state.matchedLocation == kRoomPath;
     if (onRoom) {
-      // The room owns the full window; its people strip is the last 12 dp +
-      // a 44 dp row above the safe area.
       return const EdgeInsets.all(
         base,
       ).copyWith(bottom: base + kJamRoomPeopleStrip);
     }
-    final breakpoint = context.jamBreakpoint;
-    final hasBar = !breakpoint.hasSidebar && JamSession.of(context).hasRoom;
-    if (!hasBar) return kJamNoticeMargin;
-    // The docked bar already sits over the safe area, so only its own height
-    // (plus the pill's float, on medium) is added here.
-    final float = breakpoint == JamBreakpoint.medium
-        ? _FloatingRoomBar._inset
-        : 0.0;
+    final phoneChrome = !context.jamBreakpoint.hasSidebar;
+    final hasBar = phoneChrome && JamSession.of(context).hasRoom;
+    if (!hasBar) {
+      // Home pins Start a Jam to the bottom while no jam runs; a notice
+      // floats above it rather than over the button.
+      final onHome = GoRouter.of(context).state.matchedLocation == '/';
+      if (phoneChrome && onHome) {
+        // The button sits on the home indicator's inset, or 16 above the
+        // edge where there is none (JamBottomBar).
+        final floor = MediaQuery.paddingOf(context).bottom > 0
+            ? 0.0
+            : JamSpace.lg;
+        return const EdgeInsets.all(
+          base,
+        ).copyWith(bottom: floor + JamMetrics.buttonHeight + _kNoticeAboveBar);
+      }
+      return kJamNoticeMargin;
+    }
+    // Above the floating capsule, never on it.
     return const EdgeInsets.all(
       base,
-    ).copyWith(bottom: base + kJamRoomBarHeight + float);
+    ).copyWith(bottom: kJamMiniPlayerReach + _kNoticeAboveBar);
   }
 
   @override
   void dispose() {
+    JamIdentity.changes.removeListener(_onIdentityChanged);
     unawaited(_noticeSub?.cancel());
     super.dispose();
   }
 
   Future<void> _load() async {
     final name = await JamIdentity.displayName();
-    if (mounted) setState(() => _identity = name);
+    if (mounted && name != _identity) setState(() => _identity = name);
   }
 
   Future<void> _rename() async {
@@ -322,8 +375,9 @@ class _RoomBarShellState extends State<_RoomBarShell> {
   @override
   Widget build(BuildContext context) {
     if (context.jamBreakpoint.hasSidebar) {
-      return Scaffold(
-        body: Row(
+      return ColoredBox(
+        color: context.jamColors.background,
+        child: Row(
           children: [
             AppSidebar(
               identity: _identity,
@@ -340,73 +394,37 @@ class _RoomBarShellState extends State<_RoomBarShell> {
     // on home left a session nothing on screen could reach or dismiss.
     if (!JamSession.of(context).hasRoom) return widget.child;
 
-    // Medium windows (§5): a full-bleed bar there stretches a 44 dp
-    // thumbnail across a tablet, so the bar becomes a floating pill clear of
-    // the edge and the content keeps its own bottom inset.
-    if (context.jamBreakpoint == JamBreakpoint.medium) {
-      return Stack(
-        children: [
-          widget.child,
-          const Align(
-            alignment: Alignment.bottomCenter,
-            child: _FloatingRoomBar(),
-          ),
-        ],
-      );
-    }
-
-    // The bar owns the bottom inset while it is visible, so the screen above
-    // it must not also pad for the home indicator.
-    return Column(
+    // The mini player floats over the screen (D1): it paints its own capsule,
+    // margins and bottom inset, so nothing here frames it. The screen
+    // underneath sees the capsule as bottom padding — its content scrolls
+    // under the blur and its last row comes to rest above it.
+    final media = MediaQuery.of(context);
+    return Stack(
       children: [
-        Expanded(
-          child: MediaQuery.removePadding(
-            context: context,
-            removeBottom: true,
-            child: widget.child,
+        MediaQuery(
+          data: media.copyWith(
+            padding: media.padding.copyWith(
+              bottom: media.padding.bottom + kJamMiniPlayerReach,
+            ),
+          ),
+          child: widget.child,
+        ),
+        Positioned(
+          left: 0,
+          right: 0,
+          bottom: 0,
+          child: Center(
+            // A capsule stretched across a tablet carries a 40 pt cover a
+            // long way from its controls; past a phone's width it centres.
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(
+                maxWidth: JamContentWidth.floatingRoomBar,
+              ),
+              child: const RoomBar(),
+            ),
           ),
         ),
-        // The ground the bar's translucent surface sits on. In a Column
-        // there is nothing painted behind the bar at all, so the blur had
-        // the window's black to work with and `surface @ 0.82` over it came
-        // out a flat #D1D1D1 — the neutral grey the review caught. With the
-        // canvas underneath it reads as the near-white the palette intends.
-        ColoredBox(color: context.jamColors.background, child: const RoomBar()),
       ],
-    );
-  }
-}
-
-/// The medium-width room bar: a 720-wide pill, `floating` shadow, 16 above
-/// the window's bottom edge.
-class _FloatingRoomBar extends StatelessWidget {
-  const _FloatingRoomBar();
-
-  /// The gap between the pill and the edges it floats over.
-  static const double _inset = JamSpace.lg;
-
-  @override
-  Widget build(BuildContext context) {
-    final radius = BorderRadius.circular(JamRadius.capsule);
-    return Padding(
-      padding: EdgeInsets.fromLTRB(
-        _inset,
-        0,
-        _inset,
-        _inset + MediaQuery.paddingOf(context).bottom,
-      ),
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(
-          maxWidth: JamContentWidth.floatingRoomBar,
-        ),
-        child: DecoratedBox(
-          decoration: BoxDecoration(borderRadius: radius),
-          // The radius goes *into* the bar as well as around it: the 2 dp
-          // progress line is pinned to its top edge, and an outer clip alone
-          // left it running straight across the corner it had just rounded.
-          child: RoomBar(floating: true, borderRadius: radius),
-        ),
-      ),
     );
   }
 }
