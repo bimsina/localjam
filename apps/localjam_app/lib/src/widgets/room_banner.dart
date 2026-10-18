@@ -1,28 +1,27 @@
-/// The thin strips that sit under the room's app bar and say what is going
-/// on with *this phone's* connection to the room — never the room itself.
+/// The engine-state capsule on Now Playing (DESIGN_SPEC v3 §6.3): a glass
+/// capsule under the header row with one sentence and at most one inline
+/// action — never a coloured full-width banner.
 ///
-/// Three things can put one there, and they are deliberately different
-/// sentences:
+/// It is for states that want something *done*: this phone's own sound
+/// stopped while the room plays on (a call, another app, headphones pulled
+/// out, a native failure) — [JamOutputBanner], with the one action that
+/// fixes it — or a track this phone could not fetch ("Try Again"). Waits
+/// that need nothing from anyone ("Reconnecting…", "The host’s phone is
+/// asleep") are a footnote under the room's name instead.
 ///
-/// * the phone's own sound stopped while the room plays on (a call, another
-///   app, headphones pulled out, a native failure) — [JamOutputBanner], with
-///   the one action that fixes it, "Resume audio";
-/// * the host said it is going to sleep (§3.5) — "The host's phone is
-///   asleep", calm, because nothing is broken and nothing needs doing;
-/// * the link to the host dropped — "Lost the host", with a spinner, because
-///   the engine is actively getting it back.
-///
-/// Non-blocking by design: apricot, not red, and the player stays usable
-/// underneath. Each clears itself when its cause does.
+/// The copy here is shared with the mini player, which carries the same
+/// sentences when you are somewhere else in the app.
 library;
 
-import 'package:flutter/material.dart';
+import 'package:flutter/cupertino.dart';
 import 'package:localjam_client/localjam_client.dart';
 
 import '../design/tokens.dart';
 import '../design/typography.dart';
+import 'glass.dart';
+import 'pressable.dart';
 
-/// Everything these banners say out loud.
+/// Everything these states say out loud.
 abstract final class JamRoomBannerStrings {
   /// [JamOutputSuspendReason.interruption] — auto-resumes when the call ends.
   static const String interruption = 'Paused for a call';
@@ -36,14 +35,13 @@ abstract final class JamRoomBannerStrings {
 
   /// [JamOutputSuspendReason.playbackError].
   static const String playbackError = 'Playback error';
-  static const String playbackErrorRetrying = 'Playback error — retrying…';
+  static const String playbackErrorRetrying = 'Playback error. Retrying…';
 
   /// The action that ends any of them.
-  static const String resume = 'Resume audio';
+  static const String resume = 'Resume Audio';
 
   static const String hostAsleep = 'The host’s phone is asleep';
-  static const String reconnecting =
-      'Lost the host — still playing what you have.';
+  static const String reconnecting = 'Reconnecting…';
 }
 
 /// What [suspension] is called on screen.
@@ -58,14 +56,17 @@ String jamOutputSuspensionCopy(JamOutputSuspension suspension) =>
             : JamRoomBannerStrings.playbackError,
     };
 
-IconData _iconFor(JamOutputSuspendReason reason) => switch (reason) {
-  JamOutputSuspendReason.interruption => Icons.phone_in_talk_rounded,
-  JamOutputSuspendReason.focusLost => Icons.music_off_rounded,
-  JamOutputSuspendReason.outputLost => Icons.headset_off_rounded,
-  JamOutputSuspendReason.playbackError => Icons.error_outline_rounded,
-};
+/// The glyph for a suspension.
+IconData jamOutputSuspensionIcon(JamOutputSuspendReason reason) =>
+    switch (reason) {
+      JamOutputSuspendReason.interruption => CupertinoIcons.phone,
+      JamOutputSuspendReason.focusLost => CupertinoIcons.speaker_slash,
+      JamOutputSuspendReason.outputLost => CupertinoIcons.headphones,
+      JamOutputSuspendReason.playbackError =>
+        CupertinoIcons.exclamationmark_circle,
+    };
 
-/// "Paused for a call · Resume audio", for as long as [engine]'s output is
+/// "Paused for a call · Resume Audio", for as long as [engine]'s output is
 /// suspended. Builds nothing otherwise, so it can sit in a column
 /// unconditionally.
 class JamOutputBanner extends StatelessWidget {
@@ -80,7 +81,7 @@ class JamOutputBanner extends StatelessWidget {
         builder: (context, suspension, _) => suspension == null
             ? const SizedBox.shrink()
             : JamRoomBanner(
-                icon: _iconFor(suspension.reason),
+                icon: jamOutputSuspensionIcon(suspension.reason),
                 message: jamOutputSuspensionCopy(suspension),
                 actionLabel: JamRoomBannerStrings.resume,
                 // Local only: re-anchors this phone to wherever the room is
@@ -91,10 +92,11 @@ class JamOutputBanner extends StatelessWidget {
       );
 }
 
-/// One strip: a glyph (or a spinner), a sentence, at most one action.
+/// One capsule: a glyph (or a spinner), a sentence, at most one action.
 ///
-/// The sentence is never cut short — it is the whole point of the strip —
-/// and at large text sizes the action moves under it rather than squeezing
+/// White on glass, for the Now Playing backdrop. The sentence is never cut
+/// short — it is the whole point — so the capsule wraps to a second line
+/// rather than ellipsising, and at large text sizes the action moves under
 /// it ([kJamBannerStackAboveScale]).
 class JamRoomBanner extends StatelessWidget {
   const JamRoomBanner({
@@ -104,6 +106,7 @@ class JamRoomBanner extends StatelessWidget {
     this.busy = false,
     this.actionLabel,
     this.onAction,
+    this.actionSemanticLabel,
   });
 
   final String message;
@@ -111,87 +114,97 @@ class JamRoomBanner extends StatelessWidget {
   /// Leading glyph. Ignored while [busy].
   final IconData? icon;
 
-  /// A 14 dp spinner instead of the glyph — the engine is working on it.
+  /// A small activity indicator instead of the glyph — the engine is
+  /// working on it.
   final bool busy;
 
   final String? actionLabel;
   final VoidCallback? onAction;
 
+  /// What the action says to a screen reader, when the label alone would
+  /// not stand on its own.
+  final String? actionSemanticLabel;
+
   @override
   Widget build(BuildContext context) {
-    final colors = context.jamColors;
     final label = actionLabel;
     final action = onAction;
-    // One row at ordinary sizes. Past ~130% text the action took most of a
-    // phone's width and the sentence went to "Playback err…" — and with no
-    // room left at all, overflowed: the button goes on a line of its own.
     final stacked =
         MediaQuery.textScalerOf(context).scale(1) > kJamBannerStackAboveScale;
+    final textStyle = context.jamFootnote.copyWith(
+      color: JamNowPlayingColors.text,
+    );
 
     final Widget? glyph = busy
-        ? SizedBox(
-            width: 14,
-            height: 14,
-            child: CircularProgressIndicator(
-              strokeWidth: 2,
-              color: colors.warning,
-            ),
+        ? const CupertinoActivityIndicator(
+            radius: 7,
+            color: JamNowPlayingColors.text,
           )
         : icon == null
         ? null
-        : Icon(icon, size: 16, color: colors.warning);
-    final text = Padding(
-      padding: const EdgeInsets.symmetric(vertical: JamSpace.sm),
-      child: Text(
-        message,
-        style: context.jamFootnote.copyWith(color: colors.warning),
-      ),
-    );
-    final button = label == null || action == null
+        : Icon(icon, size: 15, color: JamNowPlayingColors.text);
+
+    final Widget? button = label == null || action == null
         ? null
-        : TextButton(
-            onPressed: action,
-            style: TextButton.styleFrom(
-              foregroundColor: colors.tint,
-              minimumSize: const Size(44, 40),
-              padding: const EdgeInsets.symmetric(horizontal: JamSpace.md),
-              textStyle: context.jamFootnote.copyWith(
-                fontWeight: FontWeight.w700,
+        : Semantics(
+            container: true,
+            button: true,
+            label: actionSemanticLabel ?? label,
+            onTap: action,
+            excludeSemantics: true,
+            child: JamPressable(
+              onTap: action,
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(
+                  minHeight: JamMetrics.hitTarget,
+                ),
+                child: Center(
+                  widthFactor: 1,
+                  child: Text(
+                    label,
+                    style: textStyle.copyWith(fontWeight: FontWeight.w600),
+                  ),
+                ),
               ),
             ),
-            child: Text(label, textAlign: TextAlign.end),
           );
 
+    final sentence = Text(message, style: textStyle);
     final Widget content;
     if (!stacked) {
       content = Row(
+        mainAxisSize: MainAxisSize.min,
         children: [
-          ?glyph,
-          const SizedBox(width: JamSpace.md),
-          Expanded(child: text),
-          button ?? const SizedBox(width: JamSpace.md),
+          if (glyph != null) ...[glyph, const SizedBox(width: JamSpace.sm)],
+          Flexible(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: JamSpace.md),
+              child: sentence,
+            ),
+          ),
+          if (button != null) ...[const SizedBox(width: JamSpace.md), button],
         ],
       );
     } else {
       content = Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              if (glyph != null)
-                Padding(
-                  // Level with the first line rather than the paragraph.
-                  padding: const EdgeInsets.only(top: JamSpace.sm),
-                  child: glyph,
-                ),
-              const SizedBox(width: JamSpace.md),
-              Expanded(child: text),
-              const SizedBox(width: JamSpace.md),
-            ],
+          Padding(
+            padding: const EdgeInsets.only(top: JamSpace.md),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (glyph != null) ...[
+                  glyph,
+                  const SizedBox(width: JamSpace.sm),
+                ],
+                Flexible(child: sentence),
+              ],
+            ),
           ),
-          if (button != null)
-            Align(alignment: AlignmentDirectional.centerEnd, child: button),
+          if (button != null) button else const SizedBox(height: JamSpace.md),
         ],
       );
     }
@@ -199,16 +212,19 @@ class JamRoomBanner extends StatelessWidget {
     return Semantics(
       container: true,
       liveRegion: true,
-      child: Container(
-        width: double.infinity,
-        constraints: const BoxConstraints(minHeight: 40),
-        color: colors.fillSecondary,
-        padding: const EdgeInsets.only(left: JamSpace.page, right: JamSpace.sm),
-        child: content,
+      child: JamBlurSurface(
+        kind: JamMaterialKind.glass,
+        shape: stacked
+            ? RoundedRectangleBorder(borderRadius: BorderRadius.circular(20))
+            : const StadiumBorder(),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: JamSpace.lg),
+          child: content,
+        ),
       ),
     );
   }
 }
 
-/// The text scale past which a banner's action goes under its sentence.
+/// The text scale past which a capsule's action goes under its sentence.
 const double kJamBannerStackAboveScale = 1.3;

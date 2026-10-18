@@ -1,20 +1,25 @@
-/// The transport and the scrubber, as plain widgets.
+/// The transport and the scrubber of the Now Playing screen (DESIGN_SPEC v3
+/// §6.3), as plain widgets.
 ///
-/// Extracted from `now_playing.dart` and restyled: no [JamEngine] here at
-/// all, only values and callbacks, so a host, a guest and a widget test all
-/// drive the same controls. Position arrives as microseconds — the screen
-/// still owns the `JamPositionTicker` — and [JamScrubber] keeps its own drag
-/// value so the ticker cannot fight the thumb mid-gesture.
+/// No [JamEngine] here at all, only values and callbacks, so a host, a guest
+/// and a widget test all drive the same controls. Position arrives as
+/// microseconds — the screen still owns the `JamPositionTicker` — and
+/// [JamScrubber] keeps its own drag value so the ticker cannot fight the
+/// finger mid-gesture.
+///
+/// Both live on the immersive backdrop (D4) and paint in the fixed
+/// [JamNowPlayingColors]: white glyphs, no circles, no thumb, no tint.
 ///
 /// The controls are *gated, never hidden*: a guest without playback control
-/// sees the same bar at 38% opacity with a line saying whose call it is, so
-/// the room's rules are legible rather than mysterious.
+/// sees the same bar at 30% with a line saying whose call it is, so the
+/// room's rules are legible rather than mysterious.
 library;
 
-import 'package:flutter/material.dart';
+import 'package:flutter/cupertino.dart';
 
 import '../design/tokens.dart';
 import '../design/typography.dart';
+import 'pressable.dart';
 
 /// What the transport should be showing. Map `PlaybackStatus` onto this at
 /// the call site — this file knows nothing about the engine.
@@ -26,7 +31,7 @@ enum JamPlaybackState {
   playing,
 
   /// Preparing (loading media, fetching from the host). The glyph becomes an
-  /// indeterminate ring and the button swallows taps.
+  /// activity indicator and the button swallows taps.
   loading,
 }
 
@@ -39,21 +44,36 @@ abstract final class JamTransportStrings {
   static const String pause = 'Pause';
   static const String loading = 'Loading';
   static const String position = 'Playback position';
+
+  /// The minus in front of the remaining time: a real minus sign, not a
+  /// hyphen.
+  static const String minus = '−';
 }
 
 /// The line shown beneath the bar when the room does not grant you playback
 /// control.
-const String jamHostControlsPlayback = 'The host controls playback';
+const String jamHostControlsPlayback = 'The host controls playback.';
 
-/// The painted 4 dp track inside a [JamScrubber]. Exposed so a test can
-/// assert that the paint and the touch area share a centre line — an iOS
-/// build once shipped a slider whose taps landed 24 pt above the track.
+/// The painted track inside a [JamScrubber]. Exposed so a test can assert
+/// that the paint and the touch area share a centre line — an iOS build once
+/// shipped a slider whose taps landed 24 pt above the track.
 const Key jamScrubberTrackKey = Key('jam.scrubber.track');
 
-/// The transparent 44 dp touch area over a [JamScrubber]'s track.
+/// The transparent 44 pt touch area over a [JamScrubber]'s track.
 const Key jamScrubberHitKey = Key('jam.scrubber.hit');
 
-/// Previous · play/pause · next.
+/// Glyph sizes (§4: transport 34/44/34).
+const double _kSkipGlyph = 34;
+const double _kPlayGlyph = 44;
+
+/// The touch boxes around them — generous, the way the Music app's are.
+const double _kSkipHit = 64;
+const double _kPlayHit = 76;
+
+/// The opacity of a control the room has not given you (§6.3).
+const double _kDisabledOpacity = 0.3;
+
+/// Previous · play/pause · next, evenly spaced across the width it is given.
 class JamTransport extends StatelessWidget {
   const JamTransport({
     super.key,
@@ -69,7 +89,7 @@ class JamTransport extends StatelessWidget {
   final JamPlaybackState state;
 
   /// What the play button is called when it does something other than play
-  /// the room — "Resume audio" while this phone's own sound is suspended.
+  /// the room — "Resume Audio" while this phone's own sound is suspended.
   /// Null: "Play".
   final String? playLabel;
 
@@ -80,8 +100,8 @@ class JamTransport extends StatelessWidget {
   final VoidCallback? onPrevious;
   final VoidCallback? onNext;
 
-  /// The capability gate. False dims the whole bar to 38%, makes it inert,
-  /// and shows [gatedMessage] beneath.
+  /// The capability gate. False dims the whole bar, makes it inert, and
+  /// shows [gatedMessage] beneath.
   final bool enabled;
 
   /// The explanation shown under a gated bar.
@@ -89,32 +109,54 @@ class JamTransport extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final colors = context.jamColors;
+    final playing = state == JamPlaybackState.playing;
+    final loading = state == JamPlaybackState.loading;
 
     final bar = Row(
-      mainAxisAlignment: MainAxisAlignment.center,
-      mainAxisSize: MainAxisSize.min,
+      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
       children: [
-        _SkipButton(
-          icon: Icons.skip_previous_rounded,
+        _TransportButton(
+          icon: CupertinoIcons.backward_fill,
+          glyph: _kSkipGlyph,
+          hit: _kSkipHit,
           label: JamTransportStrings.previous,
-          onPressed: enabled ? onPrevious : null,
+          onPressed: enabled && onPrevious != null
+              ? () {
+                  JamHaptics.skip();
+                  onPrevious!();
+                }
+              : null,
         ),
-        const SizedBox(width: JamSpace.section),
-        _PlayButton(
-          state: state,
-          enabled: enabled,
-          playLabel: playLabel,
-          onPressed: () {
-            JamHaptics.transport();
-            onPlayPause();
-          },
+        _TransportButton(
+          icon: playing ? CupertinoIcons.pause_fill : CupertinoIcons.play_fill,
+          glyph: _kPlayGlyph,
+          hit: _kPlayHit,
+          loading: loading,
+          label: loading
+              ? JamTransportStrings.loading
+              : playing
+              ? JamTransportStrings.pause
+              : (playLabel ?? JamTransportStrings.play),
+          // A loading button eats the tap rather than queueing a command
+          // against media that has not landed yet.
+          onPressed: enabled && !loading
+              ? () {
+                  JamHaptics.transport();
+                  onPlayPause();
+                }
+              : null,
         ),
-        const SizedBox(width: JamSpace.section),
-        _SkipButton(
-          icon: Icons.skip_next_rounded,
+        _TransportButton(
+          icon: CupertinoIcons.forward_fill,
+          glyph: _kSkipGlyph,
+          hit: _kSkipHit,
           label: JamTransportStrings.next,
-          onPressed: enabled ? onNext : null,
+          onPressed: enabled && onNext != null
+              ? () {
+                  JamHaptics.skip();
+                  onNext!();
+                }
+              : null,
         ),
       ],
     );
@@ -123,172 +165,91 @@ class JamTransport extends StatelessWidget {
 
     return Column(
       mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         // Dimmed and inert, but still on screen: the controls you will get
         // when the host promotes you.
-        Opacity(
-          opacity: 0.38,
-          child: IgnorePointer(child: ExcludeSemantics(child: bar)),
-        ),
-        const SizedBox(height: JamSpace.sm),
+        IgnorePointer(child: ExcludeSemantics(child: bar)),
         Text(
           gatedMessage,
           textAlign: TextAlign.center,
-          style: context.jamCaption2.copyWith(color: colors.secondaryLabel),
+          maxLines: 2,
+          style: context.jamFootnote.copyWith(
+            color: JamNowPlayingColors.secondary,
+          ),
         ),
       ],
     );
   }
 }
 
-/// The 72 dp gradient play button.
-class _PlayButton extends StatefulWidget {
-  const _PlayButton({
-    required this.state,
-    required this.enabled,
-    required this.onPressed,
-    this.playLabel,
-  });
-
-  final JamPlaybackState state;
-  final bool enabled;
-  final VoidCallback onPressed;
-  final String? playLabel;
-
-  @override
-  State<_PlayButton> createState() => _PlayButtonState();
-}
-
-class _PlayButtonState extends State<_PlayButton> {
-  bool _pressed = false;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.jamColors;
-    final light = Theme.of(context).brightness == Brightness.light;
-    final loading = widget.state == JamPlaybackState.loading;
-    final playing = widget.state == JamPlaybackState.playing;
-    final reduced = _reducedMotion(context);
-    final pressed = _pressed && widget.enabled && !loading;
-
-    final glyph = loading
-        ? SizedBox(
-            key: const ValueKey('loading'),
-            width: 34,
-            height: 34,
-            child: CircularProgressIndicator(
-              strokeWidth: 3,
-              color: colors.onTint,
-            ),
-          )
-        : Icon(
-            playing ? Icons.pause_rounded : Icons.play_arrow_rounded,
-            key: ValueKey(playing),
-            size: 34,
-            color: colors.onTint,
-          );
-
-    final circle = Container(
-      width: 72,
-      height: 72,
-      alignment: Alignment.center,
-      decoration: BoxDecoration(
-        shape: BoxShape.circle,
-        color: light && !pressed
-            ? null
-            : (pressed ? colors.tintPressed : colors.tint),
-        gradient: light && !pressed
-            ? LinearGradient(
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-                colors: [colors.tint, colors.tintPressed],
-              )
-            : null,
-      ),
-      child: AnimatedSwitcher(
-        duration: reduced ? Duration.zero : JamDuration.fast,
-        switchInCurve: JamCurve.standard,
-        switchOutCurve: JamCurve.standard,
-        // Not a swap: the old glyph shrinks out while the new one grows in.
-        transitionBuilder: (child, animation) => FadeTransition(
-          opacity: animation,
-          child: ScaleTransition(
-            scale: Tween<double>(begin: 0.7, end: 1).animate(animation),
-            child: child,
-          ),
-        ),
-        child: glyph,
-      ),
-    );
-
-    return Semantics(
-      button: true,
-      enabled: widget.enabled && !loading,
-      label: loading
-          ? JamTransportStrings.loading
-          : (playing
-                ? JamTransportStrings.pause
-                : (widget.playLabel ?? JamTransportStrings.play)),
-      onTap: widget.enabled && !loading ? widget.onPressed : null,
-      excludeSemantics: true,
-      child: AnimatedScale(
-        scale: pressed && !reduced ? 0.94 : 1,
-        duration: reduced ? Duration.zero : JamDuration.instant,
-        curve: JamCurve.standard,
-        child: GestureDetector(
-          behavior: HitTestBehavior.opaque,
-          // A loading button eats the tap rather than queueing a command
-          // against media that has not landed yet.
-          onTap: widget.enabled && !loading ? widget.onPressed : null,
-          onTapDown: (_) => setState(() => _pressed = true),
-          onTapCancel: () => setState(() => _pressed = false),
-          onTapUp: (_) => setState(() => _pressed = false),
-          child: circle,
-        ),
-      ),
-    );
-  }
-}
-
-/// A 48 dp previous/next target with a 32 dp glyph.
-class _SkipButton extends StatelessWidget {
-  const _SkipButton({
+/// One transport glyph: white, no circle, dims on press and when disabled.
+/// The glyph swap (play ↔ pause) cross-fades with a small scale so a tap
+/// reads as one control changing state.
+class _TransportButton extends StatelessWidget {
+  const _TransportButton({
     required this.icon,
+    required this.glyph,
+    required this.hit,
     required this.label,
     required this.onPressed,
+    this.loading = false,
   });
 
   final IconData icon;
+  final double glyph;
+  final double hit;
   final String label;
   final VoidCallback? onPressed;
+  final bool loading;
 
   @override
   Widget build(BuildContext context) {
-    final colors = context.jamColors;
+    final reduced = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
     final enabled = onPressed != null;
+    final Widget face = loading
+        ? const CupertinoActivityIndicator(
+            key: ValueKey<String>('loading'),
+            radius: 14,
+            color: JamNowPlayingColors.text,
+          )
+        : Icon(
+            icon,
+            key: ValueKey<IconData>(icon),
+            size: glyph,
+            color: JamNowPlayingColors.text,
+          );
+
     return Semantics(
+      container: true,
       button: true,
       enabled: enabled,
       label: label,
-      onTap: enabled ? onPressed : null,
+      onTap: onPressed,
       excludeSemantics: true,
-      child: Material(
-        type: MaterialType.transparency,
-        child: InkResponse(
-          radius: 32,
-          onTap: enabled
-              ? () {
-                  JamHaptics.skip();
-                  onPressed!();
-                }
-              : null,
+      child: Opacity(
+        // A loading button is busy, not forbidden: it stays at full white.
+        opacity: enabled || loading ? 1 : _kDisabledOpacity,
+        child: JamPressable(
+          onTap: onPressed,
+          pressedOpacity: 0.5,
           child: SizedBox(
-            width: 48,
-            height: 48,
-            child: Icon(
-              icon,
-              size: 32,
-              color: enabled ? colors.label : colors.tertiaryLabel,
+            width: hit,
+            height: hit,
+            child: Center(
+              child: AnimatedSwitcher(
+                duration: reduced ? Duration.zero : JamDuration.fast,
+                switchInCurve: JamCurve.standard,
+                switchOutCurve: JamCurve.standard,
+                transitionBuilder: (child, animation) => FadeTransition(
+                  opacity: animation,
+                  child: ScaleTransition(
+                    scale: Tween<double>(begin: 0.7, end: 1).animate(animation),
+                    child: child,
+                  ),
+                ),
+                child: face,
+              ),
             ),
           ),
         ),
@@ -297,12 +258,14 @@ class _SkipButton extends StatelessWidget {
   }
 }
 
-/// The timeline: a 4 dp track, a thumb that grows while you hold it, and the
-/// elapsed / remaining pair beneath in tabular figures.
+/// The timeline: a 6 pt capsule (white 25%, elapsed white 85%) with no thumb
+/// that thickens to 10 pt while you hold it, and the elapsed / remaining pair
+/// beneath in tabular figures.
 ///
 /// The painted track and the touch area share a centre line — the hit box is
-/// 44 dp tall with the 4 dp track at its middle — so a tap lands where the
-/// finger is, not where a `Slider`'s internal padding would have put it.
+/// 44 pt tall with the track at its middle — so a touch lands where the
+/// finger is. Like the Music app, the whole track is the target: touch
+/// anywhere and drag, and the position follows the finger.
 class JamScrubber extends StatefulWidget {
   const JamScrubber({
     super.key,
@@ -313,7 +276,7 @@ class JamScrubber extends StatefulWidget {
   });
 
   /// Where playback is now, in microseconds. Ignored while a drag is in
-  /// flight — the thumb follows the finger.
+  /// flight — the bar follows the finger.
   final int positionUs;
 
   /// Total media length in microseconds; null or 0 renders an inert track.
@@ -322,7 +285,8 @@ class JamScrubber extends StatefulWidget {
   /// Called once, on release, with the seek target in microseconds.
   final ValueChanged<int>? onSeek;
 
-  /// False renders the same timeline without a thumb and without gestures.
+  /// False renders the same timeline without gestures (no
+  /// `controlPlayback`).
   final bool enabled;
 
   @override
@@ -330,17 +294,15 @@ class JamScrubber extends StatefulWidget {
 }
 
 class _JamScrubberState extends State<JamScrubber> {
-  /// The vertical slack around the 4 dp track that makes the target 44 dp.
+  /// The touch area around the track.
   static const double _hitHeight = 44;
-  static const double _trackHeight = 4;
 
-  /// Horizontal inset of the *thumb's travel* inside the track.
-  ///
-  /// The track itself is painted edge to edge and the thumb runs between
-  /// [_edge] and `width - _edge`, so at 0:00 the thumb sits inside the
-  /// track's left cap instead of hanging off it — the review caught the
-  /// fattest thumb overhanging by its own radius at either extreme.
-  static const double _edge = 11;
+  /// The track at rest and while held (§6.3).
+  static const double _track = 6;
+  static const double _trackActive = 10;
+
+  /// Track centre to the top of the times.
+  static const double _timesGap = 4;
 
   static const int _nudgeUs = 5000000;
 
@@ -367,9 +329,8 @@ class _JamScrubberState extends State<JamScrubber> {
   }
 
   double _fractionFor(double dx, double width) {
-    final span = width - _edge * 2;
-    if (span <= 0) return 0;
-    return ((dx - _edge) / span).clamp(0.0, 1.0);
+    if (width <= 0) return 0;
+    return (dx / width).clamp(0.0, 1.0);
   }
 
   void _begin(double dx, double width) {
@@ -389,6 +350,8 @@ class _JamScrubberState extends State<JamScrubber> {
     widget.onSeek?.call((fraction * _duration).round());
   }
 
+  void _cancel() => setState(() => _dragFraction = null);
+
   /// How VoiceOver reads the position.
   String _spoken(int us) => _duration <= 0
       ? jamClock(us)
@@ -403,13 +366,14 @@ class _JamScrubberState extends State<JamScrubber> {
 
   @override
   Widget build(BuildContext context) {
-    final colors = context.jamColors;
-    final light = Theme.of(context).brightness == Brightness.light;
-    final reduced = _reducedMotion(context);
+    final reduced = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
     final dragging = _dragFraction != null;
     final remaining = _duration <= 0 ? null : _duration - _shownUs;
-
-    final numeric = context.jamNumeric.copyWith(color: colors.secondaryLabel);
+    final times = jamTabular(context.jamCaption1).copyWith(
+      color: dragging
+          ? JamNowPlayingColors.text
+          : JamNowPlayingColors.secondary,
+    );
 
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -427,56 +391,55 @@ class _JamScrubberState extends State<JamScrubber> {
           onDecrease: _interactive ? () => _seekBy(-_nudgeUs) : null,
           excludeSemantics: true,
           child: Stack(
+            clipBehavior: Clip.none,
             children: [
               Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  // The top half of the 44 dp target, so the painted track
-                  // sits exactly on the touch area's centre line.
-                  const SizedBox(height: (_hitHeight - _trackHeight) / 2),
-                  TweenAnimationBuilder<double>(
-                    tween: Tween<double>(
-                      begin: 7,
-                      end: dragging && _interactive
-                          ? 11
-                          : (_interactive ? 7 : 0),
-                    ),
-                    duration: reduced ? Duration.zero : JamDuration.fast,
-                    curve: JamCurve.standard,
-                    builder: (context, thumbRadius, _) => SizedBox(
-                      key: jamScrubberTrackKey,
-                      width: double.infinity,
-                      height: _trackHeight,
-                      child: CustomPaint(
-                        painter: _ScrubberPainter(
-                          fraction: _fraction,
-                          thumbRadius: thumbRadius,
-                          showHalo: dragging,
-                          edge: _edge,
-                          active: colors.tint,
-                          inactive: light
-                              ? colors.fillSecondary
-                              : colors.separator,
-                          halo: colors.tint.withValues(alpha: 0.14),
+                  // The track's slot: centred on the hit box's middle line
+                  // whatever its thickness, so growing it never moves the
+                  // times.
+                  SizedBox(
+                    height: _hitHeight / 2 + _trackActive / 2,
+                    child: Align(
+                      alignment: Alignment.bottomCenter,
+                      child: SizedBox(
+                        height: _trackActive,
+                        child: Center(
+                          child: AnimatedContainer(
+                            key: jamScrubberTrackKey,
+                            duration: reduced
+                                ? Duration.zero
+                                : JamDuration.fast,
+                            curve: JamCurve.standard,
+                            width: double.infinity,
+                            height: dragging ? _trackActive : _track,
+                            child: CustomPaint(
+                              painter: _ScrubberPainter(fraction: _fraction),
+                            ),
+                          ),
                         ),
                       ),
                     ),
                   ),
-                  const SizedBox(height: JamSpace.sm - 2),
+                  const SizedBox(height: _timesGap),
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      Text(jamClock(_shownUs), style: numeric),
+                      Text(jamClock(_shownUs), style: times),
                       Text(
-                        remaining == null ? '--:--' : '-${jamClock(remaining)}',
-                        style: numeric,
+                        remaining == null
+                            ? '--:--'
+                            : '${JamTransportStrings.minus}'
+                                  '${jamClock(remaining)}',
+                        style: times,
                       ),
                     ],
                   ),
                 ],
               ),
               // Laid over the track and centred on it. Positioned last so it
-              // takes the hit before anything beneath.
+              // takes the touch before anything beneath.
               Positioned(
                 left: 0,
                 right: 0,
@@ -489,9 +452,7 @@ class _JamScrubberState extends State<JamScrubber> {
                       ? (d) => _begin(d.localPosition.dx, width)
                       : null,
                   onTapUp: _interactive ? (_) => _end() : null,
-                  onTapCancel: _interactive
-                      ? () => setState(() => _dragFraction = null)
-                      : null,
+                  onTapCancel: _interactive ? _cancel : null,
                   onHorizontalDragStart: _interactive
                       ? (d) => _begin(d.localPosition.dx, width)
                       : null,
@@ -499,9 +460,7 @@ class _JamScrubberState extends State<JamScrubber> {
                       ? (d) => _update(d.localPosition.dx, width)
                       : null,
                   onHorizontalDragEnd: _interactive ? (_) => _end() : null,
-                  onHorizontalDragCancel: _interactive
-                      ? () => setState(() => _dragFraction = null)
-                      : null,
+                  onHorizontalDragCancel: _interactive ? _cancel : null,
                 ),
               ),
             ],
@@ -513,61 +472,36 @@ class _JamScrubberState extends State<JamScrubber> {
 }
 
 class _ScrubberPainter extends CustomPainter {
-  const _ScrubberPainter({
-    required this.fraction,
-    required this.thumbRadius,
-    required this.showHalo,
-    required this.edge,
-    required this.active,
-    required this.inactive,
-    required this.halo,
-  });
+  const _ScrubberPainter({required this.fraction});
 
   final double fraction;
-  final double thumbRadius;
-  final bool showHalo;
-  final double edge;
-  final Color active;
-  final Color inactive;
-  final Color halo;
 
   @override
   void paint(Canvas canvas, Size size) {
-    // The track spans the full width; only the thumb's travel is inset, so
-    // the thumb is always *inside* the rail it rides.
-    final left = edge;
-    final right = size.width - edge;
-    if (right <= left) return;
-    final y = size.height / 2;
-    final radius = Radius.circular(size.height / 2);
-    final x = left + (right - left) * fraction;
-
-    canvas.drawRRect(
-      RRect.fromLTRBR(0, 0, size.width, size.height, radius),
-      Paint()..color = inactive,
+    if (size.width <= 0) return;
+    final rrect = RRect.fromLTRBR(
+      0,
+      0,
+      size.width,
+      size.height,
+      Radius.circular(size.height / 2),
     );
-    canvas.drawRRect(
-      RRect.fromLTRBR(0, 0, x.clamp(0, size.width), size.height, radius),
-      Paint()..color = active,
-    );
-    if (showHalo) {
-      canvas.drawCircle(Offset(x, y), 24, Paint()..color = halo);
-    }
-    if (thumbRadius > 0) {
-      canvas.drawCircle(Offset(x, y), thumbRadius, Paint()..color = active);
-    }
+    canvas
+      ..drawRRect(rrect, Paint()..color = JamNowPlayingColors.track)
+      ..save()
+      // The elapsed part is the same capsule clipped at the playhead, so its
+      // left end is round and its right edge is straight — the Music look.
+      ..clipRect(Rect.fromLTWH(0, 0, size.width * fraction, size.height))
+      ..drawRRect(rrect, Paint()..color = JamNowPlayingColors.fill)
+      ..restore();
   }
 
   @override
-  bool shouldRepaint(_ScrubberPainter old) =>
-      old.fraction != fraction ||
-      old.thumbRadius != thumbRadius ||
-      old.showHalo != showHalo ||
-      old.active != active ||
-      old.inactive != inactive;
+  bool shouldRepaint(_ScrubberPainter old) => old.fraction != fraction;
 }
 
-/// `mm:ss` (or `h:mm:ss`) from microseconds.
+/// `m:ss` (or `h:mm:ss`) from microseconds — no leading zero on the minutes,
+/// the way the Music app writes a time.
 ///
 /// Deliberately local: `util/format.dart` reaches for the engine package to
 /// name tracks, and these widgets stay engine-free.
@@ -576,11 +510,7 @@ String jamClock(int us) {
   final seconds = totalSeconds % 60;
   final minutes = (totalSeconds ~/ 60) % 60;
   final hours = totalSeconds ~/ 3600;
-  final mmss =
-      '${minutes.toString().padLeft(2, '0')}:'
-      '${seconds.toString().padLeft(2, '0')}';
-  return hours > 0 ? '$hours:$mmss' : mmss;
+  final ss = seconds.toString().padLeft(2, '0');
+  if (hours > 0) return '$hours:${minutes.toString().padLeft(2, '0')}:$ss';
+  return '$minutes:$ss';
 }
-
-bool _reducedMotion(BuildContext context) =>
-    MediaQuery.maybeDisableAnimationsOf(context) ?? false;

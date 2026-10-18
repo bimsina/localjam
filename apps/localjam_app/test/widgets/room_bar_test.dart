@@ -4,7 +4,9 @@
 /// not, because that asymmetry is easy to lose in a refactor.
 library;
 
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
+import 'package:localjam_app/src/widgets/artwork.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:localjam_app/src/design/theme.dart';
 import 'package:localjam_app/src/widgets/room_bar.dart';
@@ -17,20 +19,14 @@ Widget _host(Widget bar, {ThemeData? theme}) => MaterialApp(
 void main() {
   testWidgets('shows the track over the session name', (tester) async {
     await tester.pumpWidget(
-      _host(
-        const JamRoomBar(
-          title: 'Windowlicker',
-          subtitle: "Ana's kitchen",
-          progress: 0.5,
-        ),
-      ),
+      _host(const JamRoomBar(title: 'Windowlicker', subtitle: "Ana's kitchen")),
     );
 
     expect(find.text('Windowlicker'), findsOneWidget);
     expect(find.text("Ana's kitchen"), findsOneWidget);
     // Nothing was handed an artwork widget, so the slot's placeholder stands
     // in rather than the bar collapsing.
-    expect(find.byType(JamRoomBarArtworkPlaceholder), findsOneWidget);
+    expect(find.byType(JamArtworkTile), findsOneWidget);
   });
 
   testWidgets('a tap opens the room', (tester) async {
@@ -78,7 +74,8 @@ void main() {
     await tester.pumpWidget(
       _host(const JamRoomBar(title: 'Track', subtitle: 'Room')),
     );
-    expect(find.byType(IconButton), findsNothing);
+    expect(find.bySemanticsLabel(JamRoomBarStrings.play), findsNothing);
+    expect(find.bySemanticsLabel(JamRoomBarStrings.next), findsNothing);
 
     var toggled = 0;
     await tester.pumpWidget(
@@ -91,23 +88,46 @@ void main() {
         ),
       ),
     );
-    expect(find.byIcon(Icons.pause_rounded), findsOneWidget);
-    await tester.tap(find.byType(IconButton));
+    expect(find.byIcon(CupertinoIcons.pause_fill), findsOneWidget);
+    await tester.tap(find.byIcon(CupertinoIcons.pause_fill));
     expect(toggled, 1);
   });
 
-  testWidgets('the people slot is rendered when given', (tester) async {
+  testWidgets('next is offered when permitted, and only on a wide enough '
+      'capsule', (tester) async {
+    var skipped = 0;
+    Widget bar() => JamRoomBar(
+      title: 'Track',
+      subtitle: 'Room',
+      onPlayPause: () {},
+      onNext: () => skipped++,
+    );
+    await tester.pumpWidget(_host(bar()));
+    await tester.tap(find.byIcon(CupertinoIcons.forward_fill));
+    expect(skipped, 1);
+
+    await tester.pumpWidget(
+      _host(Center(child: SizedBox(width: 240, child: bar()))),
+    );
+    expect(find.byIcon(CupertinoIcons.forward_fill), findsNothing);
+    expect(find.byIcon(CupertinoIcons.play_fill), findsOneWidget);
+  });
+
+  testWidgets('a capsule: 64 tall, no progress line, a problem replaces the '
+      "room's name", (tester) async {
     await tester.pumpWidget(
       _host(
         const JamRoomBar(
           title: 'Track',
           subtitle: 'Room',
-          people: Text('+3'),
-          artwork: SizedBox.shrink(),
+          alert: 'Headphones disconnected',
         ),
       ),
     );
-    expect(find.text('+3'), findsOneWidget);
+    expect(tester.getSize(find.byType(JamRoomBar)).height, 64);
+    expect(find.text('Room'), findsNothing);
+    expect(find.text('Headphones disconnected'), findsOneWidget);
+    expect(find.byType(LinearProgressIndicator), findsNothing);
   });
 
   testWidgets('is announced as one button with the track and the room', (
@@ -121,7 +141,7 @@ void main() {
     );
 
     expect(
-      tester.getSemantics(find.byType(JamRoomBar)),
+      tester.getSemantics(find.text('Windowlicker')),
       matchesSemantics(
         label: 'Windowlicker. Kitchen',
         hint: JamRoomBarStrings.open,
@@ -144,7 +164,6 @@ void main() {
             bottomNavigationBar: JamRoomBar(
               title: 'Track',
               subtitle: 'Room',
-              progress: 0.2,
               playing: true,
               onPlayPause: () {},
             ),

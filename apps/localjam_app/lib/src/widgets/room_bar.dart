@@ -1,22 +1,21 @@
-/// The docked room bar — Spotify's mini-player, doing the job that makes the
-/// session-controller refactor worth it.
+/// The mini player (DESIGN_SPEC v3 §6.4): a floating capsule that keeps a
+/// live jam one tap away wherever you are in the app.
 ///
-/// Whenever a jam is live and you are somewhere else in the app, this shows
-/// what is playing and takes you back. It can only exist because the engine
-/// now outlives the route: before, navigating away from the room closed it.
+/// 64 tall, 12 from the window's sides and 8 above the home indicator, on
+/// the translucent `material` blur with a 0.5 pt edge. Cover 40, title and
+/// the room's name (or, when there is one, the problem), play/pause and —
+/// when the room lets you — next. No progress line, no faces.
 ///
-/// Two widgets live here. [JamRoomBar] is the look — 64 dp over the safe area,
-/// blurred translucent `surface`, a hairline on top and a 2 dp accent progress
-/// line above that, and slots for artwork, people and a transport button. It
-/// knows nothing about engines, so it can be laid out in a test or a gallery.
-/// [RoomBar] is the one the router mounts: it subscribes to the session and
-/// fills those slots.
+/// Two widgets live here. [JamRoomBar] is the look, engine-free, so it can
+/// be laid out in a test. [RoomBar] is the one the shell mounts: it
+/// subscribes to the session, fills the slots, and paints its own side
+/// margins and bottom safe-area inset — the shell just stacks it at the
+/// bottom.
 library;
 
 import 'dart:async';
-import 'dart:ui' as ui;
 
-import 'package:flutter/material.dart';
+import 'package:flutter/cupertino.dart';
 import 'package:go_router/go_router.dart';
 import 'package:localjam_client/localjam_client.dart';
 
@@ -25,221 +24,214 @@ import '../design/typography.dart';
 import '../state/session_controller.dart';
 import '../util/format.dart';
 import 'artwork.dart';
-import 'avatar.dart';
+import 'glass.dart';
+import 'pressable.dart';
 import 'room_banner.dart';
 
 /// Strings the bar owns.
 abstract final class JamRoomBarStrings {
   static const String ended = 'This jam ended';
   static const String endedAction = 'Details';
-  static const String rejoining = 'Getting back in\u2026';
-  static const String open = 'Open the room';
+  static const String rejoining = 'Getting back in…';
+  static const String open = 'Open Now Playing';
   static const String play = 'Play';
   static const String pause = 'Pause';
-
-  /// The host, when a guest has not been told their name.
-  static const String host = 'Host';
+  static const String next = 'Next';
 }
 
-/// How many faces the bar carries before the `+N` chip (§4).
-const int _kBarFaces = 3;
+/// The capsule's own height (§6.4), above the margin under it.
+const double kJamRoomBarHeight = JamMetrics.miniPlayerHeight;
 
-/// The bar's own height, above whatever the bottom safe area adds.
-const double kJamRoomBarHeight = 64;
+/// The capsule's distance from the window's sides.
+const double kJamRoomBarSideMargin = 12;
 
-/// The blur behind the translucent surface, per §2.6.
-const double _kBlurSigma = 24;
+/// The capsule's distance above the home indicator.
+const double kJamRoomBarBottomMargin = JamSpace.sm;
+
+/// The space the self-margined [RoomBar] takes above the bottom safe area:
+/// what a screen under it has to leave clear.
+const double kJamRoomBarFootprint = kJamRoomBarHeight + kJamRoomBarBottomMargin;
+
+/// The cover's edge in the capsule.
+const double _kArt = JamArtworkSize.mini;
+
+/// The glyphs (§4: mini player 22) and their touch boxes.
+const double _kGlyph = 22;
+const double _kButton = 44;
+
+/// Below this width the capsule drops the next button.
+const double _kNarrow = 280;
 
 /// The mini player, as a pure piece of layout.
-///
-/// Every moving part is a slot so this file never has to know what an avatar
-/// or an artwork tile looks like: pass [artwork] (44 dp square), [people] (an
-/// avatar stack), and a transport callback. Omitting [onPlayPause] is how a
-/// guest without `controlPlayback` renders — the button is simply not there,
-/// because a 44 dp target that does nothing is worse than none.
 class JamRoomBar extends StatelessWidget {
   const JamRoomBar({
     super.key,
     required this.title,
     required this.subtitle,
     this.artwork,
-    this.people,
-    this.progress,
     this.playing = false,
     this.onPlayPause,
+    this.onNext,
     this.onOpen,
-    this.tint,
-    this.floating = false,
-    this.borderRadius,
     this.alert,
     this.playLabel,
+    this.borderRadius,
   });
 
-  /// Line one: the track, or the room when nothing is queued. `jamRowTitle`.
+  /// Line one: the song, or the room when nothing is queued.
   final String title;
 
-  /// Line two: the session's name. `jamFootnote`.
+  /// Line two: the room's name.
   final String subtitle;
 
-  /// The 44 dp artwork slot. A plain placeholder stands in when null — the
-  /// artwork tile is another engineer's widget and drops straight in here.
+  /// The 40 pt cover slot. A placeholder stands in when null.
   final Widget? artwork;
-
-  /// The avatar stack. Omitted on a bar too narrow to carry it.
-  final Widget? people;
-
-  /// Playback position as 0..1, or null for no progress line at all.
-  final double? progress;
 
   /// Whether the transport button shows a pause glyph.
   final bool playing;
 
-  /// Play/pause. Null renders no button.
+  /// Play/pause. Null renders no button — a 44 pt target that does nothing
+  /// is worse than none.
   final VoidCallback? onPlayPause;
 
-  /// Opens the room. Fired by a tap anywhere on the bar and by a swipe up.
+  /// Next. Null (the room does not let you, or nothing is queued) renders
+  /// no button.
+  final VoidCallback? onNext;
+
+  /// Opens Now Playing. Fired by a tap anywhere on the capsule and by a
+  /// swipe up.
   final VoidCallback? onOpen;
 
   /// Something about this phone's place in the room that should not wait
-  /// for the room screen to be opened — "Headphones disconnected", "The
-  /// host's phone is asleep". Replaces [subtitle], in the warning tint.
+  /// for Now Playing to be opened — "Headphones disconnected", "The host’s
+  /// phone is asleep". Replaces [subtitle], in the warning colour.
   final String? alert;
 
   /// The play button's spoken name when it is not plain "Play" — "Resume
-  /// audio", while this phone's output is suspended.
+  /// Audio", while this phone's output is suspended.
   final String? playLabel;
 
-  /// The current artwork's ambient tint: 0.08 at the left edge, fading out
-  /// across the bar's first two thirds. Never touches text — see
-  /// `design/artwork_tint.dart`.
-  final Color? tint;
-
-  /// The medium-width form (§5 "Wide layouts"): a pill floating clear of the
-  /// window edge rather than a bar welded to it. Drops the top hairline —
-  /// which belongs to a bar that meets the content above it — and the bottom
-  /// safe-area inset, which the caller's margin has already cleared.
-  final bool floating;
-
-  /// The corner the bar is clipped to. The 2 dp progress line is pinned to
-  /// the very top edge, so a caller that rounds the bar from *outside* leaves
-  /// the line running straight across the corner it just rounded — this is
-  /// how the pill and the sidebar dock get it clipped from inside instead.
+  /// A rounded rectangle instead of the capsule (the sidebar dock).
   final BorderRadius? borderRadius;
 
-  /// Swipe velocity, in dp/s, above which an upward flick opens the room.
+  /// Swipe velocity, in pt/s, above which an upward flick opens the room.
   static const double _openVelocity = 240;
-
-  /// Below this width there is no room for a title, a session name, faces and
-  /// a transport button without all four becoming unreadable. The docked bar
-  /// in a 260 dp sidebar is the case this exists for: it collapses to the
-  /// cover and the play button, which is all the space honestly holds.
-  static const double kCollapseWidth = 320;
 
   @override
   Widget build(BuildContext context) {
     final colors = context.jamColors;
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final wash = tint;
-    final radius = borderRadius ?? BorderRadius.zero;
+    final line = alert ?? subtitle;
+    final radius = borderRadius;
+    final open = onOpen;
+    final play = onPlayPause;
+    final next = onNext;
 
-    return Semantics(
-      container: true,
-      button: onOpen != null,
-      label: '$title. ${alert ?? subtitle}',
-      hint: onOpen == null ? null : JamRoomBarStrings.open,
-      // The tap lives on this node rather than on the GestureDetector below,
-      // which `excludeSemantics` deliberately silences: one bar, one thing
-      // to activate.
-      onTap: onOpen,
-      excludeSemantics: true,
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        // Up opens the room; down is deliberately inert. A mini player that
-        // dismisses itself downward is a mini player people lose.
-        onVerticalDragEnd: (details) {
-          final velocity = details.primaryVelocity ?? 0;
-          if (velocity < -_openVelocity) onOpen?.call();
-        },
-        onTap: onOpen,
-        child: ClipRRect(
-          borderRadius: radius,
-          child: BackdropFilter(
-            filter: ui.ImageFilter.blur(
-              sigmaX: _kBlurSigma,
-              sigmaY: _kBlurSigma,
-            ),
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                color: colors.groupedSurface.withValues(
-                  alpha: isDark ? 0.86 : 0.82,
-                ),
-                border: floating
-                    ? null
-                    : Border(
-                        top: BorderSide(color: colors.separator, width: 0.5),
-                      ),
-              ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      // Up opens the room; down is deliberately inert. A mini player that
+      // dismisses itself downward is a mini player people lose.
+      onVerticalDragEnd: (details) {
+        final velocity = details.primaryVelocity ?? 0;
+        if (velocity < -_openVelocity) open?.call();
+      },
+      child: JamBlurSurface(
+        shape: radius == null
+            ? const StadiumBorder()
+            : RoundedRectangleBorder(borderRadius: radius),
+        border: BorderSide(color: colors.separator, width: 0.5),
+        child: SizedBox(
+          height: kJamRoomBarHeight,
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final narrow = constraints.maxWidth < _kNarrow;
+              return Row(
                 children: [
-                  _ProgressLine(progress: progress),
-                  SafeArea(
-                    top: false,
-                    bottom: !floating,
-                    child: SizedBox(
-                      height: kJamRoomBarHeight,
-                      child: Stack(
-                        children: [
-                          if (wash != null)
-                            Positioned.fill(
-                              child: ExcludeSemantics(
-                                child: DecoratedBox(
-                                  decoration: BoxDecoration(
-                                    // Across the whole bar, not a 40 %-wide
-                                    // box: a gradient that runs out mid-bar
-                                    // draws a seam exactly where it stops,
-                                    // however soft its own last stop is.
-                                    // Same wash, no edge.
-                                    gradient: LinearGradient(
-                                      begin: Alignment.centerLeft,
-                                      end: Alignment.centerRight,
-                                      stops: const [0, 0.3, 0.62],
-                                      colors: [
-                                        wash.withValues(alpha: 0.08),
-                                        wash.withValues(alpha: 0.035),
-                                        wash.withValues(alpha: 0),
-                                      ],
+                  Expanded(
+                    child: Semantics(
+                      container: true,
+                      button: open != null,
+                      label: '$title. $line',
+                      hint: open == null ? null : JamRoomBarStrings.open,
+                      onTap: open,
+                      excludeSemantics: true,
+                      child: JamPressable(
+                        onTap: open,
+                        pressedOpacity: 0.7,
+                        child: Padding(
+                          padding: const EdgeInsets.only(
+                            left: (kJamRoomBarHeight - _kArt) / 2,
+                          ),
+                          child: Row(
+                            children: [
+                              SizedBox.square(
+                                dimension: _kArt,
+                                child:
+                                    artwork ??
+                                    const JamArtworkTile(size: _kArt),
+                              ),
+                              const SizedBox(width: JamSpace.md),
+                              Expanded(
+                                child: Column(
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      title,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: context.jamSubheadline.copyWith(
+                                        fontWeight: FontWeight.w600,
+                                      ),
                                     ),
-                                  ),
+                                    Text(
+                                      line,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: context.jamFootnote.copyWith(
+                                        color: alert != null
+                                            ? colors.warning
+                                            : colors.secondaryLabel,
+                                      ),
+                                    ),
+                                  ],
                                 ),
                               ),
-                            ),
-                          LayoutBuilder(
-                            builder: (context, constraints) => Padding(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: JamSpace.md,
-                              ),
-                              child: _BarRow(
-                                title: title,
-                                subtitle: alert ?? subtitle,
-                                alert: alert != null,
-                                artwork: artwork,
-                                people: people,
-                                playing: playing,
-                                playLabel: playLabel,
-                                onPlayPause: onPlayPause,
-                                collapsed:
-                                    constraints.maxWidth < kCollapseWidth,
-                              ),
-                            ),
+                            ],
                           ),
-                        ],
+                        ),
                       ),
                     ),
                   ),
+                  if (play != null)
+                    _BarButton(
+                      icon: playing
+                          ? CupertinoIcons.pause_fill
+                          : CupertinoIcons.play_fill,
+                      label: playing
+                          ? JamRoomBarStrings.pause
+                          : (playLabel ?? JamRoomBarStrings.play),
+                      onPressed: () {
+                        JamHaptics.transport();
+                        play();
+                      },
+                    ),
+                  if (next != null && !narrow)
+                    _BarButton(
+                      icon: CupertinoIcons.forward_fill,
+                      label: JamRoomBarStrings.next,
+                      onPressed: () {
+                        JamHaptics.skip();
+                        next();
+                      },
+                    ),
+                  SizedBox(
+                    width: play == null && next == null
+                        ? JamSpace.lg
+                        : JamSpace.sm,
+                  ),
                 ],
-              ),
-            ),
+              );
+            },
           ),
         ),
       ),
@@ -247,163 +239,42 @@ class JamRoomBar extends StatelessWidget {
   }
 }
 
-/// The bar's contents, in one of two forms.
-///
-/// Wide: cover, title and session name, faces, transport. Narrow (a 260 dp
-/// sidebar dock): cover and transport only. The middle ground — a 40 dp
-/// ellipsised title beside a face beside a button — was the review's
-/// unreadable case, so the layout skips it rather than squeezing.
-class _BarRow extends StatelessWidget {
-  const _BarRow({
-    required this.title,
-    required this.subtitle,
-    required this.artwork,
-    required this.people,
-    required this.playing,
-    required this.onPlayPause,
-    required this.collapsed,
-    this.alert = false,
-    this.playLabel,
-  });
-
-  final String title;
-  final String subtitle;
-  final Widget? artwork;
-  final Widget? people;
-  final bool playing;
-  final VoidCallback? onPlayPause;
-  final bool collapsed;
-
-  /// [subtitle] is a warning, not the session's name.
-  final bool alert;
-  final String? playLabel;
-
-  @override
-  Widget build(BuildContext context) {
-    final cover = SizedBox.square(
-      dimension: JamArtworkSize.bar,
-      child: artwork ?? const JamRoomBarArtworkPlaceholder(),
-    );
-    final transport = onPlayPause == null
-        ? null
-        : _TransportButton(
-            playing: playing,
-            playLabel: playLabel,
-            onPressed: onPlayPause!,
-          );
-
-    if (collapsed) {
-      return Row(children: [cover, const Spacer(), ?transport]);
-    }
-
-    return Row(
-      children: [
-        cover,
-        const SizedBox(width: JamSpace.md),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(
-                title,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: context.jamHeadline,
-              ),
-              Text(
-                subtitle,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: alert
-                    ? context.jamFootnote.copyWith(
-                        color: context.jamColors.warning,
-                      )
-                    : context.jamFootnote.copyWith(
-                        color: context.jamColors.secondaryLabel,
-                      ),
-              ),
-            ],
-          ),
-        ),
-        if (people != null) ...[const SizedBox(width: JamSpace.sm), people!],
-        if (transport != null) ...[
-          const SizedBox(width: JamSpace.xs),
-          transport,
-        ],
-      ],
-    );
-  }
-}
-
-/// The 2 dp accent line pinned to the bar's top edge.
-class _ProgressLine extends StatelessWidget {
-  const _ProgressLine({required this.progress});
-
-  final double? progress;
-
-  @override
-  Widget build(BuildContext context) {
-    final value = progress;
-    if (value == null) return const SizedBox(height: 2);
-    final colors = context.jamColors;
-    return ExcludeSemantics(
-      child: SizedBox(
-        height: 2,
-        child: Align(
-          alignment: Alignment.centerLeft,
-          child: FractionallySizedBox(
-            widthFactor: value.clamp(0.0, 1.0),
-            heightFactor: 1,
-            child: ColoredBox(color: colors.tint),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-/// A 44 dp play/pause target. The glyph cross-fades rather than swapping, so
-/// a tap reads as one control changing state.
-class _TransportButton extends StatelessWidget {
-  const _TransportButton({
-    required this.playing,
+/// A 44 pt glyph button in the capsule. The glyph cross-fades rather than
+/// swapping, so a tap reads as one control changing state.
+class _BarButton extends StatelessWidget {
+  const _BarButton({
+    required this.icon,
+    required this.label,
     required this.onPressed,
-    this.playLabel,
   });
 
-  final bool playing;
+  final IconData icon;
+  final String label;
   final VoidCallback onPressed;
-  final String? playLabel;
 
   @override
   Widget build(BuildContext context) {
-    final colors = context.jamColors;
-    final noMotion = MediaQuery.disableAnimationsOf(context);
-    final label = playing
-        ? JamRoomBarStrings.pause
-        : (playLabel ?? JamRoomBarStrings.play);
+    final reduced = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
     return Semantics(
       container: true,
       button: true,
       label: label,
-      // The IconButton's own action goes with its excluded semantics.
       onTap: onPressed,
       excludeSemantics: true,
-      child: SizedBox.square(
-        dimension: 44,
-        child: IconButton(
-          padding: EdgeInsets.zero,
-          tooltip: label,
-          onPressed: onPressed,
-          icon: AnimatedSwitcher(
-            duration: noMotion ? JamDuration.instant : JamDuration.fast,
-            switchInCurve: JamCurve.standard,
-            child: Icon(
-              playing ? Icons.pause_rounded : Icons.play_arrow_rounded,
-              key: ValueKey<bool>(playing),
-              size: 30,
-              color: colors.label,
+      child: JamPressable(
+        onTap: onPressed,
+        child: SizedBox.square(
+          dimension: _kButton,
+          child: Center(
+            child: AnimatedSwitcher(
+              duration: reduced ? Duration.zero : JamDuration.fast,
+              switchInCurve: JamCurve.standard,
+              child: Icon(
+                icon,
+                key: ValueKey<IconData>(icon),
+                size: _kGlyph,
+                color: context.jamColors.label,
+              ),
             ),
           ),
         ),
@@ -412,43 +283,20 @@ class _TransportButton extends StatelessWidget {
   }
 }
 
-/// What sits in the artwork slot until a real cover is handed to the bar.
+/// The session-bound mini player the shell mounts.
 ///
-/// Deliberately plain: the placeholder gradient belongs to the artwork tile,
-/// and duplicating it here would be a second copy to keep in step.
-class JamRoomBarArtworkPlaceholder extends StatelessWidget {
-  const JamRoomBarArtworkPlaceholder({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.jamColors;
-    return ExcludeSemantics(
-      child: DecoratedBox(
-        decoration: BoxDecoration(
-          color: colors.fillSecondary,
-          borderRadius: BorderRadius.circular(
-            JamRadius.artwork(JamArtworkSize.bar),
-          ),
-        ),
-        child: Icon(
-          Icons.music_note_rounded,
-          size: 20,
-          color: colors.tertiaryLabel,
-        ),
-      ),
-    );
-  }
-}
-
-/// The session-bound bar the router mounts.
+/// By default it paints its own margins — 12 from the sides, 8 above the
+/// home indicator — so the shell only has to stack it at the bottom. A
+/// caller that places it itself (a [floating] pill in a centred column, the
+/// sidebar dock with its [borderRadius]) gets the bare capsule.
 class RoomBar extends StatefulWidget {
   const RoomBar({super.key, this.floating = false, this.borderRadius});
 
-  /// Renders the medium-width floating pill — see [JamRoomBar.floating]. The
-  /// shell owns the margin and the shadow around it.
+  /// The caller owns the margins: paint the capsule only.
   final bool floating;
 
-  /// The corner the bar clips itself to — see [JamRoomBar.borderRadius].
+  /// A rounded rectangle instead of the capsule (the sidebar dock). Implies
+  /// the caller owns the margins.
   final BorderRadius? borderRadius;
 
   @override
@@ -458,42 +306,11 @@ class RoomBar extends StatefulWidget {
 class _RoomBarState extends State<RoomBar> {
   final List<StreamSubscription<Object?>> _subs = [];
   JamEngine? _bound;
-  String _identity = '';
-
-  @override
-  void initState() {
-    super.initState();
-    unawaited(_loadIdentity());
-    JamIdentity.changes.addListener(_onIdentityChanged);
-  }
-
-  /// A stored name adopted after a prefs timeout has to reach the roster
-  /// too, or the bar keeps calling you by a name nobody else is using.
-  void _onIdentityChanged() => unawaited(_loadIdentity());
-
-  Future<void> _loadIdentity() async {
-    final name = await JamIdentity.displayName();
-    if (mounted && name != _identity) setState(() => _identity = name);
-  }
 
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
     _bind(JamSession.of(context).engine);
-  }
-
-  /// The host holds a reserved peer id and never appears in `peers`, so a
-  /// guest has to put them back or the bar is a face short.
-  List<String> _roster(JamEngine engine, JamSessionController session) => [
-    if (_identity.isNotEmpty) _identity,
-    if (!session.isHost) _hostName(engine, session),
-    for (final peer in engine.peers) jamPeerName(peer),
-  ];
-
-  String _hostName(JamEngine engine, JamSessionController session) {
-    if (session.isHost) return _identity;
-    final name = engine.hostPeer?.clientName.trim() ?? '';
-    return name.isEmpty ? JamRoomBarStrings.host : name;
   }
 
   void _bind(JamEngine? engine) {
@@ -511,25 +328,31 @@ class _RoomBarState extends State<RoomBar> {
     _subs
       ..add(engine.states.listen(refresh))
       ..add(engine.playlistUpdates.listen(refresh))
+      ..add(engine.permissionUpdates.listen(refresh))
       // "Headphones disconnected" belongs on the bar too: the user is
-      // usually on home when they pull them out.
+      // usually on Home when they pull them out.
       ..add(engine.outputSuspensionChanges.listen(refresh));
-    // The avatar stack is only honest if it repaints when the room's
-    // membership changes.
-    if (engine is JamGuestEngine) {
-      _subs.add(engine.peerEvents.listen(refresh));
-    } else if (engine is JamHostEngine) {
-      _subs.add(engine.events.listen(refresh));
-    }
   }
 
   @override
   void dispose() {
-    JamIdentity.changes.removeListener(_onIdentityChanged);
     for (final sub in _subs) {
       unawaited(sub.cancel());
     }
     super.dispose();
+  }
+
+  Widget _place(Widget capsule) {
+    if (widget.floating || widget.borderRadius != null) return capsule;
+    return Padding(
+      padding: EdgeInsets.fromLTRB(
+        kJamRoomBarSideMargin,
+        0,
+        kJamRoomBarSideMargin,
+        kJamRoomBarBottomMargin + MediaQuery.paddingOf(context).bottom,
+      ),
+      child: capsule,
+    );
   }
 
   @override
@@ -540,10 +363,11 @@ class _RoomBarState extends State<RoomBar> {
     // to be acknowledged from, so the bar survives into the terminal phase
     // and carries them to the room screen that explains it.
     if (session.phase == JamSessionPhase.ended || session.rejoining) {
-      return _EndedBar(
-        floating: widget.floating,
-        borderRadius: widget.borderRadius,
-        rejoining: session.rejoining,
+      return _place(
+        _EndedBar(
+          borderRadius: widget.borderRadius,
+          rejoining: session.rejoining,
+        ),
       );
     }
     if (engine == null || !session.isLive) return const SizedBox.shrink();
@@ -551,9 +375,9 @@ class _RoomBarState extends State<RoomBar> {
     final item = engine.currentItem;
     final roomPlaying = engine.snapshot.status == PlaybackStatus.playing;
     final canControl = engine.can(JamCapability.controlPlayback);
-    final position = session.position;
+    final canSend = session.canSendCommands;
     final suspension = engine.outputSuspension.value;
-    // While this phone's sound is suspended the button is "Resume audio" —
+    // While this phone's sound is suspended the button is "Resume Audio" —
     // for everyone, since it touches only this phone. Showing "pause" there
     // offered to stop the whole room for someone who just wanted their own
     // sound back.
@@ -568,150 +392,101 @@ class _RoomBarState extends State<RoomBar> {
             ),
           )
         : null;
+    final VoidCallback? onNext =
+        canControl && canSend && engine.playlist.length > 1
+        ? () => unawaited(session.act((e) => e.transportNext()))
+        : null;
     final alert = suspension != null
         ? jamOutputSuspensionCopy(suspension)
         : session.hostAway
         ? JamRoomBannerStrings.hostAsleep
+        : session.connection != JamConnectionState.connected
+        ? JamRoomBannerStrings.reconnecting
         : null;
 
-    Widget bar(double? progress) => JamBackdropBuilder(
-      engine: engine,
-      // The same cache the room screen reads, so minimising the player does
-      // not pay for the current cover's tint a second time.
-      cache: session.backdrops,
-      builder: (context, tint) => JamRoomBar(
+    return _place(
+      JamRoomBar(
         title: item == null ? engine.sessionName : jamDisplayTitle(item),
         subtitle: engine.sessionName,
-        artwork: JamArtwork(
-          engine: engine,
-          item: item,
-          size: JamArtworkSize.bar,
-        ),
-        people: JamAvatarStack(
-          names: _roster(engine, session),
-          size: JamAvatarSize.attribution,
-          maxVisible: _kBarFaces,
-        ),
-        tint: tint.base,
-        floating: widget.floating,
-        borderRadius: widget.borderRadius,
-        progress: progress,
+        artwork: JamArtwork(engine: engine, item: item, size: _kArt),
         playing: playing,
         onPlayPause: onPlayPause,
+        onNext: onNext,
         alert: alert,
         playLabel: suspended ? JamRoomBannerStrings.resume : null,
+        borderRadius: widget.borderRadius,
         onOpen: () => context.push('/room'),
-      ),
-    );
-
-    if (position == null) return bar(null);
-    // Only the 2 dp line rebuilds per frame; the rest of the bar is built
-    // once per state change, which is the whole reason the ticker exists.
-    // The length is listened to as well: while paused the position does not
-    // move, and a file that loads meanwhile (a Retry) has its own length.
-    return ValueListenableBuilder<int?>(
-      valueListenable: engine.loadedDurationUs,
-      builder: (context, loadedUs, _) => ValueListenableBuilder<int?>(
-        valueListenable: position,
-        builder: (context, positionUs, _) {
-          final durationUs = loadedUs ?? item?.durationUs ?? 0;
-          final progress = (positionUs == null || durationUs <= 0)
-              ? null
-              : (positionUs / durationUs).clamp(0.0, 1.0);
-          return bar(progress);
-        },
       ),
     );
   }
 }
 
-/// The same dock, in the terminal phase: what happened, and the way out.
+/// The same capsule in the terminal phase: what happened, and the way to
+/// the screen that explains it.
 class _EndedBar extends StatelessWidget {
-  const _EndedBar({
-    this.floating = false,
-    this.borderRadius,
-    this.rejoining = false,
-  });
+  const _EndedBar({this.borderRadius, this.rejoining = false});
 
-  final bool floating;
   final BorderRadius? borderRadius;
 
-  /// A "Try again" is in flight from the room screen.
+  /// A "Try Again" is in flight from the room screen.
   final bool rejoining;
 
   @override
   Widget build(BuildContext context) {
     final colors = context.jamColors;
-    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final radius = borderRadius;
+    void open() => context.push('/room');
+    final label = rejoining
+        ? JamRoomBarStrings.rejoining
+        : JamRoomBarStrings.ended;
 
     return Semantics(
       container: true,
       button: true,
-      label: rejoining ? JamRoomBarStrings.rejoining : JamRoomBarStrings.ended,
+      label: label,
       hint: JamRoomBarStrings.endedAction,
-      onTap: () => context.push('/room'),
+      onTap: open,
       excludeSemantics: true,
-      child: ClipRRect(
-        borderRadius: borderRadius ?? BorderRadius.zero,
-        child: BackdropFilter(
-          filter: ui.ImageFilter.blur(sigmaX: _kBlurSigma, sigmaY: _kBlurSigma),
-          child: Material(
-            color: colors.groupedSurface.withValues(
-              alpha: isDark ? 0.86 : 0.82,
-            ),
-            child: InkWell(
-              onTap: () => context.push('/room'),
-              child: DecoratedBox(
-                decoration: BoxDecoration(
-                  border: floating
-                      ? null
-                      : Border(
-                          top: BorderSide(color: colors.separator, width: 0.5),
-                        ),
-                ),
-                child: SafeArea(
-                  top: false,
-                  bottom: !floating,
-                  child: SizedBox(
-                    height: kJamRoomBarHeight,
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: JamSpace.lg,
-                      ),
-                      child: Row(
-                        children: [
-                          Icon(
-                            Icons.info_outline_rounded,
-                            size: 20,
-                            color: colors.secondaryLabel,
-                          ),
-                          const SizedBox(width: JamSpace.md),
-                          Expanded(
-                            child: Text(
-                              rejoining
-                                  ? JamRoomBarStrings.rejoining
-                                  : JamRoomBarStrings.ended,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: context.jamHeadline,
-                            ),
-                          ),
-                          Text(
-                            JamRoomBarStrings.endedAction,
-                            style: context.jamFootnote.copyWith(
-                              color: context.jamColors.secondaryLabel,
-                            ),
-                          ),
-                          const SizedBox(width: JamSpace.xs),
-                          Icon(
-                            Icons.chevron_right_rounded,
-                            color: colors.tertiaryLabel,
-                          ),
-                        ],
+      child: JamPressable(
+        onTap: open,
+        pressedOpacity: 0.7,
+        child: JamBlurSurface(
+          shape: radius == null
+              ? const StadiumBorder()
+              : RoundedRectangleBorder(borderRadius: radius),
+          border: BorderSide(color: colors.separator, width: 0.5),
+          child: SizedBox(
+            height: kJamRoomBarHeight,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: JamSpace.xl),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: context.jamSubheadline.copyWith(
+                        fontWeight: FontWeight.w600,
                       ),
                     ),
                   ),
-                ),
+                  if (!rejoining) ...[
+                    Text(
+                      JamRoomBarStrings.endedAction,
+                      style: context.jamFootnote.copyWith(
+                        color: colors.secondaryLabel,
+                      ),
+                    ),
+                    const SizedBox(width: JamSpace.xs),
+                    Icon(
+                      CupertinoIcons.chevron_right,
+                      size: 14,
+                      color: colors.tertiaryLabel,
+                    ),
+                  ] else
+                    const CupertinoActivityIndicator(radius: 8),
+                ],
               ),
             ),
           ),

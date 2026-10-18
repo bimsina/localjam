@@ -1,39 +1,35 @@
-/// The ambient sync state — one glance, not a readout.
+/// Sync, said only when something is wrong (DESIGN_SPEC v3 §1.2, §6.3).
 ///
-/// The engine's accuracy (±5 ms) should be *felt*, not read. The pre-overhaul
-/// UI put clock offset, drift in milliseconds, slew counts and resync counts
-/// on both screens; none of that is actionable to someone in a van. This
-/// reduces it to a dot and, only when something is off, a word. The numbers
-/// still exist — long-press.
+/// The engine's accuracy (±5 ms) should be *felt*, not read. Nothing on Now
+/// Playing says "In sync": when everything works there is no line at all,
+/// and when it does not, one footnote under the room's name says so in
+/// plain words — "Reconnecting…", "Catching up…". No dot, no pulse. The
+/// numbers live in Diagnostics.
 ///
-/// Two widgets live here: [JamSyncIndicator], which is pure (a state and a
-/// callback, no engine, testable in one pump), and [SyncIndicator], the thin
-/// adapter that derives that state from a live [JamEngine] and its
-/// connection. Screens keep using the adapter; anything that already knows
-/// its state should use the pure one.
+/// Two widgets live here: [JamSyncIndicator], which is pure (a state, an
+/// optional fallback line, no engine — testable in one pump), and
+/// [SyncIndicator], the thin adapter that derives that state from a live
+/// [JamEngine] and its connection. Both keep the one thing sync still does
+/// out loud: a throttled buzz when playback falls out of sync.
 library;
 
 import 'dart:async';
 
-import 'package:flutter/material.dart';
+import 'package:flutter/cupertino.dart';
 import 'package:localjam_client/localjam_client.dart';
 
 import '../design/tokens.dart';
 import '../design/typography.dart';
 
-/// Everything this indicator says out loud.
+/// Everything this line says out loud.
 abstract final class JamSyncStrings {
-  /// The quiet reward for everything working. A lone 6 dp dot read as a
-  /// speck of dust on a review build, so the calm state gets a word too —
-  /// in `textSecondary`, with no colour of its own.
-  static const String inSync = 'In sync';
   static const String syncing = 'Syncing…';
-  static const String catchingUp = 'Catching up';
+  static const String catchingUp = 'Catching up…';
   static const String reconnecting = 'Reconnecting…';
 
-  /// The host said it is going to sleep (§3.5). Calm, not a warning: nothing
-  /// is broken, and "Reconnecting…" pulsing beside it would be a lie.
-  static const String hostAsleep = 'Host asleep';
+  /// The host said it is going to sleep (§3.5). Calm, not a warning:
+  /// nothing is broken, and "Reconnecting…" beside it would be a lie.
+  static const String hostAsleep = 'The host’s phone is asleep';
   static const String offSync = 'Out of sync';
 
   /// The long-press affordance, announced rather than drawn.
@@ -50,18 +46,6 @@ DateTime? _lastOffSyncBuzz;
 /// Forgets the throttle, so a test can assert the buzz twice.
 @visibleForTesting
 void resetOffSyncHapticThrottle() => _lastOffSyncBuzz = null;
-
-/// The dot's diameter.
-const double _dotSize = 6;
-
-/// The default row height — a real long-press target.
-const double _kTapTarget = 44;
-
-/// The packed height used inside the room's app bar.
-const double kJamSyncIndicatorCompactHeight = 28;
-
-/// How long a pulse takes, out and back.
-const Duration _pulsePeriod = Duration(milliseconds: 1200);
 
 /// What the room should be told about sync right now.
 enum JamSyncState {
@@ -88,7 +72,7 @@ enum JamSyncState {
   offSync,
 }
 
-/// Derives the ambient state from the engine and its connection.
+/// Derives the state from the engine and its connection.
 JamSyncState jamSyncState({
   required JamEngine engine,
   required JamConnectionState connection,
@@ -101,10 +85,8 @@ JamSyncState jamSyncState({
   }
   if (!clockSynced) return JamSyncState.syncing;
   if (engine.snapshot.status != PlaybackStatus.playing) {
-    // A paused room that is connected and clock-synced is still in sync, and
-    // keeps saying so as long as there is a track to be in sync on. Reporting
-    // `idle` here made the line vanish the moment anyone hit pause, which
-    // reads as sync having dropped. Only an empty room is truly idle.
+    // A paused room that is connected and clock-synced is still in sync.
+    // Only an empty room is truly idle.
     return engine.currentItem == null ? JamSyncState.idle : JamSyncState.inSync;
   }
   final sample = engine.lastDriftSample;
@@ -115,53 +97,93 @@ JamSyncState jamSyncState({
   return JamSyncState.inSync;
 }
 
-/// A dot and — when something needs saying — a word. Long-press for the
-/// numbers.
+/// How loudly a status line speaks.
+enum JamStatusTone {
+  /// A wait that needs nothing from anyone: secondary white.
+  calm,
+
+  /// Recoverable trouble: the warning orange.
+  warning,
+
+  /// Broken: red.
+  danger,
+}
+
+/// One footnote line under the room's name.
+@immutable
+class JamStatusLine {
+  const JamStatusLine(this.text, {this.tone = JamStatusTone.calm});
+
+  final String text;
+  final JamStatusTone tone;
+
+  @override
+  bool operator ==(Object other) =>
+      other is JamStatusLine && other.text == text && other.tone == tone;
+
+  @override
+  int get hashCode => Object.hash(text, tone);
+}
+
+/// The line [state] puts on screen, or null when sync has nothing to say.
+JamStatusLine? jamSyncStatusLine(JamSyncState state) => switch (state) {
+  JamSyncState.idle || JamSyncState.inSync => null,
+  JamSyncState.syncing => const JamStatusLine(JamSyncStrings.syncing),
+  JamSyncState.hostAway => const JamStatusLine(JamSyncStrings.hostAsleep),
+  JamSyncState.reconnecting => const JamStatusLine(
+    JamSyncStrings.reconnecting,
+    tone: JamStatusTone.warning,
+  ),
+  JamSyncState.catchingUp => const JamStatusLine(
+    JamSyncStrings.catchingUp,
+    tone: JamStatusTone.warning,
+  ),
+  JamSyncState.offSync => const JamStatusLine(
+    JamSyncStrings.offSync,
+    tone: JamStatusTone.danger,
+  ),
+};
+
+/// The colour of [tone] on the Now Playing backdrop, which is the same in
+/// both themes (D4) — so these are the dark palette's values, fixed.
+Color jamStatusToneColor(JamStatusTone tone) => switch (tone) {
+  JamStatusTone.calm => JamNowPlayingColors.secondary,
+  JamStatusTone.warning => JamColors.dark.warning,
+  JamStatusTone.danger => JamColors.dark.danger,
+};
+
+/// The footnote under the room's name: sync's problem when it has one,
+/// otherwise [fallback] (the room's other news — a download, a hold), and
+/// nothing at all when everything is fine.
 ///
-/// Colour lerps over [JamDuration.base] rather than cutting, so a moment of
-/// drift never flashes red at the corner of your eye; `syncing` and
-/// `reconnecting` pulse the dot instead of animating anything larger.
+/// Long-press opens the numbers ([onShowDetails]).
 class JamSyncIndicator extends StatefulWidget {
   const JamSyncIndicator({
     super.key,
     required this.state,
+    this.fallback,
     this.onShowDetails,
-    this.height = _kTapTarget,
+    this.textAlign = TextAlign.center,
   });
 
   final JamSyncState state;
 
+  /// Shown when sync itself has nothing to say.
+  final JamStatusLine? fallback;
+
   /// Opens the full drift telemetry. Long-press, so it never invites a tap.
   final VoidCallback? onShowDetails;
 
-  /// The row's height. 44 by default — a real target for the long-press.
-  /// The room's app bar packs it to [_kCompactHeight] so the chevron beside
-  /// the two-line title has a fixed slot to align against.
-  final double height;
+  final TextAlign textAlign;
 
   @override
   State<JamSyncIndicator> createState() => _JamSyncIndicatorState();
 }
 
-class _JamSyncIndicatorState extends State<JamSyncIndicator>
-    with SingleTickerProviderStateMixin {
-  /// One controller for the whole widget, started only while a pulsing state
-  /// is showing and never at all when animations are off.
-  late final AnimationController _pulse = AnimationController(
-    vsync: this,
-    duration: _pulsePeriod,
-  );
-
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    _syncPulse();
-  }
-
+class _JamSyncIndicatorState extends State<JamSyncIndicator> {
   @override
   void didUpdateWidget(JamSyncIndicator oldWidget) {
     super.didUpdateWidget(oldWidget);
-    _syncPulse();
     if (widget.state == JamSyncState.offSync &&
         oldWidget.state != JamSyncState.offSync) {
       _buzzOffSync();
@@ -172,8 +194,8 @@ class _JamSyncIndicatorState extends State<JamSyncIndicator>
   /// an audible correction is about to happen and it is not your doing.
   ///
   /// Throttled globally rather than per widget: the room screen and the
-  /// docked panel can both be showing an indicator, and a flapping link
-  /// should not turn the phone into a pager.
+  /// docked panel can both be showing a line, and a flapping link should not
+  /// turn the phone into a pager.
   void _buzzOffSync() {
     final now = DateTime.now();
     final last = _lastOffSyncBuzz;
@@ -184,114 +206,50 @@ class _JamSyncIndicatorState extends State<JamSyncIndicator>
     JamHaptics.offSync();
   }
 
-  bool get _shouldPulse =>
-      widget.state == JamSyncState.syncing ||
-      widget.state == JamSyncState.reconnecting;
-
-  void _syncPulse() {
-    final reduced = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
-    if (_shouldPulse && !reduced) {
-      if (!_pulse.isAnimating) _pulse.repeat(reverse: true);
-    } else {
-      if (_pulse.isAnimating) _pulse.stop();
-      _pulse.value = 1;
-    }
-  }
-
-  @override
-  void dispose() {
-    _pulse.dispose();
-    super.dispose();
-  }
-
   @override
   Widget build(BuildContext context) {
-    final colors = context.jamColors;
-    if (widget.state == JamSyncState.idle) return const SizedBox.shrink();
-
-    // `inSync` is deliberately wordless: a quiet dot is the reward for
-    // everything working.
-    final (String? label, Color color) = switch (widget.state) {
-      JamSyncState.inSync => (JamSyncStrings.inSync, colors.secondaryLabel),
-      JamSyncState.syncing => (JamSyncStrings.syncing, colors.secondaryLabel),
-      JamSyncState.catchingUp => (JamSyncStrings.catchingUp, colors.warning),
-      JamSyncState.reconnecting => (
-        JamSyncStrings.reconnecting,
-        colors.warning,
-      ),
-      JamSyncState.offSync => (JamSyncStrings.offSync, colors.danger),
-      JamSyncState.hostAway => (
-        JamSyncStrings.hostAsleep,
-        colors.secondaryLabel,
-      ),
-      JamSyncState.idle => (null, colors.secondaryLabel),
-    };
-
-    // `catchingUp` is the one state whose dot is not its label's colour: an
-    // apricot dot with a readable warning-brown word beside it.
-    final dotColor = widget.state == JamSyncState.catchingUp
-        ? colors.warning
-        : color;
-
+    // "Syncing…" is the mildest thing sync says, and the room's own news
+    // (a song still on its way) explains more; every other sync problem
+    // outranks it.
+    final fallback = widget.fallback;
+    final line = widget.state == JamSyncState.syncing && fallback != null
+        ? fallback
+        : jamSyncStatusLine(widget.state) ?? fallback;
     final reduced = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
-    final lerp = reduced ? Duration.zero : JamDuration.base;
-
-    final dot = TweenAnimationBuilder<Color?>(
-      tween: ColorTween(end: dotColor),
-      duration: lerp,
-      curve: JamCurve.standard,
-      builder: (context, value, child) => DecoratedBox(
-        decoration: BoxDecoration(
-          color: value ?? dotColor,
-          shape: BoxShape.circle,
-        ),
-        child: child,
+    return AnimatedSwitcher(
+      duration: reduced ? Duration.zero : JamDuration.base,
+      switchInCurve: JamCurve.standard,
+      switchOutCurve: JamCurve.standard,
+      layoutBuilder: (current, previous) => Stack(
+        alignment: Alignment.topCenter,
+        children: [...previous, ?current],
       ),
-      child: const SizedBox(width: _dotSize, height: _dotSize),
-    );
-
-    return Semantics(
-      label: label == null ? JamSyncStrings.inSync : 'Sync: $label',
-      button: widget.onShowDetails != null,
-      onLongPress: widget.onShowDetails,
-      excludeSemantics: true,
-      child: GestureDetector(
-        onLongPress: widget.onShowDetails,
-        behavior: HitTestBehavior.opaque,
-        child: SizedBox(
-          height: widget.height,
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              _shouldPulse
-                  ? FadeTransition(
-                      // 0.4 ↔ 1.0, so the dot breathes rather than blinks.
-                      opacity: _pulse.drive(Tween<double>(begin: 0.4, end: 1)),
-                      child: dot,
-                    )
-                  : dot,
-              if (label != null) ...[
-                const SizedBox(width: JamSpace.sm),
-                TweenAnimationBuilder<Color?>(
-                  tween: ColorTween(end: color),
-                  duration: lerp,
-                  curve: JamCurve.standard,
-                  builder: (context, value, _) => Text(
-                    label,
-                    style: context.jamFootnote.copyWith(color: value ?? color),
+      child: line == null
+          ? const SizedBox.shrink(key: ValueKey<String>('quiet'))
+          : Semantics(
+              key: ValueKey<JamStatusLine>(line),
+              liveRegion: true,
+              onLongPress: widget.onShowDetails,
+              child: GestureDetector(
+                onLongPress: widget.onShowDetails,
+                behavior: HitTestBehavior.opaque,
+                child: Text(
+                  line.text,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  textAlign: widget.textAlign,
+                  style: context.jamFootnote.copyWith(
+                    color: jamStatusToneColor(line.tone),
                   ),
                 ),
-              ],
-            ],
-          ),
-        ),
-      ),
+              ),
+            ),
     );
   }
 }
 
-/// The engine-bound adapter. Same constructor it has always had, so the room
-/// screen keeps compiling while Phase 2 moves over.
+/// The engine-bound adapter: watches drift samples and the connection, and
+/// renders [JamSyncIndicator].
 class SyncIndicator extends StatefulWidget {
   const SyncIndicator({
     super.key,
@@ -299,8 +257,9 @@ class SyncIndicator extends StatefulWidget {
     required this.connection,
     required this.clockSynced,
     this.hostAway = false,
+    this.fallback,
     this.onShowDetails,
-    this.height = _kTapTarget,
+    this.textAlign = TextAlign.center,
   });
 
   final JamEngine engine;
@@ -312,11 +271,13 @@ class SyncIndicator extends StatefulWidget {
   /// False only for a guest whose §4 clock burst has not landed.
   final bool clockSynced;
 
+  /// Passed through to [JamSyncIndicator.fallback].
+  final JamStatusLine? fallback;
+
   /// Opens the full drift telemetry. Long-press, so it never invites a tap.
   final VoidCallback? onShowDetails;
 
-  /// Passed straight through to [JamSyncIndicator.height].
-  final double height;
+  final TextAlign textAlign;
 
   @override
   State<SyncIndicator> createState() => _SyncIndicatorState();
@@ -324,14 +285,38 @@ class SyncIndicator extends StatefulWidget {
 
 class _SyncIndicatorState extends State<SyncIndicator> {
   StreamSubscription<DriftSample>? _sub;
+  JamSyncState? _last;
 
   @override
   void initState() {
     super.initState();
+    _listen();
+  }
+
+  @override
+  void didUpdateWidget(SyncIndicator oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!identical(oldWidget.engine, widget.engine)) {
+      unawaited(_sub?.cancel());
+      _listen();
+    }
+  }
+
+  /// Rebuilds only when a sample changes what the line would say: drift
+  /// arrives several times a second and almost never matters.
+  void _listen() {
     _sub = widget.engine.driftSamples.listen((_) {
-      if (mounted) setState(() {});
+      if (!mounted) return;
+      if (_state() != _last) setState(() {});
     });
   }
+
+  JamSyncState _state() => jamSyncState(
+    engine: widget.engine,
+    connection: widget.connection,
+    clockSynced: widget.clockSynced,
+    hostAway: widget.hostAway,
+  );
 
   @override
   void dispose() {
@@ -340,14 +325,13 @@ class _SyncIndicatorState extends State<SyncIndicator> {
   }
 
   @override
-  Widget build(BuildContext context) => JamSyncIndicator(
-    state: jamSyncState(
-      engine: widget.engine,
-      connection: widget.connection,
-      clockSynced: widget.clockSynced,
-      hostAway: widget.hostAway,
-    ),
-    onShowDetails: widget.onShowDetails,
-    height: widget.height,
-  );
+  Widget build(BuildContext context) {
+    final state = _last = _state();
+    return JamSyncIndicator(
+      state: state,
+      fallback: widget.fallback,
+      onShowDetails: widget.onShowDetails,
+      textAlign: widget.textAlign,
+    );
+  }
 }
