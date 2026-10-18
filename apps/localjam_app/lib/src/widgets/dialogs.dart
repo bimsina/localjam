@@ -1,9 +1,11 @@
-/// iOS alerts on every platform (DESIGN_SPEC v3 §5 Alerts).
+/// iOS alerts on every platform — iOS 26's (DESIGN_SPEC v3 §5 Alerts, as
+/// amended by §10.3).
 ///
-/// Centred, 270 wide, blurred: title headline, message footnote, buttons 17
-/// (the preferred action semibold, destructive in `danger`), side by side for
-/// two and stacked for more; optionally one text field. Built on
-/// `CupertinoAlertDialog`, tinted from the theme.
+/// Centred, 300 wide, radius 34, blurred: title headline and message
+/// subheadline, leading-aligned in balanced lines (no orphaned last word);
+/// capsule buttons side by side for two, stacked otherwise — the preferred
+/// action filled tint, a destructive one filled red, Cancel a grey capsule;
+/// optionally one text field whose keyboard follows the app's appearance.
 ///
 /// **The lifetime rule.** A `TextEditingController` disposed the moment the
 /// dialog's future completes is still wired to a field the exit transition
@@ -11,11 +13,15 @@
 /// controller in a `State` and disposes it in `State.dispose`.
 library;
 
+import 'dart:ui' show ImageFilter;
+
 import 'package:flutter/cupertino.dart';
 
+import '../design/theme.dart';
 import '../design/tokens.dart';
 import '../design/typography.dart';
 import 'buttons.dart';
+import 'pressable.dart';
 
 /// Default labels.
 abstract final class JamDialogStrings {
@@ -40,14 +46,22 @@ class JamAlertAction {
   /// Null disables the button.
   final VoidCallback? onPressed;
 
-  /// The preferred action: semibold.
+  /// The preferred action: a filled tint capsule.
   final bool isDefault;
 
-  /// `danger` label.
+  /// A filled red capsule.
   final bool destructive;
 }
 
-/// An iOS alert.
+/// An iOS 26 alert (spec §10.3): a rounded (34) card of blurred `elevated`,
+/// title and message leading-aligned in balanced lines, an optional field,
+/// and capsule buttons — side by side for two when both labels fit, stacked
+/// otherwise (the cancelling action last, as iOS stacks it).
+///
+/// Buttons are told apart by shape and fill, not by two near-identical
+/// reds (rev-holistic): the preferred action is a filled tint capsule, a
+/// destructive one a filled red capsule, and everything else — Cancel — a
+/// grey `fill` capsule with `label` text.
 class JamAlert extends StatelessWidget {
   const JamAlert({
     super.key,
@@ -69,40 +83,223 @@ class JamAlert extends StatelessWidget {
   /// Cancel first, the action last (iOS order).
   final List<JamAlertAction> actions;
 
+  static const double _padding = JamSpace.xl;
+  static const double _gap = JamSpace.sm;
+
   @override
   Widget build(BuildContext context) {
+    final colors = context.jamColors;
     final message = this.message;
     final content = this.content;
-    return CupertinoAlertDialog(
-      title: Text(title),
-      content: message == null && content == null
-          ? null
-          : Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                if (message != null) Text(message),
-                if (content != null) ...[
-                  const SizedBox(height: JamSpace.md),
-                  content,
-                ],
-              ],
-            ),
-      actions: [
-        for (final action in actions)
-          CupertinoDialogAction(
-            onPressed: action.onPressed,
-            isDefaultAction: action.isDefault,
-            isDestructiveAction: action.destructive,
-            child: Text(action.label),
-          ),
+    final media = MediaQuery.of(context);
+    final width = (media.size.width - JamSpace.huge * 2).clamp(
+      0.0,
+      JamMetrics.alertWidth,
+    );
+
+    final text = <Widget>[
+      Semantics(
+        header: true,
+        child: JamBalancedText(
+          title,
+          textAlign: TextAlign.start,
+          style: context.jamHeadline.copyWith(color: colors.label),
+        ),
+      ),
+      if (message != null) ...[
+        const SizedBox(height: JamSpace.xs),
+        JamBalancedText(
+          message,
+          textAlign: TextAlign.start,
+          style: context.jamSubheadline.copyWith(color: colors.label),
+        ),
       ],
+    ];
+
+    final card = ConstrainedBox(
+      constraints: BoxConstraints.tightFor(width: width),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(JamRadius.alert),
+        child: BackdropFilter(
+          filter: ImageFilter.blur(
+            sigmaX: JamBlur.material,
+            sigmaY: JamBlur.material,
+          ),
+          child: ColoredBox(
+            // Nearly opaque: an alert over the black camera page (or any
+            // dark ground) must never turn into a muddy, half-legible grey.
+            color: colors.elevated.withValues(alpha: 0.96),
+            child: Padding(
+              padding: const EdgeInsets.all(_padding),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Flexible(
+                    child: SingleChildScrollView(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: text,
+                      ),
+                    ),
+                  ),
+                  if (content != null) ...[
+                    const SizedBox(height: JamSpace.lg),
+                    content,
+                  ],
+                  if (actions.isNotEmpty) ...[
+                    const SizedBox(height: _padding),
+                    _JamAlertButtons(actions: actions, gap: _gap),
+                  ],
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    // Rises with the keyboard when the alert holds a field.
+    return AnimatedPadding(
+      padding:
+          media.viewInsets + const EdgeInsets.symmetric(vertical: JamSpace.xxl),
+      duration: JamDuration.fast,
+      curve: JamCurve.standard,
+      child: MediaQuery.removeViewInsets(
+        context: context,
+        removeLeft: true,
+        removeTop: true,
+        removeRight: true,
+        removeBottom: true,
+        child: Center(
+          child: Semantics(
+            scopesRoute: true,
+            explicitChildNodes: true,
+            namesRoute: true,
+            label: title,
+            child: card,
+          ),
+        ),
+      ),
     );
   }
 }
 
-/// The text field inside an alert: iOS's bordered rounded field, with an
-/// optional footnote under it — [errorText] in `danger`, else [helperText]
-/// in `secondaryLabel`.
+/// The alert's capsules: a row of two when both labels fit, else a stack.
+class _JamAlertButtons extends StatelessWidget {
+  const _JamAlertButtons({required this.actions, required this.gap});
+
+  final List<JamAlertAction> actions;
+  final double gap;
+
+  /// Text inset inside a capsule.
+  static const double _inset = JamSpace.md;
+
+  bool _fitsSideBySide(BuildContext context, double width) {
+    if (actions.length != 2) return false;
+    final each = (width - gap) / 2 - _inset * 2;
+    final scaler = MediaQuery.textScalerOf(context);
+    for (final action in actions) {
+      final painter = TextPainter(
+        text: TextSpan(text: action.label, style: context.jamHeadline),
+        textDirection: Directionality.of(context),
+        textScaler: scaler,
+        maxLines: 1,
+      )..layout();
+      final fits = painter.width <= each;
+      painter.dispose();
+      if (!fits) return false;
+    }
+    return true;
+  }
+
+  @override
+  Widget build(BuildContext context) => LayoutBuilder(
+    builder: (context, constraints) {
+      if (_fitsSideBySide(context, constraints.maxWidth)) {
+        return Row(
+          children: [
+            Expanded(child: JamAlertButton(action: actions[0])),
+            SizedBox(width: gap),
+            Expanded(child: JamAlertButton(action: actions[1])),
+          ],
+        );
+      }
+      // Stacked, iOS puts the action on top and Cancel at the bottom.
+      final ordered = actions.length == 2 ? actions.reversed.toList() : actions;
+      return Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          for (var i = 0; i < ordered.length; i++) ...[
+            if (i > 0) SizedBox(height: gap),
+            JamAlertButton(action: ordered[i]),
+          ],
+        ],
+      );
+    },
+  );
+}
+
+/// One of an alert's capsules: filled tint for the preferred action, filled
+/// red for a destructive one, grey `fill` with `label` text otherwise.
+class JamAlertButton extends StatelessWidget {
+  const JamAlertButton({super.key, required this.action});
+
+  final JamAlertAction action;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.jamColors;
+    final enabled = action.onPressed != null;
+    final (Color ground, Color fg, bool strong) = action.destructive
+        ? (colors.danger, colors.onTint, true)
+        : action.isDefault
+        ? (colors.tintFilled, colors.onTint, true)
+        : (colors.fill, colors.label, false);
+    return Semantics(
+      container: true,
+      button: true,
+      enabled: enabled,
+      label: action.label,
+      onTap: action.onPressed,
+      excludeSemantics: true,
+      child: Opacity(
+        opacity: enabled ? 1 : 0.35,
+        child: JamPressable(
+          onTap: action.onPressed,
+          pressedOpacity: 0.7,
+          child: Container(
+            height: JamMetrics.alertButtonHeight,
+            alignment: Alignment.center,
+            padding: const EdgeInsets.symmetric(
+              horizontal: _JamAlertButtons._inset,
+            ),
+            decoration: ShapeDecoration(
+              color: ground,
+              shape: const StadiumBorder(),
+            ),
+            child: Text(
+              action.label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: (strong ? context.jamHeadline : context.jamBody).copyWith(
+                color: fg,
+                fontWeight: strong ? null : FontWeight.w500,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// The text field inside an alert: a filled rounded field (iOS 26), with an
+/// optional footnote under it — [errorText] in `danger` (with a hairline
+/// round the field), else [helperText] in `secondaryLabel`. The keyboard
+/// follows the app's appearance, not the device's.
 class JamAlertTextField extends StatelessWidget {
   const JamAlertTextField({
     super.key,
@@ -161,6 +358,7 @@ class JamAlertTextField extends StatelessWidget {
             autofocus: autofocus,
             placeholder: placeholder,
             keyboardType: keyboardType,
+            keyboardAppearance: jamKeyboardAppearance(context),
             textCapitalization: textCapitalization,
             textInputAction: textInputAction,
             maxLength: maxLength,
@@ -174,14 +372,16 @@ class JamAlertTextField extends StatelessWidget {
               color: colors.tertiaryLabel,
             ),
             cursorColor: colors.tint,
-            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 7),
+            padding: const EdgeInsets.symmetric(
+              horizontal: JamSpace.md,
+              vertical: JamSpace.sm,
+            ),
             decoration: BoxDecoration(
-              color: colors.elevated,
-              border: Border.all(
-                color: errorText != null ? colors.danger : colors.separator,
-                width: 0.5,
-              ),
-              borderRadius: BorderRadius.circular(7),
+              color: colors.fillSecondary,
+              border: errorText == null
+                  ? null
+                  : Border.all(color: colors.danger, width: 0.5),
+              borderRadius: BorderRadius.circular(JamRadius.field),
             ),
             onChanged: onChanged,
             onSubmitted: onSubmitted,
@@ -317,8 +517,8 @@ class JamConfirmDialog extends StatelessWidget {
   final String confirmLabel;
   final String cancelLabel;
 
-  /// The confirming action in `danger` (and Cancel becomes the bold one, as
-  /// iOS does).
+  /// The confirming action as a red capsule. Cancel stays the grey one —
+  /// iOS 26 tells them apart by fill, not by two shades of red.
   final bool destructive;
 
   @override
@@ -328,7 +528,6 @@ class JamConfirmDialog extends StatelessWidget {
     actions: [
       JamAlertAction(
         label: cancelLabel,
-        isDefault: destructive,
         onPressed: () => Navigator.of(context).pop(false),
       ),
       JamAlertAction(

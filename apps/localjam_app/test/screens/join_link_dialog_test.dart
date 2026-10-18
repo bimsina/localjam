@@ -8,6 +8,7 @@ import 'package:flutter/material.dart'
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:localjam_app/src/design/theme.dart';
+import 'package:localjam_app/src/widgets/dialogs.dart';
 import 'package:localjam_app/src/widgets/join_link_dialog.dart';
 
 const String _link =
@@ -114,11 +115,13 @@ void main() {
     await openDialog(tester);
 
     // The confirming action is disabled, not just untappable.
-    final button = tester.widget<CupertinoDialogAction>(
-      find.widgetWithText(CupertinoDialogAction, JamJoinLinkStrings.join),
-    );
+    final button = tester
+        .widget<JamAlertButton>(
+          find.widgetWithText(JamAlertButton, JamJoinLinkStrings.join),
+        )
+        .action;
     expect(button.onPressed, isNull);
-    expect(button.isDefaultAction, isTrue);
+    expect(button.isDefault, isTrue);
   });
 
   testWidgets('cancelling answers with nothing, on either palette', (
@@ -137,7 +140,7 @@ void main() {
   ) async {
     mockClipboard(null);
     await openDialog(tester);
-    expect(find.byType(CupertinoAlertDialog), findsOneWidget);
+    expect(find.byType(JamAlert), findsOneWidget);
     expect(find.text(JamJoinLinkStrings.message), findsOneWidget);
 
     await tester.enterText(find.byType(CupertinoTextField), 'not a link');
