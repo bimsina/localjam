@@ -28,7 +28,7 @@ abstract final class JamPresetStrings {
 
   /// Preset names. None of them is a capability's name.
   static const String everything = 'Everything';
-  static const String songsOnly = 'Songs Only';
+  static const String songsOnly = 'Songs & Queue';
   static const String listenOnly = 'Listen Only';
 
   /// The `JamPolicy.jam` preset's name, under its older constant.
