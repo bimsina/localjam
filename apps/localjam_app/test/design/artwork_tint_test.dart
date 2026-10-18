@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
@@ -18,17 +19,69 @@ Future<Uint8List> _solidPng(Color color) async {
 
 void main() {
   group('backdropOverlayFor', () {
-    test('mid and dark covers get the spec floor', () {
+    test('dark covers get the spec floor', () {
       expect(backdropOverlayFor(0.0), kJamBackdropMinOverlay);
-      expect(backdropOverlayFor(0.1), kJamBackdropMinOverlay);
-      expect(backdropOverlayFor(0.2), closeTo(0.25, 0.051));
+      expect(backdropOverlayFor(0.05), kJamBackdropMinOverlay);
     });
 
     test('pale covers get more black, capped', () {
       final pale = backdropOverlayFor(0.6);
       expect(pale, greaterThan(kJamBackdropMinOverlay));
       expect(pale, lessThanOrEqualTo(kJamBackdropMaxOverlay));
-      expect(backdropOverlayFor(1.0), kJamBackdropMaxOverlay);
+      expect(
+        backdropOverlayFor(1.0),
+        lessThanOrEqualTo(kJamBackdropMaxOverlay),
+      );
+      expect(backdropOverlayFor(1.0), greaterThan(0.6));
+    });
+
+    test('secondary text (white 70%) clears AA on every grey (§10.7)', () {
+      for (var l = 0.0; l <= 1.0; l += 0.02) {
+        final v = l <= 0.0031308
+            ? 12.92 * l
+            : 1.055 * math.pow(l, 1 / 2.4) - 0.055;
+        final c = (v.clamp(0.0, 1.0) * 255).round();
+        final grey = Color.fromARGB(255, c, c, c);
+        final ground = jamDarken(grey, backdropOverlayFor(l));
+        expect(
+          jamSecondaryContrastOn(ground),
+          greaterThanOrEqualTo(4.5),
+          reason: 'luminance $l',
+        );
+      }
+    });
+
+    test('and on saturated colours, solved per colour', () {
+      for (final cover in const [
+        Color(0xFFFFE4EC), // pale pink
+        Color(0xFFFFB347), // bright orange
+        Color(0xFF00FFFF), // cyan
+        Color(0xFFFFFF00), // yellow
+        Color(0xFF4A2B7F), // deep purple
+      ]) {
+        final ground = jamDarken(cover, backdropOverlayForColor(cover));
+        expect(
+          jamSecondaryContrastOn(ground),
+          greaterThanOrEqualTo(4.5),
+          reason: '$cover',
+        );
+      }
+    });
+  });
+
+  group('saturation', () {
+    test('is boosted before darkening, keeping the hue', () {
+      const pale = Color(0xFFD8B4C0);
+      final boosted = jamSaturate(pale, kJamBackdropSaturation);
+      final hsvBefore = HSVColor.fromColor(pale);
+      final hsvAfter = HSVColor.fromColor(boosted);
+      expect(hsvAfter.saturation, greaterThan(hsvBefore.saturation));
+      expect(hsvAfter.hue, closeTo(hsvBefore.hue, 6));
+    });
+
+    test('leaves greys grey', () {
+      const grey = Color(0xFF808080);
+      expect(jamSaturate(grey, kJamBackdropSaturation), grey);
     });
 
     test('is monotonic in luminance', () {
@@ -75,8 +128,10 @@ void main() {
       expect(white.isPlaceholder, isFalse);
       expect(navy.isPlaceholder, isFalse);
       expect(white.overlayOpacity, greaterThan(navy.overlayOpacity));
-      expect(white.overlayOpacity, kJamBackdropMaxOverlay);
+      expect(white.overlayOpacity, greaterThan(0.6));
       expect(navy.overlayOpacity, kJamBackdropMinOverlay);
+      // The flat stand-in still holds secondary text.
+      expect(jamSecondaryContrastOn(white.base), greaterThanOrEqualTo(4.5));
     });
   });
 

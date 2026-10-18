@@ -300,8 +300,10 @@ abstract final class JamNowPlayingColors {
   /// Titles, transport glyphs.
   static const Color text = Color(0xFFFFFFFF);
 
-  /// "Added by Mia", times.
-  static const Color secondary = Color(0x99FFFFFF);
+  /// "Added by Mia", times. 70%, not iOS's 60%: the backdrop's overlay is
+  /// solved so this clears 4.5:1 on any cover (spec §10.7,
+  /// `artwork_tint.dart`).
+  static const Color secondary = Color(0xB3FFFFFF);
 
   /// The grabber, drag handles, disabled transport.
   static const Color tertiary = Color(0x59FFFFFF);
@@ -318,8 +320,25 @@ abstract final class JamNowPlayingColors {
   /// The artwork placeholder's note on the backdrop.
   static const Color placeholderGlyph = Color(0x80FFFFFF);
 
-  /// The backdrop when the cover is a placeholder.
+  /// The backdrop when the cover is a placeholder: a deep neutral…
   static const Color backdropPlaceholder = Color(0xFF1C1C1E);
+
+  /// …with a faint radial lift behind the cover, so a song without art
+  /// still reads as Now Playing rather than a loading screen (§10.7).
+  static const Color backdropPlaceholderLift = Color(0x1FFFFFFF);
+
+  /// The platter a long-pressed queue row lifts onto, above its menu.
+  static const Color liftedRow = Color(0xFF2C2C2E);
+
+  /// What a queue row's long-press menu dims the rest of the screen with.
+  static const Color contextScrim = Color(0x59000000);
+
+  /// Grouped rows on the backdrop (the docked People panel): translucent
+  /// white, never an opaque card.
+  static const Color groupedRow = Color(0x17FFFFFF);
+
+  /// Hairlines between grouped rows on the backdrop.
+  static const Color separator = Color(0x29FFFFFF);
 
   /// Glass buttons over the backdrop.
   static const Color glass = Color(0x2EFFFFFF);
