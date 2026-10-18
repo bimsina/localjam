@@ -284,32 +284,14 @@ class _JamBackdropBuilderState extends State<JamBackdropBuilder> {
   }
 }
 
-/// How much the backdrop's cover is saturated before it is darkened
-/// (spec §10.7): a pale or bright cover keeps its hue instead of going to
-/// mud under the overlay. Luminance-preserving, so the overlay's contrast
-/// sums still hold.
-const double kJamBackdropSaturation = 1.45;
-
-/// The faint radial lift on a placeholder backdrop (spec §10.7): a deep
-/// neutral that still reads as a surface, not a loading state.
-const Color kJamBackdropPlaceholderLift = Color(0x14FFFFFF);
-
-/// A luminance-preserving saturation matrix (Rec. 709 weights).
-List<double> _saturation(double s) {
-  const r = 0.2126, g = 0.7152, b = 0.0722;
-  final i = 1 - s;
-  return <double>[
-    r * i + s, g * i, b * i, 0, 0, //
-    r * i, g * i + s, b * i, 0, 0, //
-    r * i, g * i, b * i + s, 0, 0, //
-    0, 0, 0, 1, 0, //
-  ];
-}
-
-/// Paints a [JamBackdrop]: the base colour, the cover scaled to fill,
-/// saturated ([kJamBackdropSaturation]) and blurred (σ [JamBlur.backdrop]),
-/// and the black overlay — cross-fading over [JamDuration.crossfade] when
-/// the cover changes. With no cover: the base with a faint radial lift.
+/// Paints a [JamBackdrop]: the base colour, the cover scaled to fill and
+/// blurred (σ [JamBlur.backdrop]), and the black overlay — cross-fading over
+/// [JamDuration.crossfade] when the cover changes. With no cover: the base
+/// with a faint radial lift (spec §10.7).
+///
+/// Paints only. Every colour decision — the saturation boost, the darkening
+/// solved for secondary text, the vibrance — is made once, in
+/// `design/artwork_tint.dart`, and is already in [JamBackdrop.image].
 class JamBackdropView extends StatelessWidget {
   const JamBackdropView({super.key, required this.backdrop, this.child});
 
@@ -328,12 +310,17 @@ class JamBackdropView extends StatelessWidget {
         color: backdrop.base,
         child: image == null
             // The one gradient the spec allows lives on this surface.
+            // A deep neutral with a faint lift behind where the cover sits,
+            // so a song without art still reads as Now Playing.
             ? const DecoratedBox(
                 decoration: BoxDecoration(
                   gradient: RadialGradient(
-                    center: Alignment(0, -0.45),
-                    radius: 0.95,
-                    colors: [kJamBackdropPlaceholderLift, Color(0x00FFFFFF)],
+                    center: Alignment(0, -0.3),
+                    radius: 0.85,
+                    colors: [
+                      JamNowPlayingColors.backdropPlaceholderLift,
+                      JamNowPlayingColors.clear,
+                    ],
                   ),
                 ),
                 child: SizedBox.expand(),
@@ -348,17 +335,12 @@ class JamBackdropView extends StatelessWidget {
                         sigmaY: JamBlur.backdrop,
                         tileMode: TileMode.mirror,
                       ),
-                      child: ColorFiltered(
-                        colorFilter: ColorFilter.matrix(
-                          _saturation(kJamBackdropSaturation),
-                        ),
-                        child: Image(
-                          image: image,
-                          fit: BoxFit.cover,
-                          gaplessPlayback: true,
-                          // Downsampled: a blurred cover needs no detail.
-                          filterQuality: FilterQuality.low,
-                        ),
+                      child: Image(
+                        image: image,
+                        fit: BoxFit.cover,
+                        gaplessPlayback: true,
+                        // Downsampled: a blurred cover needs no detail.
+                        filterQuality: FilterQuality.low,
                       ),
                     ),
                   ),
