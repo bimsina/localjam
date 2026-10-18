@@ -92,14 +92,14 @@ void main() {
         tester.widget<JamRow>(find.widgetWithText(JamRow, label)).checked;
     expect(settings.themeMode, ThemeMode.system);
     expect(checked(SettingsStrings.system), isTrue);
-    expect(find.byIcon(CupertinoIcons.checkmark), findsOneWidget);
+    expect(find.byIcon(CupertinoIcons.checkmark_alt), findsOneWidget);
 
     await tester.tap(find.text(SettingsStrings.dark));
     await tester.pumpAndSettle();
     expect(settings.themeMode, ThemeMode.dark);
     expect(checked(SettingsStrings.dark), isTrue);
     expect(checked(SettingsStrings.system), isFalse);
-    expect(find.byIcon(CupertinoIcons.checkmark), findsOneWidget);
+    expect(find.byIcon(CupertinoIcons.checkmark_alt), findsOneWidget);
   });
 
   testWidgets('the licences page opens', (tester) async {

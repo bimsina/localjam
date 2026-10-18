@@ -25,7 +25,7 @@ abstract final class JamTrackRowStrings {
   static const String nowPlaying = 'Now playing';
   static const String addedBy = 'Added by';
   static const String addedByYou = 'Added by you';
-  static const String failed = 'Could not be loaded';
+  static const String failed = 'Couldn’t be loaded';
   static const String fetching = 'Getting the song';
   static const String reorder = 'Reorder';
   static const String separator = ' · ';
@@ -110,7 +110,7 @@ class JamTrackRow extends StatelessWidget implements JamSelfSeparatingRow {
   /// The song could not be fetched or decoded.
   final bool hasError;
 
-  /// The reason, shown in `danger` (default "Could not be loaded").
+  /// The reason, shown in `danger` (default "Couldn’t be loaded").
   final String? errorText;
 
   /// Draws the reorder handle.

@@ -204,6 +204,22 @@ void main() {
     );
   });
 
+  testWidgets('a copy button confirms in place, then goes back', (
+    tester,
+  ) async {
+    var copies = 0;
+    await tester.pumpWidget(
+      _host(JamCopyButton(label: 'Copy Link', onCopy: () => copies++)),
+    );
+    await tester.tap(find.text('Copy Link'));
+    await tester.pump();
+    expect(copies, 1);
+    expect(find.text(JamConfirmationStrings.copied), findsOneWidget);
+    expect(find.byIcon(CupertinoIcons.checkmark_alt), findsOneWidget);
+    await tester.pump(kJamInPlaceConfirmation);
+    expect(find.text('Copy Link'), findsOneWidget);
+  });
+
   testWidgets('a button announces itself as one', (tester) async {
     final handle = tester.ensureSemantics();
     await tester.pumpWidget(
