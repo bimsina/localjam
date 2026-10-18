@@ -3,6 +3,7 @@
 /// states is that the screen still works when there is no camera anywhere.
 library;
 
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:localjam_app/src/design/theme.dart';
@@ -10,6 +11,7 @@ import 'package:localjam_app/src/screens/scan_screen.dart';
 import 'package:localjam_app/src/util/permissions.dart';
 import 'package:localjam_app/src/widgets/buttons.dart';
 import 'package:localjam_app/src/widgets/empty_state.dart';
+import 'package:localjam_app/src/widgets/join_link_dialog.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
 Future<void> pumpUnavailable(
@@ -168,6 +170,51 @@ void main() {
     expect(asked, 1);
   });
 
+  testWidgets('Enter Link sits in the same place on every dead end', (
+    tester,
+  ) async {
+    Rect linkFor(MobileScannerErrorCode code, {bool declined = false}) =>
+        tester.getRect(find.text(JamScanStrings.enterLink));
+    final rects = <Rect>[];
+    for (final (code, declined) in [
+      (MobileScannerErrorCode.permissionDenied, false),
+      (MobileScannerErrorCode.permissionDenied, true),
+      (MobileScannerErrorCode.unsupported, false),
+      (MobileScannerErrorCode.genericError, false),
+    ]) {
+      await pumpUnavailable(tester, code, declined: declined, onRetry: () {});
+      expect(find.text(JamScanStrings.enterLink), findsOneWidget);
+      rects.add(linkFor(code, declined: declined));
+    }
+    expect(rects.toSet(), hasLength(1));
+  });
+
+  testWidgets('Join with Link from the scanner is on the dark palette, '
+      'whatever the app appearance', (tester) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: jamLightTheme(),
+        home: Builder(
+          builder: (context) => Center(
+            child: GestureDetector(
+              onTap: () => promptForJoinLinkOnBlack(context),
+              child: const Text('open'),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('open'));
+    await tester.pumpAndSettle();
+    final dialog = find.byType(JoinLinkDialog);
+    expect(dialog, findsOneWidget);
+    expect(Theme.of(tester.element(dialog)).brightness, Brightness.dark);
+    expect(
+      CupertinoTheme.brightnessOf(tester.element(dialog)),
+      Brightness.dark,
+    );
+  });
+
   test('the viewfinder is ~70% of the short side, held on big screens', () {
     expect(scanWindowFor(const Size(400, 860)), closeTo(280, 0.01));
     expect(scanWindowFor(const Size(1440, 900)), kScanWindowMax);
@@ -204,11 +251,14 @@ void main() {
           .first,
     );
     expect(ground.color, const Color(0xFF000000));
-    // Open Settings is the tinted primary.
+    // Open Settings is a neutral capsule with a white label — a tinted fill
+    // on black read as a disabled maroon slab — and it hugs its label.
     final settings = tester.widget<JamButton>(
       find.widgetWithText(JamButton, JamScanStrings.openSettings),
     );
-    expect(settings.variant, JamButtonVariant.tinted);
+    expect(settings.variant, JamButtonVariant.gray);
+    expect(settings.color, const Color(0xFFFFFFFF));
+    expect(settings.expand, isFalse);
 
     await tester.tap(find.bySemanticsLabel(JamScanStrings.close));
     await tester.pumpAndSettle();
