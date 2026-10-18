@@ -10,16 +10,24 @@
 /// 1. **Saturation first.** The cover is decoded small (it is about to be
 ///    blurred by σ 70 anyway) and its saturation boosted by
 ///    [kJamBackdropSaturation], so a pale or bright sleeve keeps its hue
-///    once darkened instead of turning to grey-brown mud. The boosted
-///    pixels become the image the view blurs.
-/// 2. **Then the overlay, solved for the secondary text.** The black
-///    overlay is the weakest that puts *secondary* white
+///    once darkened instead of turning to grey-brown mud.
+/// 2. **Then the darkening, solved for the secondary text.** The black is
+///    the weakest that puts *secondary* white
 ///    ([JamNowPlayingColors.secondary], white 70%) at
 ///    [kJamBackdropContrastTarget] (AA 4.5:1 plus a margin) over the
 ///    cover's brightest blurred patch — not its mean, since the blur leaves
 ///    local bright spots under the text. Floored at
 ///    [kJamBackdropMinOverlay], capped at [kJamBackdropMaxOverlay] (a white
 ///    cover still clears at the cap).
+/// 3. **Vibrance.** Darkening scales a colour's chroma down with it, and a
+///    pastel has little to start with (a near-white sleeve cannot be
+///    saturated much before it clips). So once darkened, the quiet colours
+///    get a further, inverse-to-chroma boost ([kJamBackdropVibrance]): a
+///    pale pink cover lands on a dusty rose, not grey, while an already
+///    vivid one is left alone, and a truly grey cover stays grey.
+///
+/// The darkening is baked into the pixels the view blurs (its own overlay
+/// is then 0), so the vibrance can work on the darkened colours.
 library;
 
 import 'dart:async';
@@ -40,6 +48,13 @@ const double kJamBackdropMaxOverlay = 0.7;
 
 /// How much the cover's saturation is boosted before it is darkened.
 const double kJamBackdropSaturation = 1.5;
+
+/// The most extra saturation a quiet colour gets once darkened (a near-grey
+/// one gets 1 + this; one already at [_kVibranceKnee] chroma gets none).
+const double kJamBackdropVibrance = 2.2;
+
+/// The chroma (max − min channel, 0–1) at which vibrance stops adding.
+const double _kVibranceKnee = 0.3;
 
 /// The contrast secondary text must reach on the backdrop: AA's 4.5:1 with
 /// a margin for what the sampling misses.
@@ -70,7 +85,8 @@ class JamBackdrop {
   /// The cover to blur (already saturated), or null for [placeholder].
   final ImageProvider? image;
 
-  /// Alpha of the black overlay over the blurred cover.
+  /// Alpha of the black overlay over the blurred cover — 0 when
+  /// [backdropFor] has baked the darkening into [image] already.
   final double overlayOpacity;
 
   /// A flat stand-in: the cover's (saturated) mean colour with the overlay
@@ -257,6 +273,35 @@ class _Sample {
     }
   }
 
+  /// A copy to work on.
+  _Sample copy() => _Sample(Uint8List.fromList(pixels), edge);
+
+  /// Blends black at [opacity] into every pixel, as the overlay would.
+  void darken(double opacity) {
+    final keep = 1 - opacity;
+    for (var i = 0; i + 3 < pixels.length; i += 4) {
+      pixels[i] = (pixels[i] * keep).round();
+      pixels[i + 1] = (pixels[i + 1] * keep).round();
+      pixels[i + 2] = (pixels[i + 2] * keep).round();
+    }
+  }
+
+  /// Saturates each pixel inversely to its chroma (see
+  /// [kJamBackdropVibrance]).
+  void vibrance() {
+    for (var i = 0; i + 3 < pixels.length; i += 4) {
+      final r = pixels[i] / 255,
+          g = pixels[i + 1] / 255,
+          b = pixels[i + 2] / 255;
+      final chroma = math.max(r, math.max(g, b)) - math.min(r, math.min(g, b));
+      final quiet = 1 - math.min(1.0, chroma / _kVibranceKnee);
+      final (nr, ng, nb) = _saturate(r, g, b, 1 + kJamBackdropVibrance * quiet);
+      pixels[i] = (nr * 255).round();
+      pixels[i + 1] = (ng * 255).round();
+      pixels[i + 2] = (nb * 255).round();
+    }
+  }
+
   /// The pixels as a PNG, for an [ImageProvider]; null if encoding fails.
   Future<Uint8List?> encode() async {
     try {
@@ -312,12 +357,37 @@ Future<JamBackdrop> backdropFor(String id, Uint8List bytes) async {
   final sample = await _sample(bytes, _kSampleEdge);
   if (sample == null) return JamBackdrop.placeholder;
   sample.saturate(kJamBackdropSaturation);
-  final png = await sample.encode();
-  return backdropFromMean(
+  // Darken, give the quiet colours their vibrance back, and check the
+  // result: vibrance moves luminance a little, so the darkening steps up
+  // until the brightest patch still holds secondary text.
+  var overlay = backdropOverlayForColor(sample.bright);
+  _Sample finished;
+  while (true) {
+    finished = sample.copy()
+      ..darken(overlay)
+      ..vibrance();
+    if (overlay >= kJamBackdropMaxOverlay ||
+        jamSecondaryContrastOn(finished.bright) >= kJamBackdropContrastTarget) {
+      break;
+    }
+    overlay = math.min(kJamBackdropMaxOverlay, overlay + 0.01);
+  }
+  final png = await finished.encode();
+  if (png == null) {
+    // Nothing to bake into: the view's own overlay does the darkening.
+    return backdropFromMean(
+      id: id,
+      image: MemoryImage(bytes),
+      mean: sample.mean,
+      bright: sample.bright,
+    );
+  }
+  return JamBackdrop(
     id: id,
-    image: MemoryImage(png ?? bytes),
-    mean: sample.mean,
-    bright: sample.bright,
+    image: MemoryImage(png),
+    // Already in the pixels.
+    overlayOpacity: 0,
+    base: finished.mean,
   );
 }
 

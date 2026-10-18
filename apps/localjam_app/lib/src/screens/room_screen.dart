@@ -128,8 +128,8 @@ abstract final class JamRoomStrings {
 
   // Terminal states (spec §10.9: "jam", never "room"; plain reasons).
   static const String hostGoneTitle = 'The Host Left';
-  static const String hostGoneBody =
-      'The host’s phone left the Wi‑Fi or went to sleep.';
+  static const String hostGoneBody = 'Their phone may have gone to sleep.';
+
   static const String kickedTitle = 'You Were Removed';
   static const String kickedBody = 'The host removed you from this jam.';
   // `rejected`, by the host's reason (JamSessionController.endRejectReason).
@@ -1612,18 +1612,22 @@ class _TitleBlock extends StatelessWidget {
             // the page repeats it.
             subtitle = Padding(
               padding: const EdgeInsets.only(top: JamSpace.md),
-              child: Align(
-                alignment: AlignmentDirectional.centerStart,
-                child: JamButton(
-                  label: JamRoomStrings.addSongs,
-                  icon: CupertinoIcons.plus,
-                  variant: JamButtonVariant.gray,
-                  size: JamButtonSize.small,
-                  // White on the glass-grey ground, like every other control
-                  // on the backdrop.
-                  color: JamNowPlayingColors.text,
-                  onPressed: add,
-                ),
+              // A Row, so the capsule hugs its label rather than filling
+              // the width a loose box would hand it.
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  JamButton(
+                    label: JamRoomStrings.addSongs,
+                    icon: CupertinoIcons.plus,
+                    variant: JamButtonVariant.gray,
+                    size: JamButtonSize.small,
+                    // White on the glass-grey ground, like every other control
+                    // on the backdrop.
+                    color: JamNowPlayingColors.text,
+                    onPressed: add,
+                  ),
+                ],
               ),
             );
           } else {

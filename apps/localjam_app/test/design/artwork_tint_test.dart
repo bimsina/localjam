@@ -127,11 +127,36 @@ void main() {
       );
       expect(white.isPlaceholder, isFalse);
       expect(navy.isPlaceholder, isFalse);
-      expect(white.overlayOpacity, greaterThan(navy.overlayOpacity));
-      expect(white.overlayOpacity, greaterThan(0.6));
-      expect(navy.overlayOpacity, kJamBackdropMinOverlay);
-      // The flat stand-in still holds secondary text.
+      // The darkening is baked into the image, solved per cover: far more
+      // for white than for navy, and both hold secondary text.
+      expect(white.overlayOpacity, 0);
+      expect(
+        white.base.computeLuminance(),
+        lessThan(0.15),
+        reason: 'white is darkened hard',
+      );
+      expect(
+        navy.base.computeLuminance(),
+        greaterThan(jamDarken(const Color(0xFF101830), 0.3).computeLuminance()),
+        reason: 'navy only gets the floor',
+      );
       expect(jamSecondaryContrastOn(white.base), greaterThanOrEqualTo(4.5));
+      expect(jamSecondaryContrastOn(navy.base), greaterThanOrEqualTo(4.5));
+    });
+  });
+
+  testWidgets('a pale cover keeps its hue: dusty rose, not grey', (
+    tester,
+  ) async {
+    await tester.runAsync(() async {
+      final pale = await backdropFor(
+        'p',
+        await _solidPng(const Color(0xFFF5D5DC)),
+      );
+      final hsv = HSVColor.fromColor(pale.base);
+      expect(hsv.saturation, greaterThan(0.25));
+      expect(hsv.hue, anyOf(greaterThan(320), lessThan(20)));
+      expect(jamSecondaryContrastOn(pale.base), greaterThanOrEqualTo(4.5));
     });
   });
 
