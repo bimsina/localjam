@@ -162,6 +162,30 @@ class JamArtworkTile extends StatelessWidget {
   }
 }
 
+/// The tag both ends of the mini player → Now Playing hand-off put on the
+/// cover ([JamArtworkHero]), so the artwork grows out of the capsule and
+/// shrinks back into it (spec §10.4).
+const String kJamNowPlayingArtworkTag = 'jam-now-playing-artwork';
+
+/// The current song's cover as one end of the mini player ↔ Now Playing
+/// hand-off. In flight the cover is the destination's, scaled to the
+/// flight's rect — so it never relayouts mid-air at an in-between size.
+class JamArtworkHero extends StatelessWidget {
+  const JamArtworkHero({super.key, required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) => Hero(
+    tag: kJamNowPlayingArtworkTag,
+    flightShuttleBuilder: (context, animation, direction, from, to) {
+      final hero = (direction == HeroFlightDirection.push ? to : from).widget;
+      return FittedBox(child: (hero as Hero).child);
+    },
+    child: child,
+  );
+}
+
 /// The artwork for [item], loaded through [JamEngine.artworkFor].
 class JamArtwork extends StatelessWidget {
   const JamArtwork({

@@ -6,7 +6,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:localjam_app/src/design/breakpoints.dart';
 import 'package:localjam_app/src/design/theme.dart';
 import 'package:localjam_app/src/design/tokens.dart';
-import 'package:localjam_app/src/router.dart';
 import 'package:localjam_app/src/screens/home_screen.dart';
 import 'package:localjam_app/src/screens/room_screen.dart';
 import 'package:localjam_app/src/widgets/app_sidebar.dart';
@@ -182,7 +181,7 @@ void main() {
     final padding = MediaQuery.paddingOf(
       tester.element(find.byType(HomeScreen)),
     );
-    expect(padding.bottom, greaterThanOrEqualTo(kJamMiniPlayerReach));
+    expect(padding.bottom, greaterThanOrEqualTo(jamRoomBarReach(0)));
     // Start a Jam gives way to the mini player.
     expect(find.text('Start a Jam'), findsNothing);
 

@@ -45,10 +45,6 @@ const String kRoomPath = '/room';
 /// 44 dp row over a 12 dp inset.
 const double kJamRoomPeopleStrip = 56;
 
-/// The tag both ends of the mini player → Now Playing hand-off can put on
-/// the cover (a `Hero`), so the artwork grows out of the capsule.
-const String kJamNowPlayingArtworkTag = 'jam-now-playing-artwork';
-
 /// How far a notice at the top keeps from the window's sides: clear of the
 /// header buttons under it (a 44 pt target 12 from the edge).
 const double _kTopNoticeSide = 64;
@@ -268,11 +264,6 @@ class _JamSheetPage<T> extends Page<T> {
       CupertinoSheetRoute<T>(settings: this, scrollableBuilder: builder);
 }
 
-/// How far the floating mini player reaches up from the home indicator: the
-/// 64 capsule and the 8 it floats above the indicator. Screens in the shell
-/// see it as extra bottom padding, so their last row scrolls clear of it.
-const double kJamMiniPlayerReach = JamMetrics.miniPlayerHeight + JamSpace.sm;
-
 /// The gap between the mini player and a notice floating above it.
 const double _kNoticeAboveBar = JamSpace.md;
 
@@ -382,9 +373,11 @@ class _RoomBarShellState extends State<_RoomBarShell> {
       return kJamNoticeMargin;
     }
     // Above the floating capsule, never on it.
-    return const EdgeInsets.all(
-      base,
-    ).copyWith(bottom: kJamMiniPlayerReach + _kNoticeAboveBar);
+    return const EdgeInsets.all(base).copyWith(
+      bottom:
+          jamRoomBarReach(MediaQuery.paddingOf(context).bottom) +
+          _kNoticeAboveBar,
+    );
   }
 
   @override
@@ -442,15 +435,17 @@ class _RoomBarShellState extends State<_RoomBarShell> {
   Widget _withFloatingBar(BuildContext context, Widget child) {
     // The mini player floats over the screen (D1): it paints its own capsule,
     // margins and bottom inset, so nothing here frames it. The screen
-    // underneath sees the capsule as bottom padding — its content scrolls
-    // under the blur and its last row comes to rest above it.
+    // underneath sees the capsule as bottom padding ([jamRoomBarReach]) —
+    // its content scrolls under the blur and its last row comes to rest
+    // above it.
     final media = MediaQuery.of(context);
     return Stack(
       children: [
         MediaQuery(
           data: media.copyWith(
             padding: media.padding.copyWith(
-              bottom: media.padding.bottom + kJamMiniPlayerReach,
+              bottom:
+                  media.padding.bottom + jamRoomBarReach(media.padding.bottom),
             ),
           ),
           child: child,

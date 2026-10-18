@@ -511,6 +511,7 @@ class _RoomScreenState extends State<RoomScreen>
     final menu = JamMenuButton(
       trigger: JamMenuTrigger.glassOnArtwork,
       visualSize: 30,
+      triggerAlignment: AlignmentDirectional.centerEnd,
       semanticLabel: JamRoomStrings.more,
       // Dark over the backdrop, whatever the app theme says.
       brightness: Brightness.dark,
@@ -1455,17 +1456,20 @@ class _ArtState extends State<_Art> {
     );
     final radius = lerpDouble(JamRadius.nowPlaying, JamRadius.artworkS, t)!;
 
-    Widget tile(double size, Uint8List? bytes) => DecoratedBox(
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(radius),
-        boxShadow: shadow,
-      ),
-      child: JamArtworkTile(
-        bytes: bytes,
-        imageKey: _artworkId,
-        size: size,
-        radius: radius,
-        onBackdrop: true,
+    // The mini player's cover grows into this one (and back).
+    Widget tile(double size, Uint8List? bytes) => JamArtworkHero(
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(radius),
+          boxShadow: shadow,
+        ),
+        child: JamArtworkTile(
+          bytes: bytes,
+          imageKey: _artworkId,
+          size: size,
+          radius: radius,
+          onBackdrop: true,
+        ),
       ),
     );
 
@@ -1632,12 +1636,10 @@ class _TitleBlock extends StatelessWidget {
               ),
             ),
             const SizedBox(width: JamSpace.sm),
-            // The 30 circle sits in a 44 target: nudged so the circle's edge,
-            // not the target's, lines up with the cover's right edge.
-            Transform.translate(
-              offset: const Offset((JamMetrics.hitTarget - 30) / 2, 0),
-              child: menu,
-            ),
+            // The menu's 30 circle sits at the end of its 44 target
+            // (`triggerAlignment`), so the circle's edge lines up with the
+            // cover's.
+            menu,
           ],
         );
       },

@@ -14,6 +14,7 @@
 library;
 
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/cupertino.dart';
 import 'package:go_router/go_router.dart';
@@ -27,6 +28,7 @@ import 'artwork.dart';
 import 'glass.dart';
 import 'pressable.dart';
 import 'room_banner.dart';
+import 'scaffold.dart' show jamBottomBarInset;
 import 'sync_indicator.dart' show jamFadeThroughCurve;
 
 /// Strings the bar owns.
@@ -52,6 +54,21 @@ const double kJamRoomBarBottomMargin = JamSpace.sm;
 /// The space the self-margined [RoomBar] takes above the bottom safe area:
 /// what a screen under it has to leave clear.
 const double kJamRoomBarFootprint = kJamRoomBarHeight + kJamRoomBarBottomMargin;
+
+/// Where the floating capsule's bottom edge sits above the window's, for a
+/// bottom safe area of [safeBottom]: [kJamRoomBarBottomMargin] over the
+/// home indicator, but never closer to the edge than a pinned bottom button
+/// ([jamBottomBarInset]) — Android's small gesture inset would otherwise
+/// leave it resting on the handle.
+double jamRoomBarBottomOffset(double safeBottom) => math.max(
+  jamBottomBarInset(safeBottom),
+  safeBottom + kJamRoomBarBottomMargin,
+);
+
+/// How far the floating capsule reaches up from the bottom safe area: what
+/// a screen under it (or a notice above it) has to clear.
+double jamRoomBarReach(double safeBottom) =>
+    kJamRoomBarHeight + jamRoomBarBottomOffset(safeBottom) - safeBottom;
 
 /// The cover's edge in the capsule.
 const double _kArt = JamArtworkSize.mini;
@@ -391,7 +408,7 @@ class _RoomBarState extends State<RoomBar> {
         kJamRoomBarSideMargin,
         0,
         kJamRoomBarSideMargin,
-        kJamRoomBarBottomMargin + MediaQuery.paddingOf(context).bottom,
+        jamRoomBarBottomOffset(MediaQuery.paddingOf(context).bottom),
       ),
       child: capsule,
     );
@@ -450,7 +467,9 @@ class _RoomBarState extends State<RoomBar> {
       JamRoomBar(
         title: item == null ? engine.sessionName : jamDisplayTitle(item),
         subtitle: engine.sessionName,
-        artwork: JamArtwork(engine: engine, item: item, size: _kArt),
+        artwork: JamArtworkHero(
+          child: JamArtwork(engine: engine, item: item, size: _kArt),
+        ),
         playing: playing,
         onPlayPause: onPlayPause,
         onNext: onNext,
