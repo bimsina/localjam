@@ -11,18 +11,8 @@ import 'package:flutter/widgets.dart';
 import '../design/tokens.dart';
 import '../design/typography.dart';
 
-/// Apple's blue, indigo, purple, pink, red, orange, green and teal at ~85%
-/// saturation, darkened until white initials clear 3:1.
-const List<Color> kJamAvatarPalette = [
-  Color(0xFF137BEC),
-  Color(0xFF6160CC),
-  Color(0xFFAC5CD4),
-  Color(0xFFEF3D5F),
-  Color(0xFFEF4940),
-  Color(0xFFCB7D10),
-  Color(0xFF37A352),
-  Color(0xFF379CAE),
-];
+/// The face colours (see [JamAvatarPalette]).
+const List<Color> kJamAvatarPalette = JamAvatarPalette.colors;
 
 /// FNV-1a over UTF-16 code units: stable across runs, platforms, devices.
 int _stableHash(String value) {
@@ -112,7 +102,7 @@ class JamAvatar extends StatelessWidget {
         style: context.jamBody.copyWith(
           fontSize: size * 0.4,
           fontWeight: FontWeight.w600,
-          color: const Color(0xFFFFFFFF),
+          color: JamAvatarPalette.initials,
           height: 1,
           letterSpacing: 0,
         ),

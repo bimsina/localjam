@@ -317,7 +317,7 @@ class _ScanScreenState extends State<ScanScreen> {
       value: jamOverlayStyleOnDark,
       child: _OnBlack(
         child: Scaffold(
-          backgroundColor: const Color(0xFF000000),
+          backgroundColor: JamFixedColors.black,
           // No app bar: the camera is the screen, and everything else floats.
           body: Stack(
             fit: StackFit.expand,
@@ -539,14 +539,14 @@ class _ViewfinderPainter extends CustomPainter {
           Path()..addRect(Offset.zero & size),
           Path()..addRRect(window),
         ),
-        Paint()..color = const Color(0xFF000000).withValues(alpha: _dimOpacity),
+        Paint()..color = JamFixedColors.black.withValues(alpha: _dimOpacity),
       )
       ..drawRRect(
         window,
         Paint()
           ..style = PaintingStyle.stroke
           ..strokeWidth = _outlineWidth
-          ..color = const Color(0xFFFFFFFF),
+          ..color = JamFixedColors.white,
       );
   }
 
@@ -612,7 +612,7 @@ class ScannerUnavailableView extends StatelessWidget {
 
     return _OnBlack(
       child: ColoredBox(
-        color: const Color(0xFF000000),
+        color: JamFixedColors.black,
         child: Stack(
           fit: StackFit.expand,
           children: [

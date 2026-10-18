@@ -9,7 +9,6 @@
 library;
 
 import 'package:flutter/cupertino.dart';
-import 'package:flutter/material.dart' show showModalBottomSheet;
 import 'package:localjam_client/localjam_client.dart';
 
 import '../design/tokens.dart';
@@ -44,19 +43,11 @@ Future<List<JamLibraryTrack>?> showJamLibrarySheet(
   BuildContext context,
   List<JamLibraryTrack> tracks,
 ) {
-  final colors = context.jamColors;
   // The shared sheet pieces, assembled here rather than through
   // `showJamSheet`: the header's title and Done follow the selection, so the
   // picker owns its own header.
-  return showModalBottomSheet<List<JamLibraryTrack>>(
-    context: context,
-    isScrollControlled: true,
-    useSafeArea: true,
-    barrierColor: colors.scrim,
-    backgroundColor: const Color(0x00000000),
-    elevation: 0,
-    showDragHandle: false,
-    constraints: const BoxConstraints(maxWidth: 640),
+  return showJamModalSheet<List<JamLibraryTrack>>(
+    context,
     builder: (context) => buildJamDraggableSheet(
       initialChildSize: kJamSheetLargeSize,
       maxChildSize: kJamSheetLargeSize,

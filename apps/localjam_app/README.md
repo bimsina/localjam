@@ -51,13 +51,13 @@ transparent ground. Everything else is derived from it:
 | `splash_logo.png` | launch screen mark (≈35 % of screen width) |
 | `splash_logo_android12.png` | Android 12+ platform splash icon |
 
-Palette: raspberry `#E63B6F`, raspberry deep `#C71F5E`, plum `#2B1332`,
-cream `#FFF7F2`, apricot `#FFB25C`.
-
-Type is **Plus Jakarta Sans** (Tokotype, OFL 1.1 — `assets/fonts/OFL.txt`),
-roman weights only; the UI has no italics. Every weight ships real tabular
-figures (`tnum`), which is what keeps the room timer from jittering as it
-counts.
+Colour and type follow `docs/design/DESIGN_SPEC.md` (v3): Apple system
+neutrals, raspberry (`#D92C64` light / `#FF4F82` dark) only as the tint on
+things you can tap, and the platform's own system font — SF Pro on iOS and
+macOS, Roboto on Android, Segoe UI on Windows — at iOS text-style sizes. No
+font ships with the app. Timers use tabular figures
+(`FontFeature.tabularFigures()`), which is what keeps the room timer from
+jittering as it counts.
 
 Regenerate the native icon sets and launch screens after changing any of those
 PNGs — both generators are configured from `pubspec.yaml`:
@@ -72,9 +72,11 @@ and `ios/Runner/Base.lproj/LaunchScreen.storyboard`. Two hand-made edits live in
 those files and must be re-applied if the generator stomps them:
 
 - `NormalTheme` pins `windowBackground` / `colorBackground` to
-  `@color/app_background` (cream in `values/`, plum in `values-night/`) so there
-  is no white frame between the splash and the first Flutter frame.
-- The `LaunchScreen.storyboard` root view background is raspberry, not white.
+  `@color/app_background` (white in `values/`, black in `values-night/`, the
+  app's own `background`) so there is no seam between the splash and the
+  first Flutter frame.
+- The `LaunchScreen.storyboard` root view background is white, matching the
+  splash.
 
 ## Release signing
 

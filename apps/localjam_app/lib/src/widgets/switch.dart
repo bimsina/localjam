@@ -32,7 +32,7 @@ class JamSwitch extends StatelessWidget {
       value: value,
       activeTrackColor: colors.success,
       inactiveTrackColor: colors.fill,
-      thumbColor: const Color(0xFFFFFFFF),
+      thumbColor: JamFixedColors.white,
       onChanged: onChanged == null
           ? null
           : (v) {
@@ -79,8 +79,8 @@ class JamSegmentedControl<T extends Object> extends StatelessWidget {
       groupValue: groupValue,
       backgroundColor: colors.fillSecondary,
       thumbColor: CupertinoDynamicColor.withBrightness(
-        color: const Color(0xFFFFFFFF),
-        darkColor: const Color(0xFF636366),
+        color: JamFixedColors.white,
+        darkColor: JamFixedColors.segmentThumbDark,
       ),
       padding: const EdgeInsets.all(2),
       onValueChanged: (v) {

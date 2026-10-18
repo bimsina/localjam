@@ -37,13 +37,13 @@ abstract final class JamPermissionCopy {
       'anyone without that.';
 
   /// Android 13+ `POST_NOTIFICATIONS`.
-  static const String notificationsTitle = 'Show the playback card';
+  static const String notificationsTitle = 'Show the Playback Card';
   static const String notificationsDetail =
       'The lock-screen card is how you pause and skip without unlocking. '
       'Music still plays if you say no.';
 
   /// Android `READ_MEDIA_AUDIO` / `READ_EXTERNAL_STORAGE`.
-  static const String audioLibraryTitle = 'Reach your music';
+  static const String audioLibraryTitle = 'Reach Your Music';
   static const String audioLibraryDetail =
       'LocalJam reads the songs already on this phone so you can queue them. '
       'Nothing leaves your network.';
@@ -59,7 +59,7 @@ abstract final class JamPermissionCopy {
       'join with a link instead.';
 
   /// Action label for anything that hands the user to the OS.
-  static const String openSettings = 'Open settings';
+  static const String openSettings = 'Open Settings';
 }
 
 /// The permissions LocalJam can explain before it asks the OS for them.

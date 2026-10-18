@@ -14,7 +14,6 @@
 library;
 
 import 'package:flutter/cupertino.dart';
-import 'package:flutter/material.dart' show showModalBottomSheet;
 
 import '../design/tokens.dart';
 import '../design/typography.dart';
@@ -163,15 +162,8 @@ Future<bool> showJamPermissionSheet(
   BuildContext context,
   JamPermissionRationale rationale,
 ) async =>
-    await showModalBottomSheet<bool>(
-      context: context,
-      isScrollControlled: true,
-      useSafeArea: true,
-      barrierColor: context.jamColors.scrim,
-      backgroundColor: const Color(0x00000000),
-      elevation: 0,
-      showDragHandle: false,
-      constraints: const BoxConstraints(maxWidth: 640),
+    await showJamModalSheet<bool>(
+      context,
       builder: (context) => JamPermissionSheet(rationale: rationale),
     ) ??
     false;

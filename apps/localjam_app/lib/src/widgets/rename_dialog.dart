@@ -9,7 +9,8 @@
 /// red-screen every rename is fixed.
 library;
 
-import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show TextCapitalization;
+import 'package:flutter/widgets.dart';
 
 import 'dialogs.dart';
 

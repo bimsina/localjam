@@ -277,7 +277,7 @@ class JamTrackRow extends StatelessWidget implements JamSelfSeparatingRow {
         onTap: onTap,
         onLongPress: onLongPress,
         style: JamPressStyle.highlight,
-        highlightColor: onBackdrop ? const Color(0x1AFFFFFF) : null,
+        highlightColor: onBackdrop ? JamNowPlayingColors.pressed : null,
         child: row,
       );
     }

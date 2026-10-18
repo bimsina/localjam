@@ -96,7 +96,7 @@ class _JamPressableState extends State<JamPressable> {
         final color = widget.highlightColor ?? context.jamColors.fillPressed;
         child = DecoratedBox(
           decoration: BoxDecoration(
-            color: pressed ? color : const Color(0x00000000),
+            color: pressed ? color : JamFixedColors.clear,
             borderRadius: widget.borderRadius,
           ),
           child: child,
