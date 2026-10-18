@@ -323,6 +323,49 @@ abstract final class JamNowPlayingColors {
 
   /// Glass buttons over the backdrop.
   static const Color glass = Color(0x2EFFFFFF);
+
+  /// The glyph on a selected (white-filled) footer or glass button.
+  static const Color selectedGlyph = Color(0xFF000000);
+
+  /// A row's press highlight on the backdrop.
+  static const Color pressed = Color(0x1AFFFFFF);
+
+  /// The docked panel's shade over the backdrop (wide windows): just enough
+  /// to set it apart from the player, not a card.
+  static const Color panelShade = Color(0x2E000000);
+
+  /// A see-through white, for animating a fill in from nothing.
+  static const Color clear = Color(0x00FFFFFF);
+}
+
+/// Colours that never follow the theme: the camera's black ground and white
+/// viewfinder, the QR code's white plate, a switch's white knob, see-through
+/// grounds under sheets that paint their own.
+abstract final class JamFixedColors {
+  static const Color white = Color(0xFFFFFFFF);
+  static const Color black = Color(0xFF000000);
+  static const Color clear = Color(0x00000000);
+
+  /// The segmented control's thumb in dark mode (iOS's).
+  static const Color segmentThumbDark = Color(0xFF636366);
+}
+
+/// Faces (D6): Apple's blue, indigo, purple, pink, red, orange, green and
+/// teal at ~85% saturation, darkened until white initials clear 3:1.
+abstract final class JamAvatarPalette {
+  static const List<Color> colors = [
+    Color(0xFF137BEC),
+    Color(0xFF6160CC),
+    Color(0xFFAC5CD4),
+    Color(0xFFEF3D5F),
+    Color(0xFFEF4940),
+    Color(0xFFCB7D10),
+    Color(0xFF37A352),
+    Color(0xFF379CAE),
+  ];
+
+  /// The initials on every face.
+  static const Color initials = Color(0xFFFFFFFF);
 }
 
 /// Backdrop-blur strengths that pair with [JamColors.material] and
@@ -389,6 +432,9 @@ abstract final class JamMetrics {
 
   /// Nav bar icon glyph size.
   static const double navIcon = 22;
+
+  /// A row's small trailing glyphs: the pop-up chevrons, a disclosure.
+  static const double disclosureIcon = 14;
 
   /// The inline nav bar height (without the status bar).
   static const double navBarHeight = 44;

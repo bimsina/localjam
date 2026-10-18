@@ -158,7 +158,7 @@ class JamSheetGrabber extends StatelessWidget {
   );
 }
 
-/// The round glass xmark that closes a sheet.
+/// The round xmark that closes a sheet, on a flat `fill` circle.
 class JamSheetCloseButton extends StatelessWidget {
   const JamSheetCloseButton({super.key, this.onPressed});
 
@@ -172,6 +172,9 @@ class JamSheetCloseButton extends StatelessWidget {
     visualSize: 30,
     iconSize: 14,
     iconColor: context.jamColors.secondaryLabel,
+    // iOS's sheet xmark is a flat `fill` circle: the blurred chrome
+    // material is the sheet's own colour in dark mode and disappears.
+    fillColor: context.jamColors.fill,
     onPressed: onPressed ?? () => Navigator.of(context).maybePop(),
   );
 }
@@ -413,6 +416,33 @@ class JamSheetSurface extends StatelessWidget {
   }
 }
 
+/// The modal under every LocalJam sheet: scrolled-controlled, safe-area
+/// aware, the `scrim` barrier, a clear ground (the sheet paints its own
+/// `JamSheetSurface`), capped at 640 wide. [showJamSheet] builds its header
+/// on top of this; a sheet that owns its header (the library picker, whose
+/// title follows the selection) or has none (a permission primer) calls it
+/// directly — never a bare `showModalBottomSheet`.
+Future<T?> showJamModalSheet<T>(
+  BuildContext context, {
+  required WidgetBuilder builder,
+  bool enableDrag = true,
+  bool isDismissible = true,
+  RouteSettings? routeSettings,
+}) => showModalBottomSheet<T>(
+  context: context,
+  isScrollControlled: true,
+  useSafeArea: true,
+  enableDrag: enableDrag,
+  isDismissible: isDismissible,
+  routeSettings: routeSettings,
+  barrierColor: context.jamColors.scrim,
+  backgroundColor: JamFixedColors.clear,
+  elevation: 0,
+  showDragHandle: false,
+  constraints: const BoxConstraints(maxWidth: 640),
+  builder: builder,
+);
+
 /// Opens a LocalJam sheet.
 ///
 /// [builder] is built inside the sheet, under a [JamSheetScrollController]
@@ -437,19 +467,11 @@ Future<T?> showJamSheet<T>(
   bool grouped = false,
   RouteSettings? routeSettings,
 }) {
-  final colors = context.jamColors;
-  return showModalBottomSheet<T>(
-    context: context,
-    isScrollControlled: true,
-    useSafeArea: true,
+  return showJamModalSheet<T>(
+    context,
     enableDrag: enableDrag,
     isDismissible: isDismissible,
     routeSettings: routeSettings,
-    barrierColor: colors.scrim,
-    backgroundColor: const Color(0x00000000),
-    elevation: 0,
-    showDragHandle: false,
-    constraints: const BoxConstraints(maxWidth: 640),
     builder: (context) {
       final content = Builder(builder: builder);
       if (!scrollable) {

@@ -152,6 +152,25 @@ void main() {
       expect(value, isFalse);
     });
 
+    testWidgets('one semantics node: the button flag, its tap and the '
+        'title together', (tester) async {
+      final handle = tester.ensureSemantics();
+      await tester.pumpWidget(
+        _host(JamRow(title: 'Appearance', subtitle: 'System', onTap: () {})),
+      );
+      expect(
+        tester.getSemantics(find.text('Appearance')),
+        matchesSemantics(
+          label: 'Appearance\nSystem',
+          isButton: true,
+          hasTapAction: true,
+          hasEnabledState: true,
+          isEnabled: true,
+        ),
+      );
+      handle.dispose();
+    });
+
     testWidgets('the separator is inset to the title past the leading', (
       tester,
     ) async {

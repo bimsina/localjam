@@ -14,6 +14,8 @@ import 'package:go_router/go_router.dart';
 import 'package:localjam_client/localjam_client.dart';
 
 import 'design/theme.dart';
+import 'design/tokens.dart';
+import 'design/typography.dart';
 import 'router.dart';
 import 'state/app_settings.dart';
 import 'state/link_inbox.dart';
@@ -73,7 +75,7 @@ class _LocalJamAppState extends State<LocalJamApp> {
     JamMediaSessionController.placeholderArtworkProvider = _brandArtwork;
   }
 
-  /// The 512 px placeholder for the lock-screen card.
+  /// The 1024 px placeholder for the lock-screen card.
   ///
   /// Resolved at most once — [JamMediaSessionController] caches what this
   /// returns for the life of the process — and never throws: a missing asset
@@ -207,10 +209,20 @@ class _LocalJamAppState extends State<LocalJamApp> {
               // style, so the shell publishes the theme's. Screens that are
               // dark whatever the theme says — the scanner, onboarding —
               // annotate over this one.
+              //
+              // The root text style sits here too: anything drawn outside a
+              // page's own `Material` (pull-down menus, overlays, sheets
+              // built on Cupertino routes) would otherwise fall back to the
+              // framework's debug style — red text, yellow underline.
               builder: (context, child) =>
                   AnnotatedRegion<SystemUiOverlayStyle>(
                     value: jamOverlayStyle(Theme.of(context).brightness),
-                    child: child ?? const SizedBox.shrink(),
+                    child: DefaultTextStyle(
+                      style: context.jamBody.copyWith(
+                        color: context.jamColors.label,
+                      ),
+                      child: child ?? const SizedBox.shrink(),
+                    ),
                   ),
             ),
           ),

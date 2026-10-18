@@ -21,6 +21,7 @@ library;
 import 'package:flutter/cupertino.dart';
 
 import '../design/tokens.dart';
+import '../design/typography.dart';
 import 'buttons.dart';
 import 'glass.dart';
 
@@ -108,6 +109,7 @@ class JamMenuButton extends StatelessWidget {
     this.iconColor,
     this.builder,
     this.enabled = true,
+    this.brightness,
   });
 
   /// Item groups, separated by the thick group divider.
@@ -130,8 +132,38 @@ class JamMenuButton extends StatelessWidget {
 
   final bool enabled;
 
+  /// Forces the menu's light or dark look (Now Playing's menus are always
+  /// dark, whatever the app theme). Null follows the ambient theme.
+  final Brightness? brightness;
+
   @override
   Widget build(BuildContext context) {
+    // The menu is drawn in the root overlay but inherits from here. A
+    // complete ambient text style keeps its titles off the framework's
+    // fallback (the debug yellow underline) wherever the anchor sits.
+    Widget menu = DefaultTextStyle(
+      style: context.jamBody.copyWith(
+        color: context.jamColors.label,
+        decoration: TextDecoration.none,
+      ),
+      child: _anchor(context),
+    );
+    final forced = brightness;
+    if (forced != null) {
+      // Cupertino's dynamic colours resolve against the Cupertino theme
+      // first and the platform brightness second; set both.
+      menu = MediaQuery(
+        data: MediaQuery.of(context).copyWith(platformBrightness: forced),
+        child: CupertinoTheme(
+          data: CupertinoTheme.of(context).copyWith(brightness: forced),
+          child: menu,
+        ),
+      );
+    }
+    return menu;
+  }
+
+  Widget _anchor(BuildContext context) {
     return CupertinoMenuAnchor(
       useRootOverlay: true,
       consumeOutsideTaps: true,

@@ -56,6 +56,12 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.byIcon(CupertinoIcons.xmark_octagon_fill), findsOneWidget);
+    // Still a capsule, not a pill the height of the window: the action's
+    // own 44 box must not stretch the row.
+    expect(
+      tester.getSize(find.byType(JamNoticeCard)).height,
+      lessThanOrEqualTo(60),
+    );
     await tester.tap(find.text('Retry'));
     await tester.pumpAndSettle();
     expect(retried, 1);

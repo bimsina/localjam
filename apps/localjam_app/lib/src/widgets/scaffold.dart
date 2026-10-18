@@ -15,7 +15,7 @@
 library;
 
 import 'package:flutter/cupertino.dart';
-import 'package:flutter/material.dart' show Scaffold;
+import 'package:flutter/material.dart' show Scaffold, Theme;
 
 import '../design/tokens.dart';
 import 'glass.dart';
@@ -149,8 +149,15 @@ class _JamScaffoldState extends State<JamScaffold> {
       body = CustomScrollView(
         controller: widget.controller,
         slivers: [
+          // Content starts under the inline bar, not under the status bar:
+          // the bar floats over the body (`extendBodyBehindAppBar`), and
+          // this context sits above the Scaffold, so its padding does not
+          // include the bar's height.
           SliverToBoxAdapter(
-            child: SizedBox(height: MediaQuery.paddingOf(context).top),
+            child: SizedBox(
+              height:
+                  MediaQuery.paddingOf(context).top + JamMetrics.navBarHeight,
+            ),
           ),
           ...content,
         ],
@@ -246,20 +253,33 @@ class JamNavBar extends StatelessWidget
   bool shouldFullyObstruct(BuildContext context) => false;
 
   @override
-  Widget build(BuildContext context) => CupertinoNavigationBar(
-    middle: Text(title),
-    leading: leading,
-    automaticallyImplyLeading: automaticallyImplyLeading,
-    previousPageTitle: previousPageTitle,
-    trailing: trailing.isEmpty
-        ? null
-        : Row(mainAxisSize: MainAxisSize.min, children: trailing),
-    backgroundColor: context.jamColors.material,
-    border: _border(context),
-    automaticBackgroundVisibility: !alwaysOpaque,
-    transitionBetweenRoutes: false,
-    padding: _navPadding,
-  );
+  Widget build(BuildContext context) {
+    final bar = CupertinoNavigationBar(
+      middle: Text(title),
+      leading: leading,
+      automaticallyImplyLeading: automaticallyImplyLeading,
+      previousPageTitle: previousPageTitle,
+      trailing: trailing.isEmpty
+          ? null
+          : Row(mainAxisSize: MainAxisSize.min, children: trailing),
+      backgroundColor: context.jamColors.material,
+      border: _border(context),
+      // Status bar icons follow the theme, not the (clear) bar at rest.
+      brightness: Theme.of(context).brightness,
+      automaticBackgroundVisibility: !alwaysOpaque,
+      transitionBetweenRoutes: false,
+      padding: _navPadding,
+    );
+    if (alwaysOpaque) return bar;
+    // At rest Cupertino paints the page colour it finds here, which hides
+    // whatever reaches up under the bar (a large cover's shadow). A clear
+    // page colour makes the bar clear until content scrolls under it.
+    final page = CupertinoPageScaffoldBackgroundColor.maybeOf(context);
+    return CupertinoPageScaffoldBackgroundColor(
+      color: (page ?? context.jamColors.background).withValues(alpha: 0),
+      child: bar,
+    );
+  }
 }
 
 /// A pinned bottom action area: page-margin padding, above the home

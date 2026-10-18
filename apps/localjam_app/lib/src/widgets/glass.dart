@@ -82,6 +82,7 @@ class JamGlassButton extends StatelessWidget {
     this.iconSize = 18,
     this.selected = false,
     this.iconColor,
+    this.fillColor,
   });
 
   final IconData icon;
@@ -104,6 +105,11 @@ class JamGlassButton extends StatelessWidget {
   /// Overrides the glyph colour.
   final Color? iconColor;
 
+  /// A flat circle in this colour instead of the blurred material — for
+  /// a button on a surface the material would vanish into (a sheet's
+  /// xmark on the dark `elevated` ground).
+  final Color? fillColor;
+
   @override
   Widget build(BuildContext context) {
     final colors = context.jamColors;
@@ -111,12 +117,24 @@ class JamGlassButton extends StatelessWidget {
     final glyph =
         iconColor ??
         (selected
-            ? const Color(0xFF000000)
+            ? JamNowPlayingColors.selectedGlyph
             : onArtwork
             ? JamNowPlayingColors.text
             : colors.label);
 
-    final circle = selected
+    final fill = fillColor;
+    final circle = fill != null && !selected
+        ? DecoratedBox(
+            decoration: ShapeDecoration(
+              color: fill,
+              shape: const CircleBorder(),
+            ),
+            child: SizedBox.square(
+              dimension: visualSize,
+              child: Icon(icon, size: iconSize, color: glyph),
+            ),
+          )
+        : selected
         ? DecoratedBox(
             decoration: const ShapeDecoration(
               color: JamNowPlayingColors.fill,

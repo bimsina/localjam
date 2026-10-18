@@ -168,8 +168,12 @@ class JamNoticeCard extends StatelessWidget {
                         minWidth: JamMetrics.hitTarget,
                         minHeight: JamMetrics.hitTarget,
                       ),
+                      // Both factors: a Center without a height factor
+                      // grows to the overlay's full height, and the capsule
+                      // with it.
                       child: Center(
                         widthFactor: 1,
+                        heightFactor: 1,
                         child: Padding(
                           padding: const EdgeInsets.symmetric(
                             horizontal: JamSpace.md,

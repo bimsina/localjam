@@ -372,16 +372,20 @@ class _JamRowBody extends StatelessWidget {
     }
 
     final toggled = row.toggled;
-    return Semantics(
-      container: true,
-      button: row.onTap != null && toggled == null,
-      toggled: toggled,
-      selected: row.checked ? true : null,
-      enabled: enabled,
-      label: row.semanticLabel,
-      onTap: tap,
-      excludeSemantics: row.semanticLabel != null && toggled != null,
-      child: MergeSemantics(child: content),
+    // One node: the merge sits outside the row's own flags, so the button
+    // (or toggle) flag, its action and the title's text land together
+    // rather than as a flagged parent over an unlabelled child.
+    return MergeSemantics(
+      child: Semantics(
+        button: row.onTap != null && toggled == null,
+        toggled: toggled,
+        selected: row.checked ? true : null,
+        enabled: enabled,
+        label: row.semanticLabel,
+        onTap: tap,
+        excludeSemantics: row.semanticLabel != null,
+        child: content,
+      ),
     );
   }
 }

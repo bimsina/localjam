@@ -214,6 +214,63 @@ void main() {
     });
   });
 
+  group('JamScaffold inline', () {
+    testWidgets('content starts under the bar, not under the status bar', (
+      tester,
+    ) async {
+      tester.view.padding = const FakeViewPadding(top: 141);
+      addTearDown(tester.view.resetPadding);
+      await tester.pumpWidget(
+        _app(
+          const JamScaffold(
+            title: 'Detail',
+            largeTitle: false,
+            children: [Text('First line')],
+          ),
+        ),
+      );
+      final top = MediaQuery.paddingOf(
+        tester.element(find.byType(JamScaffold)),
+      ).top;
+      expect(
+        tester.getTopLeft(find.text('First line')).dy,
+        greaterThanOrEqualTo(top + JamMetrics.navBarHeight),
+      );
+    });
+
+    testWidgets('the inline bar is clear at rest and fills once content '
+        'scrolls under it', (tester) async {
+      await tester.pumpWidget(
+        _app(
+          JamScaffold(
+            title: 'Detail',
+            largeTitle: false,
+            children: [
+              for (var i = 0; i < 40; i++)
+                SizedBox(height: 60, child: Text('$i')),
+            ],
+          ),
+        ),
+      );
+      Color barColor() {
+        final box = tester.widget<DecoratedBox>(
+          find
+              .descendant(
+                of: find.byType(CupertinoNavigationBar),
+                matching: find.byType(DecoratedBox),
+              )
+              .first,
+        );
+        return (box.decoration as BoxDecoration).color!;
+      }
+
+      expect(barColor().a, 0);
+      await tester.drag(find.text('3'), const Offset(0, -300));
+      await tester.pumpAndSettle();
+      expect(barColor(), JamColors.light.material);
+    });
+  });
+
   group('JamMenuButton', () {
     testWidgets('opens an iOS pull-down with groups and a red row', (
       tester,
@@ -255,6 +312,54 @@ void main() {
       await tester.pumpAndSettle();
       expect(invited, 1);
       expect(find.text('Invite People'), findsNothing);
+    });
+
+    testWidgets('titles carry a complete text style wherever the anchor '
+        'sits — no fallback (debug-underlined) text', (tester) async {
+      // No Material, no page: just the app and a Cupertino page, the way a
+      // sheet hosts a menu.
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: jamLightTheme(),
+          home: const CupertinoPageScaffold(
+            child: Center(
+              child: JamMenuButton(
+                groups: [
+                  [JamMenuItem(title: 'Add Music', subtitle: 'And more')],
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.tap(find.byType(JamMenuButton));
+      await tester.pumpAndSettle();
+      final style = DefaultTextStyle.of(
+        tester.element(find.text('Add Music')),
+      ).style;
+      expect(style.decoration, isNot(TextDecoration.underline));
+      expect(style.decorationColor, isNot(const Color(0xFFFFFF00)));
+      expect(style.fontSize, 17);
+    });
+
+    testWidgets('brightness forces the menu dark on a light app', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        _host(
+          const JamMenuButton(
+            brightness: Brightness.dark,
+            groups: [
+              [JamMenuItem(title: 'People')],
+            ],
+          ),
+        ),
+      );
+      await tester.tap(find.byType(JamMenuButton));
+      await tester.pumpAndSettle();
+      final item = tester.element(find.text('People'));
+      expect(CupertinoTheme.brightnessOf(item), Brightness.dark);
+      expect(MediaQuery.platformBrightnessOf(item), Brightness.dark);
     });
 
     testWidgets('the glass trigger over artwork', (tester) async {
