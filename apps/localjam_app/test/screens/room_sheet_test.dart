@@ -6,17 +6,21 @@ library;
 import 'dart:io';
 
 import 'package:flutter/cupertino.dart';
-import 'package:flutter/material.dart' show MaterialApp, Scaffold, ThemeData;
+import 'package:flutter/material.dart'
+    show MaterialApp, Scaffold, Theme, ThemeData;
 import 'package:flutter/rendering.dart' show SemanticsAction;
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:localjam_app/src/design/theme.dart';
+import 'package:localjam_app/src/design/tokens.dart';
 import 'package:localjam_app/src/state/session_controller.dart';
 import 'package:localjam_app/src/util/format.dart';
 import 'package:localjam_app/src/util/network.dart';
+import 'package:localjam_app/src/widgets/avatar.dart';
 import 'package:localjam_app/src/widgets/guests_can.dart';
 import 'package:localjam_app/src/widgets/peer_row.dart';
 import 'package:localjam_app/src/widgets/room_sheet.dart';
+import 'package:localjam_app/src/widgets/section.dart';
 import 'package:localjam_app/src/widgets/sheet.dart';
 import 'package:localjam_app/src/widgets/switch.dart';
 import 'package:localjam_client/localjam_client.dart';
@@ -131,9 +135,10 @@ void main() {
     expect(find.text(JamPresetStrings.guestsCan), findsOneWidget);
     expect(find.byType(JamSwitch), findsNWidgets(3));
     expect(find.text(JamPresetStrings.summary(JamPolicy.jam)), findsOneWidget);
-    // Invite-only room: said, with how it was decided.
-    expect(find.text(RoomSheetStrings.nearby), findsOneWidget);
-    expect(find.text(RoomSheetStrings.off), findsOneWidget);
+    // Invite-only jam: said as a fact under the people, not drawn as a
+    // setting that can't be changed.
+    expect(find.text(RoomSheetStrings.nearbyOffFooter), findsOneWidget);
+    expect(find.text(RoomSheetStrings.nearby), findsNothing);
 
     // The way out, a row a screen reader can press.
     expect(find.text(RoomSheetStrings.endJam), findsOneWidget);
@@ -147,10 +152,12 @@ void main() {
     expect(end.hasAction(SemanticsAction.tap), isTrue);
     semantics.dispose();
 
-    // End Jam asks first; Cancel keeps the room.
+    // End Jam asks first; Cancel keeps the room. Nobody else is here, so
+    // it doesn't talk about stopping the music for "everyone".
     await tester.tap(find.text(RoomSheetStrings.endJam));
     await tester.pumpAndSettle();
     expect(find.text(RoomSheetStrings.endTitle), findsOneWidget);
+    expect(find.text(RoomSheetStrings.endDetailAlone), findsOneWidget);
     await tester.tap(find.text(RoomSheetStrings.cancel));
     await tester.pumpAndSettle();
     expect(host.isLive, isTrue);
@@ -166,8 +173,9 @@ void main() {
     await tester.pump();
     await _pump(tester, host, _panel(host));
 
-    expect(find.text(JamPresetStrings.addMusic), findsWidgets);
-    // The first switch is Add Music.
+    expect(find.text(JamPresetStrings.songsOnly), findsOneWidget);
+    // The first switch is Add Songs — a different name from any preset.
+    expect(find.text(JamPresetStrings.addSongs), findsOneWidget);
     await tester.tap(find.byType(JamSwitch).first);
     await tester.pump();
 
@@ -241,7 +249,7 @@ void main() {
     await tester.pump();
 
     await _pump(tester, host, _panel(host));
-    expect(find.text('Co-host · Can’t add music'), findsOneWidget);
+    expect(find.text('Co-host · Can’t add songs'), findsOneWidget);
 
     await tester.runAsync(guest.leave);
     await tester.runAsync(host.leave);
@@ -255,7 +263,7 @@ void main() {
     await _pump(tester, host, _panel(host));
 
     // `jam`: guests cannot control playback; the menu grants it to Ana.
-    await tester.tap(find.byIcon(CupertinoIcons.ellipsis_circle));
+    await tester.tap(find.byIcon(CupertinoIcons.ellipsis));
     await tester.pumpAndSettle();
     expect(find.text(RoomSheetStrings.makeCohost), findsOneWidget);
     await tester.tap(_menuItem(RoomSheetStrings.controlPlayback));
@@ -266,7 +274,7 @@ void main() {
 
     // And back: the override goes, so a later policy change still reaches
     // her.
-    await tester.tap(find.byIcon(CupertinoIcons.ellipsis_circle));
+    await tester.tap(find.byIcon(CupertinoIcons.ellipsis));
     await tester.pumpAndSettle();
     await tester.tap(_menuItem(RoomSheetStrings.controlPlayback));
     await tester.pumpAndSettle();
@@ -275,7 +283,7 @@ void main() {
     expect(find.text('Can control playback'), findsNothing);
 
     // Make Co-host.
-    await tester.tap(find.byIcon(CupertinoIcons.ellipsis_circle));
+    await tester.tap(find.byIcon(CupertinoIcons.ellipsis));
     await tester.pumpAndSettle();
     await tester.tap(find.text(RoomSheetStrings.makeCohost));
     await tester.pumpAndSettle();
@@ -283,6 +291,99 @@ void main() {
     expect(find.text(JamPeerRowStrings.cohost), findsOneWidget);
 
     await tester.runAsync(guest.leave);
+    await tester.runAsync(host.leave);
+  });
+
+  testWidgets('faces are coloured by peer id, the same on every device', (
+    tester,
+  ) async {
+    final host = testSession();
+    final guest = await _hostWithGuest(tester, host);
+    final guestId = host.engine!.peers.single.peerId;
+
+    Map<String, String?> keys() => {
+      for (final row in tester.widgetList<JamPeerRow>(find.byType(JamPeerRow)))
+        row.name: row.colorKey,
+    };
+
+    await _pump(tester, host, _panel(host));
+    final fromHost = keys();
+    expect(fromHost['Silky Puffin'], JamPermissions.hostPeerId);
+    expect(fromHost['Ana'], guestId);
+    // The key reaches the face.
+    expect(
+      tester
+          .widgetList<JamAvatar>(find.byType(JamAvatar))
+          .map((a) => a.colorKey),
+      containsAll(<String>[JamPermissions.hostPeerId, guestId]),
+    );
+
+    await _pump(tester, guest, _panel(guest, self: 'Ana'));
+    final fromGuest = keys();
+    expect(fromGuest['Ana'], guestId);
+    expect(fromGuest.values, contains(JamPermissions.hostPeerId));
+
+    await tester.runAsync(guest.leave);
+    await tester.runAsync(host.leave);
+  });
+
+  testWidgets('docked on the backdrop: plain rows in white, no cards', (
+    tester,
+  ) async {
+    final host = testSession();
+    await tester.runAsync(
+      () => host.startHost(sessionName: 'Van Jam', discoverable: false),
+    );
+    await tester.pump();
+    await _pump(
+      tester,
+      host,
+      ColoredBox(
+        color: const Color(0xFF7A1F4A),
+        child: RoomPanel(
+          engine: host.engine!,
+          selfName: 'Silky Puffin',
+          network: JamNetworkStatus.offline,
+        ),
+      ),
+      theme: jamDarkTheme(),
+    );
+
+    // Every section is plain: no rounded card, so no one-row pills.
+    final sections = tester.widgetList<JamSection>(find.byType(JamSection));
+    expect(sections, isNotEmpty);
+    expect(sections.every((s) => s.plain), isTrue);
+    expect(find.byType(ClipRRect), findsNothing);
+    // The backdrop's text: white titles, translucent white secondary.
+    final colors = Theme.of(
+      tester.element(find.text(RoomSheetStrings.invitePeople)),
+    ).extension<JamColors>()!;
+    expect(colors.label, JamNowPlayingColors.text);
+    expect(colors.secondaryLabel, JamNowPlayingColors.secondary);
+    expect(colors.groupedSurface.a, 0);
+    final invite = tester.widget<Text>(
+      find.text(RoomSheetStrings.invitePeople),
+    );
+    expect(invite.style?.color, JamNowPlayingColors.text);
+
+    // In its sheet the same panel keeps the grouped look.
+    await _pump(
+      tester,
+      host,
+      RoomPanel(
+        engine: host.engine!,
+        selfName: 'Silky Puffin',
+        network: JamNetworkStatus.offline,
+        inSheet: true,
+      ),
+    );
+    expect(
+      tester
+          .widgetList<JamSection>(find.byType(JamSection))
+          .every((s) => !s.plain),
+      isTrue,
+    );
+
     await tester.runAsync(host.leave);
   });
 
@@ -337,14 +438,17 @@ void main() {
     final guest = await _hostWithGuest(tester, host);
     await _pump(tester, host, _panel(host));
 
-    await tester.tap(find.byIcon(CupertinoIcons.ellipsis_circle));
+    await tester.tap(find.byIcon(CupertinoIcons.ellipsis));
     await tester.pumpAndSettle();
     await tester.tap(find.text(RoomSheetStrings.removePeer));
     await tester.pumpAndSettle();
     expect(find.text(RoomSheetStrings.removeTitle('Ana')), findsOneWidget);
     expect(find.text(RoomSheetStrings.removeDetail), findsOneWidget);
     expect(find.textContaining('room code'), findsNothing);
-    expect(RoomSheetStrings.removeDetail, contains('let them back in'));
+    // The panel can't know whether the device can be kept out (a guest that
+    // never identified itself can't be), so the alert doesn't promise it;
+    // the Removed list says so once it's true.
+    expect(RoomSheetStrings.removeDetail, isNot(contains('rejoin')));
 
     await tester.tap(find.text(RoomSheetStrings.remove));
     await tester.pumpAndSettle();
@@ -478,8 +582,16 @@ void main() {
     await tester.tap(find.text(RoomSheetStrings.copyLink));
     await tester.pump();
     await tester.runAsync(pumpEventQueue);
+    await tester.pump();
     expect(copied, '${host.joinUri}');
-    expect(heard, contains(RoomSheetStrings.copied));
+    // Confirmed in place, not by a toast over Share Link.
+    expect(heard, isEmpty);
+    expect(find.text(RoomSheetStrings.copied), findsOneWidget);
+    expect(find.byIcon(CupertinoIcons.checkmark), findsOneWidget);
+    expect(find.text(RoomSheetStrings.copyLink), findsNothing);
+    await tester.pump(const Duration(milliseconds: 1600));
+    expect(find.text(RoomSheetStrings.copyLink), findsOneWidget);
+    expect(find.text(RoomSheetStrings.copied), findsNothing);
 
     await tester.runAsync(host.leave);
   });

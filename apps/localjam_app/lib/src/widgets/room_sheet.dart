@@ -3,12 +3,15 @@
 /// Two sheets where there used to be one long page:
 ///
 /// * **People** ([showRoomSheet], [RoomPanel]) — a grouped list: Invite
-///   People, who is here (with the host's per-guest "•••"), anyone removed,
-///   what guests can do, whether the jam shows to people nearby, and the way
-///   out in its own last section.
+///   People, who is here (with the host's per-guest "•••" and, under the
+///   list, whether people nearby can see the jam), anyone removed, what
+///   guests can do, and the way out in its own last section.
 /// * **Invite** ([showInviteSheet], [InvitePanel]) — the QR on a white
-///   plate, the room's name, Share Link and Copy Link. With no network
+///   plate, the jam's name, Share Link and Copy Link. With no network
 ///   there is no code to show, and the sheet says what would make one.
+///
+/// Header rule (§10.2): People closes with **Done**; Invite, which edits
+/// nothing, with a trailing glass xmark only.
 ///
 /// The join URI never appears as text: `localjam://join?token=…` is machine
 /// text on a page about people.
@@ -18,6 +21,7 @@ import 'dart:async';
 
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/foundation.dart' show ValueListenable, debugPrint;
+import 'package:flutter/material.dart' show Theme, ThemeData;
 import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 import 'package:localjam_client/localjam_client.dart';
@@ -53,20 +57,23 @@ abstract final class RoomSheetStrings {
   /// display name.
   static const String host = 'Host';
 
-  // What guests can do: the preset's words live in `JamPresetStrings`.
-  static const String addMusic = 'Add Music';
-  static const String controlPlayback = 'Control Playback';
-  static const String editQueue = 'Edit the Queue';
+  // What guests can do: every word lives in `JamPresetStrings`, so the
+  // switches, the per-guest menu and the footer never disagree.
+  static const String addMusic = JamPresetStrings.addSongs;
+  static const String controlPlayback = JamPresetStrings.controlPlayback;
+  static const String editQueue = JamPresetStrings.editQueue;
 
-  // Show to people nearby.
+  // Whether people nearby can see the jam: chosen in Start a Jam and fixed
+  // for the jam's life, so it is said as a fact under the people list, not
+  // drawn as a setting that cannot be changed.
   static const String nearby = 'Show to People Nearby';
   static const String on = 'On';
   static const String off = 'Off';
   static const String nearbyOnFooter =
-      'People on this Wi‑Fi can see and join this jam. Set when the jam '
-      'starts.';
+      'People on this Wi‑Fi can see this jam and join it.';
   static const String nearbyOffFooter =
-      'Only people with the link or code can join. Set when the jam starts.';
+      'This jam is hidden from people nearby. Only people with the link or '
+      'code can join.';
 
   // The per-guest menu.
   static const String makeCohost = 'Make Co-host';
@@ -76,17 +83,17 @@ abstract final class RoomSheetStrings {
   static const String remove = 'Remove';
   static String removeTitle(String name) => 'Remove $name?';
 
-  /// A removal holds (§5.6): the device stays out — the room code included
-  /// — until the host lets it back in from the Removed list.
-  static const String removeDetail =
-      'They stop hearing the jam straight away, and can’t rejoin until '
-      'you let them back in.';
+  /// What removing someone does for certain. Whether the device also stays
+  /// out depends on whether it identified itself when it joined — which the
+  /// host engine keeps to itself — so the alert promises only this, and the
+  /// Removed list (with its own footer) appears when the hold is real.
+  static const String removeDetail = 'They’ll stop hearing the jam right away.';
 
   /// The subtitle words for what the host changed for one person.
   static String capabilityDetail(JamCapability capability, bool allowed) =>
       switch ((capability, allowed)) {
-        (JamCapability.addTracks, false) => 'can’t add music',
-        (JamCapability.addTracks, true) => 'can add music',
+        (JamCapability.addTracks, false) => 'can’t add songs',
+        (JamCapability.addTracks, true) => 'can add songs',
         (JamCapability.controlPlayback, false) => 'can’t control playback',
         (JamCapability.controlPlayback, true) => 'can control playback',
         (JamCapability.editQueue, false) => 'can’t edit the queue',
@@ -108,7 +115,10 @@ abstract final class RoomSheetStrings {
   static const String endJam = 'End Jam';
   static const String leaveJam = 'Leave Jam';
   static const String endTitle = 'End Jam?';
-  static const String endDetail = 'The music stops for everyone in the jam.';
+  static const String endDetail = 'The music stops for everyone.';
+
+  /// End Jam with nobody else here: there is no "everyone" to stop.
+  static const String endDetailAlone = 'This ends the jam.';
   static const String leaveTitle = 'Leave Jam?';
   static const String leaveDetail =
       'You can rejoin as long as the jam is still going.';
@@ -123,7 +133,10 @@ abstract final class RoomSheetStrings {
   static String qrLabel(String room) => 'Code to join $room';
   static const String shareLink = 'Share Link';
   static const String copyLink = 'Copy Link';
-  static const String copied = 'Link Copied';
+
+  /// Copy Link's label for a moment after it worked — the confirmation
+  /// happens in place, not in a toast over the buttons (§10.5).
+  static const String copied = 'Copied';
   static const String shareFailed = 'Couldn’t open the share sheet.';
 
   /// No Wi-Fi and no hotspot: there is no address a guest could reach, so
@@ -202,6 +215,7 @@ class RoomPanel extends StatefulWidget {
     required this.network,
     this.scrollController,
     this.inSheet = false,
+    this.onBackdrop,
   });
 
   final JamEngine engine;
@@ -219,12 +233,29 @@ class RoomPanel extends StatefulWidget {
   /// close on its way out. False when docked beside the player.
   final bool inSheet;
 
+  /// Whether the panel sits on the Now Playing backdrop (docked beside the
+  /// player on wide windows). Defaults to `!inSheet`: the docked panel is
+  /// the only place a RoomPanel appears outside its sheet.
+  ///
+  /// On the backdrop the panel drops the grouped look — opaque cards there
+  /// read as Settings pasted onto the cover's colours, and one-row cards
+  /// turn into pills — for plain rows on the panel's shade, in the backdrop's
+  /// white text, like Up Next beside it.
+  final bool? onBackdrop;
+
   @override
   State<RoomPanel> createState() => _RoomPanelState();
 }
 
 class _RoomPanelState extends State<RoomPanel> {
   final List<StreamSubscription<Object?>> _subs = [];
+
+  /// The backdrop theme, kept per base theme so a rebuild is not a new
+  /// theme for every descendant.
+  ThemeData? _backdropBase;
+  ThemeData? _backdropTheme;
+
+  bool get _onBackdrop => widget.onBackdrop ?? !widget.inSheet;
 
   JamEngine get _engine => widget.engine;
   JamHostEngine? get _host =>
@@ -309,6 +340,7 @@ class _RoomPanelState extends State<RoomPanel> {
       // This device first, so you can see your own standing.
       JamPeerRow(
         name: widget.selfName,
+        colorKey: _engine.selfPeerId,
         role: isHost
             ? JamPeerRole.host
             : _roleOf(permissions.roleOf(_engine.selfPeerId)),
@@ -317,10 +349,16 @@ class _RoomPanelState extends State<RoomPanel> {
       ),
       // The host holds the reserved peer id and is never in `peers`, so a
       // guest puts them back or the room looks a person short.
-      if (!isHost) JamPeerRow(name: _hostName(_engine), role: JamPeerRole.host),
+      if (!isHost)
+        JamPeerRow(
+          name: _hostName(_engine),
+          colorKey: _engine.hostPeer?.peerId ?? JamPermissions.hostPeerId,
+          role: JamPeerRole.host,
+        ),
       for (final peer in peers)
         JamPeerRow(
           name: jamPeerName(peer),
+          colorKey: peer.peerId,
           role: _roleOf(permissions.roleOf(peer.peerId)),
           detail: _overrideDetail(permissions, peer.peerId),
           // Only the host can observe whether somebody actually has the
@@ -331,8 +369,10 @@ class _RoomPanelState extends State<RoomPanel> {
         ),
     ];
 
+    final plain = _onBackdrop;
     final sections = <Widget>[
-      JamSection(
+      _section(
+        plain: plain,
         children: [
           JamRow(
             title: RoomSheetStrings.invitePeople,
@@ -346,13 +386,22 @@ class _RoomPanelState extends State<RoomPanel> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         mainAxisSize: MainAxisSize.min,
         children: [
-          JamSection(
+          _section(
+            plain: plain,
             header: RoomSheetStrings.peopleCount(count),
+            // Fixed when the jam started, so said as a fact rather than
+            // drawn as a setting that can't be changed.
+            footer: !isHost
+                ? null
+                : host.discoverable
+                ? RoomSheetStrings.nearbyOnFooter
+                : RoomSheetStrings.nearbyOffFooter,
             children: people,
           ),
           if (isHost)
             _Removed(
               host: host,
+              plain: plain,
               onLetBackIn: (peer) => _guarded(() {
                 // False when they were already let back in from somewhere else
                 // (another sheet, the docked panel): what the tap asked for is
@@ -367,11 +416,13 @@ class _RoomPanelState extends State<RoomPanel> {
       ),
       if (isHost)
         _GuestsCan(
+          plain: plain,
           policy: permissions.policy,
           onChanged: (policy) => _guarded(() => host.setPolicy(policy)),
         )
       else
-        JamSection(
+        _section(
+          plain: plain,
           footer: JamPresetStrings.summary(permissions.policy),
           children: [
             JamRow(
@@ -380,22 +431,10 @@ class _RoomPanelState extends State<RoomPanel> {
             ),
           ],
         ),
-      if (isHost)
-        JamSection(
-          footer: host.discoverable
-              ? RoomSheetStrings.nearbyOnFooter
-              : RoomSheetStrings.nearbyOffFooter,
-          children: [
-            JamRow(
-              title: RoomSheetStrings.nearby,
-              value: host.discoverable
-                  ? RoomSheetStrings.on
-                  : RoomSheetStrings.off,
-            ),
-          ],
-        ),
       _LeaveSection(
         isHost: isHost,
+        plain: plain,
+        alone: isHost && peers.isEmpty,
         onLeft: () {
           if (widget.inSheet && Navigator.of(context).canPop()) {
             Navigator.of(context).pop();
@@ -414,12 +453,22 @@ class _RoomPanelState extends State<RoomPanel> {
       children: [JamSectionList(children: sections)],
     );
 
-    if (widget.inSheet) return list;
-    // Docked beside the player (D7): the panel's shade over the backdrop is
-    // the ground, as it is for Up Next beside it — an opaque grouped ground
-    // here read as a black slab cut out of the Now Playing colours. The
-    // sections bring their own surface.
-    return JamGroupedSurface(elevated: false, child: list);
+    if (!_onBackdrop) return list;
+    // Docked beside the player (D7): no cards on the cover's colours. The
+    // panel's shade is the ground, the rows are plain, and the text is the
+    // backdrop's white — the same look as Up Next beside it.
+    return Theme(
+      data: _themeOnBackdrop(Theme.of(context)),
+      child: JamGroupedSurface(elevated: false, child: list),
+    );
+  }
+
+  ThemeData _themeOnBackdrop(ThemeData base) {
+    if (identical(base, _backdropBase) && _backdropTheme != null) {
+      return _backdropTheme!;
+    }
+    _backdropBase = base;
+    return _backdropTheme = _themeForBackdrop(base);
   }
 
   double? _fetchProgress(JamHostEngine? host, String peerId, String? mediaId) {
@@ -504,6 +553,47 @@ class _RoomPanelState extends State<RoomPanel> {
     if (!confirmed || !mounted) return;
     _guarded(() => host.kickPeer(peer.peerId));
   }
+}
+
+/// A section of the panel: inset grouped in the sheet, plain rows (sentence
+/// case footnote header, no card) on the backdrop.
+JamSection _section({
+  required bool plain,
+  String? header,
+  String? footer,
+  required List<Widget> children,
+}) => plain
+    ? JamSection.plain(
+        header: header,
+        prominentHeader: false,
+        footer: footer,
+        children: children,
+      )
+    : JamSection(header: header, footer: footer, children: children);
+
+/// [base] with the Now Playing backdrop's colours: white text at the
+/// backdrop's secondary and tertiary strengths, white for what can be
+/// tapped (as on the rest of Now Playing), see-through row grounds and a
+/// white press highlight. Switches stay green; destructive stays red.
+ThemeData _themeForBackdrop(ThemeData base) {
+  final colors = (base.extension<JamColors>() ?? JamColors.dark).copyWith(
+    groupedSurface: JamFixedColors.clear,
+    elevatedGroupedSurface: JamFixedColors.clear,
+    label: JamNowPlayingColors.text,
+    secondaryLabel: JamNowPlayingColors.secondary,
+    tertiaryLabel: JamNowPlayingColors.tertiary,
+    separator: JamNowPlayingColors.track,
+    fillPressed: JamNowPlayingColors.pressed,
+    tint: JamNowPlayingColors.text,
+    tintPressed: JamNowPlayingColors.fill,
+  );
+  return base.copyWith(
+    extensions: [
+      for (final extension in base.extensions.values)
+        if (extension is! JamColors) extension,
+      colors,
+    ],
+  );
 }
 
 /// What [peerId]'s role and the room policy give them, before overrides.
@@ -606,9 +696,14 @@ Widget _whileLive<T>(
 /// Hidden while nobody has been removed — gap included, so an empty list
 /// leaves no hole in the page.
 class _Removed extends StatelessWidget {
-  const _Removed({required this.host, required this.onLetBackIn});
+  const _Removed({
+    required this.host,
+    required this.onLetBackIn,
+    this.plain = false,
+  });
 
   final JamHostEngine host;
+  final bool plain;
   final ValueChanged<PeerInfo> onLetBackIn;
 
   @override
@@ -619,13 +714,15 @@ class _Removed extends StatelessWidget {
     host.kickedPeersListenable,
     (context, kicked) {
       if (kicked.isEmpty) return const SizedBox.shrink();
-      final section = JamSection(
+      final section = _section(
+        plain: plain,
         header: RoomSheetStrings.removed,
         footer: RoomSheetStrings.removedDetail,
         children: [
           for (final peer in kicked)
             JamPeerRow(
               name: jamPeerName(peer),
+              colorKey: peer.peerId,
               dimmed: true,
               trailing: JamButton.plain(
                 label: RoomSheetStrings.letBackIn,
@@ -644,34 +741,44 @@ class _Removed extends StatelessWidget {
 }
 
 /// What guests can do: the preset (a pull-down) and the three switches it
-/// stands for.
+/// stands for. The pull-down opens clear of the switches.
 class _GuestsCan extends StatelessWidget {
-  const _GuestsCan({required this.policy, required this.onChanged});
+  const _GuestsCan({
+    required this.policy,
+    required this.onChanged,
+    this.plain = false,
+  });
 
   final JamPolicy policy;
   final ValueChanged<JamPolicy> onChanged;
+  final bool plain;
 
   @override
   Widget build(BuildContext context) {
-    return JamSection(
+    return _section(
+      plain: plain,
       footer: JamPresetStrings.summary(policy),
       children: [
-        // The section draws the hairline under a non-row child.
-        JamGuestsCanRow(policy: policy, onChanged: onChanged, separator: false),
-        JamRow.toggle(
-          title: RoomSheetStrings.addMusic,
-          value: policy.addTracks,
-          onChanged: (v) => onChanged(policy.copyWith(addTracks: v)),
-        ),
-        JamRow.toggle(
-          title: RoomSheetStrings.controlPlayback,
-          value: policy.controlPlayback,
-          onChanged: (v) => onChanged(policy.copyWith(controlPlayback: v)),
-        ),
-        JamRow.toggle(
-          title: RoomSheetStrings.editQueue,
-          value: policy.editQueue,
-          onChanged: (v) => onChanged(policy.copyWith(editQueue: v)),
+        JamGuestsCanRow(
+          policy: policy,
+          onChanged: onChanged,
+          controls: [
+            JamRow.toggle(
+              title: RoomSheetStrings.addMusic,
+              value: policy.addTracks,
+              onChanged: (v) => onChanged(policy.copyWith(addTracks: v)),
+            ),
+            JamRow.toggle(
+              title: RoomSheetStrings.controlPlayback,
+              value: policy.controlPlayback,
+              onChanged: (v) => onChanged(policy.copyWith(controlPlayback: v)),
+            ),
+            JamRow.toggle(
+              title: RoomSheetStrings.editQueue,
+              value: policy.editQueue,
+              onChanged: (v) => onChanged(policy.copyWith(editQueue: v)),
+            ),
+          ],
         ),
       ],
     );
@@ -681,9 +788,18 @@ class _GuestsCan extends StatelessWidget {
 /// End Jam / Leave Jam: a centred destructive row in its own last section,
 /// behind a confirmation.
 class _LeaveSection extends StatelessWidget {
-  const _LeaveSection({required this.isHost, required this.onLeft});
+  const _LeaveSection({
+    required this.isHost,
+    required this.onLeft,
+    this.plain = false,
+    this.alone = false,
+  });
 
   final bool isHost;
+  final bool plain;
+
+  /// A host with nobody else in the jam: "everyone" would be nobody.
+  final bool alone;
 
   /// Called after the session is torn down, before the route change.
   final VoidCallback onLeft;
@@ -694,9 +810,11 @@ class _LeaveSection extends StatelessWidget {
     final confirmed = await JamDialogs.confirmDestructive(
       context,
       title: isHost ? RoomSheetStrings.endTitle : RoomSheetStrings.leaveTitle,
-      message: isHost
-          ? RoomSheetStrings.endDetail
-          : RoomSheetStrings.leaveDetail,
+      message: !isHost
+          ? RoomSheetStrings.leaveDetail
+          : alone
+          ? RoomSheetStrings.endDetailAlone
+          : RoomSheetStrings.endDetail,
       confirmLabel: isHost ? RoomSheetStrings.endJam : RoomSheetStrings.leave,
       cancelLabel: RoomSheetStrings.cancel,
     );
@@ -708,7 +826,8 @@ class _LeaveSection extends StatelessWidget {
   }
 
   @override
-  Widget build(BuildContext context) => JamSection(
+  Widget build(BuildContext context) => _section(
+    plain: plain,
     children: [
       JamRow(
         title: isHost ? RoomSheetStrings.endJam : RoomSheetStrings.leaveJam,
@@ -802,12 +921,6 @@ class _Invite extends StatelessWidget {
   final Uri joinUri;
   final String caption;
   final String roomName;
-
-  Future<void> _copy(BuildContext context) async {
-    await Clipboard.setData(ClipboardData(text: joinUri.toString()));
-    if (!context.mounted) return;
-    JamSession.read(context).notify(RoomSheetStrings.copied);
-  }
 
   Future<void> _share(BuildContext context) async {
     final session = JamSession.read(context);
@@ -906,13 +1019,57 @@ class _Invite extends StatelessWidget {
             onPressed: () => unawaited(_share(context)),
           ),
           const SizedBox(height: JamSpace.sm),
-          JamButton.plain(
-            label: RoomSheetStrings.copyLink,
-            expand: true,
-            onPressed: () => unawaited(_copy(context)),
-          ),
+          _CopyLinkButton(joinUri: joinUri),
         ],
       ),
     );
   }
+}
+
+/// How long a copy button says "Copied" before it goes back.
+const Duration kJamCopiedFeedback = Duration(milliseconds: 1500);
+
+/// Copy Link, which confirms in place: for [kJamCopiedFeedback] the label
+/// reads "Copied" behind a checkmark, then returns. No toast — it would land
+/// on Share Link, the very control beside it (§10.5).
+class _CopyLinkButton extends StatefulWidget {
+  const _CopyLinkButton({required this.joinUri});
+
+  final Uri joinUri;
+
+  @override
+  State<_CopyLinkButton> createState() => _CopyLinkButtonState();
+}
+
+class _CopyLinkButtonState extends State<_CopyLinkButton> {
+  Timer? _reset;
+  bool _copied = false;
+
+  Future<void> _copy() async {
+    await Clipboard.setData(ClipboardData(text: widget.joinUri.toString()));
+    if (!mounted) return;
+    JamHaptics.selection();
+    _reset?.cancel();
+    setState(() => _copied = true);
+    _reset = Timer(kJamCopiedFeedback, () {
+      if (mounted) setState(() => _copied = false);
+    });
+  }
+
+  @override
+  void dispose() {
+    _reset?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => Semantics(
+    liveRegion: _copied,
+    child: JamButton.plain(
+      label: _copied ? RoomSheetStrings.copied : RoomSheetStrings.copyLink,
+      icon: _copied ? CupertinoIcons.checkmark : null,
+      expand: true,
+      onPressed: () => unawaited(_copy()),
+    ),
+  );
 }
