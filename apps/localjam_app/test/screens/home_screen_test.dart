@@ -234,8 +234,8 @@ void main() {
     await session.stopBrowsing();
   });
 
-  testWidgets('on a wide pane, Start a Jam centres on the content column, '
-      'not on the pane', (tester) async {
+  testWidgets('on a wide pane, Start a Jam centres on the reading column, '
+      'which centres in the pane', (tester) async {
     tester.view.physicalSize = const Size(1032, 800) * 3;
     tester.view.devicePixelRatio = 3;
     addTearDown(tester.view.reset);
@@ -248,7 +248,12 @@ void main() {
     final empty = tester.getRect(find.byType(JamEmptyState));
     // One axis: the empty state and the button share a centre line.
     expect(button.center.dx, closeTo(empty.center.dx, 1));
-    expect(button.center.dx, lessThan(pane.center.dx));
+    expect(button.center.dx, closeTo(pane.center.dx, 1));
+    // A phone's width, not a banner across the pane.
+    expect(
+      tester.getRect(find.byType(JamButton)).width,
+      lessThanOrEqualTo(400),
+    );
   });
 
   testWidgets('renders on the dark palette', (tester) async {

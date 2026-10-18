@@ -15,15 +15,15 @@ import 'package:localjam_client/localjam_client.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../design/breakpoints.dart';
 import '../design/tokens.dart';
 import '../state/app_settings.dart';
-import '../state/session_controller.dart';
 import '../widgets/avatar.dart';
+import '../widgets/buttons.dart';
 import '../widgets/list.dart';
 import '../widgets/rename_dialog.dart';
 import '../widgets/scaffold.dart';
 import '../widgets/section.dart';
-import 'history_screen.dart' show kJamReadingColumn;
 import 'licenses_screen.dart';
 
 /// Every user-facing string on this screen, in one place.
@@ -46,7 +46,7 @@ abstract final class SettingsStrings {
   static const String version = 'Version';
   static const String openSource = 'Source Code';
   static const String openSourceDetail = 'GitHub';
-  static const String linkCopied = 'Link copied. Paste it in a browser.';
+  static const String linkCopied = JamConfirmationStrings.copied;
 
   /// American spelling, like the page's own title.
   static const String licences = 'Licenses';
@@ -129,12 +129,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   /// Opens the repository in a browser, and falls back to the clipboard.
+  /// True when it fell back (the row then confirms the copy in place).
   ///
   /// A device with no browser to hand the URL to is rare but real (a locked
   /// down Android build, a desktop with no default handler), and the address
   /// is short enough to paste — so the failure has an answer rather than a
   /// dead row.
-  Future<void> _openRepository() async {
+  Future<bool> _openRepository() async {
     var opened = false;
     try {
       opened = await launchUrl(
@@ -144,12 +145,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
     } catch (e) {
       debugPrint('localjam: could not open $kRepositoryUrl: $e');
     }
-    if (opened || !mounted) return;
+    if (opened) return false;
     await Clipboard.setData(const ClipboardData(text: kRepositoryUrl));
-    if (!mounted) return;
-    JamSession.read(
-      context,
-    ).notify(SettingsStrings.linkCopied, tone: JamNoticeTone.done);
+    return true;
   }
 
   /// The licence list: grouped iOS rows, no Material chrome.
@@ -180,78 +178,85 @@ class _SettingsScreenState extends State<SettingsScreen> {
     return JamScaffold(
       title: SettingsStrings.title,
       grouped: true,
+      // A reading column sized from the pane this page sits in — not the
+      // window, which beside an iPad sidebar is 260 wider — with the large
+      // title on its edge. Sections bring their own side margins.
+      maxContentWidth: JamContentWidth.reading,
       slivers: [
-        // A reading column sized from the pane this page sits in — not the
-        // window, which beside an iPad sidebar is 260 wider — and leading-
-        // aligned, so the sections start on the large title's edge.
-        // Sections bring their own side margins.
-        SliverConstrainedCrossAxis(
-          maxExtent: kJamReadingColumn,
-          sliver: SliverPadding(
-            padding: const EdgeInsets.only(top: JamSpace.sm),
-            sliver: SliverToBoxAdapter(
-              child: JamSectionList(
-                children: [
-                  JamSection(
-                    children: [
+        SliverPadding(
+          padding: const EdgeInsets.only(top: JamSpace.sm),
+          sliver: SliverToBoxAdapter(
+            child: JamSectionList(
+              children: [
+                JamSection(
+                  children: [
+                    JamRow(
+                      leading: _identity.isEmpty
+                          ? const SizedBox.square(
+                              dimension: JamAvatarSize.profile,
+                            )
+                          : JamAvatar(
+                              name: _identity,
+                              size: JamAvatarSize.profile,
+                            ),
+                      leadingWidth: JamAvatarSize.profile,
+                      title: name,
+                      subtitle: SettingsStrings.howYouAppear,
+                      chevron: true,
+                      onTap: () => unawaited(_rename()),
+                      semanticLabel:
+                          '${SettingsStrings.you}: $name. '
+                          '${SettingsStrings.rename}',
+                    ),
+                  ],
+                ),
+                JamSection(
+                  header: SettingsStrings.appearance,
+                  footer: SettingsStrings.appearanceFooter,
+                  children: [
+                    for (final mode in ThemeMode.values)
                       JamRow(
-                        leading: _identity.isEmpty
-                            ? const SizedBox.square(
-                                dimension: JamAvatarSize.profile,
-                              )
-                            : JamAvatar(
-                                name: _identity,
-                                size: JamAvatarSize.profile,
-                              ),
-                        leadingWidth: JamAvatarSize.profile,
-                        title: name,
-                        subtitle: SettingsStrings.howYouAppear,
-                        chevron: true,
-                        onTap: () => unawaited(_rename()),
+                        title: _modeLabel(mode),
+                        checked: settings.themeMode == mode,
+                        onTap: () {
+                          if (settings.themeMode == mode) return;
+                          JamHaptics.selection();
+                          unawaited(settings.setThemeMode(mode));
+                        },
                         semanticLabel:
-                            '${SettingsStrings.you}: $name. '
-                            '${SettingsStrings.rename}',
+                            '${SettingsStrings.appearance}: ${_modeLabel(mode)}',
                       ),
-                    ],
-                  ),
-                  JamSection(
-                    header: SettingsStrings.appearance,
-                    footer: SettingsStrings.appearanceFooter,
-                    children: [
-                      for (final mode in ThemeMode.values)
-                        JamRow(
-                          title: _modeLabel(mode),
-                          checked: settings.themeMode == mode,
-                          onTap: () {
-                            if (settings.themeMode == mode) return;
-                            JamHaptics.selection();
-                            unawaited(settings.setThemeMode(mode));
-                          },
-                          semanticLabel:
-                              '${SettingsStrings.appearance}: ${_modeLabel(mode)}',
+                  ],
+                ),
+                JamSection(
+                  header: SettingsStrings.about,
+                  footer: SettingsStrings.aboutFooter,
+                  children: [
+                    JamRow(title: SettingsStrings.version, value: _version),
+                    // Leaves the app: the external arrow, not a chevron.
+                    // When nothing can open it, the link is copied and
+                    // the row says so in place (§10.5).
+                    JamInPlaceConfirmation(
+                      builder: (context, copied, confirm) => Semantics(
+                        liveRegion: copied,
+                        child: JamRow(
+                          title: SettingsStrings.openSource,
+                          value: copied
+                              ? SettingsStrings.linkCopied
+                              : SettingsStrings.openSourceDetail,
+                          external: true,
+                          onTap: () => confirm(_openRepository),
                         ),
-                    ],
-                  ),
-                  JamSection(
-                    header: SettingsStrings.about,
-                    footer: SettingsStrings.aboutFooter,
-                    children: [
-                      JamRow(title: SettingsStrings.version, value: _version),
-                      // Leaves the app, so no push chevron.
-                      JamRow(
-                        title: SettingsStrings.openSource,
-                        value: SettingsStrings.openSourceDetail,
-                        onTap: () => unawaited(_openRepository()),
                       ),
-                      JamRow(
-                        title: SettingsStrings.licences,
-                        chevron: true,
-                        onTap: _showLicences,
-                      ),
-                    ],
-                  ),
-                ],
-              ),
+                    ),
+                    JamRow(
+                      title: SettingsStrings.licences,
+                      chevron: true,
+                      onTap: _showLicences,
+                    ),
+                  ],
+                ),
+              ],
             ),
           ),
         ),

@@ -42,7 +42,6 @@ import 'history_screen.dart'
         HistoryStrings,
         JamArtworkMosaic,
         jamHistorySummary,
-        kJamReadingColumn,
         showJamHistoryDetail;
 
 /// Every user-facing string on this screen, in one place.
@@ -99,12 +98,6 @@ const int kJamHomeRecents = 3;
 
 /// How far a newly discovered room rises into place.
 const double _roomEntryOffset = 8;
-
-/// The widest the list grows on a tablet or desktop window, measured against
-/// the pane (not the window). Rows stretched across 1000 px put the Join
-/// button a long way from the name it joins. Leading-aligned, like Past Jams
-/// and Settings, so the content starts on the large title's edge.
-const double _maxContentWidth = kJamReadingColumn;
 
 /// The widest Start a Jam grows once the column is wider than a phone: a
 /// full-width capsule across a desktop pane would be a banner.
@@ -332,14 +325,6 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   Widget build(BuildContext context) {
-    // The pane, not the window: beside an iPad sidebar the window is 260
-    // wider than what this page has.
-    return LayoutBuilder(
-      builder: (context, constraints) => _build(context, constraints.maxWidth),
-    );
-  }
-
-  Widget _build(BuildContext context, double paneWidth) {
     final session = JamSession.of(context);
     // On a wide window the sidebar already carries identity and the
     // destinations, so repeating them in the nav bar is noise.
@@ -380,34 +365,19 @@ class _HomeScreenState extends State<HomeScreen> {
             const SizedBox(width: JamSpace.xs),
           ],
         ],
-        // On a pane wider than the column, the capsule keeps a phone's width
-        // and centres on the *column* — the axis the empty state and the
-        // rows above it are on — not on the pane.
+        // The scaffold holds the page to the reading column, centred in
+        // the pane (not the window); wider than a phone, the capsule keeps
+        // a phone's width on the column's axis.
+        maxContentWidth: JamContentWidth.reading,
         bottomBar: startButton == null
             ? null
-            : paneWidth > _maxContentWidth
-            ? Padding(
-                padding: EdgeInsetsDirectional.only(
-                  end: paneWidth - _maxContentWidth,
+            : Center(
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: _maxButtonWidth),
+                  child: startButton,
                 ),
-                child: Center(
-                  child: ConstrainedBox(
-                    constraints: const BoxConstraints(
-                      maxWidth: _maxButtonWidth,
-                    ),
-                    child: startButton,
-                  ),
-                ),
-              )
-            : startButton,
-        slivers: [
-          SliverConstrainedCrossAxis(
-            maxExtent: _maxContentWidth,
-            sliver: SliverMainAxisGroup(
-              slivers: _content(context, session, rooms),
-            ),
-          ),
-        ],
+              ),
+        slivers: _content(context, session, rooms),
       ),
     );
   }

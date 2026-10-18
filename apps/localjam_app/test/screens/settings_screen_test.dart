@@ -40,7 +40,7 @@ Future<JamAppSettings> pumpSettings(
 
 void main() {
   testWidgets('beside a sidebar, the column is sized from the pane and '
-      'starts on the large title’s edge', (tester) async {
+      'centres in it', (tester) async {
     // The iPad P1: (window − 640) / 2 of padding inside a pane that was
     // already 260 narrower left a 380 strip drifting right of its title.
     tester.view.physicalSize = const Size(1032, 1000) * 2;
@@ -73,11 +73,12 @@ void main() {
         matching: find.byType(JamRow),
       ),
     );
-    // The grouped block starts at the page margin, where the large title
-    // does, and the column is the reading width, not a 380 strip.
-    expect(row.left - pane.left, inInclusiveRange(16, 20));
-    expect(row.width, greaterThan(600));
-    expect(row.right - pane.left, lessThanOrEqualTo(672));
+    // The reading column centres in the pane — not the window — and is
+    // the reading width, not a 380 strip.
+    expect(row.left - pane.left, closeTo(pane.right - row.right, 1));
+    expect(row.width, greaterThan(580));
+    expect(row.width, lessThanOrEqualTo(640));
+    // (The large title on the column's edge is JamScaffold's own test.)
   });
 
   testWidgets('you, appearance, about — and nothing else', (tester) async {

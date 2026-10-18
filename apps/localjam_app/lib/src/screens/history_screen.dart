@@ -413,14 +413,6 @@ Future<bool> _confirmForget(BuildContext context, JamHistoryRecord record) =>
       confirmLabel: HistoryStrings.forgetConfirm,
     );
 
-/// The widest the list grows: a reading column plus the rows' own insets.
-///
-/// Measured against the *pane* this page is laid out in — a sliver's cross
-/// axis — never the window: on an iPad the sidebar takes 260 of the window,
-/// and a column sized from the window squeezed Past Jams into a phone-width
-/// strip that drifted away from its own large title.
-const double kJamReadingColumn = JamContentWidth.reading + 2 * JamSpace.page;
-
 class HistoryScreen extends StatefulWidget {
   const HistoryScreen({
     super.key,
@@ -530,6 +522,9 @@ class _HistoryScreenState extends State<HistoryScreen> {
     final records = _records;
     return JamScaffold(
       title: HistoryStrings.title,
+      // The reading column, centred in the pane (not the window), with the
+      // large title on its edge.
+      maxContentWidth: JamContentWidth.reading,
       slivers: [
         switch (records) {
           // Read off disk in a moment; a spinner would only flash.
@@ -562,27 +557,23 @@ class _HistoryScreenState extends State<HistoryScreen> {
               );
             },
           ),
-          _ => SliverConstrainedCrossAxis(
-            // Leading-aligned, so the rows start on the large title's edge.
-            maxExtent: kJamReadingColumn,
-            sliver: SliverList.builder(
-              itemCount: records.length,
-              itemBuilder: (context, index) {
-                final record = records[index];
-                return JamSwipeAction(
-                  key: ValueKey<String>(record.sessionId),
-                  label: HistoryStrings.forget,
-                  semanticLabel: HistoryStrings.forgetHint(record.sessionName),
-                  onAction: () => _forget(record),
-                  onRemoved: () => _drop(record),
-                  child: _RecordRow(
-                    record: record,
-                    separator: index < records.length - 1,
-                    onTap: () => unawaited(_open(record)),
-                  ),
-                );
-              },
-            ),
+          _ => SliverList.builder(
+            itemCount: records.length,
+            itemBuilder: (context, index) {
+              final record = records[index];
+              return JamSwipeAction(
+                key: ValueKey<String>(record.sessionId),
+                label: HistoryStrings.forget,
+                semanticLabel: HistoryStrings.forgetHint(record.sessionName),
+                onAction: () => _forget(record),
+                onRemoved: () => _drop(record),
+                child: _RecordRow(
+                  record: record,
+                  separator: index < records.length - 1,
+                  onTap: () => unawaited(_open(record)),
+                ),
+              );
+            },
           ),
         },
       ],
@@ -756,113 +747,105 @@ class _HistoryDetailScreenState extends State<HistoryDetailScreen> {
 
     final use24 = MediaQuery.alwaysUse24HourFormatOf(context);
     final hostLabel = HistoryStrings.hostLabel(wasHost: record.wasHost);
-    final content = SliverLayoutBuilder(
-      // A centred column, sized from the pane this page sits in.
-      builder: (context, constraints) => SliverPadding(
-        padding: EdgeInsets.symmetric(
-          horizontal: constraints.crossAxisExtent > kJamReadingColumn
-              ? (constraints.crossAxisExtent - kJamReadingColumn) / 2
-              : 0,
-        ),
-        sliver: SliverList.list(
-          children: [
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: JamSpace.page),
-              child: Column(
-                children: [
-                  const SizedBox(height: JamSpace.xxl),
-                  JamArtworkMosaic(
-                    tracks: tracks,
-                    size: JamArtworkSize.detail,
-                    shadow: true,
-                    semanticLabel: HistoryStrings.cover(record.sessionName),
-                  ),
-                  const SizedBox(height: JamSpace.xl),
-                  Semantics(
-                    header: true,
-                    child: Text(
-                      record.sessionName,
-                      textAlign: TextAlign.center,
-                      style: context.jamTitle2,
-                    ),
-                  ),
-                  const SizedBox(height: JamSpace.xs),
-                  Text(
-                    jamHistorySummary(
-                      record,
-                      withCount: false,
-                      use24HourFormat: use24,
-                    ),
-                    textAlign: TextAlign.center,
-                    style: secondary,
-                  ),
-                  if (record.peerNames.isNotEmpty) ...[
-                    const SizedBox(height: JamSpace.xxs),
-                    Text(
-                      HistoryStrings.withPeople(record.peerNames),
-                      textAlign: TextAlign.center,
-                      style: secondary,
-                    ),
-                  ],
-                  const SizedBox(height: JamSpace.xl),
-                  ConstrainedBox(
-                    constraints: const BoxConstraints(maxWidth: 360),
-                    child: JamButton.gray(
-                      label: hostLabel,
-                      icon: CupertinoIcons.play_fill,
-                      expand: true,
-                      // Always the same label; what is missing is said in
-                      // the footnote under it.
-                      onPressed: replayable == 0
-                          ? null
-                          : () => unawaited(_hostAgain()),
-                      semanticLabel: '$hostLabel: ${record.sessionName}',
-                    ),
-                  ),
-                  if (replayable < total) ...[
-                    const SizedBox(height: JamSpace.sm),
-                    Text(
-                      replayable == 0
-                          ? HistoryStrings.noneLeft
-                          : HistoryStrings.someLeft(replayable, total),
-                      textAlign: TextAlign.center,
-                      style: footnote,
-                    ),
-                  ],
-                  const SizedBox(height: JamSpace.xxl),
-                ],
+    final content = SliverList.list(
+      children: [
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: JamSpace.page),
+          child: Column(
+            children: [
+              const SizedBox(height: JamSpace.xxl),
+              JamArtworkMosaic(
+                tracks: tracks,
+                size: JamArtworkSize.detail,
+                shadow: true,
+                semanticLabel: HistoryStrings.cover(record.sessionName),
               ),
-            ),
-            // No rule above the first song (Apple Music has none); the
-            // rows separate themselves.
-            if (tracks.isNotEmpty) ...[
-              for (var i = 0; i < tracks.length; i++)
-                _HistoryTrackRow(
-                  track: tracks[i],
-                  separator: i < tracks.length - 1,
-                ),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(
-                  kJamRowInset,
-                  JamSpace.md,
-                  kJamRowInset,
-                  0,
-                ),
+              const SizedBox(height: JamSpace.xl),
+              Semantics(
+                header: true,
                 child: Text(
-                  HistoryStrings.songsAndLength(total, length),
+                  record.sessionName,
+                  textAlign: TextAlign.center,
+                  style: context.jamTitle2,
+                ),
+              ),
+              const SizedBox(height: JamSpace.xs),
+              Text(
+                jamHistorySummary(
+                  record,
+                  withCount: false,
+                  use24HourFormat: use24,
+                ),
+                textAlign: TextAlign.center,
+                style: secondary,
+              ),
+              if (record.peerNames.isNotEmpty) ...[
+                const SizedBox(height: JamSpace.xxs),
+                Text(
+                  HistoryStrings.withPeople(record.peerNames),
+                  textAlign: TextAlign.center,
+                  style: secondary,
+                ),
+              ],
+              const SizedBox(height: JamSpace.xl),
+              ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 360),
+                child: JamButton.gray(
+                  label: hostLabel,
+                  icon: CupertinoIcons.play_fill,
+                  expand: true,
+                  // Always the same label; what is missing is said in
+                  // the footnote under it.
+                  onPressed: replayable == 0
+                      ? null
+                      : () => unawaited(_hostAgain()),
+                  semanticLabel: '$hostLabel: ${record.sessionName}',
+                ),
+              ),
+              if (replayable < total) ...[
+                const SizedBox(height: JamSpace.sm),
+                Text(
+                  replayable == 0
+                      ? HistoryStrings.noneLeft
+                      : HistoryStrings.someLeft(replayable, total),
+                  textAlign: TextAlign.center,
                   style: footnote,
                 ),
-              ),
+              ],
+              const SizedBox(height: JamSpace.xxl),
             ],
-          ],
+          ),
         ),
-      ),
+        // No rule above the first song (Apple Music has none); the
+        // rows separate themselves.
+        if (tracks.isNotEmpty) ...[
+          for (var i = 0; i < tracks.length; i++)
+            _HistoryTrackRow(
+              track: tracks[i],
+              separator: i < tracks.length - 1,
+            ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(
+              kJamRowInset,
+              JamSpace.md,
+              kJamRowInset,
+              0,
+            ),
+            child: Text(
+              HistoryStrings.songsAndLength(total, length),
+              style: footnote,
+            ),
+          ),
+        ],
+      ],
     );
 
     return JamScaffold(
       title: _titleShown ? record.sessionName : '',
       largeTitle: false,
       controller: _scroll,
+      // A centred reading column, sized from the pane this page sits in.
+      maxContentWidth: JamContentWidth.reading,
       trailing: [menu],
       slivers: [content],
     );
