@@ -1,16 +1,18 @@
 /// Home is the answer to "is there a jam here?", not a landing page.
 library;
 
-import 'package:flutter/material.dart';
+import 'package:flutter/cupertino.dart';
+import 'package:flutter/material.dart' show Icons;
 import 'package:flutter_test/flutter_test.dart';
-import 'package:localjam_app/src/widgets/rename_dialog.dart';
 import 'package:localjam_client/localjam_client.dart';
+import 'package:localjam_app/src/design/theme.dart';
 import 'package:localjam_app/src/screens/home_screen.dart';
 import 'package:localjam_app/src/screens/settings_screen.dart';
 import 'package:localjam_app/src/state/session_controller.dart';
 import 'package:localjam_app/src/widgets/avatar.dart';
 import 'package:localjam_app/src/widgets/buttons.dart';
 import 'package:localjam_app/src/widgets/empty_state.dart';
+import 'package:localjam_app/src/widgets/list.dart';
 import 'package:localjam_app/src/widgets/notice.dart';
 
 import '../harness.dart';
@@ -31,44 +33,56 @@ JamNearbyRoom room(String name) => JamNearbyRoom(
   ),
 );
 
+/// The filled Start a Jam button, if it is on screen.
+Iterable<JamButton> filledButtons(WidgetTester tester) => tester
+    .widgetList<JamButton>(find.byType(JamButton))
+    .where((b) => b.variant == JamButtonVariant.filled);
+
 void main() {
-  testWidgets('home leads with live discovery, not a pitch', (tester) async {
+  testWidgets('home leads with discovery and one way to start', (tester) async {
     final session = testSession();
     await pumpApp(tester, session);
-    await tester.pump();
+    await tester.pumpAndSettle();
 
-    // The screen's job is to answer "is there a jam here?".
-    expect(find.text(HomeStrings.title), findsOneWidget);
-    expect(find.text(HomeStrings.host), findsOneWidget);
-    // And it says the radio is on, without inventing a network name it has
-    // no way to read.
-    expect(find.text(HomeStrings.listening), findsOneWidget);
-    expect(find.textContaining('Wi-Fi name'), findsNothing);
+    // The large title, and the one filled action pinned at the bottom (D3).
+    expect(find.text(HomeStrings.title), findsWidgets);
+    final primaries = filledButtons(tester).toList();
+    expect(primaries.length, 1);
+    expect(primaries.single.label, HomeStrings.host);
+    expect(
+      tester.getCenter(find.text(HomeStrings.host)).dy,
+      greaterThan(tester.getSize(find.byType(HomeScreen)).height / 2),
+    );
 
-    // None of the landing-page copy the overhaul removed. The app is already
-    // installed; it does not need to sell itself.
+    // §1.2 Quiet when correct: no "Listening for rooms", no status dot, no
+    // landing-page copy.
+    expect(find.textContaining('Listening'), findsNothing);
     expect(find.textContaining('No internet'), findsNothing);
-    expect(find.textContaining('No accounts'), findsNothing);
-    expect(find.textContaining('Same Wi-Fi'), findsNothing);
-    expect(find.textContaining('Synchronized playback'), findsNothing);
     expect(find.text('Host a Jam'), findsNothing);
-    expect(find.text('Join a Jam'), findsNothing);
+    // History's old nav-bar clock icon is gone; the sidebar and "See All"
+    // reach it instead.
+    expect(find.byIcon(Icons.history_rounded), findsNothing);
+    expect(find.byIcon(CupertinoIcons.clock), findsNothing);
   });
 
-  testWidgets('home shows your identity and lets you rename', (tester) async {
-    // JamIdentity.displayName caches per process, so every test in this file
-    // sees the identity the first one resolved.
+  testWidgets('the nav bar carries the scanner and your avatar', (
+    tester,
+  ) async {
     final session = testSession();
     await pumpApp(tester, session);
-    await tester.pump();
-
-    expect(find.text('Silky Puffin'), findsOneWidget);
-    expect(find.byType(JamAvatar), findsWidgets);
-
-    await tester.tap(find.text('Silky Puffin'));
     await tester.pumpAndSettle();
-    // JamIdentity.setDisplayName shipped in v1 with no caller anywhere.
-    expect(find.text(RenameStrings.title), findsOneWidget);
+
+    // Scan lives in the nav bar now (D3), not as a second big button.
+    expect(find.bySemanticsLabel(HomeStrings.scan), findsOneWidget);
+    expect(find.byIcon(CupertinoIcons.qrcode_viewfinder), findsOneWidget);
+    // "Join with a link" moved into the scanner.
+    expect(find.text('Join with a link'), findsNothing);
+
+    // Your avatar opens Settings, where your name is changed.
+    expect(find.byType(JamAvatar), findsWidgets);
+    await tester.tap(find.bySemanticsLabel(HomeStrings.settings));
+    await tester.pumpAndSettle();
+    expect(find.byType(SettingsScreen), findsOneWidget);
   });
 
   testWidgets('the empty state names the situation', (tester) async {
@@ -86,45 +100,11 @@ void main() {
       ),
       findsWidgets,
     );
+    // Its action is quiet: Start a Jam is the only filled button.
+    expect(filledButtons(tester).length, 1);
   });
 
-  testWidgets('the two ways in are a secondary and one primary', (
-    tester,
-  ) async {
-    final session = testSession();
-    await pumpApp(tester, session);
-    await tester.pumpAndSettle();
-
-    final primaries = tester
-        .widgetList<JamButton>(find.byType(JamButton))
-        .where((b) => b.variant == JamButtonVariant.filled)
-        .toList();
-    // Exactly one raspberry-filled control in view (§8.5).
-    expect(primaries.length, 1);
-    expect(primaries.single.label, HomeStrings.host);
-    expect(find.text(HomeStrings.scan), findsOneWidget);
-  });
-
-  testWidgets('joining by link is a tertiary under the two main actions', (
-    tester,
-  ) async {
-    final session = testSession();
-    await pumpApp(tester, session);
-    await tester.pumpAndSettle();
-
-    // No overflow menu: three trailing app-bar icons read as a toolbar, and
-    // the third way in is quieter *and* visible in the bottom bar instead.
-    expect(find.byIcon(Icons.more_horiz_rounded), findsNothing);
-    final link = find.text(HomeStrings.joinWithLink);
-    expect(link, findsOneWidget);
-    // Under the two buttons, not beside them.
-    expect(
-      tester.getTopLeft(link).dy,
-      greaterThan(tester.getBottomLeft(find.text(HomeStrings.host)).dy),
-    );
-  });
-
-  testWidgets('a discovered room is a card with a real Join action', (
+  testWidgets('a discovered room is a plain row with a tinted Join', (
     tester,
   ) async {
     final session = testSession();
@@ -133,15 +113,27 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Bar Room'), findsOneWidget);
-    // The byline never implies a listener count or a host name: mDNS carries
-    // neither.
-    expect(find.text(HomeStrings.tapToJoin), findsNWidgets(2));
+    expect(find.text('Kitchen Sunday'), findsOneWidget);
+    expect(find.byType(JamRow), findsNWidgets(2));
+    final joins = tester
+        .widgetList<JamButton>(find.byType(JamButton))
+        .where((b) => b.label == HomeStrings.join)
+        .toList();
+    expect(joins.length, 2);
+    expect(joins.every((b) => b.variant == JamButtonVariant.tinted), isTrue);
+    expect(joins.every((b) => b.size == JamButtonSize.small), isTrue);
+    // mDNS carries only a name and a URI: no invented subtitle, no
+    // listener count, no machine text.
+    expect(find.text('Tap to join'), findsNothing);
     expect(find.textContaining('listening'), findsNothing);
-    expect(find.text(HomeStrings.join), findsNWidgets(2));
-    // A card, not a settings row.
-    expect(find.byIcon(Icons.chevron_right_rounded), findsNothing);
-    // No machine text.
     expect(find.textContaining('localjam://'), findsNothing);
+    expect(find.byType(JamEmptyState), findsNothing);
+  });
+
+  testWidgets('a default-named room shows its host’s initials', (tester) async {
+    expect(jamHostNameFromRoom('Turbo Flamingo’s Jam'), 'Turbo Flamingo');
+    expect(jamHostNameFromRoom("Mia's Jam"), 'Mia');
+    expect(jamHostNameFromRoom('Kitchen Sunday'), 'Kitchen Sunday');
   });
 
   testWidgets('home says you are hosting rather than "nobody is hosting"', (
@@ -154,13 +146,17 @@ void main() {
     await startTestHost(tester, session, 'Bar Room');
     await tester.pumpAndSettle();
 
-    expect(find.text(HomeStrings.hostingTitle('Bar Room')), findsOneWidget);
-    expect(find.text(HomeStrings.hostingBody), findsOneWidget);
+    expect(find.text(HomeStrings.hostingTitle), findsOneWidget);
+    expect(find.text(HomeStrings.hostingBody('Bar Room')), findsOneWidget);
     expect(find.text(HomeStrings.quietTitle), findsNothing);
-    // ...and the way back into it, since the bottom actions are gone.
     expect(find.text(HomeStrings.openRoom), findsOneWidget);
+    // You cannot host two at once, and the mini player owns the bottom: the
+    // Start a Jam button is gone while the jam runs.
+    expect(filledButtons(tester), isEmpty);
 
     await leaveTestSession(tester, session);
+    await tester.pumpAndSettle();
+    expect(filledButtons(tester).length, 1);
   });
 
   testWidgets('a nearby room that has gone says so instead of hanging', (
@@ -190,8 +186,15 @@ void main() {
 
     await tester.tap(find.text(HomeStrings.join));
     await tester.pump();
-    // The row says it is working on it while the probe runs.
-    expect(find.byType(CircularProgressIndicator), findsOneWidget);
+    // The row's Join turns into a system spinner while the probe runs.
+    expect(find.byType(CupertinoActivityIndicator), findsOneWidget);
+    final join = tester.widget<JamButton>(
+      find.ancestor(
+        of: find.byType(CupertinoActivityIndicator),
+        matching: find.byType(JamButton),
+      ),
+    );
+    expect(join.loading, isTrue);
 
     await tester.pump(const Duration(milliseconds: 300));
     await tester.pumpAndSettle();
@@ -209,13 +212,63 @@ void main() {
     await session.stopBrowsing();
   });
 
-  testWidgets('history and settings are one tap away', (tester) async {
+  testWidgets('renders on the dark palette', (tester) async {
     final session = testSession();
-    await pumpApp(tester, session);
+    await pumpApp(tester, session, theme: jamDarkTheme());
+    publishNearby(session, [room('Bar Room')]);
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byIcon(Icons.settings_rounded));
-    await tester.pumpAndSettle();
-    expect(find.byType(SettingsScreen), findsOneWidget);
+    expect(find.text('Bar Room'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  group('recent jams', () {
+    final now = DateTime(2026, 10, 18, 15);
+
+    test('read as calendar days, not "3 d ago"', () {
+      expect(jamRecentWhen(DateTime(2026, 10, 18, 9), now: now), 'Today');
+      expect(jamRecentWhen(DateTime(2026, 10, 17, 23), now: now), 'Yesterday');
+      // 2026-10-14 is a Wednesday.
+      expect(jamRecentWhen(DateTime(2026, 10, 14), now: now), 'Wednesday');
+      expect(jamRecentWhen(DateTime(2026, 9, 2), now: now), '2 Sep');
+      expect(jamRecentWhen(DateTime(2025, 12, 31), now: now), '31 Dec 2025');
+    });
+
+    test('say who hosted, how many songs and when', () {
+      JamHistoryRecord record({required bool host, int songs = 0}) =>
+          JamHistoryRecord(
+            sessionId: 's',
+            sessionName: 'Van Jam',
+            wasHost: host,
+            startedAt: DateTime(2026, 10, 17, 20),
+            updatedAt: DateTime(2026, 10, 17, 22),
+            tracks: [
+              for (var i = 0; i < songs; i++)
+                JamHistoryTrack(
+                  item: MediaItem(
+                    mediaId: 'm$i',
+                    kind: MediaKind.audio,
+                    name: 'song$i.mp3',
+                    mime: 'audio/mpeg',
+                    sizeBytes: 1,
+                    sha256: 'x',
+                  ),
+                ),
+            ],
+          );
+      expect(
+        jamRecentSubtitle(record(host: true, songs: 12), now: now),
+        'You hosted · 12 songs · Yesterday',
+      );
+      expect(
+        jamRecentSubtitle(record(host: false, songs: 1), now: now),
+        'You joined · 1 song · Yesterday',
+      );
+      // No "0 songs": the part is simply not there.
+      expect(
+        jamRecentSubtitle(record(host: true), now: now),
+        'You hosted · Yesterday',
+      );
+    });
   });
 }

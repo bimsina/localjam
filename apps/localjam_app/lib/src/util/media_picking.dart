@@ -9,9 +9,10 @@ library;
 import 'dart:async';
 
 import 'package:file_selector/file_selector.dart';
-import 'package:flutter/material.dart';
+import 'package:flutter/cupertino.dart';
 import 'package:localjam_client/localjam_client.dart';
 
+import '../design/tokens.dart';
 import '../state/session_controller.dart';
 import '../widgets/library_sheet.dart';
 import 'permissions.dart';
@@ -20,10 +21,10 @@ import 'permissions.dart';
 abstract final class JamPickerStrings {
   static const String audioTypeLabel = 'Audio';
 
-  static const String library = 'Library';
-  static const String libraryDetail = 'Music already on this device';
+  static const String addFrom = 'Add Songs From';
+  static const String library = 'Music Library';
   static const String files = 'Files';
-  static const String filesDetail = 'Downloads, SD card, cloud storage';
+  static const String cancel = 'Cancel';
 
   static const String pickerFailed = 'Could not open the file picker.';
   static const String libraryReadFailed = 'Could not read your music library.';
@@ -78,27 +79,33 @@ enum JamAddSource { library, files }
 Future<JamAddSource?> chooseAddSource(BuildContext context) async {
   if (!jamLibraryAvailable) return JamAddSource.files;
   _dismissKeyboard();
-  return showModalBottomSheet<JamAddSource>(
+  // An iOS action sheet on every platform (D2): the choice between two
+  // sources is exactly what one is for.
+  return showCupertinoModalPopup<JamAddSource>(
     context: context,
-    builder: (context) => SafeArea(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          ListTile(
-            leading: const Icon(Icons.library_music_rounded),
-            title: const Text(JamPickerStrings.library),
-            subtitle: const Text(JamPickerStrings.libraryDetail),
-            onTap: () => Navigator.of(context).pop(JamAddSource.library),
-          ),
-          ListTile(
-            leading: const Icon(Icons.folder_open_rounded),
-            title: const Text(JamPickerStrings.files),
-            subtitle: const Text(JamPickerStrings.filesDetail),
-            onTap: () => Navigator.of(context).pop(JamAddSource.files),
-          ),
+    builder: (context) {
+      final colors = context.jamColors;
+      Widget action(String label, JamAddSource source) =>
+          CupertinoActionSheetAction(
+            onPressed: () => Navigator.of(context).pop(source),
+            child: Text(label, style: TextStyle(color: colors.tint)),
+          );
+      return CupertinoActionSheet(
+        title: const Text(JamPickerStrings.addFrom),
+        actions: [
+          action(JamPickerStrings.library, JamAddSource.library),
+          action(JamPickerStrings.files, JamAddSource.files),
         ],
-      ),
-    ),
+        cancelButton: CupertinoActionSheetAction(
+          isDefaultAction: true,
+          onPressed: () => Navigator.of(context).pop(),
+          child: Text(
+            JamPickerStrings.cancel,
+            style: TextStyle(color: colors.tint),
+          ),
+        ),
+      );
+    },
   );
 }
 

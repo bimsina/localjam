@@ -1,15 +1,15 @@
-/// The device music library, as a picker sheet.
+/// The device music library, as a picker sheet (DESIGN_SPEC v3 §6.2).
 ///
-/// Lifted out of the host-setup screen so the in-room "Add" button can offer
-/// the same thing: on Android most music is in MediaStore, not in a folder
-/// DocumentsUI will show you.
+/// Used by Start a Jam and by the in-room Add Songs: on Android most music is
+/// in MediaStore, not in a folder DocumentsUI will show you.
 ///
-/// Restyled to §4: the same [JamTrackRow] the queue uses, so picking a track
-/// and seeing it in the room look like one continuous thing rather than a
-/// system list handing off to an app.
+/// Apple Music's "Add Songs" picker: a large sheet with Cancel and Done, a
+/// search field, plain song rows (cover, title, "Artist · 3:42") and a
+/// checkmark circle on each chosen one. The title counts the selection.
 library;
 
-import 'package:flutter/material.dart';
+import 'package:flutter/cupertino.dart';
+import 'package:flutter/material.dart' show showModalBottomSheet;
 import 'package:localjam_client/localjam_client.dart';
 
 import '../design/tokens.dart';
@@ -21,18 +21,22 @@ import 'track_row.dart';
 
 /// Everything this sheet says out loud.
 abstract final class LibrarySheetStrings {
-  static const String title = 'Your music';
-  static const String selectAll = 'Select all';
-  static const String clear = 'Clear';
-  static const String unknownArtist = 'Unknown artist';
-  static const String select = 'Select';
+  static const String title = 'Music Library';
+  static const String cancel = 'Cancel';
+  static const String done = 'Done';
+  static const String search = 'Search';
+  static const String selectAll = 'Select All';
+  static const String deselectAll = 'Deselect All';
+  static const String unknownArtist = 'Unknown Artist';
+  static const String selected = 'Selected';
+  static const String noResults = 'No Results';
 
-  /// "Add 3".
-  static String addCount(int n) => n == 0 ? 'Add' : 'Add $n';
+  /// "3 Songs Selected" — the title once something is chosen.
+  static String selectedCount(int n) =>
+      n == 1 ? '1 Song Selected' : '$n Songs Selected';
 
-  /// "12 tracks on this device".
-  static String available(int n) =>
-      '$n ${n == 1 ? 'track' : 'tracks'} on this device';
+  /// "214 Songs".
+  static String available(int n) => n == 1 ? '1 Song' : '$n Songs';
 }
 
 /// Opens the library picker. Pops the chosen tracks, or null when cancelled.
@@ -40,18 +44,43 @@ Future<List<JamLibraryTrack>?> showJamLibrarySheet(
   BuildContext context,
   List<JamLibraryTrack> tracks,
 ) {
-  return showJamSheet<List<JamLibraryTrack>>(
-    context,
-    title: LibrarySheetStrings.title,
-    builder: (context) => JamLibraryPicker(tracks: tracks),
+  final colors = context.jamColors;
+  // The shared sheet pieces, assembled here rather than through
+  // `showJamSheet`: the header's title and Done follow the selection, so the
+  // picker owns its own header.
+  return showModalBottomSheet<List<JamLibraryTrack>>(
+    context: context,
+    isScrollControlled: true,
+    useSafeArea: true,
+    barrierColor: colors.scrim,
+    backgroundColor: const Color(0x00000000),
+    elevation: 0,
+    showDragHandle: false,
+    constraints: const BoxConstraints(maxWidth: 640),
+    builder: (context) => buildJamDraggableSheet(
+      initialChildSize: kJamSheetLargeSize,
+      maxChildSize: kJamSheetLargeSize,
+      minChildSize: kJamSheetMinSize,
+      builder: (context, controller) => JamSheetSurface(
+        child: JamLibraryPicker(tracks: tracks, scrollController: controller),
+      ),
+    ),
   );
 }
 
-/// The picker's body: the list, the selection, and the one primary action.
+/// The picker's body: the header, the search, the list and the selection.
 class JamLibraryPicker extends StatefulWidget {
-  const JamLibraryPicker({super.key, required this.tracks});
+  const JamLibraryPicker({
+    super.key,
+    required this.tracks,
+    this.scrollController,
+  });
 
   final List<JamLibraryTrack> tracks;
+
+  /// The sheet's scroll controller, so a drag at the top of the list moves
+  /// the sheet.
+  final ScrollController? scrollController;
 
   @override
   State<JamLibraryPicker> createState() => _JamLibraryPickerState();
@@ -59,15 +88,40 @@ class JamLibraryPicker extends StatefulWidget {
 
 class _JamLibraryPickerState extends State<JamLibraryPicker> {
   final Set<int> _selected = {};
+  final TextEditingController _query = TextEditingController();
 
-  bool get _allSelected =>
-      widget.tracks.isNotEmpty && _selected.length == widget.tracks.length;
+  @override
+  void initState() {
+    super.initState();
+    _query.addListener(_onQuery);
+  }
 
-  void _toggleAll() => setState(() {
-    if (_allSelected) {
-      _selected.clear();
+  @override
+  void dispose() {
+    _query
+      ..removeListener(_onQuery)
+      ..dispose();
+    super.dispose();
+  }
+
+  void _onQuery() => setState(() {});
+
+  List<JamLibraryTrack> get _visible {
+    final q = _query.text.trim().toLowerCase();
+    if (q.isEmpty) return widget.tracks;
+    bool has(String? s) => s != null && s.toLowerCase().contains(q);
+    return [
+      for (final t in widget.tracks)
+        if (has(t.title) || has(t.artist) || has(t.album)) t,
+    ];
+  }
+
+  void _toggleAll(List<JamLibraryTrack> visible) => setState(() {
+    final all = visible.every((t) => _selected.contains(t.id));
+    if (all) {
+      _selected.removeAll(visible.map((t) => t.id));
     } else {
-      _selected.addAll(widget.tracks.map((t) => t.id));
+      _selected.addAll(visible.map((t) => t.id));
     }
   });
 
@@ -83,96 +137,131 @@ class _JamLibraryPickerState extends State<JamLibraryPicker> {
   @override
   Widget build(BuildContext context) {
     final colors = context.jamColors;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(
-            JamSpace.page,
-            JamSpace.sm,
-            JamSpace.md,
-            0,
+    final visible = _visible;
+    final allVisibleSelected =
+        visible.isNotEmpty && visible.every((t) => _selected.contains(t.id));
+    final count = _selected.length;
+
+    return JamSheetScaffold(
+      scrollController: widget.scrollController,
+      header: JamSheetHeader(
+        title: count == 0
+            ? LibrarySheetStrings.title
+            : LibrarySheetStrings.selectedCount(count),
+        leading: JamTextButton(
+          label: LibrarySheetStrings.cancel,
+          onPressed: () => Navigator.of(context).pop(),
+        ),
+        trailing: JamTextButton(
+          label: LibrarySheetStrings.done,
+          bold: true,
+          onPressed: count == 0 ? null : _submit,
+        ),
+      ),
+      child: CustomScrollView(
+        controller: widget.scrollController,
+        keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+        slivers: [
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(
+                JamSpace.page,
+                JamSpace.xs,
+                JamSpace.page,
+                0,
+              ),
+              child: CupertinoSearchTextField(
+                controller: _query,
+                placeholder: LibrarySheetStrings.search,
+                style: context.jamBody,
+                placeholderStyle: context.jamBody.copyWith(
+                  color: colors.secondaryLabel,
+                ),
+                backgroundColor: colors.fillSecondary,
+                itemColor: colors.secondaryLabel,
+              ),
+            ),
           ),
-          child: Row(
-            children: [
-              Expanded(
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsetsDirectional.fromSTEB(
+                JamSpace.page,
+                JamSpace.xs,
+                JamSpace.xs,
+                0,
+              ),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      LibrarySheetStrings.available(visible.length),
+                      style: context.jamFootnote.copyWith(
+                        color: colors.secondaryLabel,
+                      ),
+                    ),
+                  ),
+                  JamButton.plain(
+                    label: allVisibleSelected
+                        ? LibrarySheetStrings.deselectAll
+                        : LibrarySheetStrings.selectAll,
+                    size: JamButtonSize.small,
+                    onPressed: visible.isEmpty
+                        ? null
+                        : () => _toggleAll(visible),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          if (visible.isEmpty)
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.only(top: JamSpace.huge),
                 child: Text(
-                  LibrarySheetStrings.available(widget.tracks.length),
-                  style: context.jamFootnote.copyWith(
-                    color: context.jamColors.secondaryLabel,
+                  LibrarySheetStrings.noResults,
+                  textAlign: TextAlign.center,
+                  style: context.jamTitle3.copyWith(
+                    color: colors.secondaryLabel,
                   ),
                 ),
               ),
-              JamButton.plain(
-                label: _allSelected
-                    ? LibrarySheetStrings.clear
-                    : LibrarySheetStrings.selectAll,
-                onPressed: widget.tracks.isEmpty ? null : _toggleAll,
-              ),
-            ],
-          ),
-        ),
-        Expanded(
-          child: ListView.builder(
-            controller: JamSheetScrollController.maybeOf(context),
-            padding: const EdgeInsets.only(bottom: JamSpace.md),
-            itemCount: widget.tracks.length,
-            itemBuilder: (context, index) {
-              final track = widget.tracks[index];
-              final selected = _selected.contains(track.id);
-              return JamTrackRow(
-                key: ValueKey(track.id),
-                title: stripAudioExtension(track.title),
-                byline: track.artist ?? LibrarySheetStrings.unknownArtist,
-                addedByYou: true,
-                onTap: () => _toggle(track.id),
-                trailing: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    // MediaStore hands us a duration; the queue shows one, so
-                    // a list without them reads as a different kind of row.
-                    if (track.durationMs case final ms?)
-                      Text(
-                        formatPositionUs(ms * 1000),
-                        style: jamNumericStyle(colors.tertiaryLabel),
-                      ),
-                    const SizedBox(width: JamSpace.md),
-                    Semantics(
-                      checked: selected,
-                      label: LibrarySheetStrings.select,
-                      child: Icon(
-                        selected
-                            ? Icons.check_circle_rounded
-                            : Icons.circle_outlined,
-                        size: 22,
-                        color: selected ? colors.tint : colors.tertiaryLabel,
-                      ),
+            ),
+          SliverPadding(
+            padding: EdgeInsets.only(
+              bottom: JamSpace.lg + MediaQuery.paddingOf(context).bottom,
+            ),
+            sliver: SliverList.builder(
+              itemCount: visible.length,
+              itemBuilder: (context, index) {
+                final track = visible[index];
+                final selected = _selected.contains(track.id);
+                final ms = track.durationMs;
+                return Semantics(
+                  selected: selected,
+                  child: JamTrackRow(
+                    key: ValueKey(track.id),
+                    title: stripAudioExtension(track.title),
+                    byline: track.artist ?? LibrarySheetStrings.unknownArtist,
+                    duration: ms == null ? null : Duration(milliseconds: ms),
+                    separator: index < visible.length - 1,
+                    onTap: () => _toggle(track.id),
+                    trailing: Icon(
+                      selected
+                          ? CupertinoIcons.checkmark_circle_fill
+                          : CupertinoIcons.circle,
+                      size: 24,
+                      semanticLabel: selected
+                          ? LibrarySheetStrings.selected
+                          : null,
+                      color: selected ? colors.tint : colors.tertiaryLabel,
                     ),
-                  ],
-                ),
-              );
-            },
-          ),
-        ),
-        Container(
-          decoration: BoxDecoration(
-            border: Border(
-              top: BorderSide(color: colors.separator, width: 0.5),
+                  ),
+                );
+              },
             ),
           ),
-          child: SafeArea(
-            top: false,
-            child: Padding(
-              padding: const EdgeInsets.all(JamSpace.md),
-              child: JamButton.filled(
-                label: LibrarySheetStrings.addCount(_selected.length),
-                expand: true,
-                onPressed: _selected.isEmpty ? null : _submit,
-              ),
-            ),
-          ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 }

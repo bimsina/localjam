@@ -4,6 +4,10 @@ library;
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:localjam_app/src/design/breakpoints.dart';
+import 'package:localjam_app/src/design/theme.dart';
+import 'package:localjam_app/src/design/tokens.dart';
+import 'package:localjam_app/src/router.dart';
+import 'package:localjam_app/src/screens/home_screen.dart';
 import 'package:localjam_app/src/screens/room_screen.dart';
 import 'package:localjam_app/src/widgets/app_sidebar.dart';
 import 'package:localjam_app/src/widgets/drag_to_dismiss.dart';
@@ -50,48 +54,72 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.byType(AppSidebar), findsOneWidget);
-    expect(find.text('Past jams'), findsOneWidget);
-    expect(find.text('Settings'), findsOneWidget);
-    // The bottom action bar belongs to phones; the actions move beside the
-    // title instead of being stranded across a 1280px window.
-    expect(find.text('Start a jam'), findsOneWidget);
+    expect(find.text(AppSidebarStrings.history), findsOneWidget);
+    expect(find.text(AppSidebarStrings.settings), findsOneWidget);
+    // Start a Jam is still the page's one filled action.
+    expect(find.text('Start a Jam'), findsOneWidget);
+    // Identity lives in the sidebar, so the nav bar carries no avatar.
+    expect(find.bySemanticsLabel('Settings'), findsNothing);
   });
 
-  testWidgets('the sidebar carries the brand above identity', (tester) async {
+  testWidgets('the sidebar is plain: identity, then rows, no brand tile', (
+    tester,
+  ) async {
     final session = testSession();
     await resize(tester, _desktop);
     await pumpApp(tester, session);
     await tester.pumpAndSettle();
 
-    // §5 "Wide layouts": the mark and the wordmark, 20 above the identity
-    // row — a 1280px window has room to say whose app this is.
-    expect(find.text(AppSidebarStrings.wordmark), findsOneWidget);
-    final wordmark = tester.getCenter(find.text(AppSidebarStrings.wordmark));
+    // Like Music on the Mac: no wordmark, no gradient logo, no accent bar.
+    expect(find.text('LocalJam'), findsNothing);
     final identity = tester.getCenter(find.text('Silky Puffin'));
-    expect(wordmark.dy, lessThan(identity.dy));
+    final nearby = tester.getCenter(
+      find.descendant(
+        of: find.byType(AppSidebar),
+        matching: find.text(AppSidebarStrings.nearby),
+      ),
+    );
+    expect(identity.dy, lessThan(nearby.dy));
+    final row = tester.getSize(
+      find
+          .ancestor(
+            of: find.text(AppSidebarStrings.history),
+            matching: find.byType(Container),
+          )
+          .first,
+    );
+    expect(row.height, kJamSidebarRowHeight);
   });
 
-  testWidgets('the selected nav item takes an accent bar', (tester) async {
+  testWidgets('the selected sidebar row takes the tinted highlight', (
+    tester,
+  ) async {
     final session = testSession();
     await resize(tester, _desktop);
     await pumpApp(tester, session);
     await tester.pumpAndSettle();
 
-    // Exactly one 3×20 bar, on the destination you are standing in.
-    Finder bars() => find.descendant(
+    final tint = jamLightTheme().extension<JamColors>()!.tintFill;
+    Finder highlighted() => find.descendant(
       of: find.byType(AppSidebar),
       matching: find.byWidgetPredicate(
         (w) =>
             w is Container &&
-            w.constraints?.maxWidth == 3 &&
-            w.constraints?.maxHeight == 20,
+            w.decoration is BoxDecoration &&
+            (w.decoration! as BoxDecoration).color == tint,
       ),
     );
-    expect(bars(), findsOneWidget);
+    Finder within(String label) =>
+        find.descendant(of: highlighted(), matching: find.text(label));
+
+    // Exactly one, on the destination you are standing in.
+    expect(highlighted(), findsOneWidget);
+    expect(within(AppSidebarStrings.nearby), findsOneWidget);
 
     await tester.tap(find.text(AppSidebarStrings.settings));
     await tester.pumpAndSettle();
-    expect(bars(), findsOneWidget);
+    expect(highlighted(), findsOneWidget);
+    expect(within(AppSidebarStrings.settings), findsOneWidget);
   });
 
   testWidgets("the room's panel uses flat tabs, not a segmented button", (
@@ -118,22 +146,45 @@ void main() {
     await leaveTestSession(tester, session);
   });
 
-  testWidgets('a medium window floats the room bar as a pill', (tester) async {
+  testWidgets('a medium window floats the mini player, centred', (
+    tester,
+  ) async {
     final session = testSession();
     await resize(tester, _tablet);
     await pumpApp(tester, session);
     await startTestHost(tester, session, 'Tablet Jam');
     await tester.pumpAndSettle();
 
-    // No sidebar at this width — phone chrome, but the bar stops being
-    // welded to the window's bottom edge (§5 "Medium").
+    // No sidebar at this width — phone chrome, with the mini player held to
+    // a phone-ish width rather than stretched across the window.
     expect(find.byType(AppSidebar), findsNothing);
-    final bar = tester.widget<RoomBar>(find.byType(RoomBar));
-    expect(bar.floating, isTrue);
-    // 720 wide at most, and clear of the edges.
-    final box = tester.getRect(find.byType(JamRoomBar));
+    final box = tester.getRect(find.byType(RoomBar));
     expect(box.width, lessThanOrEqualTo(720));
-    expect(box.bottom, lessThan(_tablet.height));
+    expect(box.center.dx, closeTo(_tablet.width / 2, 1));
+    expect(box.bottom, lessThanOrEqualTo(_tablet.height));
+
+    await leaveTestSession(tester, session);
+  });
+
+  testWidgets('the mini player floats over the page, which scrolls under it', (
+    tester,
+  ) async {
+    final session = testSession();
+    await resize(tester, _phone);
+    await pumpApp(tester, session);
+    await startTestHost(tester, session, 'Phone Jam');
+    await tester.pumpAndSettle();
+
+    // Stacked over the screen, not in a column below it: the page still
+    // reaches the window's bottom edge…
+    expect(tester.getRect(find.byType(HomeScreen)).bottom, _phone.height);
+    // …and sees the capsule as bottom padding, so its last row clears it.
+    final padding = MediaQuery.paddingOf(
+      tester.element(find.byType(HomeScreen)),
+    );
+    expect(padding.bottom, greaterThanOrEqualTo(kJamMiniPlayerReach));
+    // Start a Jam gives way to the mini player.
+    expect(find.text('Start a Jam'), findsNothing);
 
     await leaveTestSession(tester, session);
   });
@@ -145,7 +196,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.byType(AppSidebar), findsNothing);
-    expect(find.text('Nearby'), findsOneWidget);
+    expect(find.text('Nearby'), findsWidgets);
   });
 
   testWidgets('the room docks its panel on desktop and not on a phone', (
