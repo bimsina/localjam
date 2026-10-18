@@ -10,8 +10,11 @@
 /// call site (`context.jamSubheadline.copyWith(color: colors.secondaryLabel)`).
 library;
 
+import 'dart:math' as math;
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 
 import 'tokens.dart';
 
@@ -273,4 +276,199 @@ extension JamTypography on BuildContext {
   /// Footnote in tabular figures, `secondaryLabel` — durations, drift, counts.
   TextStyle get jamNumeric =>
       jamTabular(jamType.footnote).copyWith(color: jamColors.secondaryLabel);
+}
+
+/// Text that wraps into balanced lines — CSS's `text-wrap: balance` — so a
+/// two-line message never ends on one orphaned word ("…for everyone in
+/// the / jam.").
+///
+/// Lays the text out at the full width, then narrows its box to the
+/// smallest width that keeps the same number of lines. A single line is
+/// left alone. For alert messages, empty-state sentences and other short
+/// copy; running text should not use it.
+class JamBalancedText extends StatelessWidget {
+  const JamBalancedText(
+    this.data, {
+    super.key,
+    this.style,
+    this.textAlign = TextAlign.center,
+    this.maxLines,
+  });
+
+  final String data;
+  final TextStyle? style;
+  final TextAlign textAlign;
+  final int? maxLines;
+
+  @override
+  Widget build(BuildContext context) => _JamBalanced(
+    text: TextSpan(
+      text: data,
+      style: DefaultTextStyle.of(context).style.merge(style),
+    ),
+    textAlign: textAlign,
+    textDirection: Directionality.of(context),
+    textScaler: MediaQuery.textScalerOf(context),
+    maxLines: maxLines,
+    child: Text(data, style: style, textAlign: textAlign, maxLines: maxLines),
+  );
+}
+
+class _JamBalanced extends SingleChildRenderObjectWidget {
+  const _JamBalanced({
+    required this.text,
+    required this.textAlign,
+    required this.textDirection,
+    required this.textScaler,
+    required this.maxLines,
+    required super.child,
+  });
+
+  final TextSpan text;
+  final TextAlign textAlign;
+  final TextDirection textDirection;
+  final TextScaler textScaler;
+  final int? maxLines;
+
+  @override
+  _RenderJamBalanced createRenderObject(BuildContext context) =>
+      _RenderJamBalanced(
+        text: text,
+        textAlign: textAlign,
+        textDirection: textDirection,
+        textScaler: textScaler,
+        maxLines: maxLines,
+      );
+
+  @override
+  void updateRenderObject(
+    BuildContext context,
+    _RenderJamBalanced renderObject,
+  ) {
+    renderObject
+      ..text = text
+      ..textAlign = textAlign
+      ..textDirection = textDirection
+      ..textScaler = textScaler
+      ..maxLines = maxLines;
+  }
+}
+
+/// Lays its text child out at the narrowest width that keeps the line count
+/// it would have at full width, then places it by the alignment. Intrinsic
+/// sizes are the child's own, so it works inside `SliverFillRemaining`,
+/// `IntrinsicWidth` and friends.
+class _RenderJamBalanced extends RenderShiftedBox {
+  _RenderJamBalanced({
+    required TextSpan text,
+    required TextAlign textAlign,
+    required TextDirection textDirection,
+    required TextScaler textScaler,
+    required int? maxLines,
+  }) : _painter = TextPainter(
+         text: text,
+         textAlign: textAlign,
+         textDirection: textDirection,
+         textScaler: textScaler,
+         maxLines: maxLines,
+       ),
+       super(null);
+
+  final TextPainter _painter;
+
+  set text(TextSpan value) {
+    if (_painter.text == value) return;
+    _painter.text = value;
+    markNeedsLayout();
+  }
+
+  set textAlign(TextAlign value) {
+    if (_painter.textAlign == value) return;
+    _painter.textAlign = value;
+    markNeedsLayout();
+  }
+
+  set textDirection(TextDirection value) {
+    if (_painter.textDirection == value) return;
+    _painter.textDirection = value;
+    markNeedsLayout();
+  }
+
+  set textScaler(TextScaler value) {
+    if (_painter.textScaler == value) return;
+    _painter.textScaler = value;
+    markNeedsLayout();
+  }
+
+  set maxLines(int? value) {
+    if (_painter.maxLines == value) return;
+    _painter.maxLines = value;
+    markNeedsLayout();
+  }
+
+  @override
+  void dispose() {
+    _painter.dispose();
+    super.dispose();
+  }
+
+  int _linesAt(double width) {
+    _painter.layout(maxWidth: width);
+    return _painter.computeLineMetrics().length;
+  }
+
+  /// The balanced width for a box at most [max] wide.
+  double _balancedWidth(double max) {
+    if (!max.isFinite || max <= 0) return max;
+    final lines = _linesAt(max);
+    if (lines <= 1 || _painter.didExceedMaxLines) return max;
+    // Never narrower than an even split needs.
+    var lo = max / lines;
+    var hi = max;
+    for (var i = 0; i < 10 && hi - lo > 1; i++) {
+      final mid = (lo + hi) / 2;
+      if (_linesAt(mid) <= lines) {
+        hi = mid;
+      } else {
+        lo = mid;
+      }
+    }
+    return math.min(max, hi.ceilToDouble() + 1);
+  }
+
+  BoxConstraints _childConstraints(BoxConstraints constraints) =>
+      BoxConstraints(
+        maxWidth: _balancedWidth(constraints.maxWidth),
+        maxHeight: constraints.maxHeight,
+      );
+
+  @override
+  Size computeDryLayout(covariant BoxConstraints constraints) {
+    final child = this.child;
+    if (child == null) return constraints.smallest;
+    return constraints.constrain(
+      child.getDryLayout(_childConstraints(constraints)),
+    );
+  }
+
+  @override
+  void performLayout() {
+    final child = this.child;
+    if (child == null) {
+      size = constraints.smallest;
+      return;
+    }
+    child.layout(_childConstraints(constraints), parentUsesSize: true);
+    size = constraints.constrain(child.size);
+    final free = size.width - child.size.width;
+    final ltr = _painter.textDirection == TextDirection.ltr;
+    final factor = switch (_painter.textAlign) {
+      TextAlign.center => 0.5,
+      TextAlign.right => 1.0,
+      TextAlign.left => 0.0,
+      TextAlign.end => ltr ? 1.0 : 0.0,
+      _ => ltr ? 0.0 : 1.0,
+    };
+    (child.parentData! as BoxParentData).offset = Offset(free * factor, 0);
+  }
 }

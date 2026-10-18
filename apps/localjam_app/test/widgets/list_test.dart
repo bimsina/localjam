@@ -54,7 +54,7 @@ void main() {
         _host(const JamRow(title: 'Dark', checked: true)),
       );
       expect(
-        tester.widget<Icon>(find.byIcon(CupertinoIcons.checkmark)).color,
+        tester.widget<Icon>(find.byIcon(CupertinoIcons.checkmark_alt)).color,
         JamColors.light.tint,
       );
     });
@@ -230,7 +230,20 @@ void main() {
           matching: find.byType(ClipRRect),
         ),
       );
-      expect(clip.borderRadius, BorderRadius.circular(JamRadius.section));
+      // Rounded by its height: 26, held under half a lone row.
+      final block = tester.getSize(
+        find.descendant(
+          of: find.byType(JamSection),
+          matching: find.byType(ClipRRect),
+        ),
+      );
+      expect(
+        clip.clipper!.getClip(block),
+        RRect.fromRectAndRadius(
+          Offset.zero & block,
+          Radius.circular(JamRadius.sectionFor(block.height)),
+        ),
+      );
       expect(
         tester
             .widgetList<ColoredBox>(

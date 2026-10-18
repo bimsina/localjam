@@ -83,6 +83,7 @@ class JamRow extends StatelessWidget implements JamSelfSeparatingRow {
     this.iconColor,
     this.value,
     this.chevron = false,
+    this.external = false,
     this.checked = false,
     this.trailing,
     this.onTap,
@@ -121,6 +122,7 @@ class JamRow extends StatelessWidget implements JamSelfSeparatingRow {
        iconColor = null,
        value = null,
        chevron = false,
+       external = false,
        checked = false,
        onTap = null,
        onLongPress = null,
@@ -155,6 +157,10 @@ class JamRow extends StatelessWidget implements JamSelfSeparatingRow {
 
   /// A trailing chevron (navigates).
   final bool chevron;
+
+  /// A trailing ↗ instead of a chevron: the row leaves the app (a web
+  /// page, the share sheet). Never both.
+  final bool external;
 
   /// A trailing tint checkmark (selected choice).
   final bool checked;
@@ -296,7 +302,21 @@ class _JamRowBody extends StatelessWidget {
       if (row.checked)
         Padding(
           padding: const EdgeInsetsDirectional.only(start: JamSpace.sm),
-          child: Icon(CupertinoIcons.checkmark, size: 20, color: colors.tint),
+          // The heavier glyph: SF's checkmark at body weight, not a hairline.
+          child: Icon(
+            CupertinoIcons.checkmark_alt,
+            size: 22,
+            color: colors.tint,
+          ),
+        ),
+      if (row.external && !row.chevron)
+        Padding(
+          padding: const EdgeInsetsDirectional.only(start: JamSpace.sm),
+          child: Icon(
+            CupertinoIcons.arrow_up_right,
+            size: 15,
+            color: colors.tertiaryLabel,
+          ),
         ),
       if (row.chevron)
         Padding(

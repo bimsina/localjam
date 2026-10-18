@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:localjam_app/src/design/theme.dart';
@@ -47,8 +49,25 @@ void main() {
     expect(l.material.a, closeTo(0.72, 0.01));
     expect(JamShadow.artwork.single.blurRadius, 30);
     expect(JamShadow.artwork.single.offset, const Offset(0, 12));
-    expect(JamRadius.alert, 14);
-    expect(JamRadius.menu, 14);
+    // One iOS era (spec §10.3): iOS 26's rounder alerts, menus and sheets.
+    expect(JamRadius.alert, 34);
+    expect(JamRadius.menu, 22);
+    expect(JamRadius.sheetFloating, 38);
+    expect(JamRadius.section, 26);
+    // A lone 44 row is not a pill; a taller block keeps the full 26.
+    expect(JamRadius.sectionFor(44), lessThan(22));
+    expect(JamRadius.sectionFor(120), JamRadius.section);
+    // Filled tint holds white at AA in both themes.
+    double contrast(Color a, Color b) {
+      final la = a.computeLuminance(), lb = b.computeLuminance();
+      return (math.max(la, lb) + 0.05) / (math.min(la, lb) + 0.05);
+    }
+
+    expect(contrast(l.tintFilled, l.onTint), greaterThanOrEqualTo(4.5));
+    expect(contrast(d.tintFilled, d.onTint), greaterThanOrEqualTo(4.5));
+    // A 402 pt Pro keeps UIKit's 16 margin; Plus / Pro Max widths get 20.
+    expect(JamSpace.pageFor(402), 16);
+    expect(JamSpace.pageFor(440), 20);
     expect(JamCurve.standard, const Cubic(0.25, 0.1, 0.25, 1));
     expect(JamCurve.spring.transform(0), 0);
     expect(JamCurve.spring.transform(1), 1);

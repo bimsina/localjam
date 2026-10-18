@@ -98,6 +98,38 @@ void main() {
     expect(find.text('Forget'), findsNothing);
   });
 
+  testWidgets('an open row closes on a touch elsewhere, and says so', (
+    tester,
+  ) async {
+    final changes = <bool>[];
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: jamLightTheme(),
+        home: Scaffold(
+          body: Column(
+            children: [
+              JamSwipeAction(
+                label: 'Remove',
+                onAction: () async => false,
+                onOpenChanged: changes.add,
+                child: const SizedBox(height: 60, child: Text('Low Tide')),
+              ),
+              const SizedBox(height: 200, child: Text('Elsewhere')),
+            ],
+          ),
+        ),
+      ),
+    );
+    await tester.drag(find.text('Low Tide'), const Offset(-120, 0));
+    await tester.pumpAndSettle();
+    expect(find.text('Remove'), findsOneWidget);
+    expect(changes, [true]);
+    await tester.tap(find.text('Elsewhere'));
+    await tester.pumpAndSettle();
+    expect(find.text('Remove'), findsNothing);
+    expect(changes, [true, false]);
+  });
+
   testWidgets('a screen reader gets the action by name', (tester) async {
     final handle = tester.ensureSemantics();
     var asked = 0;

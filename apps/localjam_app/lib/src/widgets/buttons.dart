@@ -12,6 +12,8 @@
 /// a spinner replaces the label and the button keeps its width.
 library;
 
+import 'dart:async';
+
 import 'package:flutter/cupertino.dart';
 
 import '../design/tokens.dart';
@@ -35,6 +37,13 @@ enum JamButtonVariant {
   /// No ground, tint label.
   plain,
 }
+
+/// The horizontal padding inside a plain, non-expanded [JamButton] of
+/// [size]: the distance from its hit edge to its text. A row or header that
+/// wants a plain button's *text* on a margin insets the button by this much
+/// less.
+double jamPlainButtonPadding(JamButtonSize size) =>
+    size == JamButtonSize.large ? JamSpace.sm : JamSpace.xs;
 
 /// The two sizes.
 enum JamButtonSize {
@@ -200,7 +209,10 @@ class JamButton extends StatelessWidget {
     final colors = context.jamColors;
     final accent = destructive ? colors.danger : colors.tint;
     final (Color? ground, Color fg) = switch (variant) {
-      JamButtonVariant.filled => (accent, colors.onTint),
+      JamButtonVariant.filled => (
+        destructive ? colors.danger : colors.tintFilled,
+        colors.onTint,
+      ),
       JamButtonVariant.tinted => (
         destructive ? colors.danger.withValues(alpha: 0.15) : colors.tintFill,
         color ?? accent,
@@ -248,7 +260,7 @@ class JamButton extends StatelessWidget {
 
     final padding = EdgeInsets.symmetric(
       horizontal: variant == JamButtonVariant.plain && !expand
-          ? (large ? JamSpace.sm : JamSpace.xs)
+          ? jamPlainButtonPadding(size)
           : (large ? JamSpace.xl : JamSpace.md),
     );
 
@@ -401,4 +413,123 @@ class JamIconButton extends StatelessWidget {
       ),
     );
   }
+}
+
+/// Strings the in-place confirmations say.
+abstract final class JamConfirmationStrings {
+  static const String copied = 'Copied';
+}
+
+/// How long an in-place confirmation shows before the control goes back.
+const Duration kJamInPlaceConfirmation = Duration(milliseconds: 1500);
+
+/// Confirms an action *in place* (spec §10.5): the control that was used
+/// changes for [duration] — "Copy Link" becomes "Copied" with a checkmark —
+/// instead of a toast landing on top of it.
+///
+/// [builder] gets whether the confirmation is showing and a `confirm`
+/// callback to run the action through: `confirm(action)` awaits [action]
+/// (when it returns `false` nothing is confirmed) and then flips the state.
+///
+/// ```dart
+/// JamInPlaceConfirmation(
+///   builder: (context, confirmed, confirm) => JamRow(
+///     title: confirmed ? 'Copied' : 'Copy Diagnostics',
+///     icon: confirmed ? CupertinoIcons.checkmark : CupertinoIcons.doc_on_doc,
+///     tinted: true,
+///     onTap: () => confirm(_copy),
+///   ),
+/// )
+/// ```
+class JamInPlaceConfirmation extends StatefulWidget {
+  const JamInPlaceConfirmation({
+    super.key,
+    required this.builder,
+    this.duration = kJamInPlaceConfirmation,
+  });
+
+  final Widget Function(
+    BuildContext context,
+    bool confirmed,
+    void Function(FutureOr<Object?> Function() action) confirm,
+  )
+  builder;
+
+  final Duration duration;
+
+  @override
+  State<JamInPlaceConfirmation> createState() => _JamInPlaceConfirmationState();
+}
+
+class _JamInPlaceConfirmationState extends State<JamInPlaceConfirmation> {
+  bool _confirmed = false;
+  Timer? _timer;
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  void _confirm(FutureOr<Object?> Function() action) => unawaited(_run(action));
+
+  Future<void> _run(FutureOr<Object?> Function() action) async {
+    final result = await action();
+    if (!mounted || result == false) return;
+    _timer?.cancel();
+    setState(() => _confirmed = true);
+    _timer = Timer(widget.duration, () {
+      if (mounted) setState(() => _confirmed = false);
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) =>
+      widget.builder(context, _confirmed, _confirm);
+}
+
+/// A [JamButton] that copies and then says so in its own label: "Copied"
+/// with a checkmark for 1.5 s (spec §10.5). [onCopy] returning `false`
+/// (nothing was copied) skips the confirmation.
+class JamCopyButton extends StatelessWidget {
+  const JamCopyButton({
+    super.key,
+    required this.label,
+    required this.onCopy,
+    this.copiedLabel = JamConfirmationStrings.copied,
+    this.variant = JamButtonVariant.plain,
+    this.size = JamButtonSize.large,
+    this.icon,
+    this.expand = false,
+  });
+
+  /// "Copy Link".
+  final String label;
+
+  /// "Copied".
+  final String copiedLabel;
+
+  final FutureOr<Object?> Function() onCopy;
+  final JamButtonVariant variant;
+  final JamButtonSize size;
+
+  /// The glyph before [label]; the confirmation always shows a checkmark.
+  final IconData? icon;
+
+  final bool expand;
+
+  @override
+  Widget build(BuildContext context) => JamInPlaceConfirmation(
+    builder: (context, copied, confirm) => Semantics(
+      liveRegion: copied,
+      child: JamButton(
+        label: copied ? copiedLabel : label,
+        icon: copied ? CupertinoIcons.checkmark_alt : icon,
+        variant: variant,
+        size: size,
+        expand: expand,
+        onPressed: () => confirm(onCopy),
+      ),
+    ),
+  );
 }

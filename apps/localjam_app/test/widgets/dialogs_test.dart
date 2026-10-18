@@ -8,7 +8,25 @@ import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:localjam_app/src/design/theme.dart';
+import 'package:localjam_app/src/design/tokens.dart';
 import 'package:localjam_app/src/widgets/dialogs.dart';
+
+List<JamAlertAction> _actions(WidgetTester tester) => tester
+    .widgetList<JamAlertButton>(find.byType(JamAlertButton))
+    .map((b) => b.action)
+    .toList();
+
+Color? _ground(WidgetTester tester, String label) {
+  final box = tester.widget<Container>(
+    find
+        .descendant(
+          of: find.widgetWithText(JamAlertButton, label),
+          matching: find.byType(Container),
+        )
+        .first,
+  );
+  return (box.decoration! as ShapeDecoration).color;
+}
 
 Widget _host(Future<void> Function(BuildContext) onTap, {ThemeData? theme}) =>
     MaterialApp(
@@ -65,11 +83,11 @@ void main() {
     );
     await tester.tap(find.text('Go'));
     await tester.pumpAndSettle();
-    expect(find.byType(CupertinoAlertDialog), findsOneWidget);
+    expect(find.byType(JamAlert), findsOneWidget);
 
     await tester.tapAt(const Offset(10, 10)); // the barrier: iOS keeps it up
     await tester.pumpAndSettle();
-    expect(find.byType(CupertinoAlertDialog), findsOneWidget);
+    expect(find.byType(JamAlert), findsOneWidget);
 
     // System back (Android) pops it.
     final navigator = tester.state<NavigatorState>(find.byType(Navigator));
@@ -78,7 +96,9 @@ void main() {
     expect(answer, isFalse);
   });
 
-  testWidgets('an iOS alert: 270 wide, Cancel then the action', (tester) async {
+  testWidgets('an iOS 26 alert: 300 wide, radius 34, Cancel then the action', (
+    tester,
+  ) async {
     await tester.pumpWidget(
       _host(
         (context) async => JamDialogs.confirm(
@@ -90,29 +110,30 @@ void main() {
     );
     await tester.tap(find.text('Go'));
     await tester.pumpAndSettle();
+    final card = find
+        .descendant(of: find.byType(JamAlert), matching: find.byType(ClipRRect))
+        .first;
+    expect(tester.getSize(card).width, JamMetrics.alertWidth);
     expect(
-      tester
-          .getSize(
-            find
-                .descendant(
-                  of: find.byType(CupertinoAlertDialog),
-                  matching: find.byType(CupertinoPopupSurface),
-                )
-                .first,
-          )
-          .width,
-      270,
+      tester.widget<ClipRRect>(card).borderRadius,
+      BorderRadius.circular(JamRadius.alert),
     );
-    final actions = tester
-        .widgetList<CupertinoDialogAction>(find.byType(CupertinoDialogAction))
-        .toList();
+    final actions = _actions(tester);
     expect(actions.length, 2);
-    expect(actions.first.isDefaultAction, isFalse);
-    expect(actions.last.isDefaultAction, isTrue);
+    expect(actions.first.isDefault, isFalse);
+    expect(actions.last.isDefault, isTrue);
+    // Two short labels sit side by side, Cancel first.
     expect(
       tester.getCenter(find.text('Cancel')).dx,
       lessThan(tester.getCenter(find.text('Join')).dx),
     );
+    expect(
+      tester.getCenter(find.text('Cancel')).dy,
+      tester.getCenter(find.text('Join')).dy,
+    );
+    // Shape and fill tell them apart: grey Cancel, filled tint Join.
+    expect(_ground(tester, 'Cancel'), JamColors.light.fill);
+    expect(_ground(tester, 'Join'), JamColors.light.tintFilled);
   });
 
   testWidgets('a destructive confirm turns its action red', (tester) async {
@@ -128,12 +149,71 @@ void main() {
     await tester.tap(find.text('Go'));
     await tester.pumpAndSettle();
 
-    final actions = tester
-        .widgetList<CupertinoDialogAction>(find.byType(CupertinoDialogAction))
-        .toList();
-    expect(actions.last.isDestructiveAction, isTrue);
-    // iOS makes Cancel the bold one beside a destructive action.
-    expect(actions.first.isDefaultAction, isTrue);
+    final actions = _actions(tester);
+    expect(actions.last.destructive, isTrue);
+    // Cancel is the neutral grey capsule, the action filled red — never
+    // two near-identical reds side by side.
+    expect(actions.first.isDefault, isFalse);
+    expect(_ground(tester, 'Cancel'), JamColors.light.fill);
+    expect(_ground(tester, 'End it'), JamColors.light.danger);
+  });
+
+  testWidgets('labels too long to sit side by side stack, action on top', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      _host(
+        (context) async => JamDialogs.confirmDestructive(
+          context,
+          title: 'Remove Electric Mongoose?',
+          confirmLabel: 'Remove from This Jam',
+        ),
+      ),
+    );
+    await tester.tap(find.text('Go'));
+    await tester.pumpAndSettle();
+    expect(
+      tester.getCenter(find.text('Remove from This Jam')).dy,
+      lessThan(tester.getCenter(find.text('Cancel')).dy),
+    );
+  });
+
+  testWidgets('a two-line message is balanced, not left with an orphan', (
+    tester,
+  ) async {
+    const message =
+        'The music stops for everyone and the jam ends for everyone in the jam.';
+    await tester.pumpWidget(
+      _host(
+        (context) async =>
+            JamDialogs.confirm(context, title: 'End Jam?', message: message),
+      ),
+    );
+    await tester.tap(find.text('Go'));
+    await tester.pumpAndSettle();
+    final text = find.text(message);
+    final textWidth = tester.getSize(text).width;
+    final lineHeight = tester.widget<Text>(text).style!.fontSize! * 1.6;
+    // Two lines, and narrower than the card's text column: rebalanced.
+    expect(tester.getSize(text).height, greaterThan(lineHeight));
+    expect(textWidth, lessThan(JamMetrics.alertWidth - 40 - 8));
+  });
+
+  testWidgets('the alert field follows the app appearance', (tester) async {
+    await tester.pumpWidget(
+      _host(
+        (context) async => JamDialogs.promptText(context, title: 'Name'),
+        theme: jamLightTheme(),
+      ),
+    );
+    await tester.tap(find.text('Go'));
+    await tester.pumpAndSettle();
+    expect(
+      tester
+          .widget<CupertinoTextField>(find.byType(CupertinoTextField))
+          .keyboardAppearance,
+      Brightness.light,
+    );
   });
 
   testWidgets('promptText returns the trimmed value and survives the exit', (
@@ -181,13 +261,7 @@ void main() {
 
     await tester.enterText(find.byType(CupertinoTextField), '   ');
     await tester.pump();
-    expect(
-      tester
-          .widgetList<CupertinoDialogAction>(find.byType(CupertinoDialogAction))
-          .last
-          .onPressed,
-      isNull,
-    );
+    expect(_actions(tester).last.onPressed, isNull);
 
     await tester.tap(find.text('Cancel'));
     await tester.pumpAndSettle();

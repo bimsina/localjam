@@ -253,6 +253,165 @@ void main() {
     expect(grounds, contains(JamColors.dark.elevatedGroupedSurface));
   });
 
+  ClipRRect surfaceClip(WidgetTester tester) => tester.widget<ClipRRect>(
+    find
+        .descendant(
+          of: find.byType(JamSheetSurface),
+          matching: find.byType(ClipRRect),
+        )
+        .first,
+  );
+
+  testWidgets('a medium sheet floats on all four corners, inset', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(
+      _host(
+        (context) => showJamSheet<void>(
+          context,
+          title: 'People',
+          actions: const JamSheetActions.done(),
+          initialChildSize: kJamSheetMediumSize,
+          builder: (_) => const SizedBox(height: 40),
+        ),
+      ),
+    );
+    await tester.tap(find.text('Open'));
+    await tester.pumpAndSettle();
+    final radius = surfaceClip(tester).borderRadius as BorderRadius;
+    expect(radius.bottomLeft.x, closeTo(JamRadius.sheetFloating, 0.1));
+    final sheet = tester.getRect(find.byType(JamSheetHeader));
+    expect(sheet.left, closeTo(JamRadius.sheetFloatingInset, 0.5));
+    expect(jamOpenSheets.value, 1);
+    await tester.tap(find.text(JamSheetStrings.done));
+    await tester.pumpAndSettle();
+    expect(jamOpenSheets.value, 0);
+  });
+
+  testWidgets('a large sheet is edge-attached', (tester) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(
+      _host(
+        (context) => showJamSheet<void>(
+          context,
+          title: 'Queue',
+          actions: const JamSheetActions.close(),
+          builder: (_) => const SizedBox(height: 40),
+        ),
+      ),
+    );
+    await tester.tap(find.text('Open'));
+    await tester.pumpAndSettle();
+    final radius = surfaceClip(tester).borderRadius as BorderRadius;
+    expect(radius.bottomLeft.x, closeTo(0, 0.1));
+    expect(radius.topLeft.x, JamRadius.sheet);
+    expect(tester.getRect(find.byType(JamSheetHeader)).left, 0);
+  });
+
+  testWidgets('on a wide window a sheet is a centred form sheet', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1024, 1366);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(
+      _host(
+        (context) => showJamSheet<void>(
+          context,
+          title: 'Invite People',
+          actions: const JamSheetActions.close(),
+          initialChildSize: kJamSheetMediumSize,
+          builder: (_) => const SizedBox(height: 200),
+        ),
+      ),
+    );
+    await tester.tap(find.text('Open'));
+    await tester.pumpAndSettle();
+    final header = tester.getRect(find.byType(JamSheetHeader));
+    expect(header.center.dx, closeTo(512, 1));
+    expect(header.width, lessThanOrEqualTo(kJamFormSheetMaxSize.width));
+    // Centred, not bottom-attached, and no grabber: a form sheet does not
+    // drag.
+    expect(header.top, greaterThan(200));
+    expect(find.byType(JamSheetGrabber), findsNothing);
+  });
+
+  testWidgets('the header rule: Cancel + verb, or Done, or one xmark', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    var started = 0;
+    Future<void> open(JamSheetActions actions) async {
+      await tester.pumpWidget(
+        _host(
+          (context) => showJamSheet<void>(
+            context,
+            title: 'Sheet',
+            actions: actions,
+            scrollable: false,
+            builder: (_) => const SizedBox(height: 40),
+          ),
+        ),
+      );
+      await tester.tap(find.text('Open'));
+      await tester.pumpAndSettle();
+    }
+
+    await open(
+      JamSheetActions.confirm(label: 'Start', onConfirm: () => started++),
+    );
+    expect(find.text(JamSheetStrings.cancel), findsOneWidget);
+    await tester.tap(find.text('Start'));
+    expect(started, 1);
+    // Cancel sits left of the title, the verb right of it.
+    expect(
+      tester.getCenter(find.text(JamSheetStrings.cancel)).dx,
+      lessThan(tester.getCenter(find.text('Sheet')).dx),
+    );
+    // Its text lands on the content margin, not 12 from the edge.
+    expect(
+      tester.getRect(find.text(JamSheetStrings.cancel)).left,
+      closeTo(JamSpace.page + JamRadius.sheetFloatingInset, 1),
+    );
+
+    await tester.tap(find.text(JamSheetStrings.cancel));
+    await tester.pumpAndSettle();
+    expect(find.text('Sheet'), findsNothing);
+
+    await open(const JamSheetActions.close());
+    expect(find.byType(JamSheetCloseButton), findsOneWidget);
+    expect(find.text(JamSheetStrings.done), findsNothing);
+    expect(find.text(JamSheetStrings.cancel), findsNothing);
+    await tester.tap(find.byType(JamSheetCloseButton));
+    await tester.pumpAndSettle();
+    expect(find.text('Sheet'), findsNothing);
+  });
+
+  testWidgets('dragging the sheet down dismisses it', (tester) async {
+    await tester.pumpWidget(
+      _host(
+        (context) => showJamSheet<void>(
+          context,
+          title: 'People',
+          scrollable: false,
+          builder: (_) => const SizedBox(height: 200),
+        ),
+      ),
+    );
+    await tester.tap(find.text('Open'));
+    await tester.pumpAndSettle();
+    await tester.fling(find.text('People'), const Offset(0, 300), 1500);
+    await tester.pumpAndSettle();
+    expect(find.text('People'), findsNothing);
+  });
+
   testWidgets('the glass close button pops the sheet', (tester) async {
     await tester.pumpWidget(
       _host(

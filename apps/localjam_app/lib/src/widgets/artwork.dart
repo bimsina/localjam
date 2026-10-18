@@ -284,9 +284,32 @@ class _JamBackdropBuilderState extends State<JamBackdropBuilder> {
   }
 }
 
-/// Paints a [JamBackdrop]: the base colour, the cover scaled to fill and
-/// blurred (σ [JamBlur.backdrop]), and the black overlay — cross-fading
-/// over [JamDuration.crossfade] when the cover changes.
+/// How much the backdrop's cover is saturated before it is darkened
+/// (spec §10.7): a pale or bright cover keeps its hue instead of going to
+/// mud under the overlay. Luminance-preserving, so the overlay's contrast
+/// sums still hold.
+const double kJamBackdropSaturation = 1.45;
+
+/// The faint radial lift on a placeholder backdrop (spec §10.7): a deep
+/// neutral that still reads as a surface, not a loading state.
+const Color kJamBackdropPlaceholderLift = Color(0x14FFFFFF);
+
+/// A luminance-preserving saturation matrix (Rec. 709 weights).
+List<double> _saturation(double s) {
+  const r = 0.2126, g = 0.7152, b = 0.0722;
+  final i = 1 - s;
+  return <double>[
+    r * i + s, g * i, b * i, 0, 0, //
+    r * i, g * i + s, b * i, 0, 0, //
+    r * i, g * i, b * i + s, 0, 0, //
+    0, 0, 0, 1, 0, //
+  ];
+}
+
+/// Paints a [JamBackdrop]: the base colour, the cover scaled to fill,
+/// saturated ([kJamBackdropSaturation]) and blurred (σ [JamBlur.backdrop]),
+/// and the black overlay — cross-fading over [JamDuration.crossfade] when
+/// the cover changes. With no cover: the base with a faint radial lift.
 class JamBackdropView extends StatelessWidget {
   const JamBackdropView({super.key, required this.backdrop, this.child});
 
@@ -304,7 +327,17 @@ class JamBackdropView extends StatelessWidget {
       child: ColoredBox(
         color: backdrop.base,
         child: image == null
-            ? const SizedBox.expand()
+            // The one gradient the spec allows lives on this surface.
+            ? const DecoratedBox(
+                decoration: BoxDecoration(
+                  gradient: RadialGradient(
+                    center: Alignment(0, -0.45),
+                    radius: 0.95,
+                    colors: [kJamBackdropPlaceholderLift, Color(0x00FFFFFF)],
+                  ),
+                ),
+                child: SizedBox.expand(),
+              )
             : Stack(
                 fit: StackFit.expand,
                 children: [
@@ -315,12 +348,17 @@ class JamBackdropView extends StatelessWidget {
                         sigmaY: JamBlur.backdrop,
                         tileMode: TileMode.mirror,
                       ),
-                      child: Image(
-                        image: image,
-                        fit: BoxFit.cover,
-                        gaplessPlayback: true,
-                        // Downsampled: a blurred cover needs no detail.
-                        filterQuality: FilterQuality.low,
+                      child: ColorFiltered(
+                        colorFilter: ColorFilter.matrix(
+                          _saturation(kJamBackdropSaturation),
+                        ),
+                        child: Image(
+                          image: image,
+                          fit: BoxFit.cover,
+                          gaplessPlayback: true,
+                          // Downsampled: a blurred cover needs no detail.
+                          filterQuality: FilterQuality.low,
+                        ),
                       ),
                     ),
                   ),

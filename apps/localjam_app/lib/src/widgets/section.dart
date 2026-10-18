@@ -21,6 +21,7 @@ import 'package:flutter/widgets.dart';
 
 import '../design/tokens.dart';
 import '../design/typography.dart';
+import 'buttons.dart';
 import 'list.dart';
 
 /// Tells sections below it which surface their rows sit on. Grouped sheets
@@ -147,7 +148,9 @@ class JamSection extends StatelessWidget {
     if (!plain) {
       final elevated = this.elevated ?? JamGroupedSurface.elevatedOf(context);
       body = ClipRRect(
-        borderRadius: BorderRadius.circular(JamRadius.section),
+        // 26, but a block of one 44 row would be a pill at 26: the radius
+        // is held under half the block's height.
+        clipper: const _SectionClipper(),
         child: ColoredBox(
           color: elevated
               ? colors.elevatedGroupedSurface
@@ -160,6 +163,16 @@ class JamSection extends StatelessWidget {
     final header = this.header;
     final footer = this.footer;
     const textInset = kJamRowInset;
+    // A plain trailing button carries its own padding; its *text* lands on
+    // the rows' trailing inset, not the button's edge.
+    final trailing = headerTrailing;
+    final trailingInset = trailing == null
+        ? textInset
+        : trailing is JamButton &&
+              trailing.variant == JamButtonVariant.plain &&
+              !trailing.expand
+        ? textInset - jamPlainButtonPadding(trailing.size)
+        : textInset;
 
     return Padding(
       padding: margin ?? EdgeInsets.symmetric(horizontal: side),
@@ -172,7 +185,7 @@ class JamSection extends StatelessWidget {
               padding: EdgeInsetsDirectional.fromSTEB(
                 textInset,
                 0,
-                headerTrailing == null ? textInset : JamSpace.xs,
+                trailingInset,
                 prominentHeader ? JamSpace.xs : JamSpace.sectionHeader,
               ),
               child: Row(
@@ -217,6 +230,20 @@ class JamSection extends StatelessWidget {
       ),
     );
   }
+}
+
+/// Rounds a section's block by [JamRadius.sectionFor] its height.
+class _SectionClipper extends CustomClipper<RRect> {
+  const _SectionClipper();
+
+  @override
+  RRect getClip(Size size) => RRect.fromRectAndRadius(
+    Offset.zero & size,
+    Radius.circular(JamRadius.sectionFor(size.height)),
+  );
+
+  @override
+  bool shouldReclip(_SectionClipper oldClipper) => false;
 }
 
 /// Stacks sections with the standard [JamSpace.section] gap.

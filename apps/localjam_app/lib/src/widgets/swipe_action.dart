@@ -16,6 +16,10 @@
 /// The action decides; the row only leaves when it says so. A refused or
 /// declined action (a "Cancel" in the alert, a removal the host said no to)
 /// slides the row back.
+///
+/// As on iOS, an open row closes the moment the list scrolls or a touch
+/// lands anywhere else; [JamSwipeAction.onOpenChanged] tells the row so it
+/// can hide what does not belong beside an open action (a reorder grip).
 library;
 
 import 'dart:async';
@@ -41,6 +45,7 @@ class JamSwipeAction extends StatefulWidget implements JamSelfSeparatingRow {
     this.onRemoved,
     this.semanticLabel,
     this.enabled = true,
+    this.onOpenChanged,
   });
 
   final Widget child;
@@ -61,6 +66,9 @@ class JamSwipeAction extends StatefulWidget implements JamSelfSeparatingRow {
 
   /// False: just the row, no gesture.
   final bool enabled;
+
+  /// Told when the row slides open (true) and when it is back (false).
+  final ValueChanged<bool>? onOpenChanged;
 
   @override
   State<JamSwipeAction> createState() => _JamSwipeActionState();
@@ -89,11 +97,41 @@ class _JamSwipeActionState extends State<JamSwipeAction>
 
   double _width = 1;
   bool _busy = false;
+  bool _open = false;
+  ScrollPosition? _scroll;
 
-  void _changed() => setState(() {});
+  void _changed() {
+    setState(() {});
+    final open = _offset.value > 0;
+    if (open != _open) {
+      _open = open;
+      widget.onOpenChanged?.call(open);
+    }
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final scroll = Scrollable.maybeOf(context)?.position;
+    if (identical(scroll, _scroll)) return;
+    _scroll?.isScrollingNotifier.removeListener(_onScrolling);
+    _scroll = scroll;
+    scroll?.isScrollingNotifier.addListener(_onScrolling);
+  }
+
+  /// The list moving closes an open row.
+  void _onScrolling() {
+    if (_scroll?.isScrollingNotifier.value ?? false) _closeIfOpen();
+  }
+
+  void _closeIfOpen() {
+    if (!mounted || _busy || _offset.value == 0) return;
+    _close();
+  }
 
   @override
   void dispose() {
+    _scroll?.isScrollingNotifier.removeListener(_onScrolling);
     _offset.dispose();
     _size.dispose();
     super.dispose();
@@ -235,7 +273,11 @@ class _JamSwipeActionState extends State<JamSwipeAction>
     return SizeTransition(
       sizeFactor: _size,
       alignment: Alignment.topCenter,
-      child: row,
+      // A touch anywhere else puts an open row back.
+      child: TapRegion(
+        onTapOutside: open > 0 ? (_) => _closeIfOpen() : null,
+        child: row,
+      ),
     );
   }
 }

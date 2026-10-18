@@ -2,6 +2,13 @@
 /// title in a blurred `material` nav bar on scroll, with the hairline only
 /// once content scrolls under it (DESIGN_SPEC v3 §5 JamScaffold).
 ///
+/// Back is a bare chevron everywhere (§10.11): no previous-page labels,
+/// whatever a caller passes or a route would imply.
+///
+/// [JamScaffold.maxContentWidth] holds the content to a reading column
+/// centred in the *pane* (a sidebar layout's detail pane, not the window),
+/// with the large title on the column's leading edge.
+///
 /// ```dart
 /// JamScaffold(
 ///   title: 'Nearby',
@@ -13,6 +20,8 @@
 /// )
 /// ```
 library;
+
+import 'dart:math' as math;
 
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart' show Scaffold, Theme;
@@ -37,6 +46,7 @@ class JamScaffold extends StatefulWidget {
     this.backgroundColor,
     this.controller,
     this.contentPadding,
+    this.maxContentWidth,
   }) : assert(
          slivers != null || children != null,
          'A JamScaffold needs slivers or children.',
@@ -55,7 +65,8 @@ class JamScaffold extends StatefulWidget {
   /// `JamMenuButton`, an avatar).
   final List<Widget> trailing;
 
-  /// "‹ Nearby"-style label beside the back chevron.
+  /// Ignored: back is a bare chevron everywhere (spec §10.11). Kept so
+  /// older call sites compile.
   final String? previousPageTitle;
 
   /// Shows the back chevron when the route can pop.
@@ -83,6 +94,12 @@ class JamScaffold extends StatefulWidget {
   /// margins).
   final EdgeInsetsGeometry? contentPadding;
 
+  /// Holds the content (and the large title, and the bottom bar) to a
+  /// column this wide, centred in the space the page actually has — use
+  /// `JamContentWidth.reading` for lists and forms on wide windows. Null:
+  /// edge to edge.
+  final double? maxContentWidth;
+
   @override
   State<JamScaffold> createState() => _JamScaffoldState();
 }
@@ -104,65 +121,17 @@ class _JamScaffoldState extends State<JamScaffold> {
     final bg =
         widget.backgroundColor ??
         (widget.grouped ? colors.groupedBackground : colors.background);
-    final bottomInset = MediaQuery.paddingOf(context).bottom;
     final hasBottom = widget.bottomBar != null;
+    final maxWidth = widget.maxContentWidth;
 
-    Widget body;
-    final children = widget.children;
-    final content = <Widget>[
-      ...?widget.slivers,
-      if (children != null)
-        SliverPadding(
-          padding: widget.contentPadding ?? EdgeInsets.zero,
-          sliver: SliverList.list(children: children),
-        ),
-      SliverToBoxAdapter(
-        child: SizedBox(
-          height: hasBottom
-              ? JamMetrics.buttonHeight + JamSpace.lg * 2 + bottomInset
-              : JamSpace.xxxl + bottomInset,
-        ),
-      ),
-    ];
-
-    if (widget.largeTitle) {
-      body = CustomScrollView(
-        controller: widget.controller,
-        slivers: [
-          CupertinoSliverNavigationBar(
-            largeTitle: Text(widget.title),
-            middle: Text(widget.title),
-            alwaysShowMiddle: false,
-            leading: widget.leading,
-            automaticallyImplyLeading: widget.automaticallyImplyLeading,
-            previousPageTitle: widget.previousPageTitle,
-            trailing: _trailing(),
-            backgroundColor: colors.material,
-            border: _border(context),
-            transitionBetweenRoutes: false,
-            padding: _navPadding,
-          ),
-          ...content,
-        ],
-      );
-    } else {
-      body = CustomScrollView(
-        controller: widget.controller,
-        slivers: [
-          // Content starts under the inline bar, not under the status bar:
-          // the bar floats over the body (`extendBodyBehindAppBar`), and
-          // this context sits above the Scaffold, so its padding does not
-          // include the bar's height.
-          SliverToBoxAdapter(
-            child: SizedBox(
-              height:
-                  MediaQuery.paddingOf(context).top + JamMetrics.navBarHeight,
+    Widget body = maxWidth == null
+        ? _scrollView(context, 0)
+        : LayoutBuilder(
+            builder: (context, constraints) => _scrollView(
+              context,
+              math.max(0, (constraints.maxWidth - maxWidth) / 2),
             ),
-          ),
-          ...content,
-        ],
-      );
-    }
+          );
 
     body = NotificationListener<ScrollMetricsNotification>(
       onNotification: (n) => _onMetrics(n.metrics),
@@ -171,6 +140,17 @@ class _JamScaffoldState extends State<JamScaffold> {
         child: body,
       ),
     );
+
+    Widget? bottomBar = widget.bottomBar;
+    if (bottomBar != null && maxWidth != null) {
+      final side = JamSpace.pageFor(MediaQuery.sizeOf(context).width);
+      bottomBar = Center(
+        child: ConstrainedBox(
+          constraints: BoxConstraints(maxWidth: maxWidth - side * 2),
+          child: bottomBar,
+        ),
+      );
+    }
 
     final page = Scaffold(
       backgroundColor: bg,
@@ -181,7 +161,6 @@ class _JamScaffoldState extends State<JamScaffold> {
               title: widget.title,
               leading: widget.leading,
               trailing: widget.trailing,
-              previousPageTitle: widget.previousPageTitle,
               automaticallyImplyLeading: widget.automaticallyImplyLeading,
             ),
       body: Stack(
@@ -194,7 +173,7 @@ class _JamScaffoldState extends State<JamScaffold> {
               bottom: 0,
               child: JamBottomBar(
                 showMaterial: _contentUnderBottom,
-                child: widget.bottomBar!,
+                child: bottomBar!,
               ),
             ),
         ],
@@ -204,15 +183,151 @@ class _JamScaffoldState extends State<JamScaffold> {
     return CupertinoPageScaffoldBackgroundColor(color: bg, child: page);
   }
 
+  /// The scroll view, its content held [side] in from each edge.
+  Widget _scrollView(BuildContext context, double side) {
+    final colors = context.jamColors;
+    final bottomInset = MediaQuery.paddingOf(context).bottom;
+    final hasBottom = widget.bottomBar != null;
+    final spacer = hasBottom
+        ? JamMetrics.buttonHeight + JamSpace.lg + jamBottomBarInset(bottomInset)
+        : JamSpace.xxxl + bottomInset;
+
+    final slivers = <Widget>[...?widget.slivers];
+    // A last sliver that fills the remaining space (an empty state) takes
+    // the bottom clearance inside itself: a spacer after it would make the
+    // empty page scroll, and paint the bottom bar's strip under nothing.
+    var fills = false;
+    final children = widget.children;
+    if (children == null && slivers.isNotEmpty) {
+      final last = slivers.last;
+      if (last is SliverFillRemaining && last.child != null) {
+        fills = true;
+        slivers[slivers.length - 1] = SliverFillRemaining(
+          key: last.key,
+          hasScrollBody: last.hasScrollBody,
+          fillOverscroll: last.fillOverscroll,
+          child: Padding(
+            padding: EdgeInsets.only(bottom: spacer),
+            child: last.child,
+          ),
+        );
+      }
+    }
+
+    Widget column(Widget sliver) => side <= 0
+        ? sliver
+        : SliverPadding(
+            padding: EdgeInsets.symmetric(horizontal: side),
+            sliver: sliver,
+          );
+
+    final content = <Widget>[
+      for (final sliver in slivers) column(sliver),
+      if (children != null)
+        column(
+          SliverPadding(
+            padding: widget.contentPadding ?? EdgeInsets.zero,
+            sliver: SliverList.list(children: children),
+          ),
+        ),
+      if (!fills) SliverToBoxAdapter(child: SizedBox(height: spacer)),
+    ];
+
+    final width = MediaQuery.sizeOf(context).width;
+    final navPadding = _navPaddingFor(width, side);
+    final leading = widget.leading ?? _backButton(context);
+
+    if (widget.largeTitle) {
+      return CustomScrollView(
+        controller: widget.controller,
+        slivers: [
+          CupertinoSliverNavigationBar(
+            // Cupertino insets the large title by a fixed 16; the rest of
+            // the margin (20 on wide phones, a reading column's side)
+            // is ours to add.
+            largeTitle: Padding(
+              padding: EdgeInsetsDirectional.only(
+                start: math.max(0, navPadding.start - _kCupertinoTitleInset),
+              ),
+              child: Text(widget.title),
+            ),
+            middle: Text(widget.title),
+            alwaysShowMiddle: false,
+            leading: leading,
+            automaticallyImplyLeading: widget.automaticallyImplyLeading,
+            trailing: _trailing(),
+            backgroundColor: colors.material,
+            border: _border(context),
+            transitionBetweenRoutes: false,
+            padding: navPadding,
+          ),
+          ...content,
+        ],
+      );
+    }
+    return CustomScrollView(
+      controller: widget.controller,
+      slivers: [
+        // Content starts under the inline bar, not under the status bar:
+        // the bar floats over the body (`extendBodyBehindAppBar`), and
+        // this context sits above the Scaffold, so its padding does not
+        // include the bar's height.
+        SliverToBoxAdapter(
+          child: SizedBox(
+            height: MediaQuery.paddingOf(context).top + JamMetrics.navBarHeight,
+          ),
+        ),
+        ...content,
+      ],
+    );
+  }
+
+  Widget? _backButton(BuildContext context) =>
+      widget.automaticallyImplyLeading ? jamBackButtonFor(context) : null;
+
   Widget? _trailing() => widget.trailing.isEmpty
       ? null
       : Row(mainAxisSize: MainAxisSize.min, children: widget.trailing);
 }
 
-const EdgeInsetsDirectional _navPadding = EdgeInsetsDirectional.only(
-  start: JamSpace.lg,
-  end: JamSpace.xs,
-);
+/// The fixed leading inset Cupertino gives a large title.
+const double _kCupertinoTitleInset = 16;
+
+/// The nav bar's insets: the large title on the page margin (plus a reading
+/// column's [side]); trailing icon buttons' glyphs on the same margin.
+EdgeInsetsDirectional _navPaddingFor(double width, [double side = 0]) {
+  final margin = JamSpace.pageFor(width);
+  return EdgeInsetsDirectional.only(
+    start: side + margin,
+    // A 44 icon button carries ~11 of air around a 22 glyph.
+    end: side + math.max(JamSpace.xs, margin - 12),
+  );
+}
+
+/// The bare back chevron (spec §10.11), when [context]'s route can go back
+/// — never a "‹ Settings" label, whatever route the page sits in. Null when
+/// there is nothing to go back to, or the route is a full-screen cover
+/// (which closes with its own button).
+Widget? jamBackButtonFor(BuildContext context) {
+  final route = ModalRoute.of(context);
+  if (route == null || !route.canPop) return null;
+  if (route is PageRoute && route.fullscreenDialog) return null;
+  // An empty title is how Cupertino's own back button is told "chevron
+  // only": it otherwise reads the previous route's title off a
+  // CupertinoPageRoute.
+  return const CupertinoNavigationBarBackButton(previousPageTitle: '');
+}
+
+/// Where a pinned bottom action sits above the window's bottom edge, given
+/// the bottom safe area [bottomInset]: on the home indicator's inset on
+/// iOS (≈ 34, which already leaves ~20 of air above the indicator); a small
+/// gesture inset (Android's ≈ 24) gets air added so the button does not sit
+/// on the handle; no inset at all gets 16.
+double jamBottomBarInset(double bottomInset) {
+  if (bottomInset >= 30) return bottomInset;
+  if (bottomInset > 0) return bottomInset + JamSpace.md;
+  return JamSpace.lg;
+}
 
 Border _border(BuildContext context) => Border(
   bottom: BorderSide(
@@ -240,6 +355,8 @@ class JamNavBar extends StatelessWidget
   final String title;
   final Widget? leading;
   final List<Widget> trailing;
+
+  /// Ignored: back is a bare chevron everywhere (spec §10.11).
   final String? previousPageTitle;
   final bool automaticallyImplyLeading;
 
@@ -256,9 +373,10 @@ class JamNavBar extends StatelessWidget
   Widget build(BuildContext context) {
     final bar = CupertinoNavigationBar(
       middle: Text(title),
-      leading: leading,
+      leading:
+          leading ??
+          (automaticallyImplyLeading ? jamBackButtonFor(context) : null),
       automaticallyImplyLeading: automaticallyImplyLeading,
-      previousPageTitle: previousPageTitle,
       trailing: trailing.isEmpty
           ? null
           : Row(mainAxisSize: MainAxisSize.min, children: trailing),
@@ -268,7 +386,7 @@ class JamNavBar extends StatelessWidget
       brightness: Theme.of(context).brightness,
       automaticBackgroundVisibility: !alwaysOpaque,
       transitionBetweenRoutes: false,
-      padding: _navPadding,
+      padding: _navPaddingFor(MediaQuery.sizeOf(context).width),
     );
     if (alwaysOpaque) return bar;
     // At rest Cupertino paints the page colour it finds here, which hides
@@ -283,8 +401,8 @@ class JamNavBar extends StatelessWidget
 }
 
 /// A pinned bottom action area: page-margin padding, above the home
-/// indicator, on a `material` strip (with a top hairline) when
-/// [showMaterial].
+/// indicator (see [jamBottomBarInset]), on a `material` strip (with a top
+/// hairline) when [showMaterial].
 class JamBottomBar extends StatelessWidget {
   const JamBottomBar({
     super.key,
@@ -305,7 +423,7 @@ class JamBottomBar extends StatelessWidget {
         JamSpace.pageFor(width),
         JamSpace.lg,
         JamSpace.pageFor(width),
-        bottom > 0 ? bottom : JamSpace.lg,
+        jamBottomBarInset(bottom),
       ),
       child: child,
     );

@@ -45,7 +45,7 @@ void main() {
     expect(taps, 1);
   });
 
-  testWidgets('48 glyph in tertiaryLabel, 22 bold title, capped at 320', (
+  testWidgets('48 glyph in secondaryLabel, 22 bold title, capped at 320', (
     tester,
   ) async {
     await tester.pumpWidget(
@@ -59,7 +59,8 @@ void main() {
     );
     final icon = tester.widget<Icon>(find.byType(Icon));
     expect(icon.size, 48);
-    expect(icon.color, JamColors.light.tertiaryLabel);
+    // ContentUnavailableView's colour: tertiary all but vanished on black.
+    expect(icon.color, JamColors.light.secondaryLabel);
     final title = tester.widget<Text>(find.text('Nothing Up Next')).style!;
     expect(title.fontSize, 22);
     expect(title.fontWeight, FontWeight.w700);
@@ -81,6 +82,31 @@ void main() {
           .width,
       lessThanOrEqualTo(320),
     );
+  });
+
+  testWidgets('the action hugs its label (min 140), never a full-width bar', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      _host(
+        JamEmptyState(
+          icon: CupertinoIcons.wifi_slash,
+          title: 'Host Is Gone',
+          body: 'The host left the network.',
+          actionLabel: 'Retry',
+          onAction: () {},
+          secondaryActionLabel: 'Back to Nearby',
+          onSecondaryAction: () {},
+        ),
+      ),
+    );
+    final primary = tester.getSize(find.widgetWithText(JamButton, 'Retry'));
+    expect(primary.width, greaterThanOrEqualTo(kJamEmptyStateActionMinWidth));
+    expect(primary.width, lessThan(200));
+    final secondary = tester.getSize(
+      find.widgetWithText(JamButton, 'Back to Nearby'),
+    );
+    expect(secondary.width, lessThan(288));
   });
 
   testWidgets('no action label means no button', (tester) async {

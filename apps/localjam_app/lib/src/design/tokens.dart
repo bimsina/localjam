@@ -37,6 +37,7 @@ class JamColors extends ThemeExtension<JamColors> {
     required this.scrim,
     required this.material,
     required this.glass,
+    this._tintFilled,
   });
 
   /// Plain screens: Home, History, the scan fallbacks.
@@ -110,6 +111,13 @@ class JamColors extends ThemeExtension<JamColors> {
   /// Round icon buttons over artwork. Paired with [JamBlur.glass].
   final Color glass;
 
+  /// The ground of a filled tint button (`JamButton.filled`, an alert's
+  /// preferred action). Darker than [tint] in dark mode so the white label
+  /// clears 4.5:1 — the bright dark-mode tint is for tint *text* on black.
+  /// Falls back to [tint].
+  Color get tintFilled => _tintFilled ?? tint;
+  final Color? _tintFilled;
+
   /// The light palette.
   static const JamColors light = JamColors(
     background: Color(0xFFFFFFFF),
@@ -135,6 +143,7 @@ class JamColors extends ThemeExtension<JamColors> {
     scrim: Color(0x66000000),
     material: Color(0xB8FFFFFF),
     glass: Color(0x2EFFFFFF),
+    tintFilled: Color(0xFFD92C64),
   );
 
   /// The dark palette: true black, Apple's elevated greys.
@@ -162,6 +171,34 @@ class JamColors extends ThemeExtension<JamColors> {
     scrim: Color(0x99000000),
     material: Color(0xB81C1C1E),
     glass: Color(0x2EFFFFFF),
+    // #FF4F82 under white is 3.1:1; the light tint is 4.7:1 and still reads
+    // as the same raspberry on black.
+    tintFilled: Color(0xFFD92C64),
+  );
+
+  /// The light palette under the system's Increase Contrast: secondary text
+  /// and hairlines firmer, the tint a step deeper (spec §8: AA everywhere).
+  static final JamColors lightHighContrast = light.copyWith(
+    secondaryLabel: const Color(0xCC3C3C43),
+    tertiaryLabel: const Color(0x993C3C43),
+    separator: const Color(0x803C3C43),
+    tint: const Color(0xFFB31F51),
+    tintPressed: const Color(0xFF8F1640),
+    tintFilled: const Color(0xFFB31F51),
+    warning: const Color(0xFFA62B00),
+    danger: const Color(0xFFD70015),
+  );
+
+  /// The dark palette under Increase Contrast.
+  static final JamColors darkHighContrast = dark.copyWith(
+    secondaryLabel: const Color(0xCCEBEBF5),
+    tertiaryLabel: const Color(0x99EBEBF5),
+    separator: const Color(0xCC6C6C70),
+    tint: const Color(0xFFFF6A95),
+    tintPressed: const Color(0xFFFF4F82),
+    tintFilled: const Color(0xFFB31F51),
+    warning: const Color(0xFFFFB340),
+    danger: const Color(0xFFFF6961),
   );
 
   List<Color> get _all => [
@@ -188,6 +225,7 @@ class JamColors extends ThemeExtension<JamColors> {
     scrim,
     material,
     glass,
+    tintFilled,
   ];
 
   static JamColors _fromList(List<Color> v) => JamColors(
@@ -214,6 +252,7 @@ class JamColors extends ThemeExtension<JamColors> {
     scrim: v[20],
     material: v[21],
     glass: v[22],
+    tintFilled: v[23],
   );
 
   @override
@@ -241,6 +280,7 @@ class JamColors extends ThemeExtension<JamColors> {
     Color? scrim,
     Color? material,
     Color? glass,
+    Color? tintFilled,
   }) => JamColors(
     background: background ?? this.background,
     groupedBackground: groupedBackground ?? this.groupedBackground,
@@ -267,6 +307,7 @@ class JamColors extends ThemeExtension<JamColors> {
     scrim: scrim ?? this.scrim,
     material: material ?? this.material,
     glass: glass ?? this.glass,
+    tintFilled: tintFilled ?? this.tintFilled,
   );
 
   @override
@@ -425,8 +466,13 @@ abstract final class JamSpace {
   /// Screen side margin on phones. See [pageFor] for wider windows.
   static const double page = 16;
 
-  /// Screen side margin from 400 wide up.
+  /// Screen side margin from [pageWideFrom] up (Plus / Pro Max phones,
+  /// tablets) — UIKit's layout margins.
   static const double pageWide = 20;
+
+  /// The window width at which the side margin grows from [page] to
+  /// [pageWide]. A 402 pt Pro keeps 16, as UIKit does.
+  static const double pageWideFrom = 414;
 
   /// Padding inside a custom content block in a grouped section.
   static const double card = 16;
@@ -438,7 +484,8 @@ abstract final class JamSpace {
   static const double sectionHeader = 6;
 
   /// The side margin for a window [width] wide.
-  static double pageFor(double width) => width >= 400 ? pageWide : page;
+  static double pageFor(double width) =>
+      width >= pageWideFrom ? pageWide : page;
 }
 
 /// Fixed component metrics (§2 Spacing, §4, §5).
@@ -485,14 +532,29 @@ abstract final class JamMetrics {
   /// The sheet grabber.
   static const Size grabber = Size(36, 5);
 
-  /// The width of an iOS alert.
-  static const double alertWidth = 270;
+  /// The width of an iOS 26 alert (narrower windows inset it by 40 a side).
+  static const double alertWidth = 300;
+
+  /// An iOS 26 alert's capsule buttons.
+  static const double alertButtonHeight = 44;
 
   /// A pull-down menu row.
   static const double menuRow = 44;
 }
 
-/// Corner radii (§2 Radii).
+/// Corner radii — the one radius table (spec §2 Radii as amended by §10.3:
+/// one iOS era, iOS 26).
+///
+/// | Shape | Radius |
+/// |---|---|
+/// | Artwork ≤ 44 / ≤ 64 / larger | 6 / 8 / 12 |
+/// | Inset-grouped section | 26 (never more than half a lone row: see [sectionFor]) |
+/// | Sheet, edge-attached (large detent: follows the device corner) | 38 (top) |
+/// | Sheet, floating (medium detent, iPad form sheet) | 38 (all four) |
+/// | Alert | 34 |
+/// | Pull-down menu | 22 |
+/// | Text field | 10 |
+/// | Buttons, toasts, mini player | capsule |
 abstract final class JamRadius {
   /// A generic scale for one-off shapes.
   static const double xs = 6;
@@ -517,17 +579,29 @@ abstract final class JamRadius {
   /// app-wide.
   static const double section = 26;
 
-  /// A sheet's top corners when attached to the bottom edge (phones).
-  static const double sheet = 16;
+  /// The section radius for a block [height] tall: [section], but never
+  /// so round that a single 44 row turns into a pill.
+  static double sectionFor(double height) {
+    final cap = height / 2 - 6;
+    return cap < section ? (cap < md ? md : cap) : section;
+  }
 
-  /// A sheet that floats inset from the edges.
+  /// A sheet's top corners when attached to the bottom edge (the large
+  /// detent): iOS 26 follows the device's own corner, approximated here.
+  static const double sheet = 38;
+
+  /// A sheet that floats inset from the edges (the medium detent, a form
+  /// sheet on a wide window): all four corners.
   static const double sheetFloating = 38;
 
-  /// Alerts.
-  static const double alert = 14;
+  /// The gap a floating sheet keeps from the window's sides and bottom.
+  static const double sheetFloatingInset = 8;
 
-  /// Pull-down menus.
-  static const double menu = 14;
+  /// Alerts (iOS 26).
+  static const double alert = 34;
+
+  /// Pull-down menus (iOS 26).
+  static const double menu = 22;
 
   /// Text and search fields.
   static const double field = 10;

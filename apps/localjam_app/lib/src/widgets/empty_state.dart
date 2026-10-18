@@ -1,9 +1,14 @@
 /// Nothing here yet — said once, plainly, with at most one way forward
 /// (DESIGN_SPEC v3 §5 Empty state).
 ///
-/// Centred: a 48 glyph in `tertiaryLabel`, a title2 title, one subheadline
-/// `secondaryLabel` sentence, and an optional `.filled` or `.plain` action.
-/// No illustrations.
+/// Centred: a 48 glyph in `secondaryLabel` (ContentUnavailableView's; the
+/// old `tertiaryLabel` all but vanished on black), a title2 title, one
+/// subheadline `secondaryLabel` sentence in balanced lines, and an optional
+/// action that *hugs its label* (min width [kJamEmptyStateActionMinWidth])
+/// with an optional plain secondary action under it — never a full-width
+/// bar floating mid-page (spec §10.6). No illustrations.
+///
+/// Every empty, ended, error and denied state uses this one.
 library;
 
 import 'package:flutter/widgets.dart';
@@ -11,6 +16,9 @@ import 'package:flutter/widgets.dart';
 import '../design/tokens.dart';
 import '../design/typography.dart';
 import 'buttons.dart';
+
+/// The narrowest an empty state's primary action gets (spec §10.6).
+const double kJamEmptyStateActionMinWidth = 140;
 
 /// The centred empty-state block, capped at 320 wide.
 class JamEmptyState extends StatelessWidget {
@@ -30,7 +38,7 @@ class JamEmptyState extends StatelessWidget {
     this.secondaryColor,
   });
 
-  /// A 48 CupertinoIcons glyph in `tertiaryLabel`.
+  /// A 48 CupertinoIcons glyph in `secondaryLabel`.
   final IconData? icon;
 
   /// A ready-made mark used instead of [icon].
@@ -46,7 +54,9 @@ class JamEmptyState extends StatelessWidget {
   final String? actionLabel;
   final VoidCallback? onAction;
 
-  /// [JamButtonVariant.filled] (default) or [JamButtonVariant.plain].
+  /// [JamButtonVariant.filled] (default), [JamButtonVariant.gray],
+  /// [JamButtonVariant.tinted] or [JamButtonVariant.plain]. Whatever the
+  /// look, it hugs its label.
   final JamButtonVariant actionVariant;
 
   final bool actionLoading;
@@ -67,7 +77,7 @@ class JamEmptyState extends StatelessWidget {
     final colors = context.jamColors;
     final label = actionLabel;
     final secondary = secondaryActionLabel;
-    final filled = actionVariant == JamButtonVariant.filled;
+    final grounded = actionVariant != JamButtonVariant.plain;
 
     return Center(
       child: ConstrainedBox(
@@ -84,7 +94,7 @@ class JamEmptyState extends StatelessWidget {
                 Icon(
                   icon,
                   size: 48,
-                  color: secondaryColor ?? colors.tertiaryLabel,
+                  color: secondaryColor ?? colors.secondaryLabel,
                 ),
               if (mark != null || icon != null)
                 const SizedBox(height: JamSpace.lg),
@@ -97,31 +107,40 @@ class JamEmptyState extends StatelessWidget {
                 ),
               ),
               const SizedBox(height: JamSpace.sm),
-              Text(
+              JamBalancedText(
                 body,
-                textAlign: TextAlign.center,
                 style: context.jamSubheadline.copyWith(
                   color: secondaryColor ?? colors.secondaryLabel,
                 ),
               ),
               if (label != null && onAction != null) ...[
-                SizedBox(height: filled ? JamSpace.xxl : JamSpace.md),
+                SizedBox(height: grounded ? JamSpace.xl : JamSpace.md),
                 Center(
-                  child: JamButton(
-                    label: label,
-                    variant: actionVariant,
-                    expand: filled,
-                    onPressed: onAction,
-                    loading: actionLoading,
+                  // Hugs: a button in bounded width would otherwise fill it.
+                  child: IntrinsicWidth(
+                    child: ConstrainedBox(
+                      constraints: BoxConstraints(
+                        minWidth: grounded ? kJamEmptyStateActionMinWidth : 0,
+                      ),
+                      child: JamButton(
+                        label: label,
+                        variant: actionVariant,
+                        onPressed: onAction,
+                        loading: actionLoading,
+                      ),
+                    ),
                   ),
                 ),
               ],
               if (secondary != null && onSecondaryAction != null) ...[
                 const SizedBox(height: JamSpace.xs),
                 Center(
-                  child: JamButton.plain(
-                    label: secondary,
-                    onPressed: onSecondaryAction,
+                  child: IntrinsicWidth(
+                    child: JamButton.plain(
+                      label: secondary,
+                      onPressed: onSecondaryAction,
+                      color: foregroundColor,
+                    ),
                   ),
                 ),
               ],
