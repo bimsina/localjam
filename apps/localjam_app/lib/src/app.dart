@@ -8,6 +8,7 @@ library;
 import 'dart:async';
 
 import 'package:app_links/app_links.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
@@ -27,6 +28,41 @@ import 'widgets/artwork.dart';
 import 'widgets/join_link_dialog.dart';
 import 'widgets/permission_sheet.dart';
 import 'widgets/session_gate.dart';
+
+/// What the app root says out loud.
+abstract final class AppStrings {
+  static const String notAnInvite = 'That link isn’t a jam invite.';
+  static const String notLocal =
+      'That link points outside your Wi‑Fi. A jam only works between '
+      'devices on the same network.';
+  static const String couldNotJoin = 'Couldn’t join that jam.';
+}
+
+/// Carries the in-app appearance (Settings → Appearance) to the system's
+/// own surfaces (spec §10.8).
+///
+/// Flutter paints every pixel of the app itself, but the keyboard, the
+/// share sheet, the document and photo pickers and permission prompts are
+/// UIKit's, and UIKit draws them from the *window's* trait collection — so
+/// with the app forced Light on a phone in Dark mode, every keyboard came
+/// up dark. On iOS this sets the window's `overrideUserInterfaceStyle`
+/// through a tiny channel in the Runner (`AppDelegate.swift`). Android's
+/// system pickers follow the system theme and an app cannot change that;
+/// nothing is sent there.
+abstract final class JamSystemAppearance {
+  static const MethodChannel channel = MethodChannel('localjam/appearance');
+
+  /// Sends [mode] to the platform. Never throws: an older Runner without
+  /// the channel just keeps the system's style.
+  static Future<void> apply(ThemeMode mode) async {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.iOS) return;
+    try {
+      await channel.invokeMethod<void>('setStyle', mode.name);
+    } catch (_) {
+      // Missing channel (tests, an old build): nothing to do.
+    }
+  }
+}
 
 class LocalJamApp extends StatefulWidget {
   const LocalJamApp({super.key});
@@ -52,10 +88,21 @@ class _LocalJamAppState extends State<LocalJamApp> {
     ready: () => _onboarding.loaded && _onboarding.seen && !_session.isBusy,
   );
 
+  ThemeMode? _sentAppearance;
+
+  /// Keeps the system's surfaces on the app's appearance.
+  void _syncAppearance() {
+    final mode = _settings.themeMode;
+    if (mode == _sentAppearance) return;
+    _sentAppearance = mode;
+    unawaited(JamSystemAppearance.apply(mode));
+  }
+
   @override
   void initState() {
     super.initState();
-    unawaited(_settings.load());
+    _settings.addListener(_syncAppearance);
+    unawaited(_settings.load().whenComplete(_syncAppearance));
     // The gate holds every route until this lands, so nobody sees the intro
     // flash past on their second launch.
     unawaited(_onboarding.load());
@@ -140,16 +187,13 @@ class _LocalJamAppState extends State<LocalJamApp> {
   Future<void> _joinFromLink(Uri uri) async {
     final parsed = parseJoinUri('$uri');
     if (parsed == null) {
-      _session.notify('That link is not a jam invite.');
+      _session.notify(AppStrings.notAnInvite);
       return;
     }
     // LocalJam is a LAN product; a link pointing anywhere routable is not a
     // jam, it is this app being aimed at someone else's server.
     if (!joinUriIsLocalOnly(parsed)) {
-      _session.notify(
-        'That link points outside your network. A jam only runs between '
-        'devices on it.',
-      );
+      _session.notify(AppStrings.notLocal);
       return;
     }
     final context = _router.routerDelegate.navigatorKey.currentContext;
@@ -170,7 +214,7 @@ class _LocalJamAppState extends State<LocalJamApp> {
       _router.push('/room');
     } else {
       // Deep links showed nothing at all on failure before this.
-      _session.notify(_session.error ?? 'Could not join that room.');
+      _session.notify(_session.error ?? AppStrings.couldNotJoin);
     }
   }
 
@@ -178,6 +222,7 @@ class _LocalJamAppState extends State<LocalJamApp> {
   void dispose() {
     jamRationalePresenter = null;
     JamMediaSessionController.placeholderArtworkProvider = null;
+    _settings.removeListener(_syncAppearance);
     _onboarding.removeListener(_links.readyChanged);
     _session.removeListener(_links.readyChanged);
     unawaited(_linkSub?.cancel());
@@ -202,6 +247,10 @@ class _LocalJamAppState extends State<LocalJamApp> {
               debugShowCheckedModeBanner: false,
               theme: jamLightTheme(),
               darkTheme: jamDarkTheme(),
+              // Increase Contrast: firmer secondary text and hairlines, a
+              // deeper tint (spec §8, AA everywhere).
+              highContrastTheme: jamLightTheme(highContrast: true),
+              highContrastDarkTheme: jamDarkTheme(highContrast: true),
               themeMode: _settings.themeMode,
               routerConfig: _router,
               // Screens without an app bar (the room, the sheets over it,

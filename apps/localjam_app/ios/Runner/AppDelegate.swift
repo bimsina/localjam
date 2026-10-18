@@ -19,6 +19,52 @@ import UIKit
 
   func didInitializeImplicitFlutterEngine(_ engineBridge: FlutterImplicitEngineBridge) {
     GeneratedPluginRegistrant.register(with: engineBridge.pluginRegistry)
+    if let registrar = engineBridge.pluginRegistry.registrar(forPlugin: "LocalJamAppearance") {
+      AppearanceChannel.register(with: registrar)
+    }
+  }
+}
+
+/// `localjam/appearance`: the in-app Light / Dark / System choice, applied to
+/// the window's `overrideUserInterfaceStyle` so UIKit's own surfaces — the
+/// keyboard, the share sheet, document and photo pickers — match the app
+/// rather than the device. Flutter draws everything else itself.
+final class AppearanceChannel: NSObject, FlutterPlugin {
+  /// The last style asked for, re-applied to windows that appear later.
+  private static var style: UIUserInterfaceStyle = .unspecified
+
+  static func register(with registrar: FlutterPluginRegistrar) {
+    let channel = FlutterMethodChannel(
+      name: "localjam/appearance",
+      binaryMessenger: registrar.messenger()
+    )
+    registrar.addMethodCallDelegate(AppearanceChannel(), channel: channel)
+    NotificationCenter.default.addObserver(
+      forName: UIWindow.didBecomeKeyNotification,
+      object: nil,
+      queue: .main
+    ) { note in
+      (note.object as? UIWindow)?.overrideUserInterfaceStyle = style
+    }
+  }
+
+  func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
+    guard call.method == "setStyle" else {
+      result(FlutterMethodNotImplemented)
+      return
+    }
+    switch call.arguments as? String {
+    case "light": AppearanceChannel.style = .light
+    case "dark": AppearanceChannel.style = .dark
+    default: AppearanceChannel.style = .unspecified
+    }
+    for scene in UIApplication.shared.connectedScenes {
+      guard let windowScene = scene as? UIWindowScene else { continue }
+      for window in windowScene.windows {
+        window.overrideUserInterfaceStyle = AppearanceChannel.style
+      }
+    }
+    result(nil)
   }
 }
 
