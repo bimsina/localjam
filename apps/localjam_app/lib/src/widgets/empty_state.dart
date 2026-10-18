@@ -66,7 +66,8 @@ class JamEmptyState extends StatelessWidget {
   final String? secondaryActionLabel;
   final VoidCallback? onSecondaryAction;
 
-  /// Overrides the title colour (e.g. white on the camera).
+  /// Overrides the title colour (e.g. white on the camera), and the label
+  /// of an unfilled action.
   final Color? foregroundColor;
 
   /// Overrides the glyph and body colour.
@@ -115,19 +116,23 @@ class JamEmptyState extends StatelessWidget {
               ),
               if (label != null && onAction != null) ...[
                 SizedBox(height: grounded ? JamSpace.xl : JamSpace.md),
+                // JamButton hugs its label; the floor keeps a short one
+                // from looking like a chip.
                 Center(
-                  // Hugs: a button in bounded width would otherwise fill it.
-                  child: IntrinsicWidth(
-                    child: ConstrainedBox(
-                      constraints: BoxConstraints(
-                        minWidth: grounded ? kJamEmptyStateActionMinWidth : 0,
-                      ),
-                      child: JamButton(
-                        label: label,
-                        variant: actionVariant,
-                        onPressed: onAction,
-                        loading: actionLoading,
-                      ),
+                  child: ConstrainedBox(
+                    constraints: BoxConstraints(
+                      minWidth: grounded ? kJamEmptyStateActionMinWidth : 0,
+                    ),
+                    child: JamButton(
+                      label: label,
+                      variant: actionVariant,
+                      onPressed: onAction,
+                      loading: actionLoading,
+                      // On a page that sets its own foreground (white on
+                      // the camera), an unfilled action's label follows.
+                      color: actionVariant == JamButtonVariant.filled
+                          ? null
+                          : foregroundColor,
                     ),
                   ),
                 ),
@@ -135,12 +140,10 @@ class JamEmptyState extends StatelessWidget {
               if (secondary != null && onSecondaryAction != null) ...[
                 const SizedBox(height: JamSpace.xs),
                 Center(
-                  child: IntrinsicWidth(
-                    child: JamButton.plain(
-                      label: secondary,
-                      onPressed: onSecondaryAction,
-                      color: foregroundColor,
-                    ),
+                  child: JamButton.plain(
+                    label: secondary,
+                    onPressed: onSecondaryAction,
+                    color: foregroundColor,
                   ),
                 ),
               ],

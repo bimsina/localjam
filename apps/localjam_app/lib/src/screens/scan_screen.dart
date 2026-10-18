@@ -65,10 +65,6 @@ abstract final class JamScanStrings {
   static const String retry = 'Try Again';
 }
 
-/// The narrowest a dead end's button gets: it hugs its label (§10.6), but
-/// "Try Again" alone would be a sliver.
-const double _actionMinWidth = 140;
-
 /// The viewfinder's share of the screen's shorter side…
 const double kScanWindowFraction = 0.7;
 
@@ -601,46 +597,25 @@ class ScannerUnavailableView extends StatelessWidget {
 
     return JamForcedAppearance(
       brightness: Brightness.dark,
-
       child: ColoredBox(
         color: JamFixedColors.black,
         child: Stack(
           fit: StackFit.expand,
           children: [
             Center(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  JamEmptyState(
-                    icon: denied || declined
-                        ? CupertinoIcons.camera
-                        : CupertinoIcons.qrcode_viewfinder,
-                    title: title,
-                    body: body,
-                    foregroundColor: JamNowPlayingColors.text,
-                    secondaryColor: JamNowPlayingColors.secondary,
-                  ),
-                  if (actionLabel != null && onAction != null) ...[
-                    const SizedBox(height: JamSpace.xxl),
-                    // Hugs its label: a centred Container grows to whatever
-                    // width it is offered, so the width is the label's own.
-                    IntrinsicWidth(
-                      child: ConstrainedBox(
-                        constraints: const BoxConstraints(
-                          minWidth: _actionMinWidth,
-                        ),
-                        // Neutral on black: the dark `fill` capsule with a
-                        // white label.
-                        child: JamButton(
-                          label: actionLabel,
-                          variant: JamButtonVariant.gray,
-                          color: JamNowPlayingColors.text,
-                          onPressed: onAction,
-                        ),
-                      ),
-                    ),
-                  ],
-                ],
+              child: JamEmptyState(
+                icon: denied || declined
+                    ? CupertinoIcons.camera
+                    : CupertinoIcons.qrcode_viewfinder,
+                title: title,
+                body: body,
+                foregroundColor: JamNowPlayingColors.text,
+                secondaryColor: JamNowPlayingColors.secondary,
+                // Neutral on black: the dark `fill` capsule with a
+                // white label.
+                actionLabel: actionLabel,
+                onAction: onAction,
+                actionVariant: JamButtonVariant.gray,
               ),
             ),
             _ScanChrome(

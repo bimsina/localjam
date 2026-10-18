@@ -268,11 +268,13 @@ class JamButton extends StatelessWidget {
       height: height,
       width: expand ? double.infinity : null,
       padding: padding,
-      alignment: Alignment.center,
       decoration: ground == null
           ? null
           : ShapeDecoration(color: ground, shape: const StadiumBorder()),
-      child: body,
+      // Centred vertically, but hugging its label across unless [expand]:
+      // a Container's own alignment would stretch it to any width it is
+      // offered.
+      child: Align(widthFactor: expand ? null : 1, child: body),
     );
 
     // A small button keeps a 44 pt hit area without growing its paint.
