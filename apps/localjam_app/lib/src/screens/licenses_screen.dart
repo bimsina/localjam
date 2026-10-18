@@ -23,17 +23,53 @@ import '../widgets/section.dart';
 /// Everything these pages say.
 abstract final class LicensesStrings {
   static const String title = 'Licenses';
-  static const String settings = 'Settings';
-  static const String packages = 'Open-Source Software';
+  static const String packages = 'Open-source software';
   static String count(int n) => n == 1 ? '1 license' : '$n licenses';
 }
 
-/// The registry, grouped by package (sorted, case-insensitively).
+/// The platform suffixes of federated plugin packages.
+const List<String> _kPlatformSuffixes = [
+  '_android',
+  '_ios',
+  '_darwin',
+  '_foundation',
+  '_macos',
+  '_linux',
+  '_windows',
+  '_web',
+];
+
+/// Whether [package] is another platform's implementation of a plugin —
+/// `app_links_linux` on an iPhone — and so not part of this build.
+bool jamLicenseIsOtherPlatform(String package, TargetPlatform platform) {
+  final mine = switch (platform) {
+    TargetPlatform.iOS ||
+    TargetPlatform.macOS => const ['_ios', '_darwin', '_foundation', '_macos'],
+    TargetPlatform.android => const ['_android'],
+    TargetPlatform.linux => const ['_linux'],
+    TargetPlatform.windows => const ['_windows'],
+    TargetPlatform.fuchsia => const <String>[],
+  };
+  for (final suffix in _kPlatformSuffixes) {
+    if (package.endsWith(suffix)) return !mine.contains(suffix);
+  }
+  return false;
+}
+
+/// A licence paragraph as it should read: runs of spaces (the plain-text
+/// licences' column padding, "Apache License  Version 2.0") collapsed.
+String jamLicenseParagraph(String text) =>
+    text.replaceAll(RegExp(r' {2,}'), ' ');
+
+/// The registry, grouped by package (sorted, case-insensitively), without
+/// other platforms' plugin implementations.
 Future<List<({String package, List<LicenseEntry> entries})>>
-jamLicensesByPackage() async {
+jamLicensesByPackage({TargetPlatform? platform}) async {
+  final target = platform ?? defaultTargetPlatform;
   final byPackage = <String, List<LicenseEntry>>{};
   await for (final entry in LicenseRegistry.licenses) {
     for (final package in entry.packages) {
+      if (jamLicenseIsOtherPlatform(package, target)) continue;
       (byPackage[package] ??= <LicenseEntry>[]).add(entry);
     }
   }
@@ -90,7 +126,6 @@ class _JamLicensesScreenState extends State<JamLicensesScreen> {
     final legalese = widget.applicationLegalese;
     return JamScaffold(
       title: LicensesStrings.title,
-      previousPageTitle: LicensesStrings.settings,
       grouped: true,
       children: [
         Center(
@@ -190,14 +225,17 @@ class _LicenseDetail extends StatelessWidget {
       }
       for (final paragraph in entries[i].paragraphs) {
         final centered = paragraph.indent == LicenseParagraph.centeredIndent;
+        // One step of indent at most: deeper levels pushed the body into a
+        // ragged column well right of the title.
+        final indent = centered ? 0 : (paragraph.indent > 0 ? 1 : 0);
         paragraphs.add(
           Padding(
             padding: EdgeInsetsDirectional.only(
               top: JamSpace.sm,
-              start: centered ? 0 : JamSpace.lg * paragraph.indent,
+              start: JamSpace.lg * indent,
             ),
             child: Text(
-              paragraph.text,
+              jamLicenseParagraph(paragraph.text),
               textAlign: centered ? TextAlign.center : TextAlign.start,
               style: centered
                   ? body.copyWith(fontWeight: FontWeight.w600)
@@ -210,7 +248,6 @@ class _LicenseDetail extends StatelessWidget {
     return JamScaffold(
       title: package,
       largeTitle: false,
-      previousPageTitle: LicensesStrings.title,
       children: [
         Center(
           child: ConstrainedBox(
