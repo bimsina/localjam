@@ -130,73 +130,65 @@ class _JamLicensesScreenState extends State<JamLicensesScreen> {
       // The large title shares the reading column's leading edge.
       maxContentWidth: JamContentWidth.reading,
       children: [
-        Center(
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(
-              maxWidth: JamContentWidth.reading,
-            ),
-            child: Padding(
-              padding: const EdgeInsets.only(top: JamSpace.sm),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
+        Padding(
+          padding: const EdgeInsets.only(top: JamSpace.sm),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Column(
                 children: [
-                  Column(
-                    children: [
-                      if (widget.applicationIcon != null)
-                        widget.applicationIcon!,
-                      const SizedBox(height: JamSpace.sm),
-                      Text(
-                        widget.applicationName,
-                        textAlign: TextAlign.center,
-                        style: context.jamTitle3,
+                  if (widget.applicationIcon != null) widget.applicationIcon!,
+                  const SizedBox(height: JamSpace.sm),
+                  Text(
+                    widget.applicationName,
+                    textAlign: TextAlign.center,
+                    style: context.jamTitle3,
+                  ),
+                  const SizedBox(height: JamSpace.xxs),
+                  Text(
+                    widget.applicationVersion,
+                    textAlign: TextAlign.center,
+                    style: context.jamSubheadline.copyWith(
+                      color: colors.secondaryLabel,
+                    ),
+                  ),
+                  if (legalese != null) ...[
+                    const SizedBox(height: JamSpace.sm),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: JamSpace.xxxl,
                       ),
-                      const SizedBox(height: JamSpace.xxs),
-                      Text(
-                        widget.applicationVersion,
+                      child: Text(
+                        legalese,
                         textAlign: TextAlign.center,
-                        style: context.jamSubheadline.copyWith(
+                        style: context.jamFootnote.copyWith(
                           color: colors.secondaryLabel,
                         ),
                       ),
-                      if (legalese != null) ...[
-                        const SizedBox(height: JamSpace.sm),
-                        Padding(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: JamSpace.xxxl,
-                          ),
-                          child: Text(
-                            legalese,
-                            textAlign: TextAlign.center,
-                            style: context.jamFootnote.copyWith(
-                              color: colors.secondaryLabel,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ],
-                  ),
-                  const SizedBox(height: JamSpace.section),
-                  if (packages == null)
-                    const Padding(
-                      padding: EdgeInsets.all(JamSpace.xxxl),
-                      child: Center(child: JamSpinner()),
-                    )
-                  else
-                    JamSection(
-                      header: LicensesStrings.packages,
-                      children: [
-                        for (final p in packages)
-                          JamRow(
-                            title: p.package,
-                            value: LicensesStrings.count(p.entries.length),
-                            chevron: true,
-                            onTap: () => _open(p.package, p.entries),
-                          ),
-                      ],
                     ),
+                  ],
                 ],
               ),
-            ),
+              const SizedBox(height: JamSpace.section),
+              if (packages == null)
+                const Padding(
+                  padding: EdgeInsets.all(JamSpace.xxxl),
+                  child: Center(child: JamSpinner()),
+                )
+              else
+                JamSection(
+                  header: LicensesStrings.packages,
+                  children: [
+                    for (final p in packages)
+                      JamRow(
+                        title: p.package,
+                        value: LicensesStrings.count(p.entries.length),
+                        chevron: true,
+                        onTap: () => _open(p.package, p.entries),
+                      ),
+                  ],
+                ),
+            ],
           ),
         ),
       ],
@@ -252,23 +244,16 @@ class _LicenseDetail extends StatelessWidget {
       largeTitle: false,
       maxContentWidth: JamContentWidth.reading,
       children: [
-        Center(
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(
-              maxWidth: JamContentWidth.reading,
-            ),
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(
-                JamSpace.page,
-                JamSpace.sm,
-                JamSpace.page,
-                0,
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: paragraphs,
-              ),
-            ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(
+            JamSpace.page,
+            JamSpace.sm,
+            JamSpace.page,
+            0,
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: paragraphs,
           ),
         ),
       ],

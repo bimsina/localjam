@@ -20,6 +20,7 @@ import '../design/typography.dart';
 import '../util/format.dart';
 import '../util/media_picking.dart';
 import 'buttons.dart';
+import 'empty_state.dart';
 import 'sheet.dart';
 import 'track_row.dart';
 
@@ -34,6 +35,7 @@ abstract final class LibrarySheetStrings {
   static const String unknownArtist = 'Unknown Artist';
   static const String selected = 'Selected';
   static const String noResults = 'No Results';
+  static const String noResultsBody = 'Check the spelling or try a new search.';
 
   /// "3 Songs Selected" — the title once something is chosen.
   static String selectedCount(int n) =>
@@ -240,12 +242,10 @@ class _JamLibraryPickerState extends State<JamLibraryPicker> {
             SliverToBoxAdapter(
               child: Padding(
                 padding: const EdgeInsets.only(top: JamSpace.huge),
-                child: Text(
-                  LibrarySheetStrings.noResults,
-                  textAlign: TextAlign.center,
-                  style: context.jamTitle3.copyWith(
-                    color: colors.secondaryLabel,
-                  ),
+                child: JamEmptyState(
+                  icon: CupertinoIcons.search,
+                  title: LibrarySheetStrings.noResults,
+                  body: LibrarySheetStrings.noResultsBody,
                 ),
               ),
             ),
