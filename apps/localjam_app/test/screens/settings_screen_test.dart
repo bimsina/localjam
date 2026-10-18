@@ -4,6 +4,7 @@ library;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:localjam_app/src/widgets/rename_dialog.dart';
 import 'package:localjam_app/src/design/theme.dart';
 import 'package:localjam_app/src/screens/settings_screen.dart';
 import 'package:localjam_app/src/state/app_settings.dart';
@@ -64,7 +65,7 @@ void main() {
 
     await tester.tap(find.text('Silky Puffin'));
     await tester.pumpAndSettle();
-    expect(find.text('Your name in the room'), findsOneWidget);
+    expect(find.text(RenameStrings.title), findsOneWidget);
 
     await tester.tap(find.text('Cancel'));
     await tester.pumpAndSettle();

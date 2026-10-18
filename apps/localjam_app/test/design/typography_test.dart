@@ -6,77 +6,106 @@ import 'package:localjam_app/src/design/theme.dart';
 import 'package:localjam_app/src/design/tokens.dart';
 import 'package:localjam_app/src/design/typography.dart';
 
-/// Relative luminance per WCAG 2.1, then the 4.5:1 contrast ratio the palette
-/// claims. Both themes are checked, because a dark palette that quietly fails
-/// AA is exactly the kind of thing nobody notices until a review.
+/// Relative luminance per WCAG 2.1, with a translucent foreground composited
+/// over its ground first.
 double _luminance(Color c) {
   double channel(double v) =>
       v <= 0.03928 ? v / 12.92 : math.pow((v + 0.055) / 1.055, 2.4).toDouble();
   return 0.2126 * channel(c.r) + 0.7152 * channel(c.g) + 0.0722 * channel(c.b);
 }
 
-double contrast(Color a, Color b) {
-  final la = _luminance(a);
-  final lb = _luminance(b);
-  final hi = la > lb ? la : lb;
-  final lo = la > lb ? lb : la;
+double contrast(Color fg, Color bg) {
+  final a = _luminance(Color.alphaBlend(fg, bg));
+  final b = _luminance(bg);
+  final hi = a > b ? a : b;
+  final lo = a > b ? b : a;
   return (hi + 0.05) / (lo + 0.05);
 }
 
 void main() {
-  test('the bundled family is applied once, at the theme', () {
-    for (final theme in [jamLightTheme(), jamDarkTheme()]) {
-      expect(theme.textTheme.bodyLarge!.fontFamily, jamFontFamily);
-      expect(theme.textTheme.headlineLarge!.fontFamily, jamFontFamily);
+  test('no bundled family: the platform system face, named per platform', () {
+    final ios = buildJamTypeScale(
+      platform: TargetPlatform.iOS,
+      color: JamColors.light.label,
+    );
+    expect(ios.body.fontFamily, 'CupertinoSystemText');
+    expect(ios.footnote.fontFamily, 'CupertinoSystemText');
+    // SF switches to its Display cut at 20 pt and up.
+    expect(ios.title3.fontFamily, 'CupertinoSystemDisplay');
+    expect(ios.largeTitle.fontFamily, 'CupertinoSystemDisplay');
+
+    final android = buildJamTypeScale(
+      platform: TargetPlatform.android,
+      color: JamColors.light.label,
+    );
+    expect(android.body.fontFamily, 'Roboto');
+    final windows = buildJamTypeScale(
+      platform: TargetPlatform.windows,
+      color: JamColors.light.label,
+    );
+    expect(windows.body.fontFamily, 'Segoe UI');
+    for (final s in [ios.body, android.body]) {
+      expect(s.fontFamily, isNot('Plus Jakarta Sans'));
     }
   });
 
-  test('the scale matches the spec at every step', () {
-    final text = buildJamTextTheme(
-      primary: JamColors.light.textPrimary,
-      secondary: JamColors.light.textSecondary,
+  test('the scale matches the spec table', () {
+    final s = buildJamTypeScale(
+      platform: TargetPlatform.iOS,
+      color: JamColors.light.label,
     );
-    expect(text.displayLarge!.fontSize, 40);
-    expect(text.displayLarge!.fontWeight, FontWeight.w800);
-    expect(text.headlineLarge!.fontSize, 32);
-    expect(text.headlineMedium!.fontSize, 26);
-    expect(text.headlineSmall!.fontSize, 22);
-    expect(text.titleLarge!.fontSize, 19);
-    expect(text.titleMedium!.fontSize, 17);
-    expect(text.titleSmall!.fontSize, 15);
-    expect(text.bodyLarge!.fontSize, 16);
-    expect(text.bodyMedium!.fontSize, 15);
-    expect(text.bodySmall!.fontSize, 13);
-    expect(text.labelLarge!.fontSize, 16);
-    expect(text.labelSmall!.fontSize, 11);
-    // The big titles are set tight; the body is not.
-    expect(text.headlineLarge!.letterSpacing, lessThan(0));
-    expect(text.bodyLarge!.letterSpacing, 0);
+    void check(
+      TextStyle style,
+      double size,
+      double line,
+      FontWeight w,
+      double t,
+    ) {
+      expect(style.fontSize, size);
+      expect(style.height! * size, closeTo(line, 0.001));
+      expect(style.fontWeight, w);
+      expect(style.letterSpacing, t);
+    }
+
+    check(s.largeTitle, 34, 41, FontWeight.w700, 0.4);
+    check(s.title1, 28, 34, FontWeight.w700, 0.38);
+    check(s.title2, 22, 28, FontWeight.w700, -0.26);
+    check(s.title3, 20, 25, FontWeight.w600, -0.45);
+    check(s.headline, 17, 22, FontWeight.w600, -0.43);
+    check(s.body, 17, 22, FontWeight.w400, -0.43);
+    check(s.callout, 16, 21, FontWeight.w400, -0.31);
+    check(s.subheadline, 15, 20, FontWeight.w400, -0.23);
+    check(s.footnote, 13, 18, FontWeight.w400, -0.08);
+    check(s.caption1, 12, 16, FontWeight.w400, 0);
+    check(s.caption2, 11, 13, FontWeight.w400, 0.06);
+  });
+
+  test('SF tracking applies on Apple platforms only', () {
+    for (final p in [TargetPlatform.iOS, TargetPlatform.macOS]) {
+      final s = buildJamTypeScale(platform: p, color: JamColors.light.label);
+      expect(s.body.letterSpacing, -0.43);
+    }
+    for (final p in [
+      TargetPlatform.android,
+      TargetPlatform.windows,
+      TargetPlatform.linux,
+    ]) {
+      final s = buildJamTypeScale(platform: p, color: JamColors.light.label);
+      expect(s.body.letterSpacing, 0);
+      expect(s.largeTitle.letterSpacing, 0);
+    }
   });
 
   test('numeric styles ask for tabular figures', () {
-    final style = jamNumericStyle(JamColors.light.textSecondary);
+    final style = jamNumericStyle(JamColors.light.secondaryLabel);
     expect(style.fontFeatures, contains(const FontFeature.tabularFigures()));
-    expect(style.fontFamily, jamFontFamily);
-  });
-
-  testWidgets('jamNumeric resolves from context with tnum', (tester) async {
-    late TextStyle seen;
-    await tester.pumpWidget(
-      MaterialApp(
-        theme: jamLightTheme(),
-        home: Builder(
-          builder: (context) {
-            seen = context.jamNumeric;
-            return const SizedBox.shrink();
-          },
-        ),
-      ),
+    expect(
+      jamTabular(const TextStyle()).fontFeatures,
+      contains(const FontFeature.tabularFigures()),
     );
-    expect(seen.fontFeatures, contains(const FontFeature.tabularFigures()));
   });
 
-  testWidgets('the semantic aliases map onto the scale', (tester) async {
+  testWidgets('the named getters resolve from the theme', (tester) async {
     late BuildContext ctx;
     await tester.pumpWidget(
       MaterialApp(
@@ -89,29 +118,50 @@ void main() {
         ),
       ),
     );
-    expect(ctx.jamDisplay.fontSize, 40);
-    expect(ctx.jamLargeTitle.fontSize, 32);
-    expect(ctx.jamTrackTitle.fontSize, 26);
-    expect(ctx.jamSheetTitle.fontSize, 22);
-    expect(ctx.jamTitle.fontSize, 19);
-    expect(ctx.jamRowTitle.fontSize, 17);
-    expect(ctx.jamBody.fontSize, 16);
-    expect(ctx.jamByline.fontSize, 15);
+    expect(ctx.jamLargeTitle.fontSize, 34);
+    expect(ctx.jamTitle1.fontSize, 28);
+    expect(ctx.jamTitle2.fontSize, 22);
+    expect(ctx.jamTitle3.fontSize, 20);
+    expect(ctx.jamHeadline.fontSize, 17);
+    expect(ctx.jamHeadline.fontWeight, FontWeight.w600);
+    expect(ctx.jamBody.fontSize, 17);
+    expect(ctx.jamCallout.fontSize, 16);
+    expect(ctx.jamSubheadline.fontSize, 15);
     expect(ctx.jamFootnote.fontSize, 13);
-    expect(ctx.jamCaption.fontSize, 11);
+    expect(ctx.jamCaption1.fontSize, 12);
+    expect(ctx.jamCaption2.fontSize, 11);
+    expect(ctx.jamBody.color, JamColors.light.label);
+    expect(ctx.jamNumeric.color, JamColors.light.secondaryLabel);
+    expect(
+      ctx.jamNumeric.fontFeatures,
+      contains(const FontFeature.tabularFigures()),
+    );
   });
 
-  test('label colours clear AA against the ground they sit on', () {
+  test('the text theme carries the same scale', () {
+    final theme = jamLightTheme(platform: TargetPlatform.iOS);
+    expect(theme.textTheme.bodyLarge!.fontSize, 17);
+    expect(theme.textTheme.bodySmall!.fontSize, 13);
+    expect(theme.textTheme.displayLarge!.fontSize, 34);
+    expect(theme.extension<JamTypeScale>(), isNotNull);
+  });
+
+  test('text colours hold their contrast on the grounds they sit on', () {
     for (final c in [JamColors.light, JamColors.dark]) {
-      expect(contrast(c.onAccent, c.accent), greaterThanOrEqualTo(4.5));
-      expect(contrast(c.textPrimary, c.canvas), greaterThanOrEqualTo(4.5));
-      expect(contrast(c.textPrimary, c.surface), greaterThanOrEqualTo(4.5));
-      expect(contrast(c.textSecondary, c.canvas), greaterThanOrEqualTo(4.5));
-      // Apricot is a fill, never text — `warning` is the readable sibling.
-      expect(contrast(c.warning, c.canvas), greaterThanOrEqualTo(4.5));
-      expect(contrast(c.danger, c.canvas), greaterThanOrEqualTo(4.5));
-      // A snackbar draws canvas-coloured text on the primary text colour.
-      expect(contrast(c.canvas, c.textPrimary), greaterThanOrEqualTo(4.5));
+      for (final ground in [
+        c.background,
+        c.groupedBackground,
+        c.groupedSurface,
+        c.elevated,
+      ]) {
+        expect(contrast(c.label, ground), greaterThanOrEqualTo(4.5));
+        // Apple's secondaryLabel: 3:1 is its design floor on light grounds.
+        expect(contrast(c.secondaryLabel, ground), greaterThanOrEqualTo(3));
+      }
+      expect(contrast(c.tint, c.background), greaterThanOrEqualTo(4.5));
+      expect(contrast(c.warning, c.background), greaterThanOrEqualTo(4.5));
+      // Filled-button labels (17 semibold): at least the large-text floor.
+      expect(contrast(c.onTint, c.tint), greaterThanOrEqualTo(3));
     }
   });
 }

@@ -212,8 +212,8 @@ class _JamSyncIndicatorState extends State<JamSyncIndicator>
     // `inSync` is deliberately wordless: a quiet dot is the reward for
     // everything working.
     final (String? label, Color color) = switch (widget.state) {
-      JamSyncState.inSync => (JamSyncStrings.inSync, colors.textSecondary),
-      JamSyncState.syncing => (JamSyncStrings.syncing, colors.textSecondary),
+      JamSyncState.inSync => (JamSyncStrings.inSync, colors.secondaryLabel),
+      JamSyncState.syncing => (JamSyncStrings.syncing, colors.secondaryLabel),
       JamSyncState.catchingUp => (JamSyncStrings.catchingUp, colors.warning),
       JamSyncState.reconnecting => (
         JamSyncStrings.reconnecting,
@@ -222,15 +222,15 @@ class _JamSyncIndicatorState extends State<JamSyncIndicator>
       JamSyncState.offSync => (JamSyncStrings.offSync, colors.danger),
       JamSyncState.hostAway => (
         JamSyncStrings.hostAsleep,
-        colors.textSecondary,
+        colors.secondaryLabel,
       ),
-      JamSyncState.idle => (null, colors.textSecondary),
+      JamSyncState.idle => (null, colors.secondaryLabel),
     };
 
     // `catchingUp` is the one state whose dot is not its label's colour: an
     // apricot dot with a readable warning-brown word beside it.
     final dotColor = widget.state == JamSyncState.catchingUp
-        ? colors.highlight
+        ? colors.warning
         : color;
 
     final reduced = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
@@ -239,7 +239,7 @@ class _JamSyncIndicatorState extends State<JamSyncIndicator>
     final dot = TweenAnimationBuilder<Color?>(
       tween: ColorTween(end: dotColor),
       duration: lerp,
-      curve: JamCurve.base,
+      curve: JamCurve.standard,
       builder: (context, value, child) => DecoratedBox(
         decoration: BoxDecoration(
           color: value ?? dotColor,
@@ -275,7 +275,7 @@ class _JamSyncIndicatorState extends State<JamSyncIndicator>
                 TweenAnimationBuilder<Color?>(
                   tween: ColorTween(end: color),
                   duration: lerp,
-                  curve: JamCurve.base,
+                  curve: JamCurve.standard,
                   builder: (context, value, _) => Text(
                     label,
                     style: context.jamFootnote.copyWith(color: value ?? color),

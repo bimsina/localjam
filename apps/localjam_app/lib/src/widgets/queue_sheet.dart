@@ -318,7 +318,6 @@ class _QueuePanelState extends State<QueuePanel> {
           child: playlist.isEmpty
               ? JamEmptyState(
                   icon: Icons.queue_music_rounded,
-                  gradientMark: true,
                   title: QueueSheetStrings.emptyTitle,
                   body: canAdd
                       ? QueueSheetStrings.emptyCanAdd
@@ -513,12 +512,14 @@ class _QueueHeaderActionsState extends State<QueueHeaderActions> {
       children: [
         Text(
           QueueSheetStrings.count(widget.engine.playlist.length),
-          style: context.jamFootnote,
+          style: context.jamFootnote.copyWith(
+            color: context.jamColors.secondaryLabel,
+          ),
         ),
         const SizedBox(width: JamSpace.sm),
         // Never vanishes when the room says no: a control that disappears
         // reads as a bug, a disabled one reads as a rule.
-        JamButton.tertiary(
+        JamButton.plain(
           label: QueueSheetStrings.add,
           icon: Icons.add_rounded,
           loading: _adding,
@@ -543,7 +544,12 @@ class _QueueGateNote extends StatelessWidget {
       JamSpace.page,
       0,
     ),
-    child: Text(message, style: context.jamFootnote),
+    child: Text(
+      message,
+      style: context.jamFootnote.copyWith(
+        color: context.jamColors.secondaryLabel,
+      ),
+    ),
   );
 }
 
@@ -601,8 +607,8 @@ class _ProgressLine extends StatelessWidget {
       child: LinearProgressIndicator(
         value: value,
         minHeight: 3,
-        color: colors.accent,
-        backgroundColor: colors.surfaceMuted,
+        color: colors.tint,
+        backgroundColor: colors.fillSecondary,
       ),
     );
   }
@@ -628,7 +634,7 @@ class _SectionRule extends StatelessWidget {
         header: true,
         child: Text(
           label,
-          style: context.jamCaption.copyWith(color: colors.textTertiary),
+          style: context.jamCaption2.copyWith(color: colors.tertiaryLabel),
         ),
       ),
     );
@@ -895,8 +901,8 @@ class _StatusSlot extends StatelessWidget {
             child: CircularProgressIndicator(
               strokeWidth: 2,
               value: prefetch!.progress == 0 ? null : prefetch!.progress,
-              backgroundColor: colors.surfaceMuted,
-              valueColor: AlwaysStoppedAnimation<Color>(colors.accent),
+              backgroundColor: colors.fillSecondary,
+              valueColor: AlwaysStoppedAnimation<Color>(colors.tint),
             ),
           );
         case JamPrefetchPhase.failed:
@@ -926,7 +932,7 @@ class _StatusSlot extends StatelessWidget {
     if (duration == null) return const SizedBox.shrink();
     return Text(
       formatPositionUs(duration),
-      style: jamNumericStyle(colors.textTertiary),
+      style: jamNumericStyle(colors.tertiaryLabel),
     );
   }
 }
@@ -990,7 +996,7 @@ class _EqualiserBadgeState extends State<_EqualiserBadge>
         height: _badgeSize,
         alignment: Alignment.center,
         decoration: BoxDecoration(
-          color: colors.accent,
+          color: colors.tint,
           borderRadius: BorderRadius.circular(4),
         ),
         child: AnimatedBuilder(
@@ -1005,7 +1011,7 @@ class _EqualiserBadgeState extends State<_EqualiserBadge>
                   width: 2,
                   height: _height(periods[i]),
                   decoration: BoxDecoration(
-                    color: colors.onAccent,
+                    color: colors.onTint,
                     borderRadius: BorderRadius.circular(1),
                   ),
                 ),
@@ -1062,7 +1068,7 @@ class _InsertRevealState extends State<_InsertReveal>
 
   @override
   Widget build(BuildContext context) {
-    final curved = CurvedAnimation(parent: _reveal, curve: JamCurve.base);
+    final curved = CurvedAnimation(parent: _reveal, curve: JamCurve.standard);
     return SizeTransition(
       sizeFactor: curved,
       child: FadeTransition(opacity: curved, child: widget.child),

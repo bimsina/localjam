@@ -661,7 +661,7 @@ void main() {
             matching: find.byType(JamButton),
           ),
         );
-        expect(primary.variant, JamButtonVariant.primary);
+        expect(primary.variant, JamButtonVariant.filled);
         expect(find.text(JamRoomStrings.back), findsOneWidget);
 
         await tester.runAsync(host.acknowledgeEnd);

@@ -441,11 +441,11 @@ class _RoomScreenState extends State<RoomScreen>
           // The cover's colour, resolved once per track through the cache the
           // session holds — so minimising to the room bar does not re-derive
           // the tint the bar is already wearing.
-          JamTintBuilder(
+          JamBackdropBuilder(
             engine: engine,
-            cache: session.tints,
+            cache: session.backdrops,
             builder: (context, tint) => Scaffold(
-              backgroundColor: colors.canvas,
+              backgroundColor: colors.background,
               // The gradient wash runs to the very top; the app bar floats on it.
               extendBodyBehindAppBar: true,
               appBar: AppBar(
@@ -522,7 +522,7 @@ class _RoomScreenState extends State<RoomScreen>
                                     engine.sessionName,
                                     maxLines: 1,
                                     overflow: TextOverflow.ellipsis,
-                                    style: context.jamRowTitle,
+                                    style: context.jamHeadline,
                                   ),
                                 ),
                               ),
@@ -624,7 +624,7 @@ class _RoomScreenState extends State<RoomScreen>
 class _TintWash extends StatelessWidget {
   const _TintWash({required this.tint});
 
-  final JamTint tint;
+  final JamBackdrop tint;
 
   @override
   Widget build(BuildContext context) {
@@ -632,8 +632,8 @@ class _TintWash extends StatelessWidget {
     final reduced = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
     return TweenAnimationBuilder<Color?>(
       tween: ColorTween(end: tint.base),
-      duration: reduced ? Duration.zero : JamDuration.ambient,
-      curve: JamCurve.ambient,
+      duration: reduced ? Duration.zero : JamDuration.crossfade,
+      curve: JamCurve.standard,
       builder: (context, value, _) => IgnorePointer(
         child: DecoratedBox(
           decoration: BoxDecoration(
@@ -642,7 +642,7 @@ class _TintWash extends StatelessWidget {
               end: Alignment.bottomCenter,
               colors: [
                 (value ?? tint.base).withValues(alpha: 0.10),
-                colors.canvas.withValues(alpha: 0),
+                colors.background.withValues(alpha: 0),
               ],
               stops: const [0, 0.45],
             ),
@@ -671,7 +671,7 @@ class _RoomBody extends StatelessWidget {
   final JamGuestEngine? guest;
   final JamSessionController session;
   final String identity;
-  final JamTint tint;
+  final JamBackdrop tint;
   final Animation<double> ambient;
 
   /// Wide windows sit the hero at the left of the player column with the
@@ -867,12 +867,11 @@ class _Hero extends StatelessWidget {
 
   final JamEngine engine;
   final double size;
-  final JamTint tint;
+  final JamBackdrop tint;
   final Animation<double> ambient;
 
   @override
   Widget build(BuildContext context) {
-    final colors = context.jamColors;
     final dark = Theme.of(context).brightness == Brightness.dark;
     final reduced = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
     final glowAlpha = dark ? 0.40 : 0.28;
@@ -892,8 +891,8 @@ class _Hero extends StatelessWidget {
             child: IgnorePointer(
               child: TweenAnimationBuilder<Color?>(
                 tween: ColorTween(end: tint.base),
-                duration: reduced ? Duration.zero : JamDuration.ambient,
-                curve: JamCurve.ambient,
+                duration: reduced ? Duration.zero : JamDuration.crossfade,
+                curve: JamCurve.standard,
                 builder: (context, value, _) => AnimatedBuilder(
                   animation: ambient,
                   builder: (context, _) {
@@ -929,7 +928,7 @@ class _Hero extends StatelessWidget {
           DecoratedBox(
             decoration: BoxDecoration(
               borderRadius: BorderRadius.circular(JamRadius.artwork(size)),
-              boxShadow: JamShadow.floating(colors),
+              boxShadow: JamShadow.artwork,
             ),
             child: JamArtwork(
               engine: engine,
@@ -1068,7 +1067,7 @@ class _TitleBlock extends StatelessWidget {
         JamRoomStrings.importing,
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
-        style: context.jamTrackTitle.copyWith(color: colors.textPrimary),
+        style: context.jamTitle2.copyWith(color: colors.label),
       );
     }
     // The credit is always shown, yours included. Hiding "added by You" left
@@ -1104,13 +1103,13 @@ class _TitleBlock extends StatelessWidget {
               : jamDisplayTitle(current),
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
-          style: context.jamTrackTitle.copyWith(color: colors.textPrimary),
+          style: context.jamTitle2.copyWith(color: colors.label),
         ),
         const SizedBox(height: JamSpace.xxs),
         if (current == null && onAdd != null)
           Align(
             alignment: Alignment.centerLeft,
-            child: JamButton.tertiary(
+            child: JamButton.plain(
               label: JamRoomStrings.addMusic,
               onPressed: onAdd,
             ),
@@ -1120,14 +1119,14 @@ class _TitleBlock extends StatelessWidget {
             JamRoomStrings.nothingQueuedBody,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
-            style: context.jamBody.copyWith(color: colors.textSecondary),
+            style: context.jamBody.copyWith(color: colors.secondaryLabel),
           )
         else if (byline != null) ...[
           Text(
             byline,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
-            style: context.jamBody.copyWith(color: colors.textSecondary),
+            style: context.jamBody.copyWith(color: colors.secondaryLabel),
           ),
           if (creditWidget != null) ...[
             const SizedBox(height: JamSpace.sm),
@@ -1172,18 +1171,14 @@ class _AddedBy extends StatelessWidget {
     child: Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        JamAvatar(
-          name: faceName,
-          size: JamAvatarSize.attribution,
-          ring: you ? JamAvatarRing.you : JamAvatarRing.none,
-        ),
+        JamAvatar(name: faceName, size: JamAvatarSize.attribution),
         const SizedBox(width: JamSpace.sm),
         Flexible(
           child: Text(
             '${JamRoomStrings.addedBy} ${label.toUpperCase()}',
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
-            style: context.jamCaption.copyWith(color: colors.textTertiary),
+            style: context.jamCaption2.copyWith(color: colors.tertiaryLabel),
           ),
         ),
       ],
@@ -1332,7 +1327,7 @@ class _FetchCaption extends StatelessWidget {
     return Text(
       JamRoomStrings.fetching(percent),
       textAlign: TextAlign.center,
-      style: context.jamCaption.copyWith(color: context.jamColors.warning),
+      style: context.jamCaption2.copyWith(color: context.jamColors.warning),
     );
   }
 }
@@ -1359,11 +1354,11 @@ class _FetchFailed extends StatelessWidget {
           child: Text(
             JamRoomStrings.fetchFailed,
             textAlign: TextAlign.center,
-            style: context.jamCaption.copyWith(color: colors.danger),
+            style: context.jamCaption2.copyWith(color: colors.danger),
           ),
         ),
         const SizedBox(width: JamSpace.xs),
-        JamButton.tertiary(
+        JamButton.plain(
           label: JamRoomStrings.retry,
           semanticLabel: JamRoomStrings.retryFetch,
           onPressed: onRetry,
@@ -1379,13 +1374,13 @@ class _FetchFailed extends StatelessWidget {
           height: 72,
           alignment: Alignment.center,
           decoration: BoxDecoration(
-            color: colors.surfaceMuted,
+            color: colors.fillSecondary,
             shape: BoxShape.circle,
           ),
           child: Icon(
             Icons.music_off_rounded,
             size: 28,
-            color: colors.textSecondary,
+            color: colors.secondaryLabel,
           ),
         ),
         const SizedBox(height: JamSpace.xs),
@@ -1425,14 +1420,14 @@ class _Fetching extends StatelessWidget {
                   child: CircularProgressIndicator(
                     value: progress.clamp(0.0, 1.0),
                     strokeWidth: 3,
-                    backgroundColor: colors.surfaceMuted,
-                    color: colors.accent,
+                    backgroundColor: colors.fillSecondary,
+                    color: colors.tint,
                   ),
                 ),
                 Icon(
                   Icons.south_rounded,
                   size: 28,
-                  color: colors.textSecondary,
+                  color: colors.secondaryLabel,
                 ),
               ],
             ),
@@ -1441,7 +1436,7 @@ class _Fetching extends StatelessWidget {
           Text(
             JamRoomStrings.fetching(percent),
             textAlign: TextAlign.center,
-            style: context.jamCaption.copyWith(color: colors.warning),
+            style: context.jamCaption2.copyWith(color: colors.warning),
           ),
         ],
       ),
@@ -1479,9 +1474,7 @@ class _PeopleStrip extends StatelessWidget {
     final faces = JamAvatarStack(
       names: roster,
       size: JamAvatarSize.strip,
-      maxVisible: 4,
-      hostName: hostName,
-      youName: selfName,
+      maxVisible: 3,
     );
 
     return Row(
@@ -1498,7 +1491,7 @@ class _PeopleStrip extends StatelessWidget {
             excludeSemantics: true,
             child: InkWell(
               onTap: onPeople,
-              borderRadius: BorderRadius.circular(JamRadius.pill),
+              borderRadius: BorderRadius.circular(JamRadius.capsule),
               child: Padding(
                 // No horizontal inset: the strip, the title block and the
                 // scrubber all start on the column's own left edge. Three
@@ -1529,7 +1522,7 @@ class _PeopleStrip extends StatelessWidget {
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: context.jamFootnote.copyWith(
-                          color: colors.textSecondary,
+                          color: colors.secondaryLabel,
                         ),
                       ),
                     ),
@@ -1540,7 +1533,7 @@ class _PeopleStrip extends StatelessWidget {
           ),
         ),
         if (isHost)
-          JamButton.tertiary(label: JamRoomStrings.invite, onPressed: onPeople),
+          JamButton.plain(label: JamRoomStrings.invite, onPressed: onPeople),
         Semantics(
           container: true,
           button: true,
@@ -1550,7 +1543,7 @@ class _PeopleStrip extends StatelessWidget {
           excludeSemantics: true,
           child: InkWell(
             onTap: onQueue,
-            borderRadius: BorderRadius.circular(JamRadius.pill),
+            borderRadius: BorderRadius.circular(JamRadius.capsule),
             child: Padding(
               // Mirrors the people side: flush to the column's right edge.
               padding: const EdgeInsets.symmetric(vertical: JamSpace.sm),
@@ -1560,13 +1553,13 @@ class _PeopleStrip extends StatelessWidget {
                   Icon(
                     Icons.queue_music_rounded,
                     size: 20,
-                    color: colors.textSecondary,
+                    color: colors.secondaryLabel,
                   ),
                   const SizedBox(width: JamSpace.sm),
                   Text(
                     JamRoomStrings.queued(queueCount),
                     style: context.jamFootnote.copyWith(
-                      color: colors.textSecondary,
+                      color: colors.secondaryLabel,
                     ),
                   ),
                 ],
@@ -1618,7 +1611,7 @@ class _ReadinessNote extends StatelessWidget {
         return Text(
           note,
           textAlign: TextAlign.center,
-          style: context.jamCaption.copyWith(color: colors.warning),
+          style: context.jamCaption2.copyWith(color: colors.warning),
         );
       },
     );
@@ -1647,8 +1640,8 @@ class _ImportNote extends StatelessWidget {
             child: Text(
               JamRoomStrings.importingCount(progress.completed, progress.total),
               textAlign: TextAlign.center,
-              style: context.jamCaption.copyWith(
-                color: context.jamColors.textSecondary,
+              style: context.jamCaption2.copyWith(
+                color: context.jamColors.secondaryLabel,
               ),
             ),
           );
@@ -1674,8 +1667,7 @@ class _JamStarted extends StatelessWidget {
           duration: _kCelebration,
           builder: (context, t, _) {
             final scale =
-                0.8 +
-                0.2 * JamCurve.celebration.transform(math.min(t / 0.5, 1));
+                0.8 + 0.2 * JamCurve.spring.transform(math.min(t / 0.5, 1));
             final fade = t < 0.7 ? 1.0 : 1 - (t - 0.7) / 0.3;
             return Opacity(
               opacity: fade.clamp(0.0, 1.0),
@@ -1684,7 +1676,7 @@ class _JamStarted extends StatelessWidget {
                   gradient: LinearGradient(
                     begin: Alignment.topLeft,
                     end: Alignment.bottomRight,
-                    colors: [JamColors.brandRaspberry, Color(0xFFC71F5E)],
+                    colors: [Color(0xFFD92C64), Color(0xFFB31F51)],
                   ),
                 ),
                 child: Center(
@@ -1708,7 +1700,7 @@ class _JamStarted extends StatelessWidget {
                             textAlign: TextAlign.center,
                             maxLines: 2,
                             overflow: TextOverflow.ellipsis,
-                            style: context.jamDisplay.copyWith(
+                            style: context.jamLargeTitle.copyWith(
                               color: Colors.white,
                             ),
                           ),
@@ -1851,14 +1843,14 @@ class JamSessionEndedView extends StatelessWidget {
     final List<Widget> actions;
     if (retry != null || retrying) {
       actions = [
-        JamButton.primary(
+        JamButton.filled(
           label: JamRoomStrings.tryAgain,
           onPressed: retrying ? null : retry,
           loading: retrying,
           expand: true,
         ),
         const SizedBox(height: JamSpace.md),
-        JamButton.secondary(
+        JamButton.gray(
           label: JamRoomStrings.back,
           onPressed: onDone,
           expand: true,
@@ -1866,13 +1858,13 @@ class JamSessionEndedView extends StatelessWidget {
       ];
     } else if (startNew != null) {
       actions = [
-        JamButton.primary(
+        JamButton.filled(
           label: JamRoomStrings.startNew,
           onPressed: startNew,
           expand: true,
         ),
         const SizedBox(height: JamSpace.md),
-        JamButton.secondary(
+        JamButton.gray(
           label: JamRoomStrings.back,
           onPressed: onDone,
           expand: true,
@@ -1880,7 +1872,7 @@ class JamSessionEndedView extends StatelessWidget {
       ];
     } else {
       actions = [
-        JamButton.primary(
+        JamButton.filled(
           label: JamRoomStrings.back,
           onPressed: onDone,
           expand: true,
@@ -1889,7 +1881,7 @@ class JamSessionEndedView extends StatelessWidget {
     }
 
     return Scaffold(
-      backgroundColor: colors.canvas,
+      backgroundColor: colors.background,
       body: SafeArea(
         child: Center(
           child: ConstrainedBox(
@@ -1904,23 +1896,23 @@ class JamSessionEndedView extends StatelessWidget {
                     height: 72,
                     alignment: Alignment.center,
                     decoration: BoxDecoration(
-                      color: colors.surfaceMuted,
+                      color: colors.fillSecondary,
                       shape: BoxShape.circle,
                     ),
-                    child: Icon(icon, size: 32, color: colors.textSecondary),
+                    child: Icon(icon, size: 32, color: colors.secondaryLabel),
                   ),
                   const SizedBox(height: JamSpace.xl),
                   Text(
                     title,
                     textAlign: TextAlign.center,
-                    style: context.jamSheetTitle,
+                    style: context.jamTitle2,
                   ),
                   const SizedBox(height: JamSpace.sm),
                   Text(
                     detail,
                     textAlign: TextAlign.center,
-                    style: context.jamByline.copyWith(
-                      color: colors.textSecondary,
+                    style: context.jamSubheadline.copyWith(
+                      color: colors.secondaryLabel,
                     ),
                   ),
                   if (message != null) ...[
@@ -1983,7 +1975,7 @@ class _SidePanelState extends State<_SidePanel> {
     return SizedBox(
       width: JamContentWidth.panel,
       child: Material(
-        color: colors.surface,
+        color: colors.groupedSurface,
         child: DecoratedBox(
           decoration: BoxDecoration(
             border: Border(
@@ -2081,15 +2073,15 @@ class _PanelTabButton extends StatelessWidget {
           decoration: BoxDecoration(
             border: Border(
               bottom: BorderSide(
-                color: selected ? colors.accent : Colors.transparent,
+                color: selected ? colors.tint : Colors.transparent,
                 width: 2,
               ),
             ),
           ),
           child: Text(
             label,
-            style: context.jamRowTitle.copyWith(
-              color: selected ? colors.accent : colors.textSecondary,
+            style: context.jamHeadline.copyWith(
+              color: selected ? colors.tint : colors.secondaryLabel,
             ),
           ),
         ),

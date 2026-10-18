@@ -26,11 +26,12 @@ void main() {
       expect(colors.length, greaterThan(1));
     });
 
-    test('picks a different value per brightness', () {
+    test('is the same flat colour in both themes (D6)', () {
       expect(
         identityColor('Silky Puffin', Brightness.light),
-        isNot(identityColor('Silky Puffin', Brightness.dark)),
+        identityColor('Silky Puffin', Brightness.dark),
       );
+      expect(kJamAvatarPalette, contains(identityColor('Silky Puffin')));
     });
   });
 

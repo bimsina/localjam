@@ -1,54 +1,34 @@
-/// Cover-art rendering (PROTOCOL.md §6.5).
+/// Cover art (PROTOCOL.md §6.5) and the Now Playing backdrop (D4).
 ///
-/// Artwork is the only thing on screen with real colour, so it gets a
-/// hairline on light grounds — without one, a pale cover dissolves into a
-/// white page. On dark the lightness step is separation enough.
-///
-/// A track with no cover is not a hole: it gets the brand gradient with the
-/// logo knocked into it, so a queue of untagged files still looks composed.
+/// A track with no cover gets the iOS placeholder: `fillSecondary` ground and
+/// a music note in `tertiaryLabel` at 40% of the tile. On the Now Playing
+/// backdrop ([JamArtworkTile.onBackdrop]) it is white @ 12% with a white @ 50%
+/// note. No gradients, no logo.
 library;
 
 import 'dart:async';
 import 'dart:typed_data';
+import 'dart:ui' show ImageFilter;
 
-import 'package:flutter/material.dart';
-import 'package:flutter_svg/flutter_svg.dart';
+import 'package:flutter/cupertino.dart';
 import 'package:localjam_client/localjam_client.dart';
 
 import '../design/artwork_tint.dart';
 import '../design/tokens.dart';
 
-/// The brand mark drawn into the artwork placeholder.
-const String _logoAsset = 'assets/brand/logo.svg';
-
-/// The same placeholder, pre-rendered at 512×512.
-///
-/// The OS media card is drawn by the platform from raw bytes — it cannot run
-/// [JamArtworkTile], so an untagged track showed up on the lock screen as a
-/// blank square. Rendering it at runtime would mean rasterising an SVG and a
-/// gradient on the first track of every session; baking it once at build time
-/// costs 26 KB and no frames. Kept in step with [_placeholderAlpha],
-/// [_logoScale] and [_logoOpacity] by hand — see README.md, "Brand assets".
+/// A pre-rendered 512×512 placeholder for the OS media card, which is drawn
+/// by the platform from bytes and cannot run [JamArtworkTile].
 const String kJamPlaceholderArtworkAsset =
     'assets/brand/artwork_placeholder.png';
 
-/// The placeholder gradient's alpha — a shade under solid, so a wall of
-/// untagged tracks does not read as a wall of buttons.
-const double _placeholderAlpha = 0.85;
+/// The placeholder note's share of the tile.
+const double _noteScale = 0.4;
 
-/// The logo's share of the tile, and how faintly it sits in the gradient.
-const double _logoScale = 0.42;
-const double _logoOpacity = 0.22;
-
-/// One turn of the loading shimmer.
-const Duration _shimmerPeriod = Duration(milliseconds: 1200);
-
-/// A square of cover art, or the brand placeholder standing in for one.
+/// A square of cover art, or the placeholder standing in for one.
 ///
-/// Engine-free by design: hand it bytes (what `JamEngine.artworkFor`
-/// returns) or any [ImageProvider], plus flags for the loading and error
-/// states. [JamArtwork] is the engine-aware wrapper around it.
-class JamArtworkTile extends StatefulWidget {
+/// Engine-free: hand it bytes or an [ImageProvider]. [JamArtwork] is the
+/// engine-aware wrapper.
+class JamArtworkTile extends StatelessWidget {
   const JamArtworkTile({
     super.key,
     this.bytes,
@@ -59,137 +39,99 @@ class JamArtworkTile extends StatefulWidget {
     this.imageKey,
     this.semanticLabel,
     this.overlay,
+    this.onBackdrop = false,
+    this.radius,
+    this.shadow = false,
   });
 
   /// Encoded cover bytes, if they have arrived.
   final Uint8List? bytes;
 
-  /// An already-resolved provider, for callers that hold one. Ignored when
-  /// [bytes] is set.
+  /// An already-resolved provider. Ignored when [bytes] is set.
   final ImageProvider? image;
 
-  /// Edge length. Drives the corner radius through [JamRadius.artwork].
+  /// Edge length. Drives the radius through [JamRadius.artwork].
   final double size;
 
-  /// Whether the cover is still being fetched — draws the shimmer.
+  /// Still fetching: shows the placeholder (no shimmer — no idle motion).
   final bool isLoading;
 
-  /// Whether the cover failed to load or decode.
+  /// The cover failed to load or decode: shows the placeholder.
   final bool hasError;
 
-  /// Identity of the current artwork, so a *different* cover cross-fades
-  /// while a rebuild with the same one does not. Defaults to the identity of
-  /// [bytes] / [image].
+  /// Identity of the current artwork, so a *different* cover cross-fades.
   final Object? imageKey;
 
-  /// Announced description. Omit for decorative thumbnails beside a title
-  /// that already says what the track is.
+  /// Announced description. Omit for thumbnails beside a title.
   final String? semanticLabel;
 
-  /// Drawn over the artwork, inside the clip — the queue's equaliser badge,
-  /// for instance.
+  /// Drawn over the artwork, inside the clip.
   final Widget? overlay;
 
-  @override
-  State<JamArtworkTile> createState() => _JamArtworkTileState();
-}
+  /// Uses the Now Playing placeholder (white on the backdrop).
+  final bool onBackdrop;
 
-class _JamArtworkTileState extends State<JamArtworkTile>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _shimmer = AnimationController(
-    vsync: this,
-    duration: _shimmerPeriod,
-  );
+  /// Overrides the corner radius.
+  final double? radius;
 
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    _syncShimmer();
-  }
-
-  @override
-  void didUpdateWidget(JamArtworkTile oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    _syncShimmer();
-  }
-
-  void _syncShimmer() {
-    final wanted =
-        widget.isLoading &&
-        widget.bytes == null &&
-        widget.image == null &&
-        !widget.hasError &&
-        !MediaQuery.disableAnimationsOf(context);
-    if (wanted && !_shimmer.isAnimating) {
-      _shimmer.repeat();
-    } else if (!wanted && _shimmer.isAnimating) {
-      _shimmer
-        ..stop()
-        ..value = 0;
-    }
-  }
-
-  @override
-  void dispose() {
-    _shimmer.dispose();
-    super.dispose();
-  }
+  /// Adds [JamShadow.artwork] (large covers only).
+  final bool shadow;
 
   @override
   Widget build(BuildContext context) {
     final colors = context.jamColors;
-    final isLight = Theme.of(context).brightness == Brightness.light;
-    final size = widget.size;
-    final radius = BorderRadius.circular(JamRadius.artwork(size));
     final reduceMotion = MediaQuery.disableAnimationsOf(context);
+    final r = BorderRadius.circular(radius ?? JamRadius.artwork(size));
 
-    final bytes = widget.bytes;
-    final provider = bytes != null
-        ? MemoryImage(bytes) as ImageProvider
-        : widget.image;
+    final bytes = this.bytes;
+    final provider = bytes != null ? MemoryImage(bytes) : image;
+
+    final ground = onBackdrop
+        ? JamNowPlayingColors.placeholderGround
+        : colors.fillSecondary;
+    final glyph = onBackdrop
+        ? JamNowPlayingColors.placeholderGlyph
+        : colors.tertiaryLabel;
+    final placeholder = ColoredBox(
+      color: ground,
+      child: Center(
+        child: Icon(
+          CupertinoIcons.music_note,
+          size: size * _noteScale,
+          color: glyph,
+        ),
+      ),
+    );
 
     Widget content;
     Object contentKey;
-    if (widget.hasError) {
-      content = _placeholder(colors, size, errorGlyph: true);
-      contentKey = 'error';
-    } else if (provider != null) {
+    if (hasError || provider == null) {
+      content = placeholder;
+      contentKey = 'placeholder';
+    } else {
       content = Image(
         image: provider,
         width: size,
         height: size,
         fit: BoxFit.cover,
         gaplessPlayback: true,
-        errorBuilder: (_, _, _) => _placeholder(colors, size, errorGlyph: true),
+        errorBuilder: (_, _, _) => placeholder,
       );
-      contentKey =
-          widget.imageKey ?? identityHashCode(bytes ?? widget.image ?? this);
-    } else if (widget.isLoading) {
-      content = _shimmerPlaceholder(colors, size, reduceMotion: reduceMotion);
-      contentKey = 'loading';
-    } else {
-      content = _placeholder(colors, size);
-      contentKey = 'placeholder';
+      contentKey = imageKey ?? identityHashCode(bytes ?? image);
     }
 
-    final overlay = widget.overlay;
+    final overlay = this.overlay;
     final tile = Container(
       width: size,
       height: size,
       clipBehavior: Clip.antiAlias,
-      decoration: BoxDecoration(
-        color: colors.surfaceMuted,
-        borderRadius: radius,
-        border: isLight
-            ? Border.all(color: colors.separator, width: 0.5)
-            : null,
-      ),
+      decoration: BoxDecoration(color: ground, borderRadius: r),
       child: Stack(
         fit: StackFit.expand,
         children: [
           AnimatedSwitcher(
-            duration: reduceMotion ? JamDuration.instant : JamDuration.base,
-            switchInCurve: JamCurve.base,
+            duration: reduceMotion ? Duration.zero : JamDuration.base,
+            switchInCurve: JamCurve.standard,
             child: KeyedSubtree(
               key: ValueKey<Object>(contentKey),
               child: content,
@@ -200,93 +142,27 @@ class _JamArtworkTileState extends State<JamArtworkTile>
       ),
     );
 
-    final label = widget.semanticLabel;
-    if (label == null) return ExcludeSemantics(child: tile);
+    final painted = shadow
+        ? DecoratedBox(
+            decoration: BoxDecoration(
+              borderRadius: r,
+              boxShadow: JamShadow.artwork,
+            ),
+            child: tile,
+          )
+        : tile;
+
+    final label = semanticLabel;
+    if (label == null) return ExcludeSemantics(child: painted);
     return Semantics(
       label: label,
       image: true,
-      child: ExcludeSemantics(child: tile),
-    );
-  }
-
-  /// The brand gradient with the logo knocked into it — what stands in for a
-  /// cover that does not exist.
-  Widget _placeholder(
-    JamColors colors,
-    double size, {
-    bool errorGlyph = false,
-  }) => DecoratedBox(
-    decoration: BoxDecoration(
-      gradient: LinearGradient(
-        begin: Alignment.topLeft,
-        end: Alignment.bottomRight,
-        colors: [
-          colors.highlight.withValues(alpha: _placeholderAlpha),
-          colors.accent.withValues(alpha: _placeholderAlpha),
-        ],
-      ),
-    ),
-    child: Center(
-      child: errorGlyph
-          ? Icon(
-              Icons.music_note_rounded,
-              size: size * _logoScale,
-              color: Colors.white.withValues(alpha: 0.3),
-            )
-          : Opacity(
-              opacity: _logoOpacity,
-              child: SvgPicture.asset(
-                _logoAsset,
-                width: size * _logoScale,
-                height: size * _logoScale,
-                fit: BoxFit.contain,
-                colorFilter: const ColorFilter.mode(
-                  Colors.white,
-                  BlendMode.srcIn,
-                ),
-              ),
-            ),
-    ),
-  );
-
-  /// The same placeholder with a light sweeping across it while the real
-  /// cover is on its way.
-  Widget _shimmerPlaceholder(
-    JamColors colors,
-    double size, {
-    required bool reduceMotion,
-  }) {
-    final base = _placeholder(colors, size);
-    if (reduceMotion) return base;
-    return AnimatedBuilder(
-      animation: _shimmer,
-      builder: (context, child) {
-        final t = _shimmer.value * 2 - 0.5;
-        return ShaderMask(
-          blendMode: BlendMode.srcATop,
-          shaderCallback: (rect) => LinearGradient(
-            begin: Alignment(t - 1, -1),
-            end: Alignment(t + 1, 1),
-            colors: [
-              Colors.white.withValues(alpha: 0),
-              Colors.white.withValues(alpha: 0.28),
-              Colors.white.withValues(alpha: 0),
-            ],
-            stops: const [0.35, 0.5, 0.65],
-          ).createShader(rect),
-          child: child,
-        );
-      },
-      child: base,
+      child: ExcludeSemantics(child: painted),
     );
   }
 }
 
-/// The artwork for [item], loaded through [JamEngine.artworkFor] (hosts read
-/// their own registry, guests fetch-and-cache).
-///
-/// A thin engine-aware shell over [JamArtworkTile] — the tile is the one
-/// that knows what artwork looks like.
+/// The artwork for [item], loaded through [JamEngine.artworkFor].
 class JamArtwork extends StatelessWidget {
   const JamArtwork({
     super.key,
@@ -295,6 +171,8 @@ class JamArtwork extends StatelessWidget {
     this.size = JamArtworkSize.thumb,
     this.semanticLabel,
     this.overlay,
+    this.onBackdrop = false,
+    this.shadow = false,
   });
 
   final JamEngine engine;
@@ -307,6 +185,12 @@ class JamArtwork extends StatelessWidget {
   /// Drawn over the artwork, inside the clip.
   final Widget? overlay;
 
+  /// Uses the Now Playing placeholder.
+  final bool onBackdrop;
+
+  /// Adds [JamShadow.artwork].
+  final bool shadow;
+
   @override
   Widget build(BuildContext context) {
     final current = item;
@@ -315,11 +199,12 @@ class JamArtwork extends StatelessWidget {
         size: size,
         semanticLabel: semanticLabel,
         overlay: overlay,
+        onBackdrop: onBackdrop,
+        shadow: shadow,
       );
     }
     return FutureBuilder<Uint8List?>(
-      // The engines dedup/cache loads internally, so a rebuilt FutureBuilder
-      // re-requesting the same artworkId is cheap.
+      // The engines dedup and cache loads, so re-requesting is cheap.
       future: engine.artworkFor(current!),
       builder: (context, snapshot) => JamArtworkTile(
         bytes: snapshot.data,
@@ -329,23 +214,22 @@ class JamArtwork extends StatelessWidget {
         hasError: snapshot.hasError,
         semanticLabel: semanticLabel,
         overlay: overlay,
+        onBackdrop: onBackdrop,
+        shadow: shadow,
       ),
     );
   }
 }
 
-/// Resolves the ambient tint (§2.2) for whatever [engine] is playing and
-/// hands it to [builder].
+/// Resolves the Now Playing [JamBackdrop] for whatever [engine] is playing
+/// and hands it to [builder].
 ///
-/// The derivation is not free — it decodes and quantises the cover — so the
-/// [cache] is passed in rather than owned: the room screen and the docked
-/// room bar are looking at the same track and must not each pay for it. The
-/// session controller holds the shared one.
-///
-/// On a cache hit the right colour is on the very first frame; on a miss the
-/// builder sees [JamTint.fallback] until the derivation lands.
-class JamTintBuilder extends StatefulWidget {
-  const JamTintBuilder({
+/// The [cache] is shared (the session controller's `backdrops`) so the room
+/// screen and the mini player never decode the same cover twice. On a hit the
+/// right backdrop is on the first frame; on a miss [builder] sees
+/// [JamBackdrop.placeholder] until it lands.
+class JamBackdropBuilder extends StatefulWidget {
+  const JamBackdropBuilder({
     super.key,
     required this.engine,
     required this.cache,
@@ -353,64 +237,121 @@ class JamTintBuilder extends StatefulWidget {
   });
 
   final JamEngine engine;
-
-  /// The shared cache — see [JamSessionController.tints].
-  final JamTintCache cache;
-
-  final Widget Function(BuildContext context, JamTint tint) builder;
+  final JamBackdropCache cache;
+  final Widget Function(BuildContext context, JamBackdrop backdrop) builder;
 
   @override
-  State<JamTintBuilder> createState() => _JamTintBuilderState();
+  State<JamBackdropBuilder> createState() => _JamBackdropBuilderState();
 }
 
-class _JamTintBuilderState extends State<JamTintBuilder> {
-  JamTint _tint = JamTint.fallback;
+class _JamBackdropBuilderState extends State<JamBackdropBuilder> {
+  JamBackdrop _backdrop = JamBackdrop.placeholder;
   String? _key;
-  Brightness? _brightness;
 
   @override
   Widget build(BuildContext context) {
     _sync();
-    return widget.builder(context, _tint);
+    return widget.builder(context, _backdrop);
   }
 
   void _sync() {
     final item = widget.engine.currentItem;
     final id = item?.artworkId;
-    final brightness = Theme.of(context).brightness;
-    if (id == _key && brightness == _brightness) return;
+    if (id == _key) return;
     _key = id;
-    _brightness = brightness;
     if (id == null || item == null) {
-      _tint = JamTint.fallback;
+      _backdrop = JamBackdrop.placeholder;
       return;
     }
-    final hit = widget.cache.peek(id, brightness);
+    final hit = widget.cache.peek(id);
     if (hit != null) {
-      _tint = hit;
+      _backdrop = hit;
       return;
     }
-    _tint = JamTint.fallback;
-    unawaited(_resolve(item, id, brightness));
+    // Keep showing the previous cover until the new one resolves: the
+    // cross-fade goes cover → cover, not cover → grey → cover.
+    unawaited(_resolve(item, id));
   }
 
-  Future<void> _resolve(
-    MediaItem item,
-    String id,
-    Brightness brightness,
-  ) async {
+  Future<void> _resolve(MediaItem item, String id) async {
     final bytes = await widget.engine.artworkFor(item);
     if (!mounted || _key != id) return;
-    final tint = bytes == null || bytes.isEmpty
-        ? JamTint.fallback
-        : await widget.cache.resolve(id, bytes, brightness);
+    final backdrop = bytes == null || bytes.isEmpty
+        ? JamBackdrop.placeholder
+        : await widget.cache.resolve(id, bytes);
     if (!mounted || _key != id) return;
-    setState(() => _tint = tint);
+    setState(() => _backdrop = backdrop);
   }
 }
 
-/// The one-line artist/album byline for [item], or null when untagged —
-/// callers show their own fallback.
+/// Paints a [JamBackdrop]: the base colour, the cover scaled to fill and
+/// blurred (σ [JamBlur.backdrop]), and the black overlay — cross-fading
+/// over [JamDuration.crossfade] when the cover changes.
+class JamBackdropView extends StatelessWidget {
+  const JamBackdropView({super.key, required this.backdrop, this.child});
+
+  final JamBackdrop backdrop;
+
+  /// Content drawn above the backdrop.
+  final Widget? child;
+
+  @override
+  Widget build(BuildContext context) {
+    final reduceMotion = MediaQuery.disableAnimationsOf(context);
+    final image = backdrop.image;
+    final layer = KeyedSubtree(
+      key: ValueKey<Object>(backdrop.id ?? 'placeholder'),
+      child: ColoredBox(
+        color: backdrop.base,
+        child: image == null
+            ? const SizedBox.expand()
+            : Stack(
+                fit: StackFit.expand,
+                children: [
+                  ClipRect(
+                    child: ImageFiltered(
+                      imageFilter: ImageFilter.blur(
+                        sigmaX: JamBlur.backdrop,
+                        sigmaY: JamBlur.backdrop,
+                        tileMode: TileMode.mirror,
+                      ),
+                      child: Image(
+                        image: image,
+                        fit: BoxFit.cover,
+                        gaplessPlayback: true,
+                        // Downsampled: a blurred cover needs no detail.
+                        filterQuality: FilterQuality.low,
+                      ),
+                    ),
+                  ),
+                  ColoredBox(
+                    color: const Color(
+                      0xFF000000,
+                    ).withValues(alpha: backdrop.overlayOpacity),
+                  ),
+                ],
+              ),
+      ),
+    );
+
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        AnimatedSwitcher(
+          duration: reduceMotion ? Duration.zero : JamDuration.crossfade,
+          switchInCurve: JamCurve.standard,
+          switchOutCurve: JamCurve.standard,
+          layoutBuilder: (current, previous) =>
+              Stack(fit: StackFit.expand, children: [...previous, ?current]),
+          child: layer,
+        ),
+        ?child,
+      ],
+    );
+  }
+}
+
+/// The one-line artist/album byline for [item], or null when untagged.
 String? artworkByline(MediaItem item) {
   final artist = item.artist;
   final album = item.album;

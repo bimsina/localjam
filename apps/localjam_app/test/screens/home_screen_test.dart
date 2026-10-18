@@ -3,6 +3,7 @@ library;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:localjam_app/src/widgets/rename_dialog.dart';
 import 'package:localjam_client/localjam_client.dart';
 import 'package:localjam_app/src/screens/home_screen.dart';
 import 'package:localjam_app/src/screens/settings_screen.dart';
@@ -67,7 +68,7 @@ void main() {
     await tester.tap(find.text('Silky Puffin'));
     await tester.pumpAndSettle();
     // JamIdentity.setDisplayName shipped in v1 with no caller anywhere.
-    expect(find.text('Your name in the room'), findsOneWidget);
+    expect(find.text(RenameStrings.title), findsOneWidget);
   });
 
   testWidgets('the empty state names the situation', (tester) async {
@@ -96,7 +97,7 @@ void main() {
 
     final primaries = tester
         .widgetList<JamButton>(find.byType(JamButton))
-        .where((b) => b.variant == JamButtonVariant.primary)
+        .where((b) => b.variant == JamButtonVariant.filled)
         .toList();
     // Exactly one raspberry-filled control in view (§8.5).
     expect(primaries.length, 1);

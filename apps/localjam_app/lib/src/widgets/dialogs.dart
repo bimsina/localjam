@@ -1,35 +1,228 @@
-/// The three dialogs the app actually needs: confirm, confirm-something-you-
-/// cannot-undo, and ask-for-one-line-of-text.
+/// iOS alerts on every platform (DESIGN_SPEC v3 §5 Alerts).
 ///
-/// Shape and palette come from `dialogTheme` (§4: `surfaceElevated`, radius
-/// `lg`, 24 padding, `jamSheetTitle` title, `jamBody` `textSecondary` body,
-/// actions right-aligned, dismiss first and primary last). What lives here is
-/// the wording contract and the one lifetime rule below.
+/// Centred, 270 wide, blurred: title headline, message footnote, buttons 17
+/// (the preferred action semibold, destructive in `danger`), side by side for
+/// two and stacked for more; optionally one text field. Built on
+/// `CupertinoAlertDialog`, tinted from the theme.
 ///
-/// **The lifetime rule.** A `TextEditingController` created by the *caller*
-/// and disposed the moment `showDialog` completes is still wired to a
-/// `TextField` that the exit transition keeps building for another 150 ms —
-/// `'_dependents.isEmpty': is not true`, red screen. Every dialog here that
-/// owns a field owns its controller in a `State` and disposes it in
-/// `State.dispose`, which ties the controller's life to the route's.
+/// **The lifetime rule.** A `TextEditingController` disposed the moment the
+/// dialog's future completes is still wired to a field the exit transition
+/// keeps building — red screen. Every alert here that owns a field owns its
+/// controller in a `State` and disposes it in `State.dispose`.
 library;
 
-import 'package:flutter/material.dart';
+import 'package:flutter/cupertino.dart';
 
 import '../design/tokens.dart';
 import '../design/typography.dart';
+import 'buttons.dart';
 
-/// Default labels, in one place rather than scattered through call sites.
+/// Default labels.
 abstract final class JamDialogStrings {
   static const String cancel = 'Cancel';
-  static const String confirm = 'Confirm';
+  static const String confirm = 'OK';
   static const String save = 'Save';
 }
 
-/// Ask, then act. Every method returns only after the exit transition has
-/// been started, and never throws.
+/// One alert button.
+@immutable
+class JamAlertAction {
+  const JamAlertAction({
+    required this.label,
+    this.onPressed,
+    this.isDefault = false,
+    this.destructive = false,
+  });
+
+  /// Title Case ("Leave Jam").
+  final String label;
+
+  /// Null disables the button.
+  final VoidCallback? onPressed;
+
+  /// The preferred action: semibold.
+  final bool isDefault;
+
+  /// `danger` label.
+  final bool destructive;
+}
+
+/// An iOS alert.
+class JamAlert extends StatelessWidget {
+  const JamAlert({
+    super.key,
+    required this.title,
+    this.message,
+    this.content,
+    required this.actions,
+  });
+
+  /// Title Case question or statement ("End Jam?").
+  final String title;
+
+  /// One or two sentences.
+  final String? message;
+
+  /// Extra content under the message — a [JamAlertTextField].
+  final Widget? content;
+
+  /// Cancel first, the action last (iOS order).
+  final List<JamAlertAction> actions;
+
+  @override
+  Widget build(BuildContext context) {
+    final message = this.message;
+    final content = this.content;
+    return CupertinoAlertDialog(
+      title: Text(title),
+      content: message == null && content == null
+          ? null
+          : Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (message != null) Text(message),
+                if (content != null) ...[
+                  const SizedBox(height: JamSpace.md),
+                  content,
+                ],
+              ],
+            ),
+      actions: [
+        for (final action in actions)
+          CupertinoDialogAction(
+            onPressed: action.onPressed,
+            isDefaultAction: action.isDefault,
+            isDestructiveAction: action.destructive,
+            child: Text(action.label),
+          ),
+      ],
+    );
+  }
+}
+
+/// The text field inside an alert: iOS's bordered rounded field, with an
+/// optional footnote under it — [errorText] in `danger`, else [helperText]
+/// in `secondaryLabel`.
+class JamAlertTextField extends StatelessWidget {
+  const JamAlertTextField({
+    super.key,
+    required this.controller,
+    this.placeholder,
+    this.autofocus = true,
+    this.keyboardType,
+    this.textCapitalization = TextCapitalization.sentences,
+    this.textInputAction = TextInputAction.done,
+    this.maxLength,
+    this.minLines,
+    this.maxLines = 1,
+    this.autocorrect = true,
+    this.onChanged,
+    this.onSubmitted,
+    this.errorText,
+    this.helperText,
+    this.semanticLabel,
+  });
+
+  final TextEditingController controller;
+  final String? placeholder;
+  final bool autofocus;
+  final TextInputType? keyboardType;
+  final TextCapitalization textCapitalization;
+  final TextInputAction textInputAction;
+  final int? maxLength;
+  final int? minLines;
+  final int? maxLines;
+  final bool autocorrect;
+  final ValueChanged<String>? onChanged;
+  final ValueChanged<String>? onSubmitted;
+
+  /// Shown under the field in `danger`.
+  final String? errorText;
+
+  /// Shown under the field in `secondaryLabel` when there is no error.
+  final String? helperText;
+
+  /// Labels the field for screen readers (defaults to [placeholder]).
+  final String? semanticLabel;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.jamColors;
+    final note = errorText ?? helperText;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Semantics(
+          label: semanticLabel ?? placeholder,
+          textField: true,
+          child: CupertinoTextField(
+            controller: controller,
+            autofocus: autofocus,
+            placeholder: placeholder,
+            keyboardType: keyboardType,
+            textCapitalization: textCapitalization,
+            textInputAction: textInputAction,
+            maxLength: maxLength,
+            minLines: minLines,
+            maxLines: maxLines,
+            autocorrect: autocorrect,
+            enableSuggestions: autocorrect,
+            clearButtonMode: OverlayVisibilityMode.editing,
+            style: context.jamSubheadline.copyWith(color: colors.label),
+            placeholderStyle: context.jamSubheadline.copyWith(
+              color: colors.tertiaryLabel,
+            ),
+            cursorColor: colors.tint,
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 7),
+            decoration: BoxDecoration(
+              color: colors.elevated,
+              border: Border.all(
+                color: errorText != null ? colors.danger : colors.separator,
+                width: 0.5,
+              ),
+              borderRadius: BorderRadius.circular(7),
+            ),
+            onChanged: onChanged,
+            onSubmitted: onSubmitted,
+          ),
+        ),
+        if (note != null) ...[
+          const SizedBox(height: JamSpace.xs),
+          Text(
+            note,
+            textAlign: TextAlign.start,
+            style: context.jamFootnote.copyWith(
+              color: errorText != null ? colors.danger : colors.secondaryLabel,
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+/// Presents an alert on the root navigator over the `scrim`.
+Future<T?> showJamAlert<T>(
+  BuildContext context, {
+  required WidgetBuilder builder,
+  bool barrierDismissible = false,
+}) {
+  final colors = context.jamColors;
+  return Navigator.of(context, rootNavigator: true).push<T>(
+    CupertinoDialogRoute<T>(
+      context: context,
+      builder: builder,
+      barrierColor: colors.scrim,
+      barrierDismissible: barrierDismissible,
+    ),
+  );
+}
+
+/// Ask, then act. Every method resolves once the alert is dismissed and never
+/// throws.
 abstract final class JamDialogs {
-  /// A yes/no question. Returns true only when the primary action was taken.
+  /// A yes/no question. True only when the confirming action was taken.
   static Future<bool> confirm(
     BuildContext context, {
     required String title,
@@ -37,8 +230,8 @@ abstract final class JamDialogs {
     String confirmLabel = JamDialogStrings.confirm,
     String cancelLabel = JamDialogStrings.cancel,
   }) async =>
-      await showDialog<bool>(
-        context: context,
+      await showJamAlert<bool>(
+        context,
         builder: (context) => JamConfirmDialog(
           title: title,
           message: message,
@@ -48,9 +241,8 @@ abstract final class JamDialogs {
       ) ??
       false;
 
-  /// A yes/no question about something that cannot be undone — ending the jam,
-  /// removing a person, forgetting a past jam. The primary action is filled in
-  /// `danger` so the consequence is visible before the tap, not after.
+  /// A question about something that cannot be undone. The confirming action
+  /// is red.
   static Future<bool> confirmDestructive(
     BuildContext context, {
     required String title,
@@ -58,8 +250,8 @@ abstract final class JamDialogs {
     required String confirmLabel,
     String cancelLabel = JamDialogStrings.cancel,
   }) async =>
-      await showDialog<bool>(
-        context: context,
+      await showJamAlert<bool>(
+        context,
         builder: (context) => JamConfirmDialog(
           title: title,
           message: message,
@@ -70,8 +262,8 @@ abstract final class JamDialogs {
       ) ??
       false;
 
-  /// Ask for one line of text. Returns the trimmed value, or null when the
-  /// dialog was cancelled or (unless [allowEmpty]) left blank.
+  /// Ask for one line of text. The trimmed value, or null when cancelled or
+  /// (unless [allowEmpty]) left blank.
   static Future<String?> promptText(
     BuildContext context, {
     required String title,
@@ -85,12 +277,10 @@ abstract final class JamDialogs {
     int? maxLength,
     bool allowEmpty = false,
   }) async {
-    // The keyboard belongs to the dialog now; leaving a field focused behind
-    // it means the caller's own field pops the keyboard back up on the way
-    // out.
+    // The keyboard belongs to the alert now.
     FocusManager.instance.primaryFocus?.unfocus();
-    final value = await showDialog<String>(
-      context: context,
+    final value = await showJamAlert<String>(
+      context,
       builder: (context) => JamPromptDialog(
         title: title,
         message: message,
@@ -110,8 +300,8 @@ abstract final class JamDialogs {
   }
 }
 
-/// The confirm dialog. Public so a caller can push it onto a navigator of its
-/// own; [JamDialogs.confirm] is the way in for everything else.
+/// The confirm alert: Cancel, then the (semibold or red) confirming action.
+/// Pops `true` on confirm, `false` on cancel.
 class JamConfirmDialog extends StatelessWidget {
   const JamConfirmDialog({
     super.key,
@@ -127,36 +317,32 @@ class JamConfirmDialog extends StatelessWidget {
   final String confirmLabel;
   final String cancelLabel;
 
-  /// Fills the primary action in `danger` rather than the accent.
+  /// The confirming action in `danger` (and Cancel becomes the bold one, as
+  /// iOS does).
   final bool destructive;
 
   @override
-  Widget build(BuildContext context) {
-    final body = message;
-    return AlertDialog(
-      title: Text(title),
-      content: body == null ? null : Text(body),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.of(context).pop(false),
-          child: Text(cancelLabel),
-        ),
-        JamDialogPrimaryButton(
-          label: confirmLabel,
-          destructive: destructive,
-          onPressed: () => Navigator.of(context).pop(true),
-        ),
-      ],
-    );
-  }
+  Widget build(BuildContext context) => JamAlert(
+    title: title,
+    message: message,
+    actions: [
+      JamAlertAction(
+        label: cancelLabel,
+        isDefault: destructive,
+        onPressed: () => Navigator.of(context).pop(false),
+      ),
+      JamAlertAction(
+        label: confirmLabel,
+        isDefault: !destructive,
+        destructive: destructive,
+        onPressed: () => Navigator.of(context).pop(true),
+      ),
+    ],
+  );
 }
 
-/// A dialog's primary action: the themed `FilledButton`, re-tinted to `danger`
-/// when the thing behind it cannot be undone.
-///
-/// The label is [JamColors.onAccent] rather than a literal white: on the dark
-/// palette `danger` is a light coral, and white on it misses AA by a mile,
-/// where the plum `onAccent` clears it.
+/// A confirming text action for alerts and dialogs not yet on [JamAlert]:
+/// 17 semibold tint (or `danger`).
 class JamDialogPrimaryButton extends StatelessWidget {
   const JamDialogPrimaryButton({
     super.key,
@@ -170,25 +356,15 @@ class JamDialogPrimaryButton extends StatelessWidget {
   final bool destructive;
 
   @override
-  Widget build(BuildContext context) {
-    final colors = context.jamColors;
-    return FilledButton(
-      onPressed: onPressed,
-      style: destructive
-          ? FilledButton.styleFrom(
-              backgroundColor: colors.danger,
-              foregroundColor: colors.onAccent,
-              disabledBackgroundColor: colors.surfaceMuted,
-              disabledForegroundColor: colors.textTertiary,
-            )
-          : null,
-      child: Text(label),
-    );
-  }
+  Widget build(BuildContext context) => JamTextButton(
+    label: label,
+    bold: true,
+    destructive: destructive,
+    onPressed: onPressed,
+  );
 }
 
-/// The one-field dialog. Owns its [TextEditingController] — see the lifetime
-/// rule at the top of this file.
+/// The one-field alert. Owns its controller — see the lifetime rule above.
 class JamPromptDialog extends StatefulWidget {
   const JamPromptDialog({
     super.key,
@@ -214,7 +390,7 @@ class JamPromptDialog extends StatefulWidget {
   final TextInputType? keyboardType;
   final int? maxLength;
 
-  /// Whether the primary action stays live with an empty field.
+  /// Whether the confirming action stays live with an empty field.
   final bool allowEmpty;
 
   @override
@@ -228,8 +404,6 @@ class _JamPromptDialogState extends State<JamPromptDialog> {
 
   @override
   void dispose() {
-    // Not after `await showDialog` — here, where the route's own lifetime
-    // decides when the field is finally gone.
     _text.dispose();
     super.dispose();
   }
@@ -242,52 +416,31 @@ class _JamPromptDialogState extends State<JamPromptDialog> {
   }
 
   @override
-  Widget build(BuildContext context) {
-    final colors = context.jamColors;
-    final message = widget.message;
-
-    return AlertDialog(
-      title: Text(widget.title),
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          if (message != null) ...[
-            Text(message),
-            const SizedBox(height: JamSpace.lg),
-          ],
-          ValueListenableBuilder<TextEditingValue>(
-            valueListenable: _text,
-            builder: (context, _, _) => TextField(
-              controller: _text,
-              autofocus: true,
-              textCapitalization: widget.textCapitalization,
-              keyboardType: widget.keyboardType,
-              maxLength: widget.maxLength,
-              textInputAction: TextInputAction.done,
-              style: context.jamBody.copyWith(color: colors.textPrimary),
-              decoration: InputDecoration(
-                hintText: widget.hintText,
-                counterText: '',
-              ),
-              onSubmitted: (_) => _submit(),
+  Widget build(BuildContext context) =>
+      ValueListenableBuilder<TextEditingValue>(
+        valueListenable: _text,
+        builder: (context, _, _) => JamAlert(
+          title: widget.title,
+          message: widget.message,
+          content: JamAlertTextField(
+            controller: _text,
+            placeholder: widget.hintText,
+            keyboardType: widget.keyboardType,
+            textCapitalization: widget.textCapitalization,
+            maxLength: widget.maxLength,
+            onSubmitted: (_) => _submit(),
+          ),
+          actions: [
+            JamAlertAction(
+              label: widget.cancelLabel,
+              onPressed: () => Navigator.of(context).pop(),
             ),
-          ),
-        ],
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.of(context).pop(),
-          child: Text(widget.cancelLabel),
+            JamAlertAction(
+              label: widget.confirmLabel,
+              isDefault: true,
+              onPressed: _canSubmit ? _submit : null,
+            ),
+          ],
         ),
-        ValueListenableBuilder<TextEditingValue>(
-          valueListenable: _text,
-          builder: (context, _, _) => JamDialogPrimaryButton(
-            label: widget.confirmLabel,
-            onPressed: _canSubmit ? _submit : null,
-          ),
-        ),
-      ],
-    );
-  }
+      );
 }

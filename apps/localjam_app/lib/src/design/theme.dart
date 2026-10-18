@@ -1,13 +1,14 @@
-/// Builds the app's [ThemeData] from the [JamColors] tokens.
+/// Builds the app's [ThemeData] from the [JamColors] tokens and the
+/// [JamTypeScale].
 ///
-/// Stock Material widgets are mapped onto the same tokens as our own, so a
-/// `FilledButton` or a `Slider` picks up the raspberry accent without a call
-/// site having to say so. Chrome is quiet by design: separation comes from
-/// hairlines and the softest of [JamShadow]s on light, and from lightness
-/// steps on dark, so cover art is the only thing on screen with loud colour.
+/// The app looks like iOS on every platform (D2): no Material ink ripples
+/// (presses are highlights and opacity), Cupertino page transitions, a
+/// Cupertino theme derived from the same tokens so `Cupertino*` widgets —
+/// nav bars, alerts, switches, menus — pick up the tint and the type scale.
 library;
 
-import 'package:flutter/cupertino.dart' show CupertinoPageTransitionsBuilder;
+import 'package:flutter/cupertino.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -16,15 +17,9 @@ import 'typography.dart';
 
 /// The status-bar and navigation-bar treatment for a surface of [brightness].
 ///
-/// Both bars are transparent — the app draws edge to edge — so the only thing
-/// this decides is which way the OS's own glyphs are tinted. Light surfaces
-/// (the cream canvas) get dark glyphs; dark surfaces get light ones. Getting
-/// this wrong is invisible in a widget test and unmissable on a phone: white
-/// clock and battery on cream is what the review caught.
-///
-/// [statusBarBrightness] is iOS's spelling of the same idea, and it is the
-/// *background's* brightness rather than the icons', which is why the two
-/// fields look contradictory.
+/// Both bars are transparent (the app draws edge to edge), so this only picks
+/// which way the OS glyphs are tinted. [SystemUiOverlayStyle.statusBarBrightness]
+/// is iOS's spelling and names the *background's* brightness.
 SystemUiOverlayStyle jamOverlayStyle(Brightness brightness) {
   final dark = brightness == Brightness.dark;
   return SystemUiOverlayStyle(
@@ -40,111 +35,133 @@ SystemUiOverlayStyle jamOverlayStyle(Brightness brightness) {
   );
 }
 
-/// For the two screens that are dark whatever the theme says: the camera feed
-/// behind the scanner, and the raspberry→plum onboarding gradient.
+/// For surfaces that are dark whatever the theme says: the camera, the Now
+/// Playing backdrop.
 final SystemUiOverlayStyle jamOverlayStyleOnDark = jamOverlayStyle(
   Brightness.dark,
 );
 
-/// The light theme — the palette the app is designed against.
-ThemeData jamLightTheme() => _build(JamColors.light, Brightness.light);
+/// The light theme.
+ThemeData jamLightTheme({TargetPlatform? platform}) => _build(
+  JamColors.light,
+  Brightness.light,
+  platform ?? defaultTargetPlatform,
+);
 
-/// The dark theme — a full peer, not an inversion afterthought.
-ThemeData jamDarkTheme() => _build(JamColors.dark, Brightness.dark);
+/// The dark theme.
+ThemeData jamDarkTheme({TargetPlatform? platform}) =>
+    _build(JamColors.dark, Brightness.dark, platform ?? defaultTargetPlatform);
 
-ThemeData _build(JamColors c, Brightness brightness) {
-  final text = buildJamTextTheme(
-    primary: c.textPrimary,
-    secondary: c.textSecondary,
-  );
+ThemeData _build(JamColors c, Brightness brightness, TargetPlatform platform) {
+  final type = buildJamTypeScale(platform: platform, color: c.label);
+  final text = jamTextThemeFrom(type);
 
   final scheme = ColorScheme(
     brightness: brightness,
-    primary: c.accent,
-    onPrimary: c.onAccent,
-    primaryContainer: c.accentSoft,
-    onPrimaryContainer: c.accent,
-    secondary: c.accent,
-    onSecondary: c.onAccent,
-    secondaryContainer: c.surfaceMuted,
-    onSecondaryContainer: c.textPrimary,
+    primary: c.tint,
+    onPrimary: c.onTint,
+    primaryContainer: c.tintFill,
+    onPrimaryContainer: c.tint,
+    secondary: c.tint,
+    onSecondary: c.onTint,
+    secondaryContainer: c.fillSecondary,
+    onSecondaryContainer: c.label,
     tertiary: c.warning,
-    onTertiary: c.onAccent,
-    tertiaryContainer: c.highlightSoft,
+    onTertiary: c.onTint,
+    tertiaryContainer: c.fillSecondary,
     onTertiaryContainer: c.warning,
     error: c.danger,
-    onError: c.onAccent,
+    onError: c.onTint,
     errorContainer: c.danger.withValues(alpha: 0.12),
     onErrorContainer: c.danger,
-    surface: c.surface,
-    onSurface: c.textPrimary,
-    onSurfaceVariant: c.textSecondary,
-    surfaceContainerLowest: c.canvas,
-    surfaceContainerLow: c.surface,
-    surfaceContainer: c.surfaceMuted,
-    surfaceContainerHigh: c.surfaceElevated,
-    surfaceContainerHighest: c.surfaceMuted,
+    surface: c.background,
+    onSurface: c.label,
+    onSurfaceVariant: c.secondaryLabel,
+    surfaceContainerLowest: c.background,
+    surfaceContainerLow: c.groupedSurface,
+    surfaceContainer: c.groupedSurface,
+    surfaceContainerHigh: c.elevated,
+    surfaceContainerHighest: c.elevated,
     outline: c.separator,
     outlineVariant: c.separator,
     scrim: c.scrim,
-    shadow: c.shadowTint.withValues(alpha: 1),
-    inverseSurface: c.textPrimary,
-    onInverseSurface: c.canvas,
-    inversePrimary: c.accent,
+    shadow: Colors.black,
+    inverseSurface: c.label,
+    onInverseSurface: c.background,
+    inversePrimary: c.tint,
   );
 
-  /// Every button shares a shape, a height and a label style; only the fill
-  /// and the label colour differ.
-  ButtonStyle buttonBase({
-    Color? foreground,
-    Color? background,
-    BorderSide? side,
-    double height = 52,
-    double radius = JamRadius.md,
-  }) => ButtonStyle(
+  final cupertino = CupertinoThemeData(
+    brightness: brightness,
+    primaryColor: c.tint,
+    primaryContrastingColor: c.onTint,
+    scaffoldBackgroundColor: c.background,
+    barBackgroundColor: c.material,
+    applyThemeToAll: true,
+    textTheme: CupertinoTextThemeData(
+      primaryColor: c.tint,
+      textStyle: type.body,
+      actionTextStyle: type.body.copyWith(color: c.tint),
+      actionSmallTextStyle: type.subheadline.copyWith(color: c.tint),
+      tabLabelTextStyle: type.caption2.copyWith(color: c.secondaryLabel),
+      navTitleTextStyle: type.headline,
+      navLargeTitleTextStyle: type.largeTitle,
+      navActionTextStyle: type.body.copyWith(color: c.tint),
+      pickerTextStyle: type.title3.copyWith(fontWeight: FontWeight.w400),
+      dateTimePickerTextStyle: type.title3.copyWith(
+        fontWeight: FontWeight.w400,
+      ),
+    ),
+  );
+
+  /// Every Material button that slips through gets a capsule, no ripple and
+  /// no elevation.
+  ButtonStyle buttonBase({Color? foreground, Color? background}) => ButtonStyle(
     foregroundColor: WidgetStateProperty.resolveWith(
-      (s) => s.contains(WidgetState.disabled) ? c.textTertiary : foreground,
+      (s) => s.contains(WidgetState.disabled) ? c.tertiaryLabel : foreground,
     ),
     backgroundColor: background == null
         ? null
         : WidgetStateProperty.resolveWith((s) {
-            if (s.contains(WidgetState.disabled)) return c.surfaceMuted;
-            if (s.contains(WidgetState.pressed)) return c.accentPressed;
+            if (s.contains(WidgetState.disabled)) return c.fill;
+            if (s.contains(WidgetState.pressed)) return c.tintPressed;
             return background;
           }),
-    overlayColor: WidgetStatePropertyAll(c.accent.withValues(alpha: 0.08)),
-    side: side == null ? null : WidgetStatePropertyAll(side),
-    textStyle: WidgetStatePropertyAll(text.labelLarge),
-    minimumSize: WidgetStatePropertyAll(Size(0, height)),
+    overlayColor: const WidgetStatePropertyAll(Colors.transparent),
+    textStyle: WidgetStatePropertyAll(type.headline),
+    minimumSize: const WidgetStatePropertyAll(
+      Size(JamMetrics.hitTarget, JamMetrics.hitTarget),
+    ),
     padding: const WidgetStatePropertyAll(
-      EdgeInsets.symmetric(horizontal: JamSpace.xl),
+      EdgeInsets.symmetric(horizontal: JamSpace.lg),
     ),
     elevation: const WidgetStatePropertyAll(0),
     shadowColor: const WidgetStatePropertyAll(Colors.transparent),
-    shape: WidgetStatePropertyAll(
-      RoundedRectangleBorder(borderRadius: BorderRadius.circular(radius)),
-    ),
-    splashFactory: InkRipple.splashFactory,
+    shape: const WidgetStatePropertyAll(StadiumBorder()),
+    splashFactory: NoSplash.splashFactory,
   );
 
   return ThemeData(
     useMaterial3: true,
     brightness: brightness,
+    platform: platform,
     colorScheme: scheme,
-    fontFamily: jamFontFamily,
     textTheme: text,
     primaryTextTheme: text,
-    scaffoldBackgroundColor: c.canvas,
-    canvasColor: c.canvas,
+    scaffoldBackgroundColor: c.background,
+    canvasColor: c.background,
     dividerColor: c.separator,
-    // Material You's sparkle fights this palette; a plain ripple in the
-    // accent at 8% reads as a press without becoming a light show.
-    splashFactory: InkRipple.splashFactory,
-    splashColor: c.accent.withValues(alpha: 0.08),
-    highlightColor: c.accent.withValues(alpha: 0.04),
-    // Comfortable targets on touch, tighter chrome on desktop.
-    visualDensity: VisualDensity.adaptivePlatformDensity,
-    extensions: <ThemeExtension<dynamic>>[c],
+    // D2: no Material ink anywhere. Presses are highlights (rows) or opacity
+    // (buttons), drawn by our own components.
+    splashFactory: NoSplash.splashFactory,
+    splashColor: Colors.transparent,
+    highlightColor: Colors.transparent,
+    hoverColor: c.fillPressed,
+    focusColor: c.fillPressed,
+    visualDensity: VisualDensity.standard,
+    materialTapTargetSize: MaterialTapTargetSize.padded,
+    cupertinoOverrideTheme: cupertino,
+    extensions: <ThemeExtension<dynamic>>[c, type],
 
     dividerTheme: DividerThemeData(
       color: c.separator,
@@ -152,334 +169,260 @@ ThemeData _build(JamColors c, Brightness brightness) {
       space: 0.5,
     ),
 
-    // Transparent: the room supplies its own artwork-tinted ground, and every
-    // other screen sits directly on the canvas.
+    iconTheme: IconThemeData(color: c.tint, size: JamMetrics.navIcon),
+
     appBarTheme: AppBarTheme(
       backgroundColor: Colors.transparent,
       surfaceTintColor: Colors.transparent,
       shadowColor: Colors.transparent,
-      foregroundColor: c.textPrimary,
+      foregroundColor: c.label,
       elevation: 0,
       scrolledUnderElevation: 0,
-      centerTitle: false,
-      // Without this Material picks a style from the app bar's *own* colour,
-      // which is transparent here — so it guessed, and guessed light glyphs
-      // on the cream canvas.
+      centerTitle: true,
       systemOverlayStyle: jamOverlayStyle(brightness),
-      titleTextStyle: text.titleLarge,
-      iconTheme: IconThemeData(color: c.textPrimary, size: 22),
-      actionsIconTheme: IconThemeData(color: c.textPrimary, size: 22),
+      titleTextStyle: type.headline,
+      toolbarTextStyle: type.body.copyWith(color: c.tint),
+      iconTheme: IconThemeData(color: c.tint, size: JamMetrics.navIcon),
+      actionsIconTheme: IconThemeData(color: c.tint, size: JamMetrics.navIcon),
     ),
 
     cardTheme: CardThemeData(
-      color: c.surface,
+      color: c.groupedSurface,
       surfaceTintColor: Colors.transparent,
       shadowColor: Colors.transparent,
       elevation: 0,
       margin: EdgeInsets.zero,
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(JamRadius.lg),
-        side: BorderSide(color: c.separator, width: 0.5),
+        borderRadius: BorderRadius.circular(JamRadius.section),
       ),
     ),
 
     listTileTheme: ListTileThemeData(
-      contentPadding: const EdgeInsets.symmetric(
-        horizontal: JamSpace.page,
-        vertical: JamSpace.xs,
-      ),
+      contentPadding: const EdgeInsets.symmetric(horizontal: JamSpace.lg),
       minVerticalPadding: JamSpace.md,
-      titleTextStyle: text.titleMedium,
-      subtitleTextStyle: text.bodySmall,
-      iconColor: c.textSecondary,
-      textColor: c.textPrimary,
-      selectedColor: c.accent,
-      selectedTileColor: c.accentSoft,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(JamRadius.md),
-      ),
+      titleTextStyle: type.body,
+      subtitleTextStyle: type.subheadline.copyWith(color: c.secondaryLabel),
+      iconColor: c.tint,
+      textColor: c.label,
+      selectedColor: c.tint,
+      selectedTileColor: Colors.transparent,
     ),
 
-    // The primary action. Its gradient lives in `JamButton`; the flat accent
-    // here is what stock `FilledButton`s fall back to.
     filledButtonTheme: FilledButtonThemeData(
-      style: buttonBase(foreground: c.onAccent, background: c.accent),
+      style: buttonBase(foreground: c.onTint, background: c.tint),
     ),
     elevatedButtonTheme: ElevatedButtonThemeData(
-      style: buttonBase(foreground: c.onAccent, background: c.accent),
+      style: buttonBase(foreground: c.onTint, background: c.tint),
     ),
     outlinedButtonTheme: OutlinedButtonThemeData(
-      style: buttonBase(
-        foreground: c.textPrimary,
-        side: BorderSide(color: c.separator),
-      ),
+      style: buttonBase(foreground: c.tint),
     ),
-    textButtonTheme: TextButtonThemeData(
-      style: buttonBase(
-        foreground: c.accent,
-        height: 44,
-        radius: JamRadius.pill,
-      ),
-    ),
+    textButtonTheme: TextButtonThemeData(style: buttonBase(foreground: c.tint)),
 
     iconButtonTheme: IconButtonThemeData(
       style: IconButton.styleFrom(
-        foregroundColor: c.textPrimary,
-        disabledForegroundColor: c.textTertiary,
-        highlightColor: c.accent.withValues(alpha: 0.08),
-        minimumSize: const Size(44, 44),
-      ),
-    ),
-
-    segmentedButtonTheme: SegmentedButtonThemeData(
-      style: SegmentedButton.styleFrom(
-        backgroundColor: c.surfaceMuted,
-        foregroundColor: c.textSecondary,
-        selectedBackgroundColor: c.accentSoft,
-        selectedForegroundColor: c.accent,
-        side: BorderSide(color: c.separator),
-        textStyle: text.titleSmall,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(JamRadius.sm),
-        ),
-      ),
+        foregroundColor: c.tint,
+        disabledForegroundColor: c.tertiaryLabel,
+        highlightColor: Colors.transparent,
+        minimumSize: const Size(JamMetrics.hitTarget, JamMetrics.hitTarget),
+      ).copyWith(splashFactory: NoSplash.splashFactory),
     ),
 
     sliderTheme: SliderThemeData(
-      activeTrackColor: c.accent,
-      inactiveTrackColor: c.surfaceMuted,
-      thumbColor: c.accent,
-      overlayColor: c.accent.withValues(alpha: 0.14),
+      activeTrackColor: c.tint,
+      inactiveTrackColor: c.fill,
+      thumbColor: Colors.white,
+      overlayColor: Colors.transparent,
       trackHeight: 4,
-      trackShape: const RoundedRectSliderTrackShape(),
-      overlayShape: const RoundSliderOverlayShape(overlayRadius: 24),
-      thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 7),
-      valueIndicatorColor: c.textPrimary,
-      valueIndicatorTextStyle: text.bodySmall?.copyWith(color: c.canvas),
+      thumbShape: const RoundSliderThumbShape(
+        enabledThumbRadius: 14,
+        elevation: 1,
+        pressedElevation: 1,
+      ),
+      overlayShape: const RoundSliderOverlayShape(overlayRadius: 22),
+      valueIndicatorColor: c.label,
+      valueIndicatorTextStyle: type.footnote.copyWith(color: c.background),
     ),
 
     progressIndicatorTheme: ProgressIndicatorThemeData(
-      color: c.accent,
-      linearTrackColor: c.surfaceMuted,
-      circularTrackColor: c.surfaceMuted,
-      linearMinHeight: 3,
+      color: c.secondaryLabel,
+      linearTrackColor: c.fill,
+      circularTrackColor: Colors.transparent,
+      linearMinHeight: 4,
     ),
 
     switchTheme: SwitchThemeData(
-      thumbColor: WidgetStateProperty.resolveWith(
-        (s) => s.contains(WidgetState.selected) ? c.onAccent : c.surface,
-      ),
+      thumbColor: const WidgetStatePropertyAll(Colors.white),
       trackColor: WidgetStateProperty.resolveWith(
-        (s) => s.contains(WidgetState.selected) ? c.accent : c.surfaceMuted,
+        (s) => s.contains(WidgetState.selected) ? c.success : c.fill,
       ),
-      trackOutlineColor: WidgetStateProperty.resolveWith(
-        (s) =>
-            s.contains(WidgetState.selected) ? Colors.transparent : c.separator,
-      ),
-      overlayColor: WidgetStatePropertyAll(c.accent.withValues(alpha: 0.08)),
+      trackOutlineColor: const WidgetStatePropertyAll(Colors.transparent),
+      overlayColor: const WidgetStatePropertyAll(Colors.transparent),
     ),
 
     checkboxTheme: CheckboxThemeData(
       fillColor: WidgetStateProperty.resolveWith(
-        (s) => s.contains(WidgetState.selected) ? c.accent : Colors.transparent,
+        (s) => s.contains(WidgetState.selected) ? c.tint : Colors.transparent,
       ),
-      checkColor: WidgetStatePropertyAll(c.onAccent),
-      side: BorderSide(color: c.separator, width: 1.5),
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(JamRadius.xs / 2),
-      ),
+      checkColor: WidgetStatePropertyAll(c.onTint),
+      side: BorderSide(color: c.tertiaryLabel, width: 1.5),
+      shape: const CircleBorder(),
+      overlayColor: const WidgetStatePropertyAll(Colors.transparent),
     ),
 
     radioTheme: RadioThemeData(
       fillColor: WidgetStateProperty.resolveWith(
-        (s) => s.contains(WidgetState.selected) ? c.accent : c.textTertiary,
+        (s) => s.contains(WidgetState.selected) ? c.tint : c.tertiaryLabel,
       ),
+      overlayColor: const WidgetStatePropertyAll(Colors.transparent),
     ),
 
     chipTheme: ChipThemeData(
-      backgroundColor: c.surfaceMuted,
-      selectedColor: c.accentSoft,
-      disabledColor: c.surfaceMuted,
+      backgroundColor: c.fillSecondary,
+      selectedColor: c.tintFill,
+      disabledColor: c.fillSecondary,
       surfaceTintColor: Colors.transparent,
       side: BorderSide.none,
-      labelStyle: text.labelMedium!,
-      secondaryLabelStyle: text.labelMedium!.copyWith(color: c.accent),
-      labelPadding: const EdgeInsets.symmetric(horizontal: JamSpace.xs),
-      padding: const EdgeInsets.symmetric(
-        horizontal: JamSpace.sm,
-        vertical: JamSpace.xxs,
-      ),
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(JamRadius.pill),
-      ),
+      labelStyle: type.footnote,
+      secondaryLabelStyle: type.footnote.copyWith(color: c.tint),
+      shape: const StadiumBorder(),
     ),
 
-    // Filled by default. The borderless variant below is the one the
-    // editable-heading fields (a room's name, your own name) use, where the
-    // text *is* the heading and a box around it would be noise.
     inputDecorationTheme: jamFilledInput(c, text),
 
+    textSelectionTheme: TextSelectionThemeData(
+      cursorColor: c.tint,
+      selectionColor: c.tint.withValues(alpha: 0.3),
+      selectionHandleColor: c.tint,
+    ),
+
     bottomSheetTheme: BottomSheetThemeData(
-      backgroundColor: c.surfaceElevated,
+      backgroundColor: c.elevated,
       surfaceTintColor: Colors.transparent,
-      modalBackgroundColor: c.surfaceElevated,
+      modalBackgroundColor: c.elevated,
       modalBarrierColor: c.scrim,
       elevation: 0,
       modalElevation: 0,
       showDragHandle: true,
-      dragHandleColor: c.textTertiary.withValues(alpha: 0.4),
-      dragHandleSize: const Size(36, 4),
+      dragHandleColor: c.tertiaryLabel,
+      dragHandleSize: JamMetrics.grabber,
       shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(JamRadius.xl)),
+        borderRadius: BorderRadius.vertical(
+          top: Radius.circular(JamRadius.sheet),
+        ),
       ),
     ),
 
+    // Stock Material dialogs that have not moved to `JamAlert` yet at least
+    // take the alert's proportions and palette.
     dialogTheme: DialogThemeData(
-      backgroundColor: c.surfaceElevated,
+      backgroundColor: c.elevated,
       surfaceTintColor: Colors.transparent,
       barrierColor: c.scrim,
       elevation: 0,
-      titleTextStyle: text.headlineSmall,
-      contentTextStyle: text.bodyLarge!.copyWith(color: c.textSecondary),
+      titleTextStyle: type.headline,
+      contentTextStyle: type.footnote,
       insetPadding: const EdgeInsets.symmetric(
-        horizontal: JamSpace.xxl,
+        horizontal: JamSpace.huge,
         vertical: JamSpace.xxl,
       ),
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(JamRadius.lg),
+        borderRadius: BorderRadius.circular(JamRadius.alert),
       ),
     ),
 
     snackBarTheme: SnackBarThemeData(
-      backgroundColor: c.textPrimary,
-      contentTextStyle: text.bodyMedium!.copyWith(color: c.canvas),
-      actionTextColor: c.highlight,
+      backgroundColor: c.material,
+      contentTextStyle: type.subheadline,
+      actionTextColor: c.tint,
       behavior: SnackBarBehavior.floating,
-      insetPadding: const EdgeInsets.all(JamSpace.lg),
       elevation: 0,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(JamRadius.md),
-      ),
+      shape: const StadiumBorder(),
     ),
 
     popupMenuTheme: PopupMenuThemeData(
-      color: c.surfaceElevated,
+      color: c.elevated,
       surfaceTintColor: Colors.transparent,
-      elevation: 8,
-      shadowColor: c.shadowTint,
-      textStyle: text.bodyLarge,
+      elevation: 0,
+      textStyle: type.body,
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(JamRadius.md),
+        borderRadius: BorderRadius.circular(JamRadius.menu),
       ),
     ),
 
     tooltipTheme: TooltipThemeData(
       decoration: BoxDecoration(
-        color: c.textPrimary,
-        borderRadius: BorderRadius.circular(JamRadius.xs),
+        color: c.label.withValues(alpha: 0.85),
+        borderRadius: BorderRadius.circular(JamRadius.sm),
       ),
-      textStyle: text.bodySmall!.copyWith(color: c.canvas),
-    ),
-
-    // Wide layouts put navigation in a rail; the compact shell has no bottom
-    // bar, but both are themed so a stock one never arrives unstyled.
-    navigationBarTheme: NavigationBarThemeData(
-      backgroundColor: c.surface,
-      surfaceTintColor: Colors.transparent,
-      indicatorColor: c.accentSoft,
-      elevation: 0,
-      height: 64,
-      labelTextStyle: WidgetStatePropertyAll(text.labelMedium),
-      iconTheme: WidgetStateProperty.resolveWith(
-        (s) => IconThemeData(
-          size: 24,
-          color: s.contains(WidgetState.selected) ? c.accent : c.textSecondary,
-        ),
-      ),
+      textStyle: type.footnote.copyWith(color: c.background),
     ),
 
     navigationRailTheme: NavigationRailThemeData(
-      backgroundColor: c.surface,
-      indicatorColor: c.accentSoft,
+      backgroundColor: c.material,
+      indicatorColor: c.tintFill,
       elevation: 0,
-      selectedLabelTextStyle: text.labelMedium!.copyWith(color: c.accent),
-      unselectedLabelTextStyle: text.labelMedium,
-      selectedIconTheme: IconThemeData(color: c.accent, size: 24),
-      unselectedIconTheme: IconThemeData(color: c.textSecondary, size: 24),
+      selectedLabelTextStyle: type.footnote.copyWith(color: c.tint),
+      unselectedLabelTextStyle: type.footnote,
+      selectedIconTheme: IconThemeData(color: c.tint, size: 22),
+      unselectedIconTheme: IconThemeData(color: c.secondaryLabel, size: 22),
     ),
 
-    tabBarTheme: TabBarThemeData(
-      labelColor: c.accent,
-      unselectedLabelColor: c.textSecondary,
-      labelStyle: text.titleSmall,
-      unselectedLabelStyle: text.titleSmall,
-      indicatorColor: c.accent,
-      indicatorSize: TabBarIndicatorSize.tab,
-      dividerColor: c.separator,
-      dividerHeight: 0.5,
-    ),
-
-    // Screens cross-fade rather than slide on desktop, and use the platform's
-    // own gesture-aware transition on mobile; the room's slide-up is its own
-    // route transition and is untouched by this.
+    // iOS's push everywhere (D2); the room's own slide-up is its own route
+    // transition and is untouched by this.
     pageTransitionsTheme: const PageTransitionsTheme(
       builders: <TargetPlatform, PageTransitionsBuilder>{
         TargetPlatform.iOS: CupertinoPageTransitionsBuilder(),
-        TargetPlatform.macOS: FadeForwardsPageTransitionsBuilder(),
-        TargetPlatform.android: FadeForwardsPageTransitionsBuilder(),
-        TargetPlatform.linux: FadeForwardsPageTransitionsBuilder(),
-        TargetPlatform.windows: FadeForwardsPageTransitionsBuilder(),
+        TargetPlatform.macOS: CupertinoPageTransitionsBuilder(),
+        TargetPlatform.android: CupertinoPageTransitionsBuilder(),
+        TargetPlatform.linux: CupertinoPageTransitionsBuilder(),
+        TargetPlatform.windows: CupertinoPageTransitionsBuilder(),
       },
     ),
   );
 }
 
-/// The default field: a soft [JamColors.surfaceMuted] fill with no border,
-/// focused with a 1.5 dp accent ring.
+/// The default field: iOS's filled rounded rect — `fillSecondary`, radius 10,
+/// no border; a danger hairline when in error.
 InputDecorationTheme jamFilledInput(JamColors c, TextTheme text) {
   OutlineInputBorder border([BorderSide side = BorderSide.none]) =>
       OutlineInputBorder(
-        borderRadius: BorderRadius.circular(JamRadius.md),
+        borderRadius: BorderRadius.circular(JamRadius.field),
         borderSide: side,
       );
 
   return InputDecorationTheme(
     filled: true,
-    fillColor: c.surfaceMuted,
-    hintStyle: text.bodyLarge!.copyWith(color: c.textTertiary),
-    labelStyle: text.bodyMedium,
+    fillColor: c.fillSecondary,
+    hintStyle: text.bodyLarge!.copyWith(color: c.tertiaryLabel),
+    labelStyle: text.bodyMedium!.copyWith(color: c.secondaryLabel),
+    helperStyle: text.bodySmall!.copyWith(color: c.secondaryLabel),
     errorStyle: text.bodySmall!.copyWith(color: c.danger),
     contentPadding: const EdgeInsets.symmetric(
-      horizontal: JamSpace.lg,
-      vertical: JamSpace.md,
+      horizontal: JamSpace.md,
+      vertical: 11,
     ),
     border: border(),
     enabledBorder: border(),
     disabledBorder: border(),
-    focusedBorder: border(BorderSide(color: c.accent, width: 1.5)),
-    errorBorder: border(BorderSide(color: c.danger)),
-    focusedErrorBorder: border(BorderSide(color: c.danger, width: 1.5)),
+    focusedBorder: border(),
+    errorBorder: border(BorderSide(color: c.danger, width: 0.5)),
+    focusedErrorBorder: border(BorderSide(color: c.danger, width: 0.5)),
   );
 }
 
 /// The editable-heading field: no box at all, so a room's name reads as the
-/// title it is until you put a caret in it. Wrap the field in a
-/// `Theme(data: Theme.of(context).copyWith(inputDecorationTheme: …))`, or pass
-/// it straight to a `TextField.decoration`'s `applyDefaults`.
+/// title it is. Hint in `tertiaryLabel` at the field's own style.
 InputDecorationTheme jamBorderlessInput(JamColors c, TextTheme text) =>
     InputDecorationTheme(
       filled: false,
       isDense: true,
-      hintStyle: text.headlineLarge!.copyWith(color: c.textTertiary),
+      hintStyle: text.displaySmall!.copyWith(color: c.tertiaryLabel),
       contentPadding: EdgeInsets.zero,
       border: InputBorder.none,
       enabledBorder: InputBorder.none,
       disabledBorder: InputBorder.none,
-      focusedBorder: UnderlineInputBorder(
-        borderSide: BorderSide(color: c.accent, width: 1.5),
-      ),
-      errorBorder: UnderlineInputBorder(
-        borderSide: BorderSide(color: c.danger),
-      ),
+      focusedBorder: InputBorder.none,
+      errorBorder: InputBorder.none,
       errorStyle: text.bodySmall!.copyWith(color: c.danger),
     );

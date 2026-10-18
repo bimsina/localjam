@@ -125,9 +125,11 @@ double jamRecentCardHeight(BuildContext context) {
   return _recentMosaic +
       JamSpace.md * 2 +
       JamSpace.md +
-      lineOf(context.jamRowTitle) * _recentTitleLines +
+      lineOf(context.jamHeadline) * _recentTitleLines +
       JamSpace.xxs +
-      lineOf(context.jamFootnote) +
+      lineOf(
+        context.jamFootnote.copyWith(color: context.jamColors.secondaryLabel),
+      ) +
       JamSpace.xs;
 }
 
@@ -386,7 +388,7 @@ class _HomeScreenState extends State<HomeScreen> {
               titleSpacing: JamSpace.page,
               // Opaque, and its own colour: a transparent bar let the large
               // title's descenders show through as it scrolled past.
-              backgroundColor: context.jamColors.canvas,
+              backgroundColor: context.jamColors.background,
               surfaceTintColor: Colors.transparent,
               scrolledUnderElevation: 0,
               bottom: _ScrolledUnderRule(progress: _scrolled),
@@ -642,7 +644,7 @@ class _IdentityButton extends StatelessWidget {
       label: '$name. ${HomeStrings.rename}',
       child: InkWell(
         onTap: onTap,
-        borderRadius: BorderRadius.circular(JamRadius.pill),
+        borderRadius: BorderRadius.circular(JamRadius.capsule),
         child: Padding(
           padding: const EdgeInsets.all(JamSpace.xs),
           child: Row(
@@ -658,7 +660,7 @@ class _IdentityButton extends StatelessWidget {
                   name,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: context.jamRowTitle,
+                  style: context.jamHeadline,
                 ),
               ),
             ],
@@ -721,12 +723,12 @@ class _ListeningFootnoteState extends State<_ListeningFootnote> {
           AnimatedOpacity(
             opacity: _lit ? 1 : 0.4,
             duration: _pulseFade,
-            curve: JamCurve.ambient,
+            curve: JamCurve.standard,
             child: Container(
               width: 6,
               height: 6,
               decoration: BoxDecoration(
-                color: colors.liveDot,
+                color: colors.secondaryLabel,
                 shape: BoxShape.circle,
               ),
             ),
@@ -737,7 +739,7 @@ class _ListeningFootnoteState extends State<_ListeningFootnote> {
               HomeStrings.listening,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: context.jamFootnote.copyWith(color: colors.textSecondary),
+              style: context.jamFootnote.copyWith(color: colors.secondaryLabel),
             ),
           ),
         ],
@@ -787,10 +789,9 @@ class _RoomCard extends StatelessWidget {
       child: Container(
         height: 88,
         decoration: BoxDecoration(
-          color: colors.surface,
+          color: colors.groupedSurface,
           borderRadius: BorderRadius.circular(JamRadius.lg),
           border: Border.all(color: colors.separator, width: 0.5),
-          boxShadow: JamShadow.raised(colors),
         ),
         clipBehavior: Clip.antiAlias,
         child: Material(
@@ -812,7 +813,7 @@ class _RoomCard extends StatelessWidget {
                           room.sessionName,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: context.jamRowTitle,
+                          style: context.jamHeadline,
                         ),
                         const SizedBox(height: JamSpace.xxs),
                         Text(
@@ -824,7 +825,7 @@ class _RoomCard extends StatelessWidget {
                           style: context.jamFootnote.copyWith(
                             color: joining
                                 ? colors.warning
-                                : colors.textSecondary,
+                                : colors.secondaryLabel,
                           ),
                         ),
                       ],
@@ -837,11 +838,11 @@ class _RoomCard extends StatelessWidget {
                       height: 20,
                       child: CircularProgressIndicator(
                         strokeWidth: 2,
-                        color: colors.accent,
+                        color: colors.tint,
                       ),
                     )
                   else
-                    JamButton.tertiary(
+                    JamButton.plain(
                       label: HomeStrings.join,
                       onPressed: enabled ? onTap : null,
                     ),
@@ -868,7 +869,7 @@ class _RoomCard extends StatelessWidget {
     return TweenAnimationBuilder<double>(
       tween: Tween<double>(begin: 0, end: 1),
       duration: JamDuration.base,
-      curve: JamCurve.base,
+      curve: JamCurve.standard,
       builder: (context, t, child) => Opacity(
         opacity: t,
         child: Transform.translate(
@@ -903,16 +904,13 @@ class _RecentsRail extends StatelessWidget {
                   header: true,
                   child: Text(
                     HomeStrings.recently,
-                    style: context.jamCaption.copyWith(
-                      color: colors.textTertiary,
+                    style: context.jamCaption2.copyWith(
+                      color: colors.tertiaryLabel,
                     ),
                   ),
                 ),
               ),
-              JamButton.tertiary(
-                label: HomeStrings.seeAll,
-                onPressed: onSeeAll,
-              ),
+              JamButton.plain(label: HomeStrings.seeAll, onPressed: onSeeAll),
             ],
           ),
         ),
@@ -949,7 +947,7 @@ class _RecentCard extends StatelessWidget {
         child: SizedBox(
           width: _recentCardWidth,
           child: Material(
-            color: colors.surface,
+            color: colors.groupedSurface,
             clipBehavior: Clip.antiAlias,
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(JamRadius.lg),
@@ -971,7 +969,7 @@ class _RecentCard extends StatelessWidget {
                       record.sessionName,
                       maxLines: _recentTitleLines,
                       overflow: TextOverflow.ellipsis,
-                      style: context.jamRowTitle,
+                      style: context.jamHeadline,
                     ),
                     const SizedBox(height: JamSpace.xxs),
                     Text(
@@ -979,7 +977,7 @@ class _RecentCard extends StatelessWidget {
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: context.jamFootnote.copyWith(
-                        color: colors.textTertiary,
+                        color: colors.tertiaryLabel,
                       ),
                     ),
                   ],
@@ -1024,7 +1022,6 @@ class _EmptyNearby extends StatelessWidget {
     if (live != null) {
       return JamEmptyState(
         icon: Icons.graphic_eq_rounded,
-        gradientMark: true,
         title: live == _Hosting.host
             ? HomeStrings.hostingTitle(roomName)
             : HomeStrings.guestingTitle(roomName),
@@ -1033,7 +1030,7 @@ class _EmptyNearby extends StatelessWidget {
             : HomeStrings.guestingBody,
         actionLabel: onOpenRoom == null ? null : HomeStrings.openRoom,
         onAction: onOpenRoom,
-        actionVariant: JamButtonVariant.tertiary,
+        actionVariant: JamButtonVariant.plain,
       );
     }
 
@@ -1064,14 +1061,13 @@ class _EmptyNearby extends StatelessWidget {
     // actions") read as two different doors to two different places.
     return JamEmptyState(
       icon: icon,
-      gradientMark: true,
       title: title,
       body: body,
       // The bottom bar already owns this screen's primary action, so the
       // empty state's own is deliberately quieter.
       actionLabel: scannable ? HomeStrings.scan : null,
       onAction: scannable ? onScan : null,
-      actionVariant: JamButtonVariant.secondary,
+      actionVariant: JamButtonVariant.gray,
     );
   }
 }
@@ -1118,14 +1114,14 @@ class _HomeActions extends StatelessWidget {
             const SizedBox(width: JamSpace.xs),
           ],
           if (canScanQrCodes) ...[
-            JamButton.secondary(
+            JamButton.gray(
               label: HomeStrings.scan,
               icon: Icons.qr_code_scanner_rounded,
               onPressed: onScan,
             ),
             const SizedBox(width: JamSpace.md),
           ],
-          JamButton.primary(
+          JamButton.filled(
             label: HomeStrings.host,
             icon: Icons.graphic_eq_rounded,
             onPressed: onHost,
@@ -1139,7 +1135,7 @@ class _HomeActions extends StatelessWidget {
         filter: ui.ImageFilter.blur(sigmaX: 24, sigmaY: 24),
         child: DecoratedBox(
           decoration: BoxDecoration(
-            color: colors.surface.withValues(
+            color: colors.groupedSurface.withValues(
               alpha: Theme.of(context).brightness == Brightness.light
                   ? 0.82
                   : 0.86,
@@ -1164,7 +1160,7 @@ class _HomeActions extends StatelessWidget {
                     children: [
                       if (canScanQrCodes) ...[
                         Expanded(
-                          child: JamButton.secondary(
+                          child: JamButton.gray(
                             label: HomeStrings.scan,
                             icon: Icons.qr_code_scanner_rounded,
                             onPressed: onScan,
@@ -1174,7 +1170,7 @@ class _HomeActions extends StatelessWidget {
                         const SizedBox(width: JamSpace.md),
                       ],
                       Expanded(
-                        child: JamButton.primary(
+                        child: JamButton.filled(
                           label: HomeStrings.host,
                           icon: Icons.graphic_eq_rounded,
                           onPressed: onHost,
@@ -1188,7 +1184,7 @@ class _HomeActions extends StatelessWidget {
                   // trailing icons up there read as a toolbar.
                   if (link != null) ...[
                     const SizedBox(height: JamSpace.xs),
-                    JamButton.tertiary(
+                    JamButton.plain(
                       label: HomeStrings.joinWithLink,
                       onPressed: link,
                     ),

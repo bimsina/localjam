@@ -1,56 +1,62 @@
-/// Modal sheets, in one place.
+/// iOS sheets (DESIGN_SPEC v3 §5 Sheets).
 ///
-/// Queue, People, Diagnostics and the library picker all reached for
-/// `showModalBottomSheet` and then each re-invented the same header: a title,
-/// an action, a rule underneath. This is that header, plus the sheet around
-/// it, plus the one piece of plumbing a hand-rolled sheet always gets wrong —
-/// a way for reorderable content to stop the sheet from dragging itself off
-/// the screen while a row is in the air.
+/// A 36×5 grabber, a header row (centred headline title, optional leading
+/// Cancel / trailing Done text buttons or a glass xmark), medium (~50%) and
+/// large detents, drag to dismiss. Ground: `elevated`, or for sheets that host
+/// grouped rows `elevatedGroupedBackground` with `elevatedGroupedSurface`
+/// rows. Top radius [JamRadius.sheet]; no shadow.
 ///
-/// Sizes come from §4 of the design spec: `surfaceElevated`, a top radius of
-/// [JamRadius.xl], the `overlay` shadow, a 36×4 handle, and a header padded
-/// 20/12/16/12 over a 0.5 dp rule.
+/// Also the one piece of plumbing a hand-rolled sheet gets wrong: a way for
+/// reorderable content to stop the sheet dragging itself away while a row is
+/// in the air ([JamSheetDragLock]).
 library;
 
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/gestures.dart';
-import 'package:flutter/material.dart';
+import 'package:flutter/material.dart' show showModalBottomSheet;
 
 import '../design/tokens.dart';
 import '../design/typography.dart';
+import 'glass.dart';
+import 'list.dart';
+import 'section.dart';
 
-/// Default open height for a content sheet (Queue, People).
-const double kJamSheetInitialSize = 0.82;
+/// Strings the sheet chrome says.
+abstract final class JamSheetStrings {
+  static const String close = 'Close';
+  static const String cancel = 'Cancel';
+  static const String done = 'Done';
+}
+
+/// The medium detent.
+const double kJamSheetMediumSize = 0.5;
+
+/// The large detent (clamped under the status bar by [jamSheetMaxExtent]).
+const double kJamSheetLargeSize = 1.0;
+
+/// Default open height for a content sheet.
+const double kJamSheetInitialSize = kJamSheetLargeSize;
 
 /// Default ceiling for a content sheet.
-const double kJamSheetMaxSize = 0.96;
+const double kJamSheetMaxSize = kJamSheetLargeSize;
 
 /// Default floor before a flung sheet dismisses.
-const double kJamSheetMinSize = 0.32;
+const double kJamSheetMinSize = 0.25;
 
-/// How much of the status bar a fully dragged sheet leaves showing.
-///
-/// `useSafeArea` already stops the sheet at the bottom of the status bar; ten
-/// dp more is what keeps the grabber clear of the clock rather than tucked
-/// under it, and it is what says "there is a screen behind this".
+/// How much of the page behind a fully dragged sheet stays visible below the
+/// status bar.
 const double kJamSheetTopInset = 10;
 
 /// The largest fraction of [availableHeight] a sheet may take before its top
-/// edge starts climbing into the status bar.
-///
-/// [availableHeight] is the height a [DraggableScrollableSheet] is given —
-/// under `useSafeArea` that is the window minus the top inset — so the only
-/// thing left to reserve is [kJamSheetTopInset].
+/// edge climbs into the status bar.
 double jamSheetMaxExtent(double availableHeight, double preferred) {
   if (availableHeight <= kJamSheetTopInset) return preferred;
   final ceiling = (availableHeight - kJamSheetTopInset) / availableHeight;
   return preferred < ceiling ? preferred : ceiling;
 }
 
-/// Builds a [DraggableScrollableSheet] whose extents are already clamped to
-/// [jamSheetMaxExtent], so no sheet in the app can slide under the clock.
-///
-/// Shared with `room_sheet.dart`, which builds its own surface because its
-/// title counts the people in the room and has to stay live.
+/// A [DraggableScrollableSheet] clamped by [jamSheetMaxExtent], snapping to
+/// the medium detent when it lies between [minChildSize] and the max.
 Widget buildJamDraggableSheet({
   required double initialChildSize,
   required double maxChildSize,
@@ -59,39 +65,27 @@ Widget buildJamDraggableSheet({
 }) => LayoutBuilder(
   builder: (context, constraints) {
     final max = jamSheetMaxExtent(constraints.maxHeight, maxChildSize);
+    final min = minChildSize.clamp(0.0, max).toDouble();
+    final initial = initialChildSize.clamp(0.05, max).toDouble();
+    final medium = kJamSheetMediumSize;
     return DraggableScrollableSheet(
       expand: false,
-      initialChildSize: initialChildSize.clamp(0.05, max),
+      initialChildSize: initial,
       maxChildSize: max,
-      minChildSize: minChildSize.clamp(0.0, max),
+      minChildSize: min,
       snap: true,
+      snapSizes: medium > min && medium < max ? [medium] : null,
       builder: builder,
     );
   },
 );
 
-/// Height of the fade that carries content under a sheet's header rule.
-///
-/// Without it a scrolled row is sliced clean in half by the hairline, which
-/// reads as a rendering fault rather than as "there is more above". Twelve
-/// logical pixels is enough for the eye to read a dissolve and short enough
-/// that a stationary list looks untouched.
-const double kJamSheetHeaderFade = 12;
-
-/// Counts the reasons a sheet must not drag right now.
-///
-/// A `ReorderableListView` inside a modal sheet is two vertical drags fighting
-/// over one finger: on Android, picking a queue row up and moving it drags the
-/// whole sheet down instead. The list takes a lock while a row is in the air
-/// and releases it on drop, and the sheet swallows its own drag for as long as
-/// the count is above zero.
-///
-/// Counted rather than boolean so two independent children (a reorderable list
-/// and a scrubbing slider, say) cannot unlock each other.
+/// Counts the reasons a sheet must not drag right now (a reorder in
+/// progress). Counted, so two holders cannot unlock each other.
 class JamSheetDragLock extends ChangeNotifier {
   int _holders = 0;
 
-  /// Whether something is currently holding the sheet still.
+  /// Whether something is holding the sheet still.
   bool get isLocked => _holders > 0;
 
   /// Take a hold. Pair every call with exactly one [unlock].
@@ -100,18 +94,14 @@ class JamSheetDragLock extends ChangeNotifier {
     if (_holders == 1) notifyListeners();
   }
 
-  /// Release a hold taken with [lock]. Extra releases are ignored rather than
-  /// throwing: a drag cancelled by a route change should not crash the app.
+  /// Release a hold. Extra releases are ignored.
   void unlock() {
     if (_holders == 0) return;
     _holders--;
     if (_holders == 0) notifyListeners();
   }
 
-  /// The lock for the enclosing [JamSheetScaffold], if there is one.
-  ///
-  /// Returns null outside a sheet, which is what lets the same list widget be
-  /// used inside a sheet and on a full page without branching.
+  /// The lock for the enclosing [JamSheetScaffold], or null outside a sheet.
   static JamSheetDragLock? maybeOf(BuildContext context) => context
       .dependOnInheritedWidgetOfExactType<_JamSheetDragScope>()
       ?.notifier;
@@ -125,9 +115,7 @@ class _JamSheetDragScope extends InheritedNotifier<JamSheetDragLock> {
 }
 
 /// Exposes the scroll controller a scrollable sheet drives its extent from.
-///
-/// Content that scrolls must hand this to its own `ListView`/`CustomScrollView`
-/// or the sheet will not grow when the list is flung.
+/// Content that scrolls must hand it to its own scroll view.
 class JamSheetScrollController extends InheritedWidget {
   const JamSheetScrollController({
     super.key,
@@ -135,10 +123,8 @@ class JamSheetScrollController extends InheritedWidget {
     required super.child,
   });
 
-  /// The sheet's controller, or null when the sheet is not scrollable.
   final ScrollController? controller;
 
-  /// The enclosing sheet's scroll controller, or null when there is none.
   static ScrollController? maybeOf(BuildContext context) => context
       .dependOnInheritedWidgetOfExactType<JamSheetScrollController>()
       ?.controller;
@@ -148,16 +134,69 @@ class JamSheetScrollController extends InheritedWidget {
       old.controller != controller;
 }
 
-/// A sheet's title bar: title left, one action right, a hairline underneath.
-class JamSheetHeader extends StatelessWidget {
-  const JamSheetHeader({super.key, required this.title, this.trailing});
+/// The 36×5 grabber in `tertiaryLabel` (or [color]).
+class JamSheetGrabber extends StatelessWidget {
+  const JamSheetGrabber({super.key, this.color});
 
-  /// The sheet's title, in `jamSheetTitle`.
+  final Color? color;
+
+  @override
+  Widget build(BuildContext context) => ExcludeSemantics(
+    child: Padding(
+      padding: const EdgeInsets.only(top: 5),
+      child: Center(
+        child: Container(
+          width: JamMetrics.grabber.width,
+          height: JamMetrics.grabber.height,
+          decoration: ShapeDecoration(
+            color: color ?? context.jamColors.tertiaryLabel,
+            shape: const StadiumBorder(),
+          ),
+        ),
+      ),
+    ),
+  );
+}
+
+/// The round glass xmark that closes a sheet.
+class JamSheetCloseButton extends StatelessWidget {
+  const JamSheetCloseButton({super.key, this.onPressed});
+
+  /// Defaults to popping the sheet's route.
+  final VoidCallback? onPressed;
+
+  @override
+  Widget build(BuildContext context) => JamGlassButton(
+    icon: CupertinoIcons.xmark,
+    semanticLabel: JamSheetStrings.close,
+    visualSize: 30,
+    iconSize: 14,
+    iconColor: context.jamColors.secondaryLabel,
+    onPressed: onPressed ?? () => Navigator.of(context).maybePop(),
+  );
+}
+
+/// A sheet's header row: [leading] left, centred headline [title],
+/// [trailing] right; a hairline under it once [scrolledUnder].
+class JamSheetHeader extends StatelessWidget {
+  const JamSheetHeader({
+    super.key,
+    required this.title,
+    this.leading,
+    this.trailing,
+    this.scrolledUnder = false,
+  });
+
   final String title;
 
-  /// One optional action, right-aligned. A tertiary button, a count, a chip —
-  /// never a row of three.
+  /// "Cancel" (`JamTextButton`), usually.
+  final Widget? leading;
+
+  /// "Done" (`JamTextButton(bold: true)`) or `JamSheetCloseButton`.
   final Widget? trailing;
+
+  /// Shows the hairline (content is scrolled under the header).
+  final bool scrolledUnder;
 
   @override
   Widget build(BuildContext context) {
@@ -166,45 +205,53 @@ class JamSheetHeader extends StatelessWidget {
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(
-            JamSpace.xl,
-            JamSpace.md,
-            JamSpace.lg,
-            JamSpace.md,
-          ),
-          child: Row(
-            children: [
-              Expanded(
-                child: Semantics(
-                  header: true,
-                  child: Text(
-                    title,
-                    style: context.jamSheetTitle,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
+        SizedBox(
+          height: 52,
+          child: NavigationToolbar(
+            leading: leading == null
+                ? null
+                : Padding(
+                    padding: const EdgeInsetsDirectional.only(
+                      start: JamSpace.sm,
+                    ),
+                    child: leading,
                   ),
-                ),
+            trailing: trailing == null
+                ? null
+                : Padding(
+                    padding: const EdgeInsetsDirectional.only(end: JamSpace.sm),
+                    child: trailing,
+                  ),
+            middle: Semantics(
+              header: true,
+              child: Text(
+                title,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: context.jamHeadline,
               ),
-              ?trailing,
-            ],
+            ),
+            middleSpacing: JamSpace.sm,
           ),
         ),
-        Divider(height: 0.5, thickness: 0.5, color: colors.separator),
+        AnimatedOpacity(
+          opacity: scrolledUnder ? 1 : 0,
+          duration: JamDuration.fast,
+          child: JamHairline(color: colors.separator),
+        ),
       ],
     );
   }
 }
 
-/// The inside of a sheet: handle, header, content — and the drag lock.
-///
-/// Usable on its own for content that is not presented modally (the docked
-/// side panel on desktop reuses it), which is why it is a widget rather than
-/// something [showJamSheet] builds inline.
+/// The inside of a sheet: grabber, header, content, and the drag lock.
+/// Sections inside use `elevatedGroupedSurface` rows. Usable outside a modal
+/// (the docked side panel on desktop).
 class JamSheetScaffold extends StatefulWidget {
   const JamSheetScaffold({
     super.key,
     this.title,
+    this.leading,
     this.trailing,
     this.header,
     required this.child,
@@ -216,25 +263,25 @@ class JamSheetScaffold extends StatefulWidget {
   /// Title for the default [JamSheetHeader]. Ignored when [header] is given.
   final String? title;
 
+  /// Leading action for the default header.
+  final Widget? leading;
+
   /// Trailing action for the default header.
   final Widget? trailing;
 
   /// A header of your own, replacing the default one entirely.
   final Widget? header;
 
-  /// The sheet's content. Fills the remaining height when [scrollController]
-  /// is non-null, and sizes itself otherwise.
+  /// The content. Fills the remaining height when [scrollController] is set.
   final Widget child;
 
-  /// The controller a scrollable sheet drives its extent from. Published to
-  /// descendants through [JamSheetScrollController].
+  /// The controller a scrollable sheet drives its extent from.
   final ScrollController? scrollController;
 
-  /// Whether to draw the 36×4 grab handle.
+  /// Draws the grabber.
   final bool showHandle;
 
-  /// A lock owned by the caller. One is created here when omitted, which is
-  /// the usual case.
+  /// A caller-owned lock; one is created when omitted.
   final JamSheetDragLock? dragLock;
 
   @override
@@ -243,10 +290,7 @@ class JamSheetScaffold extends StatefulWidget {
 
 class _JamSheetScaffoldState extends State<JamSheetScaffold> {
   JamSheetDragLock? _owned;
-
-  /// Only content that actually passes under a header needs the dissolve.
-  Widget _faded(bool hasHeader, Widget child) =>
-      hasHeader ? JamSheetHeaderFade(child: child) : child;
+  bool _scrolledUnder = false;
 
   JamSheetDragLock get _lock =>
       widget.dragLock ?? (_owned ??= JamSheetDragLock());
@@ -257,41 +301,42 @@ class _JamSheetScaffoldState extends State<JamSheetScaffold> {
     super.dispose();
   }
 
+  bool _onScroll(ScrollNotification n) {
+    if (n.metrics.axis != Axis.vertical) return false;
+    final under = n.metrics.pixels > n.metrics.minScrollExtent + 0.5;
+    if (under != _scrolledUnder) setState(() => _scrolledUnder = under);
+    return false;
+  }
+
   @override
   Widget build(BuildContext context) {
-    final colors = context.jamColors;
     final scrollController = widget.scrollController;
     final header =
         widget.header ??
         (widget.title == null
             ? null
-            : JamSheetHeader(title: widget.title!, trailing: widget.trailing));
+            : JamSheetHeader(
+                title: widget.title!,
+                leading: widget.leading,
+                trailing: widget.trailing,
+                scrolledUnder: _scrolledUnder,
+              ));
+
+    final content = NotificationListener<ScrollNotification>(
+      onNotification: _onScroll,
+      child: JamGroupedSurface(elevated: true, child: widget.child),
+    );
 
     final column = Column(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        if (widget.showHandle)
-          Padding(
-            padding: const EdgeInsets.only(top: JamSpace.sm),
-            child: Center(
-              child: ExcludeSemantics(
-                child: Container(
-                  width: 36,
-                  height: 4,
-                  decoration: BoxDecoration(
-                    color: colors.textTertiary.withValues(alpha: 0.4),
-                    borderRadius: BorderRadius.circular(JamRadius.pill),
-                  ),
-                ),
-              ),
-            ),
-          ),
+        if (widget.showHandle) const JamSheetGrabber(),
         ?header,
         if (scrollController == null)
-          Flexible(child: _faded(header != null, widget.child))
+          Flexible(child: content)
         else
-          Expanded(child: _faded(header != null, widget.child)),
+          Expanded(child: content),
       ],
     );
 
@@ -306,10 +351,6 @@ class _JamSheetScaffoldState extends State<JamSheetScaffold> {
 }
 
 /// Swallows vertical drags while a [JamSheetDragLock] is held.
-///
-/// A descendant recognizer joins the gesture arena ahead of the modal route's
-/// own, so accepting here is what keeps a reorder drag from becoming a sheet
-/// dismissal. When unlocked this adds no recognizer at all and costs nothing.
 class JamSheetDragGuard extends StatelessWidget {
   const JamSheetDragGuard({super.key, required this.lock, required this.child});
 
@@ -347,66 +388,44 @@ class JamSheetDragGuard extends StatelessWidget {
   static void _swallow(Object? _) {}
 }
 
-/// Content under a [kJamSheetHeaderFade] dissolve, so nothing is sliced by
-/// the header's hairline on the way past it.
-class JamSheetHeaderFade extends StatelessWidget {
-  const JamSheetHeaderFade({super.key, required this.child});
+/// The sheet's ground: `elevated` (or the grouped sheet ground), top radius
+/// [JamRadius.sheet], clipped.
+class JamSheetSurface extends StatelessWidget {
+  const JamSheetSurface({super.key, required this.child, this.grouped = false});
 
   final Widget child;
+
+  /// `elevatedGroupedBackground` instead of `elevated`.
+  final bool grouped;
 
   @override
   Widget build(BuildContext context) {
     final colors = context.jamColors;
-    // `child` is the Stack's only unpositioned child, so the Stack takes its
-    // size — the dissolve must not turn a min-height sheet into a zero one.
-    return Stack(
-      // Passthrough, not loose: the content must keep the exact constraints
-      // it had before the fade was slipped over it.
-      fit: StackFit.passthrough,
-      children: [
-        child,
-        Positioned(
-          top: 0,
-          left: 0,
-          right: 0,
-          height: kJamSheetHeaderFade,
-          child: IgnorePointer(
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: [
-                    colors.surfaceElevated,
-                    colors.surfaceElevated.withValues(alpha: 0),
-                  ],
-                ),
-              ),
-            ),
-          ),
-        ),
-      ],
+    return ClipRRect(
+      borderRadius: const BorderRadius.vertical(
+        top: Radius.circular(JamRadius.sheet),
+      ),
+      child: ColoredBox(
+        color: grouped ? colors.elevatedGroupedBackground : colors.elevated,
+        child: child,
+      ),
     );
   }
 }
 
-/// Opens a LocalJam modal sheet.
+/// Opens a LocalJam sheet.
 ///
-/// [builder] is built inside the sheet, under a [JamSheetScrollController] the
-/// content should attach its scroll view to when [scrollable] is true.
+/// [builder] is built inside the sheet, under a [JamSheetScrollController]
+/// the content attaches its scroll view to when [scrollable].
 ///
-/// [enableDrag] turns the sheet's drag-to-dismiss off for the whole life of
-/// the route — pass false only for a sheet whose content is one big gesture
-/// surface. For content that is *sometimes* dragging (a reorderable queue),
-/// leave it on and have the child take a [JamSheetDragLock] on pick-up:
-///
-/// ```dart
-/// onReorderStart: (_) => JamSheetDragLock.maybeOf(context)?.lock(),
-/// onReorderEnd: (_) => JamSheetDragLock.maybeOf(context)?.unlock(),
-/// ```
+/// [initialChildSize]: [kJamSheetLargeSize] (default) or
+/// [kJamSheetMediumSize]. [grouped] uses the grouped sheet ground for
+/// content built from `JamSection`s. Content that is *sometimes* dragging (a
+/// reorderable queue) takes a [JamSheetDragLock] on pick-up.
 Future<T?> showJamSheet<T>(
   BuildContext context, {
   required String title,
+  Widget? leading,
   Widget? trailing,
   required WidgetBuilder builder,
   double initialChildSize = kJamSheetInitialSize,
@@ -415,31 +434,32 @@ Future<T?> showJamSheet<T>(
   bool scrollable = true,
   bool enableDrag = true,
   bool isDismissible = true,
+  bool grouped = false,
   RouteSettings? routeSettings,
 }) {
+  final colors = context.jamColors;
   return showModalBottomSheet<T>(
     context: context,
     isScrollControlled: true,
-    // Without it the sheet's own 0.96 is 0.96 of the *window*, which on a
-    // notched phone puts its top edge — grabber and all — behind the clock.
     useSafeArea: true,
     enableDrag: enableDrag,
     isDismissible: isDismissible,
     routeSettings: routeSettings,
-    // The shadow and the fill are painted by [_JamSheetSurface] so the
-    // `overlay` shadow lands outside the sheet's own clip.
-    backgroundColor: Colors.transparent,
+    barrierColor: colors.scrim,
+    backgroundColor: const Color(0x00000000),
     elevation: 0,
     showDragHandle: false,
     constraints: const BoxConstraints(maxWidth: 640),
     builder: (context) {
       final content = Builder(builder: builder);
       if (!scrollable) {
-        return _JamSheetSurface(
+        return JamSheetSurface(
+          grouped: grouped,
           child: SafeArea(
             top: false,
             child: JamSheetScaffold(
               title: title,
+              leading: leading,
               trailing: trailing,
               showHandle: enableDrag,
               child: content,
@@ -451,9 +471,11 @@ Future<T?> showJamSheet<T>(
         initialChildSize: initialChildSize,
         maxChildSize: maxChildSize,
         minChildSize: minChildSize,
-        builder: (context, scrollController) => _JamSheetSurface(
+        builder: (context, scrollController) => JamSheetSurface(
+          grouped: grouped,
           child: JamSheetScaffold(
             title: title,
+            leading: leading,
             trailing: trailing,
             showHandle: enableDrag,
             scrollController: scrollController,
@@ -463,30 +485,4 @@ Future<T?> showJamSheet<T>(
       );
     },
   );
-}
-
-/// The sheet's ground: `surfaceElevated`, top radius `xl`, `overlay` shadow.
-class _JamSheetSurface extends StatelessWidget {
-  const _JamSheetSurface({required this.child});
-
-  final Widget child;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.jamColors;
-    const radius = BorderRadius.vertical(top: Radius.circular(JamRadius.xl));
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        color: colors.surfaceElevated,
-        borderRadius: radius,
-        boxShadow: JamShadow.overlay(colors),
-      ),
-      child: Material(
-        color: Colors.transparent,
-        clipBehavior: Clip.antiAlias,
-        shape: const RoundedRectangleBorder(borderRadius: radius),
-        child: child,
-      ),
-    );
-  }
 }

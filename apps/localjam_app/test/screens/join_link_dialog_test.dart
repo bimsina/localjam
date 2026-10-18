@@ -6,7 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:localjam_app/src/design/theme.dart';
-import 'package:localjam_app/src/design/tokens.dart';
+import 'package:localjam_app/src/widgets/dialogs.dart';
 import 'package:localjam_app/src/widgets/join_link_dialog.dart';
 
 const String _link =
@@ -109,34 +109,11 @@ void main() {
     mockClipboard(null);
     await openDialog(tester);
 
-    // The theme's disabled fill, not a half-opacity raspberry: white on 50%
-    // pink is below AA, and `surfaceMuted`/`textTertiary` is the palette's
-    // own answer to "not yet".
-    final theme = jamLightTheme();
-    final colors = theme.extension<JamColors>()!;
-    final button = tester.widget<FilledButton>(
-      find
-          .ancestor(
-            of: find.text(JamJoinLinkStrings.join),
-            matching: find.byType(FilledButton),
-          )
-          .first,
+    // The confirming action is disabled, not just untappable.
+    final button = tester.widget<JamDialogPrimaryButton>(
+      find.byType(JamDialogPrimaryButton),
     );
-    expect(button.onPressed, isNull, reason: 'disabled, not just untappable');
-    // No local override: the disabled colours are the theme's, which is the
-    // point — one contrast-checked answer, everywhere.
-    expect(button.style, isNull);
-    expect(
-      find.ancestor(
-        of: find.text(JamJoinLinkStrings.join),
-        matching: find.byType(Opacity),
-      ),
-      findsNothing,
-    );
-    const disabled = <WidgetState>{WidgetState.disabled};
-    final style = theme.filledButtonTheme.style!;
-    expect(style.backgroundColor!.resolve(disabled), colors.surfaceMuted);
-    expect(style.foregroundColor!.resolve(disabled), colors.textTertiary);
+    expect(button.onPressed, isNull);
   });
 
   testWidgets('cancelling answers with nothing, on either palette', (

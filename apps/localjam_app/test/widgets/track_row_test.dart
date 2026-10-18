@@ -1,14 +1,15 @@
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:localjam_app/src/design/theme.dart';
 import 'package:localjam_app/src/design/tokens.dart';
 import 'package:localjam_app/src/widgets/avatar.dart';
+import 'package:localjam_app/src/widgets/list.dart';
+import 'package:localjam_app/src/widgets/section.dart';
 import 'package:localjam_app/src/widgets/track_row.dart';
 
 Future<void> pumpRow(WidgetTester tester, Widget child, {bool dark = false}) {
   final theme = dark ? jamDarkTheme() : jamLightTheme();
-  // An inner Theme, not just MaterialApp's: MaterialApp animates a theme
-  // change, so a single pump would still be halfway through the old palette.
   return tester.pumpWidget(
     MaterialApp(
       theme: theme,
@@ -22,9 +23,7 @@ Future<void> pumpRow(WidgetTester tester, Widget child, {bool dark = false}) {
 
 void main() {
   group('JamTrackRow', () {
-    testWidgets('shows title and byline in both themes, at 68 high', (
-      tester,
-    ) async {
+    testWidgets('title and byline in both themes, 60 tall', (tester) async {
       for (final dark in [false, true]) {
         await pumpRow(
           tester,
@@ -37,10 +36,34 @@ void main() {
           tester.getSize(find.byType(JamTrackRow)).height,
           kJamTrackRowHeight,
         );
+        expect(kJamTrackRowHeight, 60);
       }
     });
 
-    testWidgets('marks the current track in accent and announces it', (
+    testWidgets('credits the adder in words with the length', (tester) async {
+      await pumpRow(
+        tester,
+        const JamTrackRow(
+          title: 'Blue Moon',
+          addedByName: 'Mia',
+          duration: Duration(minutes: 3, seconds: 42),
+        ),
+      );
+      expect(find.text('Added by Mia · 3:42'), findsOneWidget);
+      expect(find.byType(JamAvatar), findsNothing);
+
+      await pumpRow(
+        tester,
+        const JamTrackRow(
+          title: 'Blue Moon',
+          addedByName: 'You',
+          addedByYou: true,
+        ),
+      );
+      expect(find.text(JamTrackRowStrings.addedByYou), findsOneWidget);
+    });
+
+    testWidgets('marks the current song in tint and announces it', (
       tester,
     ) async {
       final handle = tester.ensureSemantics();
@@ -50,7 +73,7 @@ void main() {
       );
       expect(
         tester.widget<Text>(find.text('Blue Moon')).style!.color,
-        JamColors.light.accent,
+        JamColors.light.tint,
       );
       expect(
         find.bySemanticsLabel(RegExp(JamTrackRowStrings.nowPlaying)),
@@ -59,119 +82,106 @@ void main() {
       handle.dispose();
     });
 
-    testWidgets('credits every adder, you included', (tester) async {
-      await pumpRow(
-        tester,
-        const JamTrackRow(title: 'Blue Moon', addedByName: 'Silky Puffin'),
-      );
-      expect(find.byType(JamAvatar), findsOneWidget);
-      expect(
-        tester.widget<JamAvatar>(find.byType(JamAvatar)).ring,
-        JamAvatarRing.none,
-      );
-
-      // Your own row keeps its face — and wears the apricot ring, drawn from
-      // the name the caller hands over rather than from the word "You".
+    testWidgets('white on the backdrop', (tester) async {
       await pumpRow(
         tester,
         const JamTrackRow(
           title: 'Blue Moon',
-          addedByName: 'You',
-          addedByAvatarName: 'Chill Toucan',
-          addedByYou: true,
+          addedByName: 'Mia',
+          onBackdrop: true,
         ),
       );
-      final you = tester.widget<JamAvatar>(find.byType(JamAvatar));
-      expect(you.ring, JamAvatarRing.you);
-      expect(you.name, 'Chill Toucan');
-
-      // Nothing to credit: no face, and no gap where one would have been.
-      await pumpRow(tester, const JamTrackRow(title: 'Blue Moon'));
-      expect(find.byType(JamAvatar), findsNothing);
+      expect(
+        tester.widget<Text>(find.text('Blue Moon')).style!.color,
+        JamNowPlayingColors.text,
+      );
+      expect(
+        tester.widget<Text>(find.text('Added by Mia')).style!.color,
+        JamNowPlayingColors.secondary,
+      );
     });
 
-    testWidgets('trails a duration, a prefetch ring, or an error glyph', (
+    testWidgets('a failure states its reason in danger', (tester) async {
+      await pumpRow(
+        tester,
+        const JamTrackRow(
+          title: 'Blue Moon',
+          hasError: true,
+          errorText: 'Unsupported format',
+        ),
+      );
+      expect(
+        tester.widget<Text>(find.text('Unsupported format')).style!.color,
+        JamColors.light.danger,
+      );
+    });
+
+    testWidgets('a fetch in progress shows a revealing indicator', (
       tester,
     ) async {
       await pumpRow(
         tester,
-        const JamTrackRow(
-          title: 'Blue Moon',
-          duration: Duration(minutes: 3, seconds: 7),
-        ),
-      );
-      expect(find.text('03:07'), findsOneWidget);
-
-      await pumpRow(
-        tester,
         const JamTrackRow(title: 'Blue Moon', prefetchProgress: 0.4),
       );
-      expect(
-        tester
-            .widget<CircularProgressIndicator>(
-              find.byType(CircularProgressIndicator),
-            )
-            .value,
-        0.4,
-      );
-
-      await pumpRow(
-        tester,
-        const JamTrackRow(title: 'Blue Moon', hasError: true),
-      );
-      expect(find.byIcon(Icons.error_outline_rounded), findsOneWidget);
+      expect(find.byType(CupertinoActivityIndicator), findsOneWidget);
     });
 
     testWidgets('offers a drag handle only when reordering is allowed', (
       tester,
     ) async {
       await pumpRow(tester, const JamTrackRow(title: 'Blue Moon'));
-      expect(find.byIcon(Icons.drag_handle_rounded), findsNothing);
-
+      expect(find.byIcon(CupertinoIcons.line_horizontal_3), findsNothing);
       await pumpRow(
         tester,
         const JamTrackRow(title: 'Blue Moon', showDragHandle: true),
       );
-      expect(find.byIcon(Icons.drag_handle_rounded), findsOneWidget);
+      expect(find.byIcon(CupertinoIcons.line_horizontal_3), findsOneWidget);
     });
 
-    testWidgets('lifts onto surfaceElevated while dragging', (tester) async {
-      await pumpRow(
-        tester,
-        const JamTrackRow(title: 'Blue Moon', dragging: true),
-      );
-      final container = tester.widget<AnimatedContainer>(
-        find.byType(AnimatedContainer),
-      );
-      expect(
-        (container.decoration! as BoxDecoration).color,
-        JamColors.light.surfaceElevated,
-      );
-      expect(find.byType(Transform), findsWidgets);
-    });
-
-    testWidgets('fills while pressed', (tester) async {
+    testWidgets('press highlight is fillPressed, no ink', (tester) async {
       await pumpRow(tester, JamTrackRow(title: 'Blue Moon', onTap: () {}));
       final gesture = await tester.startGesture(
         tester.getCenter(find.byType(JamTrackRow)),
       );
-      await tester.pump(JamDuration.fast);
-      expect(
-        (tester
-                    .widget<AnimatedContainer>(find.byType(AnimatedContainer))
-                    .decoration!
-                as BoxDecoration)
-            .color,
-        JamColors.light.surfaceMuted,
+      await tester.pump();
+      final boxes = tester.widgetList<DecoratedBox>(
+        find.descendant(
+          of: find.byType(JamTrackRow),
+          matching: find.byType(DecoratedBox),
+        ),
       );
+      expect(
+        boxes.any(
+          (b) =>
+              (b.decoration as BoxDecoration).color ==
+              JamColors.light.fillPressed,
+        ),
+        isTrue,
+      );
+      expect(find.byType(InkWell), findsNothing);
       await gesture.up();
       await tester.pumpAndSettle();
+    });
+
+    testWidgets('draws its separator inside a section, not after the last', (
+      tester,
+    ) async {
+      await pumpRow(
+        tester,
+        const JamSection(
+          children: [
+            JamTrackRow(title: 'One'),
+            JamTrackRow(title: 'Two'),
+          ],
+        ),
+      );
+      expect(find.byType(JamHairline), findsOneWidget);
     });
   });
 
   group('formatTrackDuration', () {
-    test('is mm:ss, and h:mm:ss past an hour', () {
-      expect(formatTrackDuration(const Duration(seconds: 7)), '00:07');
+    test('is m:ss, and h:mm:ss past an hour', () {
+      expect(formatTrackDuration(const Duration(seconds: 7)), '0:07');
       expect(
         formatTrackDuration(const Duration(minutes: 12, seconds: 3)),
         '12:03',

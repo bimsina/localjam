@@ -60,18 +60,7 @@ void main() {
       expect(find.text('CO-HOST'), findsNothing);
     });
 
-    testWidgets('rings the host in accent, and you over the host', (
-      tester,
-    ) async {
-      await pumpRow(
-        tester,
-        const JamPeerRow(name: 'Silky Puffin', role: JamPeerRole.host),
-      );
-      expect(
-        tester.widget<JamAvatar>(find.byType(JamAvatar)).ring,
-        JamAvatarRing.host,
-      );
-
+    testWidgets('faces carry no ring (D6)', (tester) async {
       await pumpRow(
         tester,
         const JamPeerRow(
@@ -80,9 +69,13 @@ void main() {
           isYou: true,
         ),
       );
+      final face = find.descendant(
+        of: find.byType(JamAvatar),
+        matching: find.byType(Container),
+      );
       expect(
-        tester.widget<JamAvatar>(find.byType(JamAvatar)).ring,
-        JamAvatarRing.you,
+        (tester.widget<Container>(face).decoration! as BoxDecoration).border,
+        isNull,
       );
     });
 

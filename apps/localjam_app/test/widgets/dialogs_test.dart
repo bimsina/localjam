@@ -4,10 +4,10 @@
 /// kept building. Every prompt test below pumps that transition to the end.
 library;
 
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:localjam_app/src/design/theme.dart';
-import 'package:localjam_app/src/design/tokens.dart';
 import 'package:localjam_app/src/widgets/dialogs.dart';
 
 Widget _host(Future<void> Function(BuildContext) onTap, {ThemeData? theme}) =>
@@ -53,7 +53,9 @@ void main() {
     expect(answer, isTrue);
   });
 
-  testWidgets('a dismissed confirm is a no', (tester) async {
+  testWidgets('an alert ignores the barrier; a back dismissal is a no', (
+    tester,
+  ) async {
     bool? answer;
     await tester.pumpWidget(
       _host(
@@ -63,15 +65,57 @@ void main() {
     );
     await tester.tap(find.text('Go'));
     await tester.pumpAndSettle();
+    expect(find.byType(CupertinoAlertDialog), findsOneWidget);
 
-    await tester.tapAt(const Offset(10, 10)); // the barrier
+    await tester.tapAt(const Offset(10, 10)); // the barrier: iOS keeps it up
+    await tester.pumpAndSettle();
+    expect(find.byType(CupertinoAlertDialog), findsOneWidget);
+
+    // System back (Android) pops it.
+    final navigator = tester.state<NavigatorState>(find.byType(Navigator));
+    navigator.pop();
     await tester.pumpAndSettle();
     expect(answer, isFalse);
   });
 
-  testWidgets('a destructive confirm fills its primary action in danger', (
-    tester,
-  ) async {
+  testWidgets('an iOS alert: 270 wide, Cancel then the action', (tester) async {
+    await tester.pumpWidget(
+      _host(
+        (context) async => JamDialogs.confirm(
+          context,
+          title: 'Join Mia’s Jam?',
+          confirmLabel: 'Join',
+        ),
+      ),
+    );
+    await tester.tap(find.text('Go'));
+    await tester.pumpAndSettle();
+    expect(
+      tester
+          .getSize(
+            find
+                .descendant(
+                  of: find.byType(CupertinoAlertDialog),
+                  matching: find.byType(CupertinoPopupSurface),
+                )
+                .first,
+          )
+          .width,
+      270,
+    );
+    final actions = tester
+        .widgetList<CupertinoDialogAction>(find.byType(CupertinoDialogAction))
+        .toList();
+    expect(actions.length, 2);
+    expect(actions.first.isDefaultAction, isFalse);
+    expect(actions.last.isDefaultAction, isTrue);
+    expect(
+      tester.getCenter(find.text('Cancel')).dx,
+      lessThan(tester.getCenter(find.text('Join')).dx),
+    );
+  });
+
+  testWidgets('a destructive confirm turns its action red', (tester) async {
     await tester.pumpWidget(
       _host(
         (context) async => JamDialogs.confirmDestructive(
@@ -84,16 +128,12 @@ void main() {
     await tester.tap(find.text('Go'));
     await tester.pumpAndSettle();
 
-    final button = tester.widget<FilledButton>(find.byType(FilledButton));
-    final colors = JamColors.light;
-    expect(
-      button.style?.backgroundColor?.resolve(<WidgetState>{}),
-      colors.danger,
-    );
-    expect(
-      button.style?.foregroundColor?.resolve(<WidgetState>{}),
-      colors.onAccent,
-    );
+    final actions = tester
+        .widgetList<CupertinoDialogAction>(find.byType(CupertinoDialogAction))
+        .toList();
+    expect(actions.last.isDestructiveAction, isTrue);
+    // iOS makes Cancel the bold one beside a destructive action.
+    expect(actions.first.isDefaultAction, isTrue);
   });
 
   testWidgets('promptText returns the trimmed value and survives the exit', (
@@ -112,9 +152,9 @@ void main() {
 
     await tester.tap(find.text('Go'));
     await tester.pumpAndSettle();
-    expect(find.byType(TextField), findsOneWidget);
+    expect(find.byType(CupertinoTextField), findsOneWidget);
 
-    await tester.enterText(find.byType(TextField), '  Neon Walrus  ');
+    await tester.enterText(find.byType(CupertinoTextField), '  Neon Walrus  ');
     await tester.tap(find.text('Save'));
     // All of it: this is where a caller-owned controller used to blow up.
     await tester.pumpAndSettle();
@@ -139,10 +179,13 @@ void main() {
     await tester.tap(find.text('Go'));
     await tester.pumpAndSettle();
 
-    await tester.enterText(find.byType(TextField), '   ');
+    await tester.enterText(find.byType(CupertinoTextField), '   ');
     await tester.pump();
     expect(
-      tester.widget<FilledButton>(find.byType(FilledButton)).onPressed,
+      tester
+          .widgetList<CupertinoDialogAction>(find.byType(CupertinoDialogAction))
+          .last
+          .onPressed,
       isNull,
     );
 

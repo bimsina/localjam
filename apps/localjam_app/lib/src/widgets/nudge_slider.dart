@@ -70,12 +70,12 @@ class _NudgeSliderState extends State<NudgeSlider> {
           children: [
             Text(
               JamNudgeStrings.label,
-              style: context.jamRowTitle.copyWith(color: colors.textPrimary),
+              style: context.jamHeadline.copyWith(color: colors.label),
             ),
             const Spacer(),
             Text(
               JamNudgeStrings.value(_ms),
-              style: context.jamNumeric.copyWith(color: colors.accent),
+              style: context.jamNumeric.copyWith(color: colors.tint),
             ),
           ],
         ),
@@ -100,7 +100,7 @@ class _NudgeSliderState extends State<NudgeSlider> {
         ),
         Text(
           JamNudgeStrings.help,
-          style: context.jamFootnote.copyWith(color: colors.textTertiary),
+          style: context.jamFootnote.copyWith(color: colors.tertiaryLabel),
         ),
       ],
     );

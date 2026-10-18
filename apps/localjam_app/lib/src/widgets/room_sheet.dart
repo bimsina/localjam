@@ -232,11 +232,7 @@ class _RoomSheetSurface extends StatelessWidget {
     final colors = context.jamColors;
     const radius = BorderRadius.vertical(top: Radius.circular(JamRadius.xl));
     return DecoratedBox(
-      decoration: BoxDecoration(
-        color: colors.surfaceElevated,
-        borderRadius: radius,
-        boxShadow: JamShadow.overlay(colors),
-      ),
+      decoration: BoxDecoration(color: colors.elevated, borderRadius: radius),
       child: Material(
         color: Colors.transparent,
         clipBehavior: Clip.antiAlias,
@@ -446,7 +442,9 @@ class _RoomPanelState extends State<RoomPanel> {
                   ),
                   child: Text(
                     RoomSheetStrings.guestSummary(permissions.policy),
-                    style: context.jamFootnote,
+                    style: context.jamFootnote.copyWith(
+                      color: context.jamColors.secondaryLabel,
+                    ),
                   ),
                 ),
 
@@ -716,7 +714,7 @@ class _NoNetworkInvite extends StatelessWidget {
           ),
           child: Semantics(
             header: true,
-            child: Text(RoomSheetStrings.invite, style: context.jamTitle),
+            child: Text(RoomSheetStrings.invite, style: context.jamTitle3),
           ),
         ),
         Padding(
@@ -730,7 +728,7 @@ class _NoNetworkInvite extends StatelessWidget {
             child: Container(
               padding: const EdgeInsets.all(JamSpace.card),
               decoration: BoxDecoration(
-                color: colors.highlightSoft,
+                color: colors.fillSecondary,
                 borderRadius: BorderRadius.circular(JamRadius.md),
               ),
               child: Row(
@@ -744,14 +742,16 @@ class _NoNetworkInvite extends StatelessWidget {
                       children: [
                         Text(
                           RoomSheetStrings.noNetworkTitle,
-                          style: context.jamRowTitle.copyWith(
+                          style: context.jamHeadline.copyWith(
                             color: colors.warning,
                           ),
                         ),
                         const SizedBox(height: JamSpace.xxs),
                         Text(
                           RoomSheetStrings.noNetworkDetail,
-                          style: context.jamFootnote,
+                          style: context.jamFootnote.copyWith(
+                            color: context.jamColors.secondaryLabel,
+                          ),
                         ),
                       ],
                     ),
@@ -796,14 +796,16 @@ class _Removed extends StatelessWidget {
             ),
             child: Semantics(
               header: true,
-              child: Text(RoomSheetStrings.removed, style: context.jamTitle),
+              child: Text(RoomSheetStrings.removed, style: context.jamTitle3),
             ),
           ),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: JamSpace.page),
             child: Text(
               RoomSheetStrings.removedDetail,
-              style: context.jamFootnote,
+              style: context.jamFootnote.copyWith(
+                color: context.jamColors.secondaryLabel,
+              ),
             ),
           ),
           const SizedBox(height: JamSpace.sm),
@@ -842,12 +844,12 @@ class _RemovedPerson extends StatelessWidget {
                 name,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: context.jamRowTitle.copyWith(
-                  color: context.jamColors.textSecondary,
+                style: context.jamHeadline.copyWith(
+                  color: context.jamColors.secondaryLabel,
                 ),
               ),
             ),
-            JamButton.tertiary(
+            JamButton.plain(
               label: RoomSheetStrings.letBackIn,
               // "Let back in" alone, heard apart from the name before it,
               // does not say who.
@@ -915,7 +917,7 @@ class _Invite extends StatelessWidget {
           ),
           child: Semantics(
             header: true,
-            child: Text(RoomSheetStrings.invite, style: context.jamTitle),
+            child: Text(RoomSheetStrings.invite, style: context.jamTitle3),
           ),
         ),
         Padding(
@@ -924,7 +926,9 @@ class _Invite extends StatelessWidget {
             network.isHotspotHost
                 ? RoomSheetStrings.inviteOnHotspot
                 : RoomSheetStrings.inviteOnNetwork,
-            style: context.jamFootnote,
+            style: context.jamFootnote.copyWith(
+              color: context.jamColors.secondaryLabel,
+            ),
           ),
         ),
         const SizedBox(height: JamSpace.xl),
@@ -949,7 +953,6 @@ class _Invite extends StatelessWidget {
                   // White on white was invisible in light: the plate needs
                   // its own edge and its own lift off the sheet.
                   border: Border.all(color: colors.separator, width: 0.5),
-                  boxShadow: JamShadow.raised(colors),
                 ),
                 child: Semantics(
                   label: RoomSheetStrings.inviteOnNetwork,
@@ -976,7 +979,7 @@ class _Invite extends StatelessWidget {
                         height: _markSize,
                         alignment: Alignment.center,
                         decoration: BoxDecoration(
-                          color: JamColors.brandRaspberry,
+                          color: colors.tint,
                           borderRadius: BorderRadius.circular(JamRadius.md),
                         ),
                         child: SvgPicture.asset(
@@ -1003,7 +1006,7 @@ class _Invite extends StatelessWidget {
           textAlign: TextAlign.center,
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
-          style: context.jamRowTitle,
+          style: context.jamHeadline,
         ),
         const SizedBox(height: JamSpace.lg),
         Padding(
@@ -1021,7 +1024,7 @@ class _Invite extends StatelessWidget {
             onTap: () => unawaited(_copy(context)),
             excludeSemantics: true,
             child: Material(
-              color: colors.surfaceMuted,
+              color: colors.fillSecondary,
               borderRadius: BorderRadius.circular(JamRadius.md),
               clipBehavior: Clip.antiAlias,
               child: InkWell(
@@ -1036,7 +1039,7 @@ class _Invite extends StatelessWidget {
                       Icon(
                         Icons.link_rounded,
                         size: 20,
-                        color: colors.textSecondary,
+                        color: colors.secondaryLabel,
                       ),
                       const SizedBox(width: JamSpace.md),
                       Expanded(
@@ -1045,11 +1048,13 @@ class _Invite extends StatelessWidget {
                           children: [
                             Text(
                               RoomSheetStrings.roomCode,
-                              style: context.jamFootnote,
+                              style: context.jamFootnote.copyWith(
+                                color: context.jamColors.secondaryLabel,
+                              ),
                             ),
                             Text(
                               jamShortRoomCode(joinUri),
-                              style: context.jamRowTitle.copyWith(
+                              style: context.jamHeadline.copyWith(
                                 fontFeatures: const [
                                   FontFeature.tabularFigures(),
                                 ],
@@ -1062,7 +1067,7 @@ class _Invite extends StatelessWidget {
                       Icon(
                         Icons.copy_rounded,
                         size: 20,
-                        color: colors.textSecondary,
+                        color: colors.secondaryLabel,
                       ),
                     ],
                   ),
@@ -1073,7 +1078,7 @@ class _Invite extends StatelessWidget {
         ),
         const SizedBox(height: JamSpace.sm),
         Center(
-          child: JamButton.tertiary(
+          child: JamButton.plain(
             label: RoomSheetStrings.shareLink,
             icon: Icons.ios_share_rounded,
             onPressed: () => unawaited(_share(context)),
@@ -1103,8 +1108,8 @@ class _QrHalo extends StatelessWidget {
             shape: BoxShape.circle,
             gradient: RadialGradient(
               colors: [
-                colors.accent.withValues(alpha: 0.22),
-                colors.accent.withValues(alpha: 0),
+                colors.tint.withValues(alpha: 0.22),
+                colors.tint.withValues(alpha: 0),
               ],
               stops: const [0.55, 1],
             ),
@@ -1137,14 +1142,16 @@ class _EveryoneCan extends StatelessWidget {
           ),
           child: Semantics(
             header: true,
-            child: Text(RoomSheetStrings.everyoneCan, style: context.jamTitle),
+            child: Text(RoomSheetStrings.everyoneCan, style: context.jamTitle3),
           ),
         ),
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: JamSpace.page),
           child: Text(
             RoomSheetStrings.presetFootnote(policy),
-            style: context.jamFootnote,
+            style: context.jamFootnote.copyWith(
+              color: context.jamColors.secondaryLabel,
+            ),
           ),
         ),
         const SizedBox(height: JamSpace.sm),
@@ -1239,7 +1246,7 @@ class _LeaveRow extends StatelessWidget {
                   Expanded(
                     child: Text(
                       label,
-                      style: context.jamRowTitle.copyWith(color: colors.danger),
+                      style: context.jamHeadline.copyWith(color: colors.danger),
                     ),
                   ),
                 ],

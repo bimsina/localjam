@@ -1,3 +1,4 @@
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:localjam_app/src/design/theme.dart';
@@ -9,56 +10,35 @@ Widget _host(Widget child, {bool dark = false}) => MaterialApp(
   home: Scaffold(body: Center(child: child)),
 );
 
-BoxDecoration _fillOf(WidgetTester tester) {
-  final container = tester.widget<AnimatedContainer>(
-    find.descendant(
-      of: find.byType(JamChip),
-      matching: find.byType(AnimatedContainer),
-    ),
+ShapeDecoration _fillOf(WidgetTester tester) {
+  final container = tester.widget<Container>(
+    find
+        .descendant(of: find.byType(JamChip), matching: find.byType(Container))
+        .first,
   );
-  return container.decoration! as BoxDecoration;
+  return container.decoration! as ShapeDecoration;
 }
 
 Color _labelColor(WidgetTester tester, String label) =>
     tester.widget<Text>(find.text(label)).style!.color!;
 
 void main() {
-  testWidgets('idle wears the muted fill and a secondary label', (
+  testWidgets('idle wears fillSecondary and a label-coloured capsule', (
     tester,
   ) async {
     await tester.pumpWidget(_host(const JamChip(label: 'Everything')));
-    expect(_fillOf(tester).color, JamColors.light.surfaceMuted);
-    expect(_labelColor(tester, 'Everything'), JamColors.light.textSecondary);
-    expect(tester.getSize(find.byType(JamChip)).height, 32);
+    expect(_fillOf(tester).color, JamColors.light.fillSecondary);
+    expect(_fillOf(tester).shape, isA<StadiumBorder>());
+    expect(_labelColor(tester, 'Everything'), JamColors.light.label);
+    expect(tester.getSize(find.byType(JamChip)).height, 30);
   });
 
   testWidgets('selected wears the soft accent fill', (tester) async {
     await tester.pumpWidget(
       _host(const JamChip(label: 'Add music', state: JamChipState.selected)),
     );
-    expect(_fillOf(tester).color, JamColors.light.accentSoft);
-    expect(_labelColor(tester, 'Add music'), JamColors.light.accent);
-  });
-
-  testWidgets('live carries the 6 dp apricot dot', (tester) async {
-    await tester.pumpWidget(
-      _host(const JamChip(label: 'LIVE', state: JamChipState.live)),
-    );
-    expect(_fillOf(tester).color, JamColors.light.highlightSoft);
-    // Apricot fails AA as text, so the word is warning-brown and only the
-    // dot is the highlight itself.
-    expect(_labelColor(tester, 'LIVE'), JamColors.light.warning);
-
-    // AnimatedContainer builds a Container of its own, so the dot is the
-    // deeper of the two.
-    final dotFinder = find
-        .descendant(of: find.byType(JamChip), matching: find.byType(Container))
-        .last;
-    final decoration =
-        tester.widget<Container>(dotFinder).decoration! as BoxDecoration;
-    expect(decoration.color, JamColors.light.highlight);
-    expect(decoration.shape, BoxShape.circle);
-    expect(tester.getSize(dotFinder), const Size(6, 6));
+    expect(_fillOf(tester).color, JamColors.light.tintFill);
+    expect(_labelColor(tester, 'Add music'), JamColors.light.tint);
   });
 
   testWidgets('a tappable chip fires and takes a 44 dp target', (tester) async {
@@ -66,7 +46,7 @@ void main() {
     await tester.pumpWidget(
       _host(JamChip(label: 'Nearby', onTap: () => taps++)),
     );
-    // Painted 32, tapped 44 — the pill does not grow to satisfy the rule.
+    // Painted 30, tapped 44 — the capsule does not grow to satisfy the rule.
     expect(tester.getSize(find.byType(JamChip)).height, 44);
     await tester.tap(find.byType(JamChip));
     expect(taps, 1);
@@ -84,7 +64,7 @@ void main() {
         ),
       ),
     );
-    await tester.tap(find.byIcon(Icons.close_rounded));
+    await tester.tap(find.byIcon(CupertinoIcons.xmark));
     expect(closes, 1);
     expect(taps, 0);
   });
@@ -101,16 +81,14 @@ void main() {
     handle.dispose();
   });
 
-  testWidgets('dark keeps the same three fills from its own palette', (
-    tester,
-  ) async {
+  testWidgets('dark keeps the same fills from its own palette', (tester) async {
     await tester.pumpWidget(
       _host(
         const JamChip(label: 'Add music', state: JamChipState.selected),
         dark: true,
       ),
     );
-    expect(_fillOf(tester).color, JamColors.dark.accentSoft);
-    expect(_labelColor(tester, 'Add music'), JamColors.dark.accent);
+    expect(_fillOf(tester).color, JamColors.dark.tintFill);
+    expect(_labelColor(tester, 'Add music'), JamColors.dark.tint);
   });
 }

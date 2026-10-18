@@ -1,0 +1,371 @@
+/// The translucent chrome and controls: glass buttons, the large-title
+/// scaffold, the pull-down menu, the switch and segmented control, the press
+/// building block and progress.
+library;
+
+import 'package:flutter/cupertino.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:localjam_app/src/design/theme.dart';
+import 'package:localjam_app/src/design/tokens.dart';
+import 'package:localjam_app/src/widgets/buttons.dart';
+import 'package:localjam_app/src/widgets/glass.dart';
+import 'package:localjam_app/src/widgets/menu.dart';
+import 'package:localjam_app/src/widgets/pressable.dart';
+import 'package:localjam_app/src/widgets/progress.dart';
+import 'package:localjam_app/src/widgets/scaffold.dart';
+import 'package:localjam_app/src/widgets/switch.dart';
+
+Widget _app(Widget home, {bool dark = false}) =>
+    MaterialApp(theme: dark ? jamDarkTheme() : jamLightTheme(), home: home);
+
+Widget _host(Widget child, {bool dark = false}) => _app(
+  Scaffold(body: Center(child: child)),
+  dark: dark,
+);
+
+void main() {
+  group('JamGlassButton', () {
+    testWidgets('44 hit, 36 blurred circle, labelled', (tester) async {
+      final handle = tester.ensureSemantics();
+      var taps = 0;
+      await tester.pumpWidget(
+        _host(
+          JamGlassButton(
+            icon: CupertinoIcons.chevron_down,
+            semanticLabel: 'Close',
+            onPressed: () => taps++,
+          ),
+        ),
+      );
+      expect(tester.getSize(find.byType(JamGlassButton)), const Size(44, 44));
+      expect(find.byType(BackdropFilter), findsOneWidget);
+      expect(
+        tester.getSize(find.byType(BackdropFilter)),
+        const Size(JamMetrics.glassButton, JamMetrics.glassButton),
+      );
+      expect(find.bySemanticsLabel('Close'), findsOneWidget);
+      await tester.tap(find.byType(JamGlassButton));
+      expect(taps, 1);
+      handle.dispose();
+    });
+
+    testWidgets('over artwork it is glass with a white glyph', (tester) async {
+      await tester.pumpWidget(
+        _host(
+          JamGlassButton(
+            icon: CupertinoIcons.person_badge_plus,
+            semanticLabel: 'Invite',
+            onArtwork: true,
+            onPressed: () {},
+          ),
+        ),
+      );
+      expect(
+        tester.widget<Icon>(find.byType(Icon)).color,
+        JamNowPlayingColors.text,
+      );
+      final surface = tester.widget<JamBlurSurface>(
+        find.byType(JamBlurSurface),
+      );
+      expect(surface.kind, JamMaterialKind.glass);
+    });
+
+    testWidgets('selected is an opaque circle with a dark glyph', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        _host(
+          JamGlassButton(
+            icon: CupertinoIcons.list_bullet,
+            semanticLabel: 'Queue',
+            onArtwork: true,
+            selected: true,
+            onPressed: () {},
+          ),
+        ),
+      );
+      expect(find.byType(BackdropFilter), findsNothing);
+      expect(tester.widget<Icon>(find.byType(Icon)).color, Colors.black);
+    });
+  });
+
+  group('JamScaffold', () {
+    testWidgets('a large title over the content, trailing items in tint', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        _app(
+          JamScaffold(
+            title: 'Nearby',
+            trailing: [
+              JamIconButton(
+                icon: CupertinoIcons.qrcode_viewfinder,
+                semanticLabel: 'Scan',
+                onPressed: () {},
+              ),
+            ],
+            children: [
+              for (var i = 0; i < 40; i++)
+                SizedBox(height: 44, child: Text('Row $i')),
+            ],
+          ),
+        ),
+      );
+      expect(find.byType(CupertinoSliverNavigationBar), findsOneWidget);
+      final large = tester
+          .widgetList<Text>(find.text('Nearby'))
+          .map((t) => t.data)
+          .toList();
+      expect(large, isNotEmpty);
+      expect(find.byIcon(CupertinoIcons.qrcode_viewfinder), findsOneWidget);
+      expect(
+        tester
+            .widget<Icon>(find.byIcon(CupertinoIcons.qrcode_viewfinder))
+            .color,
+        JamColors.light.tint,
+      );
+      // Scrolls without error and collapses the title.
+      await tester.drag(find.byType(CustomScrollView), const Offset(0, -400));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets(
+      'the bottom action sits on material only once content is under it',
+      (tester) async {
+        await tester.pumpWidget(
+          _app(
+            JamScaffold(
+              title: 'Nearby',
+              bottomBar: JamButton.filled(
+                label: 'Start a Jam',
+                expand: true,
+                onPressed: () {},
+              ),
+              children: [
+                for (var i = 0; i < 40; i++)
+                  SizedBox(height: 44, child: Text('Row $i')),
+              ],
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+        final opacity = tester.widget<AnimatedOpacity>(
+          find
+              .descendant(
+                of: find.byType(JamBottomBar),
+                matching: find.byType(AnimatedOpacity),
+              )
+              .first,
+        );
+        expect(opacity.opacity, 1);
+
+        await tester.pumpWidget(
+          _app(
+            JamScaffold(
+              title: 'Nearby',
+              bottomBar: JamButton.filled(
+                label: 'Start a Jam',
+                expand: true,
+                onPressed: () {},
+              ),
+              children: const [SizedBox(height: 44, child: Text('Only'))],
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+        expect(
+          tester
+              .widget<AnimatedOpacity>(
+                find
+                    .descendant(
+                      of: find.byType(JamBottomBar),
+                      matching: find.byType(AnimatedOpacity),
+                    )
+                    .first,
+              )
+              .opacity,
+          0,
+        );
+        expect(find.text('Start a Jam'), findsOneWidget);
+      },
+    );
+
+    testWidgets('grouped pages use groupedBackground; inline titles work', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        _app(
+          const JamScaffold(
+            title: 'Settings',
+            grouped: true,
+            largeTitle: false,
+            children: [Text('Body')],
+          ),
+        ),
+      );
+      expect(
+        tester.widget<Scaffold>(find.byType(Scaffold)).backgroundColor,
+        JamColors.light.groupedBackground,
+      );
+      expect(find.byType(CupertinoNavigationBar), findsOneWidget);
+      expect(find.text('Body'), findsOneWidget);
+    });
+  });
+
+  group('JamMenuButton', () {
+    testWidgets('opens an iOS pull-down with groups and a red row', (
+      tester,
+    ) async {
+      var invited = 0;
+      await tester.pumpWidget(
+        _host(
+          JamMenuButton(
+            groups: [
+              [
+                JamMenuItem(
+                  title: 'Invite People',
+                  icon: CupertinoIcons.person_badge_plus,
+                  onPressed: () => invited++,
+                ),
+              ],
+              [
+                JamMenuItem(
+                  title: 'End Jam',
+                  icon: CupertinoIcons.xmark_circle,
+                  destructive: true,
+                  onPressed: () {},
+                ),
+              ],
+            ],
+          ),
+        ),
+      );
+      expect(find.byIcon(CupertinoIcons.ellipsis_circle), findsOneWidget);
+      await tester.tap(find.byType(JamMenuButton));
+      await tester.pumpAndSettle();
+      expect(find.text('Invite People'), findsOneWidget);
+      expect(find.byType(CupertinoMenuDivider), findsOneWidget);
+      final items = tester
+          .widgetList<CupertinoMenuItem>(find.byType(CupertinoMenuItem))
+          .toList();
+      expect(items.last.isDestructiveAction, isTrue);
+      await tester.tap(find.text('Invite People'));
+      await tester.pumpAndSettle();
+      expect(invited, 1);
+      expect(find.text('Invite People'), findsNothing);
+    });
+
+    testWidgets('the glass trigger over artwork', (tester) async {
+      await tester.pumpWidget(
+        _host(
+          const JamMenuButton(
+            trigger: JamMenuTrigger.glassOnArtwork,
+            visualSize: 30,
+            groups: [
+              [JamMenuItem(title: 'Diagnostics')],
+            ],
+          ),
+        ),
+      );
+      expect(find.byType(JamGlassButton), findsOneWidget);
+      expect(find.byIcon(CupertinoIcons.ellipsis), findsOneWidget);
+    });
+  });
+
+  group('controls', () {
+    testWidgets('JamSwitch is a green Cupertino switch', (tester) async {
+      var value = false;
+      await tester.pumpWidget(
+        _host(
+          StatefulBuilder(
+            builder: (context, setState) => JamSwitch(
+              value: value,
+              onChanged: (v) => setState(() => value = v),
+            ),
+          ),
+        ),
+      );
+      final sw = tester.widget<CupertinoSwitch>(find.byType(CupertinoSwitch));
+      expect(sw.activeTrackColor, JamColors.light.success);
+      await tester.tap(find.byType(CupertinoSwitch));
+      await tester.pumpAndSettle();
+      expect(value, isTrue);
+    });
+
+    testWidgets('JamSegmentedControl picks a value', (tester) async {
+      var mode = 'system';
+      await tester.pumpWidget(
+        _host(
+          StatefulBuilder(
+            builder: (context, setState) => SizedBox(
+              width: 300,
+              child: JamSegmentedControl<String>(
+                segments: const {
+                  'system': 'System',
+                  'light': 'Light',
+                  'dark': 'Dark',
+                },
+                groupValue: mode,
+                onValueChanged: (v) => setState(() => mode = v),
+              ),
+            ),
+          ),
+        ),
+      );
+      expect(
+        find.byType(CupertinoSlidingSegmentedControl<String>),
+        findsOneWidget,
+      );
+      await tester.tap(find.text('Dark'));
+      await tester.pumpAndSettle();
+      expect(mode, 'dark');
+    });
+
+    testWidgets('JamPressable dims on press and restores', (tester) async {
+      await tester.pumpWidget(
+        _host(
+          JamPressable(
+            onTap: () {},
+            child: const SizedBox(width: 60, height: 60),
+          ),
+        ),
+      );
+      final g = await tester.startGesture(
+        tester.getCenter(find.byType(JamPressable)),
+      );
+      await tester.pump();
+      expect(
+        tester.widget<AnimatedOpacity>(find.byType(AnimatedOpacity)).opacity,
+        0.6,
+      );
+      await g.up();
+      await tester.pumpAndSettle();
+      expect(
+        tester.widget<AnimatedOpacity>(find.byType(AnimatedOpacity)).opacity,
+        1,
+      );
+    });
+
+    testWidgets('progress is the iOS activity indicator and a capsule bar', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        _host(
+          const Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              JamSpinner(),
+              JamSpinner(progress: 0.5),
+              SizedBox(width: 100, child: JamProgressBar(value: 0.5)),
+            ],
+          ),
+        ),
+      );
+      expect(find.byType(CupertinoActivityIndicator), findsNWidgets(2));
+      expect(find.byType(CircularProgressIndicator), findsNothing);
+      expect(tester.getSize(find.byType(JamProgressBar)).height, 4);
+    });
+  });
+}

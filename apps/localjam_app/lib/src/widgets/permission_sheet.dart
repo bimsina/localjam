@@ -179,11 +179,7 @@ class JamPermissionSheet extends StatelessWidget {
     const radius = BorderRadius.vertical(top: Radius.circular(JamRadius.xl));
 
     return DecoratedBox(
-      decoration: BoxDecoration(
-        color: colors.surfaceElevated,
-        borderRadius: radius,
-        boxShadow: JamShadow.overlay(colors),
-      ),
+      decoration: BoxDecoration(color: colors.elevated, borderRadius: radius),
       child: Material(
         color: Colors.transparent,
         clipBehavior: Clip.antiAlias,
@@ -207,39 +203,39 @@ class JamPermissionSheet extends StatelessWidget {
                     width: 64,
                     height: 64,
                     decoration: BoxDecoration(
-                      color: colors.accentSoft,
+                      color: colors.tintFill,
                       borderRadius: BorderRadius.circular(JamRadius.lg),
                     ),
                     child: Icon(
                       rationale.icon,
                       size: 32,
-                      color: colors.accent,
+                      color: colors.tint,
                       semanticLabel: '',
                     ),
                   ),
                   const SizedBox(height: JamSpace.xl),
                   Semantics(
                     header: true,
-                    child: Text(rationale.title, style: context.jamSheetTitle),
+                    child: Text(rationale.title, style: context.jamTitle2),
                   ),
                   const SizedBox(height: JamSpace.md),
                   Text(
                     rationale.body,
                     style: context.jamBody.copyWith(
-                      color: colors.textSecondary,
+                      color: colors.secondaryLabel,
                     ),
                   ),
                   const SizedBox(height: JamSpace.xl),
                   _Bullet(
                     icon: Icons.check_rounded,
-                    tint: colors.accent,
+                    tint: colors.tint,
                     heading: JamPermissionSheetStrings.doesHeading,
                     detail: rationale.doesBullet,
                   ),
                   const SizedBox(height: JamSpace.md),
                   _Bullet(
                     icon: Icons.block_rounded,
-                    tint: colors.textTertiary,
+                    tint: colors.tertiaryLabel,
                     heading: JamPermissionSheetStrings.neverHeading,
                     detail: rationale.neverBullet,
                   ),
@@ -306,12 +302,17 @@ class _Bullet extends StatelessWidget {
               children: [
                 Text(
                   heading.toUpperCase(),
-                  style: context.jamCaption.copyWith(
-                    color: colors.textTertiary,
+                  style: context.jamCaption2.copyWith(
+                    color: colors.tertiaryLabel,
                   ),
                 ),
                 const SizedBox(height: JamSpace.xxs),
-                Text(detail, style: context.jamByline),
+                Text(
+                  detail,
+                  style: context.jamSubheadline.copyWith(
+                    color: context.jamColors.secondaryLabel,
+                  ),
+                ),
               ],
             ),
           ),

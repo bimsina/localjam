@@ -418,7 +418,7 @@ class _ScanChrome extends StatelessWidget {
             Text(
               JamScanStrings.title,
               textAlign: TextAlign.center,
-              style: context.jamSheetTitle.copyWith(
+              style: context.jamTitle2.copyWith(
                 color: white,
                 shadows: const [Shadow(blurRadius: 12, color: Colors.black54)],
               ),
@@ -435,7 +435,7 @@ class _ScanChrome extends StatelessWidget {
                     found ? JamScanStrings.found : hint,
                     key: ValueKey<String>(found ? JamScanStrings.found : hint),
                     textAlign: TextAlign.center,
-                    style: context.jamByline.copyWith(
+                    style: context.jamSubheadline.copyWith(
                       color: white.withValues(alpha: 0.8),
                       shadows: const [
                         Shadow(blurRadius: 10, color: Colors.black54),
@@ -452,7 +452,7 @@ class _ScanChrome extends StatelessWidget {
               onPressed: onLink,
               style: TextButton.styleFrom(
                 foregroundColor: white,
-                textStyle: context.jamRowTitle,
+                textStyle: context.jamHeadline,
                 minimumSize: const Size(0, 44),
               ),
               child: const Text(JamScanStrings.enterLink),
@@ -548,11 +548,11 @@ class _Brackets extends StatelessWidget {
       child: TweenAnimationBuilder<double>(
         tween: Tween<double>(end: found ? 1 : 0),
         duration: JamDuration.fast,
-        curve: JamCurve.fast,
+        curve: JamCurve.standard,
         builder: (context, t, _) => CustomPaint(
           size: Size.square(size),
           painter: _BracketPainter(
-            color: Color.lerp(JamColors.brandRaspberry, colors.highlight, t)!,
+            color: Color.lerp(colors.tint, colors.warning, t)!,
             width: _bracketWidth + t * 1.5,
           ),
         ),
@@ -648,7 +648,7 @@ class ScannerUnavailableView extends StatelessWidget {
     final canRetry = onRetry != null && !denied && !unsupported;
 
     return ColoredBox(
-      color: colors.canvas,
+      color: colors.background,
       child: SafeArea(
         child: Column(
           children: [
@@ -692,7 +692,7 @@ class ScannerUnavailableView extends StatelessWidget {
             if (denied || canRetry)
               Padding(
                 padding: const EdgeInsets.only(bottom: JamSpace.xxl),
-                child: JamButton.tertiary(
+                child: JamButton.plain(
                   label: JamScanStrings.enterLink,
                   onPressed: () => unawaited(onLink()),
                 ),

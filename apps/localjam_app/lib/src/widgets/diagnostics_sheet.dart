@@ -156,11 +156,13 @@ class _DiagnosticsSheetState extends State<DiagnosticsSheet> {
           const SizedBox(height: JamSpace.section),
           Divider(height: 0.5, color: colors.separator),
           const SizedBox(height: JamSpace.lg),
-          Text(JamDiagnosticsStrings.delayTitle, style: context.jamTitle),
+          Text(JamDiagnosticsStrings.delayTitle, style: context.jamTitle3),
           const SizedBox(height: JamSpace.xs),
           Text(
             JamDiagnosticsStrings.delayBody,
-            style: context.jamByline.copyWith(color: colors.textSecondary),
+            style: context.jamSubheadline.copyWith(
+              color: colors.secondaryLabel,
+            ),
           ),
           // The nudge used to butt straight against the paragraph above it
           // while every other pair in this sheet had air between them.
@@ -190,13 +192,10 @@ class _Cell extends StatelessWidget {
         children: [
           Text(
             label,
-            style: context.jamCaption.copyWith(color: colors.textTertiary),
+            style: context.jamCaption2.copyWith(color: colors.tertiaryLabel),
           ),
           const SizedBox(height: JamSpace.xxs),
-          Text(
-            value,
-            style: context.jamNumeric.copyWith(color: colors.textPrimary),
-          ),
+          Text(value, style: context.jamNumeric.copyWith(color: colors.label)),
         ],
       ),
     );

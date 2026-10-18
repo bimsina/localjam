@@ -1,64 +1,72 @@
-/// The one button. Three variants, one shape family, no engine underneath.
+/// The button family (DESIGN_SPEC v3 §5): capsules, no shadows, no ripples.
 ///
-/// Every action in the app is a [JamButton]: a raspberry-gradient *primary*
-/// (exactly one in view at a time), an outlined *secondary*, and a borderless
-/// *tertiary* for the quiet third option. Stock `FilledButton`s still resolve
-/// to the same tokens through `theme.dart`, but the gradient — the thing that
-/// makes "Start a jam" look like the thing you want to touch — lives here.
+/// ```dart
+/// JamButton.filled(label: 'Start a Jam', expand: true, onPressed: _start)
+/// JamButton.tinted(label: 'Join', size: JamButtonSize.small, onPressed: _join)
+/// JamButton.gray(label: 'Host Again', icon: CupertinoIcons.play_fill, onPressed: _replay)
+/// JamButton.plain(label: 'See All', onPressed: _history)
+/// JamButton.filled(label: 'End Jam', destructive: true, onPressed: _end)
+/// ```
 ///
-/// Contrast note: `accent` on the cream `canvas` measures 4.41:1, just under
-/// AA for body-sized text, and a 16 dp/700 label is not "large text" under
-/// WCAG (that needs 18.66 dp bold). So a **tertiary label uses
-/// [JamColors.accentPressed] on light** (6.09:1 on canvas) and `accent` on
-/// dark, where `accent` already clears AA against the plum ground.
+/// Pressed: 0.7 opacity. Disabled (null [JamButton.onPressed]): 0.35. Loading:
+/// a spinner replaces the label and the button keeps its width.
 library;
 
-import 'package:flutter/material.dart';
+import 'package:flutter/cupertino.dart';
 
 import '../design/tokens.dart';
 import '../design/typography.dart';
+import 'pressable.dart';
 
-/// Which of the three roles a [JamButton] is playing.
+export 'list.dart' show JamSwitchRow;
+export 'switch.dart' show JamSwitch;
+
+/// The four looks.
 enum JamButtonVariant {
-  /// The single raspberry-filled action on a screen.
-  primary,
+  /// Tint fill, white label. The one primary action.
+  filled,
 
-  /// Outlined; the alternative you might reasonably take instead.
-  secondary,
+  /// `tintFill` ground, tint label ("Join").
+  tinted,
 
-  /// Borderless and pill-shaped; the quiet way out.
-  tertiary,
+  /// `fill` ground, tint label (Apple Music's Play / Shuffle).
+  gray,
+
+  /// No ground, tint label.
+  plain,
 }
 
-/// A LocalJam action button.
-///
-/// ```dart
-/// JamButton.primary(label: 'Start a jam', onPressed: _start)
-/// JamButton.secondary(label: 'Scan code', icon: Icons.qr_code_scanner_rounded, onPressed: _scan)
-/// JamButton.tertiary(label: 'Not now', onPressed: _dismiss)
-/// ```
-///
-/// Disabled whenever [onPressed] is null or [loading] is true. While loading
-/// the label is replaced by a spinner and the button keeps its width, so a
-/// bottom bar does not resize mid-tap.
-class JamButton extends StatefulWidget {
+/// The two sizes.
+enum JamButtonSize {
+  /// 50 tall, 17 semibold, 20 h-padding.
+  large,
+
+  /// 30 tall (44 hit), 15 semibold, 12 h-padding — in-row actions.
+  small,
+}
+
+/// A LocalJam button.
+class JamButton extends StatelessWidget {
   const JamButton({
     super.key,
     required this.label,
     this.onPressed,
-    this.variant = JamButtonVariant.primary,
+    this.variant = JamButtonVariant.filled,
+    this.size = JamButtonSize.large,
     this.icon,
     this.loading = false,
     this.expand = false,
     this.destructive = false,
+    this.color,
     this.semanticLabel,
   });
 
-  /// The raspberry-filled action. One per screen.
-  const JamButton.primary({
+  /// Tint fill, white label.
+  const JamButton.filled({
     Key? key,
     required String label,
     VoidCallback? onPressed,
+    JamButtonSize size = JamButtonSize.large,
     IconData? icon,
     bool loading = false,
     bool expand = false,
@@ -68,7 +76,8 @@ class JamButton extends StatefulWidget {
          key: key,
          label: label,
          onPressed: onPressed,
-         variant: JamButtonVariant.primary,
+         variant: JamButtonVariant.filled,
+         size: size,
          icon: icon,
          loading: loading,
          expand: expand,
@@ -76,32 +85,12 @@ class JamButton extends StatefulWidget {
          semanticLabel: semanticLabel,
        );
 
-  /// The outlined alternative.
-  const JamButton.secondary({
+  /// `tintFill` ground, tint label.
+  const JamButton.tinted({
     Key? key,
     required String label,
     VoidCallback? onPressed,
-    IconData? icon,
-    bool loading = false,
-    bool expand = false,
-    String? semanticLabel,
-  }) : this(
-         key: key,
-         label: label,
-         onPressed: onPressed,
-         variant: JamButtonVariant.secondary,
-         icon: icon,
-         loading: loading,
-         expand: expand,
-         semanticLabel: semanticLabel,
-       );
-
-  /// The borderless one. [destructive] turns the label `danger` — the way
-  /// "Leave jam" and "End jam" read at the bottom of the People sheet.
-  const JamButton.tertiary({
-    Key? key,
-    required String label,
-    VoidCallback? onPressed,
+    JamButtonSize size = JamButtonSize.large,
     IconData? icon,
     bool loading = false,
     bool expand = false,
@@ -111,7 +100,8 @@ class JamButton extends StatefulWidget {
          key: key,
          label: label,
          onPressed: onPressed,
-         variant: JamButtonVariant.tertiary,
+         variant: JamButtonVariant.tinted,
+         size: size,
          icon: icon,
          loading: loading,
          expand: expand,
@@ -119,326 +109,296 @@ class JamButton extends StatefulWidget {
          semanticLabel: semanticLabel,
        );
 
-  /// The label. Sentence case — this app does not shout at people.
+  /// `fill` ground, tint label.
+  const JamButton.gray({
+    Key? key,
+    required String label,
+    VoidCallback? onPressed,
+    JamButtonSize size = JamButtonSize.large,
+    IconData? icon,
+    bool loading = false,
+    bool expand = false,
+    bool destructive = false,
+    String? semanticLabel,
+  }) : this(
+         key: key,
+         label: label,
+         onPressed: onPressed,
+         variant: JamButtonVariant.gray,
+         size: size,
+         icon: icon,
+         loading: loading,
+         expand: expand,
+         destructive: destructive,
+         semanticLabel: semanticLabel,
+       );
+
+  /// Tint label, no ground. [color] overrides the label (e.g. white on the
+  /// camera).
+  const JamButton.plain({
+    Key? key,
+    required String label,
+    VoidCallback? onPressed,
+    JamButtonSize size = JamButtonSize.large,
+    IconData? icon,
+    bool loading = false,
+    bool expand = false,
+    bool destructive = false,
+    Color? color,
+    String? semanticLabel,
+  }) : this(
+         key: key,
+         label: label,
+         onPressed: onPressed,
+         variant: JamButtonVariant.plain,
+         size: size,
+         icon: icon,
+         loading: loading,
+         expand: expand,
+         destructive: destructive,
+         color: color,
+         semanticLabel: semanticLabel,
+       );
+
+  /// Title Case: "Start a Jam".
   final String label;
 
   /// Null disables the button.
   final VoidCallback? onPressed;
 
   final JamButtonVariant variant;
+  final JamButtonSize size;
 
-  /// An optional 20 dp leading glyph, 8 dp before the label.
+  /// An optional leading glyph (CupertinoIcons), 6 before the label.
   final IconData? icon;
 
   /// Swaps the label for a spinner without changing the button's width.
   final bool loading;
 
-  /// Stretches to the incoming width — for a bottom action bar.
+  /// Stretches to the incoming width.
   final bool expand;
 
-  /// A destructive action. A primary takes a `danger` fill instead of the
-  /// raspberry gradient; a tertiary takes a `danger` label. Ignored by
-  /// secondary, which has no room for a colour that loud.
+  /// `danger` instead of tint (fill for [JamButtonVariant.filled], label for
+  /// the rest).
   final bool destructive;
 
-  /// Overrides the accessibility label when [label] alone is not enough.
+  /// Overrides the label colour of a plain/gray/tinted button.
+  final Color? color;
+
+  /// Overrides the accessibility label.
   final String? semanticLabel;
 
-  /// Height per variant: 52 for primary and secondary, 44 for tertiary.
-  double get height => variant == JamButtonVariant.tertiary ? 44 : 52;
+  /// The painted height.
+  double get height => size == JamButtonSize.large
+      ? JamMetrics.buttonHeight
+      : JamMetrics.buttonHeightSmall;
 
   bool get _enabled => onPressed != null && !loading;
 
   @override
-  State<JamButton> createState() => _JamButtonState();
-}
-
-class _JamButtonState extends State<JamButton> {
-  bool _pressed = false;
-
-  @override
   Widget build(BuildContext context) {
     final colors = context.jamColors;
-    final light = Theme.of(context).brightness == Brightness.light;
-    final enabled = widget._enabled;
-    final pressed = _pressed && enabled;
-    final radius = BorderRadius.circular(
-      widget.variant == JamButtonVariant.tertiary
-          ? JamRadius.pill
-          : JamRadius.md,
-    );
-
-    final (
-      Color? fill,
-      Gradient? gradient,
-      Color label,
-      BoxBorder? border,
-    ) = switch (widget.variant) {
-      JamButtonVariant.primary when !enabled => (
-        colors.surfaceMuted,
-        null,
-        colors.textTertiary,
-        null,
+    final accent = destructive ? colors.danger : colors.tint;
+    final (Color? ground, Color fg) = switch (variant) {
+      JamButtonVariant.filled => (accent, colors.onTint),
+      JamButtonVariant.tinted => (
+        destructive ? colors.danger.withValues(alpha: 0.15) : colors.tintFill,
+        color ?? accent,
       ),
-      JamButtonVariant.primary when widget.destructive => (
-        pressed ? colors.danger.withValues(alpha: 0.86) : colors.danger,
-        null,
-        Colors.white,
-        null,
-      ),
-      JamButtonVariant.primary when pressed => (
-        colors.accentPressed,
-        null,
-        colors.onAccent,
-        null,
-      ),
-      // The gradient is the brand mark; on dark the flat accent already
-      // carries enough light against plum, and a gradient there muddies.
-      JamButtonVariant.primary => (
-        light ? null : colors.accent,
-        light ? _primaryGradient(colors) : null,
-        colors.onAccent,
-        null,
-      ),
-      JamButtonVariant.secondary => (
-        pressed ? colors.surfaceMuted : Colors.transparent,
-        null,
-        enabled ? colors.textPrimary : colors.textTertiary,
-        Border.all(color: colors.separator),
-      ),
-      JamButtonVariant.tertiary when widget.destructive => (
-        pressed ? colors.danger.withValues(alpha: 0.10) : Colors.transparent,
-        null,
-        enabled ? colors.danger : colors.textTertiary,
-        null,
-      ),
-      JamButtonVariant.tertiary => (
-        pressed ? colors.accentSoft : Colors.transparent,
-        null,
-        enabled
-            ? (light ? colors.accentPressed : colors.accent)
-            : colors.textTertiary,
-        null,
-      ),
+      JamButtonVariant.gray => (colors.fill, color ?? accent),
+      JamButtonVariant.plain => (null, color ?? accent),
     };
 
+    final large = size == JamButtonSize.large;
+    final base = large
+        ? (variant == JamButtonVariant.plain
+              ? context.jamBody
+              : context.jamHeadline)
+        : context.jamSubheadline.copyWith(fontWeight: FontWeight.w600);
+    final textStyle = base.copyWith(color: fg);
+
     final content = Row(
-      mainAxisSize: widget.expand ? MainAxisSize.max : MainAxisSize.min,
+      mainAxisSize: expand ? MainAxisSize.max : MainAxisSize.min,
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
-        if (widget.icon != null) ...[
-          Icon(widget.icon, size: 20, color: label),
-          const SizedBox(width: JamSpace.sm),
+        if (icon != null) ...[
+          Icon(icon, size: large ? 20 : 16, color: fg),
+          const SizedBox(width: 6),
         ],
         Flexible(
           child: Text(
-            widget.label,
+            label,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
-            style: Theme.of(
-              context,
-            ).textTheme.labelLarge!.copyWith(color: label),
+            style: textStyle,
           ),
         ),
       ],
     );
 
-    final body = widget.loading
-        // The label stays in the tree at zero opacity so the button keeps
-        // exactly the width it had before the tap.
+    final body = loading
         ? Stack(
             alignment: Alignment.center,
             children: [
               Opacity(opacity: 0, child: content),
-              SizedBox(
-                width: 20,
-                height: 20,
-                child: CircularProgressIndicator(
-                  strokeWidth: 2,
-                  color: widget.variant == JamButtonVariant.primary
-                      ? colors.onAccent
-                      : colors.accent,
-                ),
-              ),
+              CupertinoActivityIndicator(radius: large ? 10 : 8, color: fg),
             ],
           )
         : content;
 
-    final surface = DecoratedBox(
-      decoration: BoxDecoration(
-        color: fill,
-        gradient: gradient,
-        border: border,
-        borderRadius: radius,
+    final padding = EdgeInsets.symmetric(
+      horizontal: variant == JamButtonVariant.plain && !expand
+          ? (large ? JamSpace.sm : JamSpace.xs)
+          : (large ? JamSpace.xl : JamSpace.md),
+    );
+
+    Widget painted = Container(
+      height: height,
+      width: expand ? double.infinity : null,
+      padding: padding,
+      alignment: Alignment.center,
+      decoration: ground == null
+          ? null
+          : ShapeDecoration(color: ground, shape: const StadiumBorder()),
+      child: body,
+    );
+
+    // A small button keeps a 44 pt hit area without growing its paint.
+    if (!large) {
+      painted = Padding(
+        padding: const EdgeInsets.symmetric(
+          vertical: (JamMetrics.hitTarget - JamMetrics.buttonHeightSmall) / 2,
+        ),
+        child: painted,
+      );
+    } else if (variant == JamButtonVariant.plain) {
+      painted = ConstrainedBox(
+        constraints: const BoxConstraints(minWidth: JamMetrics.hitTarget),
+        child: painted,
+      );
+    }
+
+    return Semantics(
+      container: true,
+      button: true,
+      enabled: _enabled,
+      label: semanticLabel ?? label,
+      onTap: _enabled ? onPressed : null,
+      excludeSemantics: true,
+      child: Opacity(
+        opacity: onPressed == null ? 0.35 : 1,
+        child: JamPressable(
+          onTap: _enabled ? onPressed : null,
+          pressedOpacity: 0.7,
+          child: painted,
+        ),
       ),
-      child: Material(
-        type: MaterialType.transparency,
-        child: InkWell(
-          borderRadius: radius,
-          onTap: enabled ? widget.onPressed : null,
-          onHighlightChanged: (v) {
-            if (v != _pressed) setState(() => _pressed = v);
-          },
-          child: SizedBox(
-            height: widget.height,
-            width: widget.expand ? double.infinity : null,
+    );
+  }
+}
+
+/// A text action for a nav bar or sheet header ("Cancel", "Done", "Start").
+/// 17 regular in tint; [bold] for the confirming action.
+class JamTextButton extends StatelessWidget {
+  const JamTextButton({
+    super.key,
+    required this.label,
+    this.onPressed,
+    this.bold = false,
+    this.destructive = false,
+    this.color,
+  });
+
+  final String label;
+  final VoidCallback? onPressed;
+
+  /// Semibold — the confirming action ("Done", "Start").
+  final bool bold;
+  final bool destructive;
+  final Color? color;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.jamColors;
+    final enabled = onPressed != null;
+    final fg = !enabled
+        ? colors.tertiaryLabel
+        : color ?? (destructive ? colors.danger : colors.tint);
+    return Semantics(
+      container: true,
+      button: true,
+      enabled: enabled,
+      label: label,
+      onTap: onPressed,
+      excludeSemantics: true,
+      child: JamPressable(
+        onTap: onPressed,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(
+            minWidth: JamMetrics.hitTarget,
+            minHeight: JamMetrics.hitTarget,
+          ),
+          child: Center(
+            widthFactor: 1,
             child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: JamSpace.xl),
-              child: Center(widthFactor: widget.expand ? null : 1, child: body),
+              padding: const EdgeInsets.symmetric(horizontal: JamSpace.xs),
+              child: Text(
+                label,
+                maxLines: 1,
+                style: (bold ? context.jamHeadline : context.jamBody).copyWith(
+                  color: fg,
+                ),
+              ),
             ),
           ),
         ),
       ),
     );
+  }
+}
 
+/// A bare icon action (nav bar items, row accessories): 44 hit, glyph 22 in
+/// tint, dims on press. [semanticLabel] is required — the icon says nothing
+/// to a screen reader.
+class JamIconButton extends StatelessWidget {
+  const JamIconButton({
+    super.key,
+    required this.icon,
+    required this.semanticLabel,
+    this.onPressed,
+    this.color,
+    this.size = JamMetrics.navIcon,
+  });
+
+  final IconData icon;
+  final String semanticLabel;
+  final VoidCallback? onPressed;
+  final Color? color;
+  final double size;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.jamColors;
+    final enabled = onPressed != null;
     return Semantics(
-      // Its own node, always. Without it a button with no other actions near
-      // it was folded into the surrounding text: "Let back in" became part
-      // of one "Removed …" element (2026-10-17 run), so a screen reader read
-      // a paragraph instead of offering a button.
       container: true,
       button: true,
       enabled: enabled,
-      label: widget.semanticLabel ?? widget.label,
-      onTap: enabled ? widget.onPressed : null,
+      label: semanticLabel,
+      onTap: onPressed,
       excludeSemantics: true,
-      child: AnimatedScale(
-        scale: pressed && !_reducedMotion(context) ? 0.97 : 1,
-        duration: _reducedMotion(context) ? Duration.zero : JamDuration.instant,
-        curve: JamCurve.instant,
-        child: surface,
-      ),
-    );
-  }
-}
-
-/// The 135° brand gradient: raspberry into [JamColors.accentDeep].
-LinearGradient _primaryGradient(JamColors colors) => LinearGradient(
-  begin: Alignment.topLeft,
-  end: Alignment.bottomRight,
-  colors: [JamColors.brandRaspberry, colors.accentDeep],
-);
-
-bool _reducedMotion(BuildContext context) =>
-    MediaQuery.maybeDisableAnimationsOf(context) ?? false;
-
-/// A switch row that states a rule instead of shouting one.
-///
-/// Material's stock switch fills its track with the accent when on. Three of
-/// those stacked in the People sheet out-shouted the sheet's only primary
-/// action — the review's words were "two raspberry switches shout louder than
-/// the primary". Here the accent lands on the *thumb*, the track carries the
-/// soft tint, and an off switch is `surfaceMuted` with a hairline outline. The
-/// row is still unmistakably a toggle; it just stops competing.
-class JamSwitchRow extends StatelessWidget {
-  const JamSwitchRow({
-    super.key,
-    required this.label,
-    this.detail,
-    required this.value,
-    required this.onChanged,
-    this.padding = const EdgeInsets.symmetric(
-      horizontal: JamSpace.page,
-      vertical: JamSpace.md,
-    ),
-  });
-
-  final String label;
-
-  /// A second line under the label. Omitted when null.
-  final String? detail;
-
-  final bool value;
-  final ValueChanged<bool>? onChanged;
-
-  final EdgeInsets padding;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.jamColors;
-    final enabled = onChanged != null;
-    final detail = this.detail;
-
-    return Semantics(
-      toggled: value,
-      enabled: enabled,
-      label: detail == null ? label : '$label. $detail',
-      excludeSemantics: true,
-      child: InkWell(
-        onTap: enabled ? () => onChanged!(!value) : null,
-        child: Padding(
-          padding: padding,
-          child: Row(
-            children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      label,
-                      style: context.jamBody.copyWith(
-                        color: enabled
-                            ? colors.textPrimary
-                            : colors.textTertiary,
-                      ),
-                    ),
-                    if (detail != null) ...[
-                      const SizedBox(height: JamSpace.xxs),
-                      Text(
-                        detail,
-                        style: context.jamFootnote.copyWith(
-                          color: colors.textSecondary,
-                        ),
-                      ),
-                    ],
-                  ],
-                ),
-              ),
-              const SizedBox(width: JamSpace.md),
-              ExcludeSemantics(
-                child: JamSwitch(value: value, onChanged: onChanged),
-              ),
-            ],
+      child: JamPressable(
+        onTap: onPressed,
+        child: SizedBox(
+          width: JamMetrics.hitTarget,
+          height: JamMetrics.hitTarget,
+          child: Icon(
+            icon,
+            size: size,
+            color: enabled ? (color ?? colors.tint) : colors.tertiaryLabel,
           ),
         ),
       ),
-    );
-  }
-}
-
-/// The bare toggle from [JamSwitchRow], for callers that lay out their own row.
-class JamSwitch extends StatelessWidget {
-  const JamSwitch({super.key, required this.value, required this.onChanged});
-
-  final bool value;
-  final ValueChanged<bool>? onChanged;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.jamColors;
-    return Switch(
-      value: value,
-      onChanged: onChanged,
-      // Accent on the thumb only; the track stays a tint, never a fill.
-      thumbColor: WidgetStateProperty.resolveWith((states) {
-        if (states.contains(WidgetState.disabled)) return colors.textTertiary;
-        return states.contains(WidgetState.selected)
-            ? colors.accent
-            : colors.textTertiary;
-      }),
-      trackColor: WidgetStateProperty.resolveWith((states) {
-        return states.contains(WidgetState.selected)
-            ? colors.accentSoft
-            : colors.surfaceMuted;
-      }),
-      trackOutlineColor: WidgetStateProperty.resolveWith((states) {
-        return states.contains(WidgetState.selected)
-            ? colors.accent.withValues(alpha: 0.45)
-            : colors.separator;
-      }),
-      trackOutlineWidth: const WidgetStatePropertyAll<double>(1),
-      thumbIcon: const WidgetStatePropertyAll<Icon?>(null),
     );
   }
 }

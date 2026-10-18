@@ -724,7 +724,7 @@ void main() {
           matching: find.byType(JamButton),
         ),
       );
-      expect(primary.variant, JamButtonVariant.primary);
+      expect(primary.variant, JamButtonVariant.filled);
     });
 
     testWidgets('a rejected rejoin offers a rejoin too', (tester) async {

@@ -98,10 +98,12 @@ class _JamLibraryPickerState extends State<JamLibraryPicker> {
               Expanded(
                 child: Text(
                   LibrarySheetStrings.available(widget.tracks.length),
-                  style: context.jamFootnote,
+                  style: context.jamFootnote.copyWith(
+                    color: context.jamColors.secondaryLabel,
+                  ),
                 ),
               ),
-              JamButton.tertiary(
+              JamButton.plain(
                 label: _allSelected
                     ? LibrarySheetStrings.clear
                     : LibrarySheetStrings.selectAll,
@@ -132,7 +134,7 @@ class _JamLibraryPickerState extends State<JamLibraryPicker> {
                     if (track.durationMs case final ms?)
                       Text(
                         formatPositionUs(ms * 1000),
-                        style: jamNumericStyle(colors.textTertiary),
+                        style: jamNumericStyle(colors.tertiaryLabel),
                       ),
                     const SizedBox(width: JamSpace.md),
                     Semantics(
@@ -143,7 +145,7 @@ class _JamLibraryPickerState extends State<JamLibraryPicker> {
                             ? Icons.check_circle_rounded
                             : Icons.circle_outlined,
                         size: 22,
-                        color: selected ? colors.accent : colors.textTertiary,
+                        color: selected ? colors.tint : colors.tertiaryLabel,
                       ),
                     ),
                   ],
@@ -162,7 +164,7 @@ class _JamLibraryPickerState extends State<JamLibraryPicker> {
             top: false,
             child: Padding(
               padding: const EdgeInsets.all(JamSpace.md),
-              child: JamButton.primary(
+              child: JamButton.filled(
                 label: LibrarySheetStrings.addCount(_selected.length),
                 expand: true,
                 onPressed: _selected.isEmpty ? null : _submit,

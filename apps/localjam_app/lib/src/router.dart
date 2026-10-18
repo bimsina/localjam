@@ -371,7 +371,7 @@ class _RoomBarShellState extends State<_RoomBarShell> {
         // the window's black to work with and `surface @ 0.82` over it came
         // out a flat #D1D1D1 — the neutral grey the review caught. With the
         // canvas underneath it reads as the near-white the palette intends.
-        ColoredBox(color: context.jamColors.canvas, child: const RoomBar()),
+        ColoredBox(color: context.jamColors.background, child: const RoomBar()),
       ],
     );
   }
@@ -387,8 +387,7 @@ class _FloatingRoomBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final colors = context.jamColors;
-    final radius = BorderRadius.circular(JamRadius.pill);
+    final radius = BorderRadius.circular(JamRadius.capsule);
     return Padding(
       padding: EdgeInsets.fromLTRB(
         _inset,
@@ -401,10 +400,7 @@ class _FloatingRoomBar extends StatelessWidget {
           maxWidth: JamContentWidth.floatingRoomBar,
         ),
         child: DecoratedBox(
-          decoration: BoxDecoration(
-            borderRadius: radius,
-            boxShadow: JamShadow.floating(colors),
-          ),
+          decoration: BoxDecoration(borderRadius: radius),
           // The radius goes *into* the bar as well as around it: the 2 dp
           // progress line is pinned to its top edge, and an outer clip alone
           // left it running straight across the corner it had just rounded.

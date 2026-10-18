@@ -5,6 +5,7 @@
 /// whole test.
 library;
 
+import 'package:flutter/cupertino.dart' show CupertinoTextField;
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:localjam_app/src/widgets/rename_dialog.dart';
@@ -31,9 +32,9 @@ void main() {
 
     await tester.tap(find.text('Rename'));
     await tester.pumpAndSettle();
-    expect(find.byType(TextField), findsOneWidget);
+    expect(find.byType(CupertinoTextField), findsOneWidget);
 
-    await tester.enterText(find.byType(TextField), 'Neon Walrus');
+    await tester.enterText(find.byType(CupertinoTextField), 'Neon Walrus');
     await tester.tap(find.text('Save'));
     // The exit transition, all of it: this is where the disposed controller
     // used to blow up.

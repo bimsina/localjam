@@ -159,10 +159,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
         MaterialPageRoute<void>(
           builder: (context) => Theme(
             data: theme.copyWith(
-              scaffoldBackgroundColor: colors.canvas,
-              canvasColor: colors.canvas,
-              cardColor: colors.canvas,
-              colorScheme: theme.colorScheme.copyWith(surface: colors.canvas),
+              scaffoldBackgroundColor: colors.background,
+              canvasColor: colors.background,
+              cardColor: colors.background,
+              colorScheme: theme.colorScheme.copyWith(
+                surface: colors.background,
+              ),
             ),
             child: LicensePage(
               applicationName: SettingsStrings.appName,
@@ -211,7 +213,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 JamSectionList(
                   children: [
                     JamSection(
-                      title: SettingsStrings.you,
+                      header: SettingsStrings.you,
                       child: _Row(
                         onTap: () => unawaited(_rename()),
                         semanticLabel:
@@ -233,12 +235,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         detail: SettingsStrings.howYouAppear,
                         trailing: Icon(
                           Icons.chevron_right_rounded,
-                          color: colors.textTertiary,
+                          color: colors.tertiaryLabel,
                         ),
                       ),
                     ),
                     JamSection(
-                      title: SettingsStrings.appearance,
+                      header: SettingsStrings.appearance,
                       children: [
                         for (final mode in ThemeMode.values)
                           _AppearanceRow(
@@ -249,14 +251,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       ],
                     ),
                     JamSection(
-                      title: SettingsStrings.about,
+                      header: SettingsStrings.about,
                       children: [
                         _Row(
                           title: SettingsStrings.version,
                           trailing: Text(
                             _version,
                             style: context.jamNumeric.copyWith(
-                              color: colors.textSecondary,
+                              color: colors.secondaryLabel,
                             ),
                           ),
                         ),
@@ -267,7 +269,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           trailing: Icon(
                             Icons.open_in_new_rounded,
                             size: 18,
-                            color: colors.textTertiary,
+                            color: colors.tertiaryLabel,
                           ),
                         ),
                         _Row(
@@ -276,7 +278,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           detail: SettingsStrings.licencesDetail,
                           trailing: Icon(
                             Icons.chevron_right_rounded,
-                            color: colors.textTertiary,
+                            color: colors.tertiaryLabel,
                           ),
                         ),
                       ],
@@ -306,7 +308,7 @@ class _AppMark extends StatelessWidget {
     height: _size,
     alignment: Alignment.center,
     decoration: BoxDecoration(
-      color: JamColors.brandRaspberry,
+      color: context.jamColors.tint,
       borderRadius: BorderRadius.circular(JamRadius.lg),
     ),
     child: SvgPicture.asset(
@@ -368,7 +370,7 @@ class _Row extends StatelessWidget {
                   title,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: context.jamRowTitle,
+                  style: context.jamHeadline,
                 ),
                 if (detailText != null) ...[
                   const SizedBox(height: JamSpace.xxs),
@@ -377,7 +379,7 @@ class _Row extends StatelessWidget {
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
                     style: context.jamFootnote.copyWith(
-                      color: colors.textSecondary,
+                      color: colors.secondaryLabel,
                     ),
                   ),
                 ],
@@ -439,10 +441,10 @@ class _AppearanceRow extends StatelessWidget {
       leading: _ThemeSwatch(mode: mode),
       title: label(mode),
       trailing: selected
-          ? Icon(Icons.check_circle_rounded, color: colors.accent)
+          ? Icon(Icons.check_circle_rounded, color: colors.tint)
           : Icon(
               Icons.circle_outlined,
-              color: colors.textTertiary.withValues(alpha: 0.6),
+              color: colors.tertiaryLabel.withValues(alpha: 0.6),
             ),
     );
   }
@@ -499,7 +501,7 @@ class _SwatchFace extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => ColoredBox(
-    color: palette.canvas,
+    color: palette.background,
     child: Padding(
       padding: const EdgeInsets.all(5),
       child: Column(
@@ -510,7 +512,7 @@ class _SwatchFace extends StatelessWidget {
             width: 22,
             height: 5,
             decoration: BoxDecoration(
-              color: palette.surface,
+              color: palette.groupedSurface,
               borderRadius: BorderRadius.circular(3),
             ),
           ),
@@ -518,7 +520,7 @@ class _SwatchFace extends StatelessWidget {
             width: 14,
             height: 5,
             decoration: BoxDecoration(
-              color: palette.accent,
+              color: palette.tint,
               borderRadius: BorderRadius.circular(3),
             ),
           ),

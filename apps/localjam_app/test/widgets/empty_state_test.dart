@@ -1,3 +1,4 @@
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:localjam_app/src/design/theme.dart';
@@ -11,94 +12,112 @@ Widget _host(Widget child, {bool dark = false}) => MaterialApp(
 );
 
 void main() {
-  testWidgets('shows a mark, a title, a body and one action', (tester) async {
+  testWidgets('shows a glyph, a title, a sentence and one action', (
+    tester,
+  ) async {
     var taps = 0;
     await tester.pumpWidget(
       _host(
         JamEmptyState(
-          icon: Icons.wifi_tethering_rounded,
-          title: 'No rooms nearby',
-          body: 'Start one and the people around you will see it.',
-          actionLabel: 'Start a jam',
+          icon: CupertinoIcons.dot_radiowaves_left_right,
+          title: 'No Jams Nearby',
+          body: 'Jams on this Wi‑Fi show up here.',
+          actionLabel: 'Scan a Code',
+          actionVariant: JamButtonVariant.plain,
           onAction: () => taps++,
         ),
       ),
     );
 
-    expect(find.byIcon(Icons.wifi_tethering_rounded), findsOneWidget);
-    expect(find.text('No rooms nearby'), findsOneWidget);
     expect(
-      find.text('Start one and the people around you will see it.'),
+      find.byIcon(CupertinoIcons.dot_radiowaves_left_right),
       findsOneWidget,
     );
-    // Exactly one action — never two competing buttons.
+    expect(find.text('No Jams Nearby'), findsOneWidget);
+    expect(find.text('Jams on this Wi‑Fi show up here.'), findsOneWidget);
     expect(find.byType(JamButton), findsOneWidget);
+    expect(
+      tester.widget<JamButton>(find.byType(JamButton)).variant,
+      JamButtonVariant.plain,
+    );
 
     await tester.tap(find.byType(JamButton));
     expect(taps, 1);
   });
 
-  testWidgets(
-    'the glyph is 56 dp in tertiary text, and the block caps at 320',
-    (tester) async {
-      await tester.pumpWidget(
-        _host(
-          const JamEmptyState(
-            icon: Icons.queue_music_rounded,
-            title: 'Nothing queued',
-            body: 'Add a track.',
-          ),
-        ),
-      );
-      final icon = tester.widget<Icon>(find.byType(Icon));
-      expect(icon.size, 56);
-      expect(icon.color, JamColors.light.textTertiary);
-      expect(
-        tester
-            .getSize(
-              find
-                  .descendant(
-                    of: find.byType(JamEmptyState),
-                    matching: find.byType(ConstrainedBox),
-                  )
-                  .first,
-            )
-            .width,
-        lessThanOrEqualTo(320),
-      );
-    },
-  );
-
-  testWidgets('a music-shaped empty uses the placeholder gradient', (
+  testWidgets('48 glyph in tertiaryLabel, 22 bold title, capped at 320', (
     tester,
   ) async {
     await tester.pumpWidget(
       _host(
         const JamEmptyState(
-          icon: Icons.queue_music_rounded,
-          gradientMark: true,
-          title: 'Nothing queued',
-          body: 'Add a track.',
+          icon: CupertinoIcons.music_note_list,
+          title: 'Nothing Up Next',
+          body: 'Add songs to keep the jam going.',
         ),
       ),
     );
-    final mark = tester.widget<Container>(find.byType(Container).first);
-    final decoration = mark.decoration! as BoxDecoration;
-    expect(decoration.gradient, isA<LinearGradient>());
-    expect(tester.getSize(find.byType(Container).first), const Size(72, 72));
+    final icon = tester.widget<Icon>(find.byType(Icon));
+    expect(icon.size, 48);
+    expect(icon.color, JamColors.light.tertiaryLabel);
+    final title = tester.widget<Text>(find.text('Nothing Up Next')).style!;
+    expect(title.fontSize, 22);
+    expect(title.fontWeight, FontWeight.w700);
+    final body = tester
+        .widget<Text>(find.text('Add songs to keep the jam going.'))
+        .style!;
+    expect(body.fontSize, 15);
+    expect(body.color, JamColors.light.secondaryLabel);
+    expect(
+      tester
+          .getSize(
+            find
+                .descendant(
+                  of: find.byType(JamEmptyState),
+                  matching: find.byType(ConstrainedBox),
+                )
+                .first,
+          )
+          .width,
+      lessThanOrEqualTo(320),
+    );
   });
 
   testWidgets('no action label means no button', (tester) async {
     await tester.pumpWidget(
       _host(
         const JamEmptyState(
-          icon: Icons.history_rounded,
-          title: 'No past jams',
-          body: 'Rooms you host or join will show up here.',
+          icon: CupertinoIcons.clock,
+          title: 'No Past Jams',
+          body: 'Jams you host or join show up here.',
         ),
       ),
     );
     expect(find.byType(JamButton), findsNothing);
+  });
+
+  testWidgets('terminal states can carry a second, plain action', (
+    tester,
+  ) async {
+    var retry = 0;
+    var back = 0;
+    await tester.pumpWidget(
+      _host(
+        JamEmptyState(
+          icon: CupertinoIcons.wifi_slash,
+          title: 'Host Is Gone',
+          body: 'The host left the network.',
+          actionLabel: 'Try Again',
+          onAction: () => retry++,
+          secondaryActionLabel: 'Back to Nearby',
+          onSecondaryAction: () => back++,
+        ),
+      ),
+    );
+    expect(find.byType(JamButton), findsNWidgets(2));
+    await tester.tap(find.text('Try Again'));
+    await tester.tap(find.text('Back to Nearby'));
+    expect((retry, back), (1, 1));
   });
 
   testWidgets('a custom mark replaces the glyph', (tester) async {
@@ -106,13 +125,13 @@ void main() {
       _host(
         const JamEmptyState(
           mark: SizedBox(key: Key('logo'), width: 72, height: 72),
-          icon: Icons.history_rounded,
-          title: 'No past jams',
-          body: 'Rooms you host or join will show up here.',
+          icon: CupertinoIcons.clock,
+          title: 'No Past Jams',
+          body: 'Jams you host or join show up here.',
         ),
       ),
     );
     expect(find.byKey(const Key('logo')), findsOneWidget);
-    expect(find.byIcon(Icons.history_rounded), findsNothing);
+    expect(find.byIcon(CupertinoIcons.clock), findsNothing);
   });
 }

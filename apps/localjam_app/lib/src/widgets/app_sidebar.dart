@@ -54,7 +54,7 @@ class AppSidebar extends StatelessWidget {
     return Container(
       width: JamContentWidth.sidebar,
       decoration: BoxDecoration(
-        color: colors.surface,
+        color: colors.groupedSurface,
         border: Border(right: BorderSide(color: colors.separator, width: 0.5)),
       ),
       child: SafeArea(
@@ -106,7 +106,7 @@ class AppSidebar extends StatelessWidget {
                                 : identity,
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
-                            style: context.jamRowTitle,
+                            style: context.jamHeadline,
                           ),
                         ),
                       ],
@@ -175,7 +175,7 @@ class _Wordmark extends StatelessWidget {
               gradient: LinearGradient(
                 begin: Alignment.topLeft,
                 end: Alignment.bottomRight,
-                colors: [JamColors.brandRaspberry, colors.accentDeep],
+                colors: [colors.tint, colors.tintPressed],
               ),
             ),
             child: SvgPicture.asset(
@@ -190,7 +190,7 @@ class _Wordmark extends StatelessWidget {
             ),
           ),
           const SizedBox(width: JamSpace.md),
-          Text(AppSidebarStrings.wordmark, style: context.jamTitle),
+          Text(AppSidebarStrings.wordmark, style: context.jamTitle3),
         ],
       ),
     );
@@ -220,7 +220,7 @@ class _NavItem extends StatelessWidget {
         vertical: JamSpace.xxs,
       ),
       child: Material(
-        color: selected ? colors.accentSoft : Colors.transparent,
+        color: selected ? colors.tintFill : Colors.transparent,
         borderRadius: BorderRadius.circular(JamRadius.md),
         child: InkWell(
           borderRadius: BorderRadius.circular(JamRadius.md),
@@ -239,7 +239,7 @@ class _NavItem extends StatelessWidget {
                       width: _selectedBarWidth,
                       height: _selectedBarHeight,
                       decoration: BoxDecoration(
-                        color: colors.accent,
+                        color: colors.tint,
                         borderRadius: BorderRadius.circular(2),
                       ),
                     ),
@@ -255,13 +255,13 @@ class _NavItem extends StatelessWidget {
                     Icon(
                       icon,
                       size: 20,
-                      color: selected ? colors.accent : colors.textSecondary,
+                      color: selected ? colors.tint : colors.secondaryLabel,
                     ),
                     const SizedBox(width: JamSpace.md),
                     Text(
                       label,
                       style: context.jamBody.copyWith(
-                        color: selected ? colors.accent : colors.textPrimary,
+                        color: selected ? colors.tint : colors.label,
                         fontWeight: selected
                             ? FontWeight.w600
                             : FontWeight.w400,

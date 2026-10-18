@@ -33,9 +33,10 @@ void main() {
     expect(find.text(HostSetupStrings.title), findsOneWidget);
     // An editable heading, not a form field: the name is already filled in.
     final field = tester.widget<TextField>(find.byType(TextField));
-    // A typographic apostrophe: the name is 26 dp type, not a code literal.
+    // A typographic apostrophe: the name is title-sized type, not a code
+    // literal.
     expect(field.controller!.text, 'Silky Puffin\u2019s Jam');
-    expect(field.style!.fontSize, 26);
+    expect(field.style!.fontSize, 28);
     final fieldTheme = tester.widget<Theme>(
       find
           .ancestor(of: find.byType(TextField), matching: find.byType(Theme))
@@ -47,7 +48,7 @@ void main() {
     // §8 check 5: exactly one raspberry-filled control in view.
     final primaries = tester
         .widgetList<JamButton>(find.byType(JamButton))
-        .where((b) => b.variant == JamButtonVariant.primary);
+        .where((b) => b.variant == JamButtonVariant.filled);
     expect(primaries.length, 1);
     expect(primaries.single.label, HostSetupStrings.start);
   });

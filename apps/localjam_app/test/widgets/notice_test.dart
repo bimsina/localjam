@@ -5,6 +5,7 @@ library;
 
 import 'dart:async';
 
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:localjam_app/src/design/theme.dart';
@@ -33,7 +34,7 @@ void main() {
 
     expect(find.byType(JamNoticeCard), findsOneWidget);
     expect(find.text('Ana joined'), findsOneWidget);
-    expect(find.byIcon(Icons.info_rounded), findsOneWidget);
+    expect(find.byIcon(CupertinoIcons.info_circle_fill), findsOneWidget);
   });
 
   testWidgets('an error carries its own glyph and its action', (tester) async {
@@ -54,7 +55,7 @@ void main() {
     await tester.tap(find.text('Go'));
     await tester.pumpAndSettle();
 
-    expect(find.byIcon(Icons.error_rounded), findsOneWidget);
+    expect(find.byIcon(CupertinoIcons.xmark_octagon_fill), findsOneWidget);
     await tester.tap(find.text('Retry'));
     await tester.pumpAndSettle();
     expect(retried, 1);
@@ -178,7 +179,10 @@ void main() {
     await tester.tap(find.text('Go'));
     await tester.pumpAndSettle();
 
-    expect(find.byIcon(Icons.error_outline_rounded), findsOneWidget);
+    expect(
+      find.byIcon(CupertinoIcons.exclamationmark_triangle_fill),
+      findsOneWidget,
+    );
     expect(tester.takeException(), isNull);
   });
 }

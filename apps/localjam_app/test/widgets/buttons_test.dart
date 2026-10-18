@@ -1,206 +1,218 @@
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:localjam_app/src/design/theme.dart';
 import 'package:localjam_app/src/design/tokens.dart';
 import 'package:localjam_app/src/widgets/buttons.dart';
 
-Widget _host(Widget child, {bool dark = false, bool reduceMotion = false}) =>
-    MediaQuery(
-      data: MediaQueryData(disableAnimations: reduceMotion),
-      child: MaterialApp(
-        theme: dark ? jamDarkTheme() : jamLightTheme(),
-        home: Scaffold(body: Center(child: child)),
-      ),
-    );
+Widget _host(Widget child, {bool dark = false}) => MaterialApp(
+  theme: dark ? jamDarkTheme() : jamLightTheme(),
+  home: Scaffold(body: Center(child: child)),
+);
 
-BoxDecoration _decorationOf(WidgetTester tester) {
-  final box = tester.widget<DecoratedBox>(
-    find
-        .descendant(
-          of: find.byType(JamButton),
-          matching: find.byType(DecoratedBox),
-        )
-        .first,
+ShapeDecoration? _groundOf(WidgetTester tester) {
+  final containers = tester.widgetList<Container>(
+    find.descendant(
+      of: find.byType(JamButton),
+      matching: find.byType(Container),
+    ),
   );
-  return box.decoration as BoxDecoration;
+  for (final c in containers) {
+    final d = c.decoration;
+    if (d is ShapeDecoration) return d;
+  }
+  return null;
 }
 
 TextStyle _labelStyle(WidgetTester tester, String label) =>
     tester.widget<Text>(find.text(label)).style!;
 
+double _opacityOf(WidgetTester tester) => tester
+    .widget<Opacity>(
+      find
+          .descendant(
+            of: find.byType(JamButton),
+            matching: find.byType(Opacity),
+          )
+          .first,
+    )
+    .opacity;
+
 void main() {
-  testWidgets('a primary button carries the brand gradient on light', (
+  testWidgets('filled: tint capsule, white 17 semibold, 50 tall', (
     tester,
   ) async {
     await tester.pumpWidget(
-      _host(JamButton.primary(label: 'Start a jam', onPressed: () {})),
+      _host(JamButton.filled(label: 'Start a Jam', onPressed: () {})),
     );
-
-    final decoration = _decorationOf(tester);
-    expect(decoration.gradient, isA<LinearGradient>());
-    expect(
-      (decoration.gradient! as LinearGradient).colors.first,
-      JamColors.brandRaspberry,
-    );
-    expect(_labelStyle(tester, 'Start a jam').color, JamColors.light.onAccent);
-    expect(tester.getSize(find.byType(JamButton)).height, 52);
+    final ground = _groundOf(tester)!;
+    expect(ground.color, JamColors.light.tint);
+    expect(ground.shape, isA<StadiumBorder>());
+    final style = _labelStyle(tester, 'Start a Jam');
+    expect(style.color, JamColors.light.onTint);
+    expect(style.fontSize, 17);
+    expect(style.fontWeight, FontWeight.w600);
+    expect(tester.getSize(find.byType(JamButton)).height, 50);
   });
 
-  testWidgets('a primary button is flat accent on dark', (tester) async {
+  testWidgets('tinted, gray and plain grounds', (tester) async {
     await tester.pumpWidget(
-      _host(
-        JamButton.primary(label: 'Start a jam', onPressed: () {}),
-        dark: true,
-      ),
+      _host(JamButton.tinted(label: 'Join', onPressed: () {})),
     );
+    expect(_groundOf(tester)!.color, JamColors.light.tintFill);
+    expect(_labelStyle(tester, 'Join').color, JamColors.light.tint);
 
-    final decoration = _decorationOf(tester);
-    expect(decoration.gradient, isNull);
-    expect(decoration.color, JamColors.dark.accent);
+    await tester.pumpWidget(
+      _host(JamButton.gray(label: 'Host Again', onPressed: () {})),
+    );
+    expect(_groundOf(tester)!.color, JamColors.light.fill);
+    expect(_labelStyle(tester, 'Host Again').color, JamColors.light.tint);
+
+    await tester.pumpWidget(
+      _host(JamButton.plain(label: 'See All', onPressed: () {})),
+    );
+    expect(_groundOf(tester), isNull);
+    expect(_labelStyle(tester, 'See All').color, JamColors.light.tint);
   });
 
-  testWidgets('tapping fires, and a disabled button does not', (tester) async {
+  testWidgets('small is 30 painted inside a 44 hit area', (tester) async {
     var taps = 0;
     await tester.pumpWidget(
-      _host(JamButton.primary(label: 'Join', onPressed: () => taps++)),
+      _host(
+        JamButton.tinted(
+          label: 'Join',
+          size: JamButtonSize.small,
+          onPressed: () => taps++,
+        ),
+      ),
+    );
+    expect(tester.getSize(find.byType(JamButton)).height, 44);
+    final painted = tester.getSize(
+      find
+          .descendant(
+            of: find.byType(JamButton),
+            matching: find.byType(Container),
+          )
+          .first,
+    );
+    expect(painted.height, 30);
+    expect(_labelStyle(tester, 'Join').fontSize, 15);
+    // The transparent band still takes the tap.
+    final rect = tester.getRect(find.byType(JamButton));
+    await tester.tapAt(Offset(rect.center.dx, rect.top + 3));
+    expect(taps, 1);
+  });
+
+  testWidgets('destructive turns the fill or label danger', (tester) async {
+    await tester.pumpWidget(
+      _host(
+        JamButton.filled(label: 'End Jam', destructive: true, onPressed: () {}),
+      ),
+    );
+    expect(_groundOf(tester)!.color, JamColors.light.danger);
+
+    await tester.pumpWidget(
+      _host(
+        JamButton.plain(
+          label: 'Leave Jam',
+          destructive: true,
+          onPressed: () {},
+        ),
+      ),
+    );
+    expect(_labelStyle(tester, 'Leave Jam').color, JamColors.light.danger);
+  });
+
+  testWidgets('tapping fires; disabled dims to 0.35 and ignores taps', (
+    tester,
+  ) async {
+    var taps = 0;
+    await tester.pumpWidget(
+      _host(JamButton.filled(label: 'Join', onPressed: () => taps++)),
     );
     await tester.tap(find.byType(JamButton));
     expect(taps, 1);
+    expect(_opacityOf(tester), 1);
 
-    await tester.pumpWidget(_host(const JamButton.primary(label: 'Join')));
-    await tester.tap(find.byType(JamButton));
+    await tester.pumpWidget(_host(const JamButton.filled(label: 'Join')));
+    await tester.tap(find.byType(JamButton), warnIfMissed: false);
     await tester.pump();
     expect(taps, 1);
-    expect(_decorationOf(tester).color, JamColors.light.surfaceMuted);
-    expect(_labelStyle(tester, 'Join').color, JamColors.light.textTertiary);
+    expect(_opacityOf(tester), 0.35);
   });
 
-  testWidgets('loading shows a spinner and holds the width', (tester) async {
+  testWidgets('pressing dims to 0.7, no ink', (tester) async {
     await tester.pumpWidget(
-      _host(JamButton.primary(label: 'Start the jam', onPressed: () {})),
+      _host(JamButton.filled(label: 'Join', onPressed: () {})),
+    );
+    final gesture = await tester.startGesture(
+      tester.getCenter(find.byType(JamButton)),
+    );
+    await tester.pump();
+    expect(
+      tester.widget<AnimatedOpacity>(find.byType(AnimatedOpacity)).opacity,
+      0.7,
+    );
+    expect(find.byType(InkWell), findsNothing);
+    await gesture.up();
+    await tester.pumpAndSettle();
+    expect(
+      tester.widget<AnimatedOpacity>(find.byType(AnimatedOpacity)).opacity,
+      1,
+    );
+  });
+
+  testWidgets('loading shows the activity indicator and holds the width', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      _host(JamButton.filled(label: 'Start the Jam', onPressed: () {})),
     );
     final idleWidth = tester.getSize(find.byType(JamButton)).width;
 
     var taps = 0;
     await tester.pumpWidget(
       _host(
-        JamButton.primary(
-          label: 'Start the jam',
+        JamButton.filled(
+          label: 'Start the Jam',
           loading: true,
           onPressed: () => taps++,
         ),
       ),
     );
     await tester.pump();
-
-    expect(find.byType(CircularProgressIndicator), findsOneWidget);
+    expect(find.byType(CupertinoActivityIndicator), findsOneWidget);
     expect(tester.getSize(find.byType(JamButton)).width, idleWidth);
-    // Loading is a disabled state, not a second chance to double-start a jam.
     await tester.tap(find.byType(JamButton));
     expect(taps, 0);
   });
 
-  testWidgets('a tertiary label clears AA on cream and stays accent on dark', (
-    tester,
-  ) async {
-    await tester.pumpWidget(
-      _host(JamButton.tertiary(label: 'Not now', onPressed: () {})),
-    );
-    // `accent` on `canvas` is only 4.41:1, so light uses the pressed shade.
-    expect(_labelStyle(tester, 'Not now').color, JamColors.light.accentPressed);
-    expect(tester.getSize(find.byType(JamButton)).height, 44);
-
-    await tester.pumpWidget(
-      _host(JamButton.tertiary(label: 'Not now', onPressed: () {}), dark: true),
-    );
-    // MaterialApp lerps between themes; let it land before reading a colour.
-    await tester.pumpAndSettle();
-    expect(_labelStyle(tester, 'Not now').color, JamColors.dark.accent);
-  });
-
-  testWidgets('a secondary button is outlined, not filled', (tester) async {
+  testWidgets('an icon sits before the label', (tester) async {
     await tester.pumpWidget(
       _host(
-        JamButton.secondary(
-          label: 'Scan code',
-          icon: Icons.qr_code_scanner_rounded,
+        JamButton.gray(
+          label: 'Play',
+          icon: CupertinoIcons.play_fill,
           onPressed: () {},
         ),
       ),
     );
-    final decoration = _decorationOf(tester);
-    expect(decoration.color, Colors.transparent);
-    expect(decoration.border, isNotNull);
-    expect(find.byIcon(Icons.qr_code_scanner_rounded), findsOneWidget);
-  });
-
-  testWidgets('pressing scales to 0.97, and not at all with reduced motion', (
-    tester,
-  ) async {
-    await tester.pumpWidget(
-      _host(JamButton.primary(label: 'Join', onPressed: () {})),
-    );
-    final gesture = await tester.startGesture(
-      tester.getCenter(find.byType(JamButton)),
-    );
-    await tester.pumpAndSettle();
+    expect(find.byIcon(CupertinoIcons.play_fill), findsOneWidget);
     expect(
-      tester.widget<AnimatedScale>(find.byType(AnimatedScale)).scale,
-      0.97,
-    );
-    await gesture.up();
-    await tester.pumpAndSettle();
-    expect(tester.widget<AnimatedScale>(find.byType(AnimatedScale)).scale, 1);
-
-    await tester.pumpWidget(
-      _host(
-        JamButton.primary(label: 'Join', onPressed: () {}),
-        reduceMotion: true,
-      ),
-    );
-    final held = await tester.startGesture(
-      tester.getCenter(find.byType(JamButton)),
-    );
-    await tester.pumpAndSettle();
-    expect(tester.widget<AnimatedScale>(find.byType(AnimatedScale)).scale, 1);
-    await held.up();
-  });
-
-  testWidgets('a destructive tertiary turns its label danger', (tester) async {
-    // The way out of a room reads as a way out, not as another accent link.
-    await tester.pumpWidget(
-      _host(
-        JamButton.tertiary(
-          label: 'End jam',
-          destructive: true,
-          onPressed: () {},
-        ),
-      ),
-    );
-    expect(
-      tester.widget<Text>(find.text('End jam')).style?.color,
-      JamColors.light.danger,
-    );
-
-    // An ordinary tertiary is still the accent.
-    await tester.pumpWidget(
-      _host(JamButton.tertiary(label: 'Invite', onPressed: () {})),
-    );
-    expect(
-      tester.widget<Text>(find.text('Invite')).style?.color,
-      JamColors.light.accentPressed,
+      tester.getCenter(find.byIcon(CupertinoIcons.play_fill)).dx,
+      lessThan(tester.getCenter(find.text('Play')).dx),
     );
   });
 
   testWidgets('a button announces itself as one', (tester) async {
     final handle = tester.ensureSemantics();
     await tester.pumpWidget(
-      _host(JamButton.primary(label: 'Start a jam', onPressed: () {})),
+      _host(JamButton.filled(label: 'Start a Jam', onPressed: () {})),
     );
     expect(
       tester.getSemantics(find.byType(JamButton)),
       matchesSemantics(
-        label: 'Start a jam',
+        label: 'Start a Jam',
         isButton: true,
         isEnabled: true,
         hasEnabledState: true,
@@ -208,5 +220,34 @@ void main() {
       ),
     );
     handle.dispose();
+  });
+
+  testWidgets('JamTextButton and JamIconButton keep 44 targets', (
+    tester,
+  ) async {
+    var done = 0;
+    await tester.pumpWidget(
+      _host(
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            JamTextButton(label: 'Done', bold: true, onPressed: () => done++),
+            JamIconButton(
+              icon: CupertinoIcons.qrcode_viewfinder,
+              semanticLabel: 'Scan',
+              onPressed: () {},
+            ),
+          ],
+        ),
+      ),
+    );
+    expect(
+      tester.getSize(find.byType(JamTextButton)).height,
+      greaterThanOrEqualTo(44),
+    );
+    expect(tester.getSize(find.byType(JamIconButton)), const Size(44, 44));
+    expect(_labelStyle(tester, 'Done').fontWeight, FontWeight.w600);
+    await tester.tap(find.text('Done'));
+    expect(done, 1);
   });
 }

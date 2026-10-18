@@ -1,287 +1,344 @@
-/// The LocalJam design tokens.
+/// The LocalJam design tokens (DESIGN_SPEC v3 §2).
 ///
-/// Light-first: the light palette is the one the app is designed against and
-/// dark is a full peer, not an inversion afterthought. Chrome stays cream and
-/// plum so cover art supplies the colour in the content area; a single
-/// raspberry accent carries interactive state, apricot carries warmth and
-/// liveness, and only *problems* get a red of their own — "in sync" is
-/// deliberately quiet.
+/// Apple system neutrals carry the chrome — white and grouped grey on light,
+/// true black on dark — and raspberry is the **tint**: it lands only on things
+/// you can tap, plus selection. Cover art carries every other colour.
 library;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/physics.dart';
 import 'package:flutter/services.dart';
 
 /// Semantic colours, resolved per theme. Read them from the context rather
-/// than importing the constants directly: `context.jamColors.accent`.
+/// than importing the constants: `context.jamColors.tint`.
 @immutable
 class JamColors extends ThemeExtension<JamColors> {
   const JamColors({
-    required this.canvas,
-    required this.surface,
-    required this.surfaceElevated,
-    required this.surfaceMuted,
+    required this.background,
+    required this.groupedBackground,
+    required this.groupedSurface,
+    required this.elevated,
+    required this.elevatedGroupedBackground,
+    required this.elevatedGroupedSurface,
+    required this.fill,
+    required this.fillSecondary,
+    required this.fillPressed,
     required this.separator,
-    required this.textPrimary,
-    required this.textSecondary,
-    required this.textTertiary,
-    required this.accent,
-    required this.accentPressed,
-    required this.accentDeep,
-    required this.accentSoft,
-    required this.onAccent,
-    required this.highlight,
-    required this.highlightSoft,
+    required this.label,
+    required this.secondaryLabel,
+    required this.tertiaryLabel,
+    required this.tint,
+    required this.tintPressed,
+    required this.tintFill,
+    required this.onTint,
+    required this.success,
     required this.warning,
     required this.danger,
     required this.scrim,
-    required this.shadowTint,
+    required this.material,
+    required this.glass,
   });
 
-  /// The page behind everything. Cream on light, below-plum on dark.
-  final Color canvas;
+  /// Plain screens: Home, History, the scan fallbacks.
+  final Color background;
 
-  /// Cards, list groups, the sidebar, the room bar. Separated from [canvas]
-  /// by a hairline on light and by lightness on dark.
-  final Color surface;
+  /// Grouped screens: Settings, Start a Jam, the People sheet.
+  final Color groupedBackground;
 
-  /// Sheets, dialogs and popup menus — a step *above* [surface], so a sheet
-  /// still reads as lifted on dark where there are no shadows.
-  final Color surfaceElevated;
+  /// Rows and cells inside a grouped section.
+  final Color groupedSurface;
 
-  /// Inset areas: artwork placeholders, chips, disabled fills, text fields.
-  final Color surfaceMuted;
+  /// Sheets, alerts and menus.
+  final Color elevated;
 
-  /// Hairline rules between rows and sections, drawn at 0.5 dp.
+  /// The ground of a sheet that hosts grouped rows (light `#F2F2F7`, dark
+  /// `#1C1C1E`).
+  final Color elevatedGroupedBackground;
+
+  /// Rows inside a grouped sheet (light `#FFFFFF`, dark `#2C2C2E`).
+  final Color elevatedGroupedSurface;
+
+  /// Tinted-grey buttons (`JamButton.gray`), search fields, slider tracks.
+  final Color fill;
+
+  /// Placeholder art ground, text fields.
+  final Color fillSecondary;
+
+  /// A row's press highlight.
+  final Color fillPressed;
+
+  /// 0.5 px hairlines, inset to the text start.
   final Color separator;
 
-  /// Titles and primary values.
-  final Color textPrimary;
+  /// Primary text.
+  final Color label;
 
-  /// Bylines, labels, and the quiet "in sync" state.
-  final Color textSecondary;
+  /// Subtitles, values, footers.
+  final Color secondaryLabel;
 
-  /// Placeholder text, disabled text, durations.
-  final Color textTertiary;
+  /// Placeholders, disabled text, grabbers, chevrons.
+  final Color tertiaryLabel;
 
-  /// The one accent: primary actions, selection, the current track.
-  final Color accent;
+  /// Tappable text and icons, filled buttons, selection, checkmarks.
+  final Color tint;
 
-  /// [accent] while pressed.
-  final Color accentPressed;
+  /// [tint] while pressed.
+  final Color tintPressed;
 
-  /// The brand end of the raspberry gradient: app icon, primary-button fill,
-  /// the jam-started moment. Identical in both themes — it is a brand mark,
-  /// not a UI state.
-  final Color accentDeep;
+  /// "Tinted" buttons (Join) and the selected sidebar item.
+  final Color tintFill;
 
-  /// A tinted fill for selected rows and accent chips.
-  final Color accentSoft;
+  /// Text and icons on a [tint] fill.
+  final Color onTint;
 
-  /// Text and icons drawn on top of [accent].
-  final Color onAccent;
+  /// Switch "on" track. Apple's green — switches are never raspberry.
+  final Color success;
 
-  /// Apricot: the live dot, the "you" ring, the warm glow, the artwork
-  /// placeholder gradient. Warmth, not alarm — it never carries text.
-  final Color highlight;
-
-  /// An apricot-tinted fill, for the catching-up banner and live chips.
-  final Color highlightSoft;
-
-  /// Recoverable trouble as **text or an icon**: catching up, reconnecting,
-  /// a peer still fetching. Apricot itself fails AA as text on cream, so this
-  /// is a darker sibling of [highlight] rather than [highlight] itself.
+  /// Recoverable trouble as text or an icon: "Catching up…".
   final Color warning;
 
-  /// Failure: fetch failed, kicked, session ended, unsupported format.
+  /// Destructive buttons and rows, failures.
   final Color danger;
 
-  /// Behind modal sheets and dialogs.
+  /// Behind sheets and alerts.
   final Color scrim;
 
-  /// The base colour every [JamShadow] is mixed from. Fully transparent on
-  /// dark, where separation comes from a lightness step instead.
-  final Color shadowTint;
+  /// Translucent chrome (nav bars on scroll, mini player, menus, toasts).
+  /// Always paired with a [JamBlur.material] backdrop blur.
+  final Color material;
 
-  /// The live dot on a room card and in the room bar.
-  Color get liveDot => highlight;
+  /// Round icon buttons over artwork. Paired with [JamBlur.glass].
+  final Color glass;
 
-  /// The ring around your own avatar.
-  Color get youRing => highlight;
-
-  /// The ring around the host's avatar.
-  Color get hostRing => accent;
-
-  /// The light palette — the primary design target.
+  /// The light palette.
   static const JamColors light = JamColors(
-    canvas: Color(0xFFFFF7F2),
-    surface: Color(0xFFFFFFFF),
-    surfaceElevated: Color(0xFFFFFFFF),
-    surfaceMuted: Color(0xFFF5E9E2),
-    separator: Color(0xFFEBDDD4),
-    textPrimary: Color(0xFF2B1332),
-    textSecondary: Color(0xFF7A6478),
-    textTertiary: Color(0xFFA99AA6),
-    accent: Color(0xFFD92C64),
-    accentPressed: Color(0xFFB31F51),
-    accentDeep: Color(0xFFC71F5E),
-    accentSoft: Color(0xFFFCE7EE),
-    onAccent: Color(0xFFFFFFFF),
-    highlight: Color(0xFFFFB25C),
-    highlightSoft: Color(0xFFFFF0DC),
-    warning: Color(0xFFA85B12),
-    danger: Color(0xFFB3261E),
-    scrim: Color(0x662B1332),
-    shadowTint: Color(0x1A2B1332),
+    background: Color(0xFFFFFFFF),
+    groupedBackground: Color(0xFFF2F2F7),
+    groupedSurface: Color(0xFFFFFFFF),
+    elevated: Color(0xFFFFFFFF),
+    elevatedGroupedBackground: Color(0xFFF2F2F7),
+    elevatedGroupedSurface: Color(0xFFFFFFFF),
+    fill: Color(0x33787880),
+    fillSecondary: Color(0x1F787880),
+    fillPressed: Color(0x0F000000),
+    separator: Color(0x4A3C3C43),
+    label: Color(0xFF000000),
+    secondaryLabel: Color(0x993C3C43),
+    tertiaryLabel: Color(0x4D3C3C43),
+    tint: Color(0xFFD92C64),
+    tintPressed: Color(0xFFB31F51),
+    tintFill: Color(0x1FD92C64),
+    onTint: Color(0xFFFFFFFF),
+    success: Color(0xFF34C759),
+    warning: Color(0xFFC93400),
+    danger: Color(0xFFFF3B30),
+    scrim: Color(0x66000000),
+    material: Color(0xB8FFFFFF),
+    glass: Color(0x2EFFFFFF),
   );
 
-  /// The dark palette: same structure on a plum ground, with an accent picked
-  /// for that ground rather than inverted into it.
+  /// The dark palette: true black, Apple's elevated greys.
   static const JamColors dark = JamColors(
-    canvas: Color(0xFF150A19),
-    surface: Color(0xFF221029),
-    surfaceElevated: Color(0xFF2B1332),
-    surfaceMuted: Color(0xFF32183A),
-    separator: Color(0xFF3D2145),
-    textPrimary: Color(0xFFFBF2F6),
-    textSecondary: Color(0xFFB9A5BD),
-    textTertiary: Color(0xFF7E6C84),
-    accent: Color(0xFFFF6E96),
-    accentPressed: Color(0xFFE63B6F),
-    accentDeep: Color(0xFFC71F5E),
-    accentSoft: Color(0xFF3A1329),
-    onAccent: Color(0xFF2B1332),
-    highlight: Color(0xFFFFB25C),
-    highlightSoft: Color(0xFF3A2415),
-    warning: Color(0xFFFFC078),
-    danger: Color(0xFFFF7A6E),
-    scrim: Color(0xA6100616),
-    shadowTint: Color(0x00000000),
+    background: Color(0xFF000000),
+    groupedBackground: Color(0xFF000000),
+    groupedSurface: Color(0xFF1C1C1E),
+    elevated: Color(0xFF1C1C1E),
+    elevatedGroupedBackground: Color(0xFF1C1C1E),
+    elevatedGroupedSurface: Color(0xFF2C2C2E),
+    fill: Color(0x5C787880),
+    fillSecondary: Color(0x3D787880),
+    fillPressed: Color(0x1AFFFFFF),
+    separator: Color(0x99545458),
+    label: Color(0xFFFFFFFF),
+    secondaryLabel: Color(0x99EBEBF5),
+    tertiaryLabel: Color(0x4DEBEBF5),
+    tint: Color(0xFFFF4F82),
+    tintPressed: Color(0xFFE63B6F),
+    tintFill: Color(0x33FF4F82),
+    onTint: Color(0xFFFFFFFF),
+    success: Color(0xFF30D158),
+    warning: Color(0xFFFF9F0A),
+    danger: Color(0xFFFF453A),
+    scrim: Color(0x99000000),
+    material: Color(0xB81C1C1E),
+    glass: Color(0x2EFFFFFF),
   );
 
-  /// The brand raspberry — the start of the primary-button and app-icon
-  /// gradient. [accent] is a half-step deeper so white labels clear 4.5:1;
-  /// this is the colour the brand is drawn in, not one the UI states use.
-  static const Color brandRaspberry = Color(0xFFE63B6F);
-
-  @override
-  JamColors copyWith({
-    Color? canvas,
-    Color? surface,
-    Color? surfaceElevated,
-    Color? surfaceMuted,
-    Color? separator,
-    Color? textPrimary,
-    Color? textSecondary,
-    Color? textTertiary,
-    Color? accent,
-    Color? accentPressed,
-    Color? accentDeep,
-    Color? accentSoft,
-    Color? onAccent,
-    Color? highlight,
-    Color? highlightSoft,
-    Color? warning,
-    Color? danger,
-    Color? scrim,
-    Color? shadowTint,
-  }) => JamColors(
-    canvas: canvas ?? this.canvas,
-    surface: surface ?? this.surface,
-    surfaceElevated: surfaceElevated ?? this.surfaceElevated,
-    surfaceMuted: surfaceMuted ?? this.surfaceMuted,
-    separator: separator ?? this.separator,
-    textPrimary: textPrimary ?? this.textPrimary,
-    textSecondary: textSecondary ?? this.textSecondary,
-    textTertiary: textTertiary ?? this.textTertiary,
-    accent: accent ?? this.accent,
-    accentPressed: accentPressed ?? this.accentPressed,
-    accentDeep: accentDeep ?? this.accentDeep,
-    accentSoft: accentSoft ?? this.accentSoft,
-    onAccent: onAccent ?? this.onAccent,
-    highlight: highlight ?? this.highlight,
-    highlightSoft: highlightSoft ?? this.highlightSoft,
-    warning: warning ?? this.warning,
-    danger: danger ?? this.danger,
-    scrim: scrim ?? this.scrim,
-    shadowTint: shadowTint ?? this.shadowTint,
-  );
-
-  @override
-  bool operator ==(Object other) =>
-      other is JamColors &&
-      other.canvas == canvas &&
-      other.surface == surface &&
-      other.surfaceElevated == surfaceElevated &&
-      other.surfaceMuted == surfaceMuted &&
-      other.separator == separator &&
-      other.textPrimary == textPrimary &&
-      other.textSecondary == textSecondary &&
-      other.textTertiary == textTertiary &&
-      other.accent == accent &&
-      other.accentPressed == accentPressed &&
-      other.accentDeep == accentDeep &&
-      other.accentSoft == accentSoft &&
-      other.onAccent == onAccent &&
-      other.highlight == highlight &&
-      other.highlightSoft == highlightSoft &&
-      other.warning == warning &&
-      other.danger == danger &&
-      other.scrim == scrim &&
-      other.shadowTint == shadowTint;
-
-  @override
-  int get hashCode => Object.hashAll([
-    canvas,
-    surface,
-    surfaceElevated,
-    surfaceMuted,
+  List<Color> get _all => [
+    background,
+    groupedBackground,
+    groupedSurface,
+    elevated,
+    elevatedGroupedBackground,
+    elevatedGroupedSurface,
+    fill,
+    fillSecondary,
+    fillPressed,
     separator,
-    textPrimary,
-    textSecondary,
-    textTertiary,
-    accent,
-    accentPressed,
-    accentDeep,
-    accentSoft,
-    onAccent,
-    highlight,
-    highlightSoft,
+    label,
+    secondaryLabel,
+    tertiaryLabel,
+    tint,
+    tintPressed,
+    tintFill,
+    onTint,
+    success,
     warning,
     danger,
     scrim,
-    shadowTint,
-  ]);
+    material,
+    glass,
+  ];
+
+  static JamColors _fromList(List<Color> v) => JamColors(
+    background: v[0],
+    groupedBackground: v[1],
+    groupedSurface: v[2],
+    elevated: v[3],
+    elevatedGroupedBackground: v[4],
+    elevatedGroupedSurface: v[5],
+    fill: v[6],
+    fillSecondary: v[7],
+    fillPressed: v[8],
+    separator: v[9],
+    label: v[10],
+    secondaryLabel: v[11],
+    tertiaryLabel: v[12],
+    tint: v[13],
+    tintPressed: v[14],
+    tintFill: v[15],
+    onTint: v[16],
+    success: v[17],
+    warning: v[18],
+    danger: v[19],
+    scrim: v[20],
+    material: v[21],
+    glass: v[22],
+  );
+
+  @override
+  JamColors copyWith({
+    Color? background,
+    Color? groupedBackground,
+    Color? groupedSurface,
+    Color? elevated,
+    Color? elevatedGroupedBackground,
+    Color? elevatedGroupedSurface,
+    Color? fill,
+    Color? fillSecondary,
+    Color? fillPressed,
+    Color? separator,
+    Color? label,
+    Color? secondaryLabel,
+    Color? tertiaryLabel,
+    Color? tint,
+    Color? tintPressed,
+    Color? tintFill,
+    Color? onTint,
+    Color? success,
+    Color? warning,
+    Color? danger,
+    Color? scrim,
+    Color? material,
+    Color? glass,
+  }) => JamColors(
+    background: background ?? this.background,
+    groupedBackground: groupedBackground ?? this.groupedBackground,
+    groupedSurface: groupedSurface ?? this.groupedSurface,
+    elevated: elevated ?? this.elevated,
+    elevatedGroupedBackground:
+        elevatedGroupedBackground ?? this.elevatedGroupedBackground,
+    elevatedGroupedSurface:
+        elevatedGroupedSurface ?? this.elevatedGroupedSurface,
+    fill: fill ?? this.fill,
+    fillSecondary: fillSecondary ?? this.fillSecondary,
+    fillPressed: fillPressed ?? this.fillPressed,
+    separator: separator ?? this.separator,
+    label: label ?? this.label,
+    secondaryLabel: secondaryLabel ?? this.secondaryLabel,
+    tertiaryLabel: tertiaryLabel ?? this.tertiaryLabel,
+    tint: tint ?? this.tint,
+    tintPressed: tintPressed ?? this.tintPressed,
+    tintFill: tintFill ?? this.tintFill,
+    onTint: onTint ?? this.onTint,
+    success: success ?? this.success,
+    warning: warning ?? this.warning,
+    danger: danger ?? this.danger,
+    scrim: scrim ?? this.scrim,
+    material: material ?? this.material,
+    glass: glass ?? this.glass,
+  );
+
+  @override
+  bool operator ==(Object other) {
+    if (other is! JamColors) return false;
+    final a = _all;
+    final b = other._all;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i] != b[i]) return false;
+    }
+    return true;
+  }
+
+  @override
+  int get hashCode => Object.hashAll(_all);
 
   @override
   JamColors lerp(covariant JamColors? other, double t) {
     if (other == null) return this;
-    Color mix(Color a, Color b) => Color.lerp(a, b, t)!;
-    return JamColors(
-      canvas: mix(canvas, other.canvas),
-      surface: mix(surface, other.surface),
-      surfaceElevated: mix(surfaceElevated, other.surfaceElevated),
-      surfaceMuted: mix(surfaceMuted, other.surfaceMuted),
-      separator: mix(separator, other.separator),
-      textPrimary: mix(textPrimary, other.textPrimary),
-      textSecondary: mix(textSecondary, other.textSecondary),
-      textTertiary: mix(textTertiary, other.textTertiary),
-      accent: mix(accent, other.accent),
-      accentPressed: mix(accentPressed, other.accentPressed),
-      accentDeep: mix(accentDeep, other.accentDeep),
-      accentSoft: mix(accentSoft, other.accentSoft),
-      onAccent: mix(onAccent, other.onAccent),
-      highlight: mix(highlight, other.highlight),
-      highlightSoft: mix(highlightSoft, other.highlightSoft),
-      warning: mix(warning, other.warning),
-      danger: mix(danger, other.danger),
-      scrim: mix(scrim, other.scrim),
-      shadowTint: mix(shadowTint, other.shadowTint),
-    );
+    final a = _all;
+    final b = other._all;
+    return _fromList([
+      for (var i = 0; i < a.length; i++) Color.lerp(a[i], b[i], t)!,
+    ]);
   }
 }
 
-/// The spacing scale. Codifies the values the pre-overhaul screens repeated
-/// inline (page padding 20/24, card padding 16, section gap 28).
+/// The fixed palette of the immersive Now Playing surface (D4). Identical in
+/// both themes: the backdrop is always dark enough for white text.
+abstract final class JamNowPlayingColors {
+  /// Titles, transport glyphs.
+  static const Color text = Color(0xFFFFFFFF);
+
+  /// "Added by Mia", times.
+  static const Color secondary = Color(0x99FFFFFF);
+
+  /// The grabber, drag handles, disabled transport.
+  static const Color tertiary = Color(0x59FFFFFF);
+
+  /// The scrubber's unplayed track.
+  static const Color track = Color(0x40FFFFFF);
+
+  /// The scrubber's played part; the selected footer-icon circle.
+  static const Color fill = Color(0xD9FFFFFF);
+
+  /// The artwork placeholder's ground on the backdrop.
+  static const Color placeholderGround = Color(0x1FFFFFFF);
+
+  /// The artwork placeholder's note on the backdrop.
+  static const Color placeholderGlyph = Color(0x80FFFFFF);
+
+  /// The backdrop when the cover is a placeholder.
+  static const Color backdropPlaceholder = Color(0xFF1C1C1E);
+
+  /// Glass buttons over the backdrop.
+  static const Color glass = Color(0x2EFFFFFF);
+}
+
+/// Backdrop-blur strengths that pair with [JamColors.material] and
+/// [JamColors.glass].
+abstract final class JamBlur {
+  /// Chrome: nav bars, mini player, menus, toasts.
+  static const double material = 30;
+
+  /// Glass buttons over artwork.
+  static const double glass = 20;
+
+  /// The Now Playing backdrop's cover blur (σ).
+  static const double backdrop = 70;
+}
+
+/// The 4-pt spacing grid.
 abstract final class JamSpace {
   static const double xxs = 2;
   static const double xs = 4;
@@ -294,149 +351,234 @@ abstract final class JamSpace {
   static const double huge = 40;
   static const double giant = 56;
 
-  /// Horizontal page margin.
-  static const double page = 20;
+  /// Screen side margin on phones. See [pageFor] for wider windows.
+  static const double page = 16;
 
-  /// Padding inside a card or grouped section.
+  /// Screen side margin from 400 wide up.
+  static const double pageWide = 20;
+
+  /// Padding inside a custom content block in a grouped section.
   static const double card = 16;
 
-  /// Gap between top-level sections.
-  static const double section = 28;
+  /// Gap between grouped sections.
+  static const double section = 32;
+
+  /// Section header (or footer) to its rows.
+  static const double sectionHeader = 6;
+
+  /// The side margin for a window [width] wide.
+  static double pageFor(double width) => width >= 400 ? pageWide : page;
 }
 
-/// Corner radii. Softer than Material's default so the chrome reads warm
-/// rather than engineered.
-abstract final class JamRadius {
-  static const double xs = 8;
-  static const double sm = 10;
-  static const double md = 14;
-  static const double lg = 18;
-  static const double xl = 24;
-  static const double xxl = 32;
-  static const double pill = 999;
+/// Fixed component metrics (§2 Spacing, §4, §5).
+abstract final class JamMetrics {
+  /// Minimum hit target, and the minimum row height.
+  static const double hitTarget = 44;
 
-  /// Artwork corner radius for a given edge length, so thumbnails and heroes
-  /// stay a family: a 48 dp thumb gets 10, a 340 dp hero gets 28.
-  static double artwork(double size) => (size / 9).clamp(10, 28);
+  /// A row with only a title.
+  static const double rowHeight = 44;
+
+  /// A row with a subtitle.
+  static const double rowHeightSubtitle = 60;
+
+  /// The leading icon box in a row (icon 22 inside 30).
+  static const double rowIconBox = 30;
+
+  /// Row leading icon glyph size.
+  static const double rowIcon = 22;
+
+  /// Nav bar icon glyph size.
+  static const double navIcon = 22;
+
+  /// The inline nav bar height (without the status bar).
+  static const double navBarHeight = 44;
+
+  /// The large title's area under the inline bar.
+  static const double largeTitleHeight = 52;
+
+  /// `JamButton` large height.
+  static const double buttonHeight = 50;
+
+  /// `JamButton` small height (in-row actions).
+  static const double buttonHeightSmall = 30;
+
+  /// The floating mini player's height.
+  static const double miniPlayerHeight = 64;
+
+  /// A glass icon button's painted circle.
+  static const double glassButton = 36;
+
+  /// The sheet grabber.
+  static const Size grabber = Size(36, 5);
+
+  /// The width of an iOS alert.
+  static const double alertWidth = 270;
+
+  /// A pull-down menu row.
+  static const double menuRow = 44;
+}
+
+/// Corner radii (§2 Radii).
+abstract final class JamRadius {
+  /// A generic scale for one-off shapes.
+  static const double xs = 6;
+  static const double sm = 8;
+  static const double md = 12;
+  static const double lg = 16;
+  static const double xl = 20;
+
+  /// Artwork up to 44 on a side.
+  static const double artworkXs = 6;
+
+  /// Artwork up to 64 on a side.
+  static const double artworkS = 8;
+
+  /// Artwork above 64.
+  static const double artworkM = 12;
+
+  /// The Now Playing hero cover.
+  static const double nowPlaying = 12;
+
+  /// An inset-grouped section (iOS 26's rounder grouped look). One value
+  /// app-wide.
+  static const double section = 26;
+
+  /// A sheet's top corners when attached to the bottom edge (phones).
+  static const double sheet = 16;
+
+  /// A sheet that floats inset from the edges.
+  static const double sheetFloating = 38;
+
+  /// Alerts.
+  static const double alert = 14;
+
+  /// Pull-down menus.
+  static const double menu = 14;
+
+  /// Text and search fields.
+  static const double field = 10;
+
+  /// Buttons, toasts, the mini player: a stadium.
+  static const double capsule = 999;
+
+  /// The artwork corner radius for an edge of [size].
+  static double artwork(double size) {
+    if (size <= 44) return artworkXs;
+    if (size <= 64) return artworkS;
+    return artworkM;
+  }
 }
 
 /// Standard artwork sizes.
 abstract final class JamArtworkSize {
-  /// List-row thumbnail.
+  /// The mini player.
+  static const double mini = 40;
+
+  /// A list row (queue, songs, people's covers).
+  static const double row = 44;
+
+  /// Recent jams on Home.
   static const double thumb = 48;
 
-  /// Docked room bar.
+  /// The docked room bar (wide layouts).
   static const double bar = 44;
 
-  /// Now-playing hero. A ceiling for tablets and desktop only — on a phone
-  /// the page width bounds first, so the cover lines up with the title's
-  /// margin the way it does in Spotify and Apple Music.
+  /// History rows; the queue-in-place thumbnail.
+  static const double list = 56;
+
+  /// The History detail header.
+  static const double detail = 200;
+
+  /// Now-playing hero ceiling on tablets and desktop.
   static const double hero = 420;
 
-  /// The hero's cap once the layout is wide enough to sit it beside a panel.
+  /// The hero's cap beside a docked panel.
   static const double heroExpanded = 340;
 }
 
-/// Drop shadows. Light theme only — on dark, [JamColors.shadowTint] is
-/// transparent and every level resolves to an empty list, because separation
-/// there comes from the [JamColors.surface] lightness step instead.
+/// Shadows. There is exactly one: under large artwork.
 abstract final class JamShadow {
-  /// List groups and rows: no shadow at all, just a hairline.
-  static List<BoxShadow> flat(JamColors c) => const <BoxShadow>[];
+  /// Under the Now Playing cover and the History detail cover. Black 25%,
+  /// blur 30, y 12.
+  static const List<BoxShadow> artwork = [
+    BoxShadow(color: Color(0x40000000), blurRadius: 30, offset: Offset(0, 12)),
+  ];
+}
 
-  /// Cards, artwork thumbnails, chips that carry an action.
-  static List<BoxShadow> raised(JamColors c) => _mix(c, const [
-    (0.06, Offset(0, 1), 2.0, 0.0),
-    (0.08, Offset(0, 4), 12.0, -2.0),
-  ]);
+/// Motion durations (250–350 ms band). Pair with [JamCurve.standard]; respect
+/// `MediaQuery.disableAnimations` at the call site.
+abstract final class JamDuration {
+  /// Press highlights and icon swaps.
+  static const Duration instant = Duration(milliseconds: 100);
 
-  /// The hero artwork, the room bar, the play button.
-  static List<BoxShadow> floating(JamColors c) => _mix(c, const [
-    (0.14, Offset(0, 8), 24.0, -4.0),
-    (0.06, Offset(0, 2), 6.0, 0.0),
-  ]);
+  /// Small state changes: switches, selection.
+  static const Duration fast = Duration(milliseconds: 200);
 
-  /// Sheets, dialogs and menus — cast upward, since they rise from the edge.
-  static List<BoxShadow> overlay(JamColors c) =>
-      _mix(c, const [(0.16, Offset(0, -8), 40.0, 0.0)]);
+  /// Most transitions: sheet content, row insert, colour.
+  static const Duration base = Duration(milliseconds: 300);
 
-  static List<BoxShadow> _mix(
-    JamColors c,
-    List<(double, Offset, double, double)> layers,
-  ) {
-    if (c.shadowTint.a == 0) return const <BoxShadow>[];
-    final base = c.shadowTint.withValues(alpha: 1);
-    return [
-      for (final (alpha, offset, blur, spread) in layers)
-        BoxShadow(
-          color: base.withValues(alpha: alpha),
-          offset: offset,
-          blurRadius: blur,
-          spreadRadius: spread,
-        ),
-    ];
+  /// Larger moves: a panel docking, the artwork shrinking into the queue.
+  static const Duration slow = Duration(milliseconds: 350);
+
+  /// The Now Playing backdrop cross-fade on track change.
+  static const Duration crossfade = Duration(milliseconds: 600);
+}
+
+/// Motion curves.
+abstract final class JamCurve {
+  /// The iOS ease: `Cubic(0.25, 0.1, 0.25, 1)`.
+  static const Curve standard = Cubic(0.25, 0.1, 0.25, 1);
+
+  /// Things leaving: faster out than in.
+  static const Curve exit = Curves.easeIn;
+
+  /// A critically-damped-ish spring for size changes (artwork scale, queue
+  /// thumbnail).
+  static const Curve spring = JamSpringCurve();
+}
+
+/// A curve that follows an under-damped spring from 0 to 1 — a small settle,
+/// not a bounce.
+class JamSpringCurve extends Curve {
+  const JamSpringCurve({this.dampingRatio = 0.82, this.stiffness = 180});
+
+  final double dampingRatio;
+  final double stiffness;
+
+  @override
+  double transformInternal(double t) {
+    final spring = SpringDescription.withDampingRatio(
+      mass: 1,
+      stiffness: stiffness,
+      ratio: dampingRatio,
+    );
+    final sim = SpringSimulation(spring, 0, 1, 0);
+    // Map t∈[0,1] onto the time the spring needs to settle.
+    const settle = 0.6;
+    final x = sim.x(t * settle);
+    return t == 1 ? 1 : x;
   }
 }
 
-/// Motion. Short and unfussy — this app is looked at in a moving vehicle.
-/// Pair each duration with the [JamCurve] of the same name.
-abstract final class JamDuration {
-  /// Press and hover states, icon swaps.
-  static const Duration instant = Duration(milliseconds: 90);
-
-  /// Chips, switches, ripple settle.
-  static const Duration fast = Duration(milliseconds: 140);
-
-  /// Sheet open, row insert, colour lerp.
-  static const Duration base = Duration(milliseconds: 220);
-
-  /// The room sliding up, a panel docking.
-  static const Duration slow = Duration(milliseconds: 360);
-
-  /// Artwork tint cross-fade, glow shift.
-  static const Duration ambient = Duration(milliseconds: 480);
-
-  /// The jam-started moment.
-  static const Duration celebration = Duration(milliseconds: 900);
-}
-
-/// The curve that belongs with each [JamDuration].
-abstract final class JamCurve {
-  static const Curve instant = Curves.easeOut;
-  static const Curve fast = Curves.easeOutCubic;
-  static const Curve base = Curves.easeOutCubic;
-  static const Curve slow = Curves.easeOutQuint;
-  static const Curve ambient = Curves.easeInOutCubic;
-
-  /// The scale half of the jam-started moment; its fade uses [exit]'s sibling
-  /// [Curves.easeOut].
-  static const Curve celebration = Curves.easeOutBack;
-
-  /// Reverse transitions: things leave faster than they arrive.
-  static const Curve exit = Curves.easeInCubic;
-}
-
-/// Haptics, named for the moment rather than the waveform, so call sites read
-/// as intent. Every method is a no-op where the platform has no haptic engine
-/// (desktop and web), which the framework handles for us.
+/// Haptics, named for the moment.
 abstract final class JamHaptics {
-  /// Play or pause.
+  /// Play or pause: light impact.
   static void transport() => HapticFeedback.lightImpact();
 
   /// Next or previous track.
   static void skip() => HapticFeedback.selectionClick();
 
-  /// The scrubber thumb picked up.
+  /// The scrubber picked up.
   static void scrubStart() => HapticFeedback.selectionClick();
 
-  /// The scrubber thumb released at a new position.
+  /// The scrubber released at a new position.
   static void scrubEnd() => HapticFeedback.lightImpact();
 
   /// A track landed in the local queue.
   static void queued() => HapticFeedback.lightImpact();
 
-  /// The jam started (host) or was joined (guest).
-  static void jamStarted() => HapticFeedback.mediumImpact();
+  /// The jam started (host) or was joined (guest): success notification.
+  static void jamStarted() => HapticFeedback.successNotification();
 
   /// Somebody walked into the room.
   static void peerJoined() => HapticFeedback.selectionClick();
@@ -448,12 +590,14 @@ abstract final class JamHaptics {
   /// [offSyncThrottle].
   static void offSync() => HapticFeedback.heavyImpact();
 
-  /// The minimum gap between two [offSync] buzzes; going out of sync
-  /// repeatedly should not turn the phone into a pager.
+  /// The minimum gap between two [offSync] buzzes.
   static const Duration offSyncThrottle = Duration(seconds: 30);
 
   /// A reorder drag picked up or dropped.
   static void reorder() => HapticFeedback.selectionClick();
+
+  /// A toggle, a segmented control, a checkmark choice.
+  static void selection() => HapticFeedback.selectionClick();
 }
 
 /// Reads the [JamColors] for the current theme.

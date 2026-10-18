@@ -69,11 +69,11 @@ class _LocalJamAppState extends State<LocalJamApp> {
     // The OS media card is drawn by the platform from bytes, so it cannot
     // fall back to `JamArtworkTile`'s painted placeholder the way the app
     // does: an untagged track came up as a blank grey square on the lock
-    // screen. Same gradient, same mark, pre-rendered.
+    // screen. A pre-rendered placeholder stands in.
     JamMediaSessionController.placeholderArtworkProvider = _brandArtwork;
   }
 
-  /// The 512 dp brand placeholder for the lock-screen card.
+  /// The 512 px placeholder for the lock-screen card.
   ///
   /// Resolved at most once — [JamMediaSessionController] caches what this
   /// returns for the life of the process — and never throws: a missing asset

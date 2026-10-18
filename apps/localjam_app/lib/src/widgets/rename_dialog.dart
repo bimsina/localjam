@@ -4,8 +4,8 @@
 /// now reachable from home, settings and the desktop sidebar, so the prompt
 /// lives here rather than being copied into each.
 ///
-/// The dialog itself is [JamDialogs.promptText] — one styled dialog for the
-/// whole app, and one place where the controller-lifetime bug that used to
+/// The alert itself is [JamDialogs.promptText] — the iOS text-field alert,
+/// and the one place where the controller-lifetime bug that used to
 /// red-screen every rename is fixed.
 library;
 
@@ -15,7 +15,8 @@ import 'dialogs.dart';
 
 /// The strings this prompt puts on screen.
 abstract final class RenameStrings {
-  static const String title = 'Your name in the room';
+  static const String title = 'Your Name';
+  static const String message = 'This is how you appear to people in a jam.';
   static const String hint = 'Silky Puffin';
   static const String save = 'Save';
 }
@@ -31,6 +32,7 @@ Future<String?> promptForName(
 }) => JamDialogs.promptText(
   context,
   title: RenameStrings.title,
+  message: RenameStrings.message,
   initialValue: current,
   hintText: RenameStrings.hint,
   confirmLabel: RenameStrings.save,

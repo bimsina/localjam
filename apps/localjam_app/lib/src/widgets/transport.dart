@@ -134,7 +134,7 @@ class JamTransport extends StatelessWidget {
         Text(
           gatedMessage,
           textAlign: TextAlign.center,
-          style: context.jamCaption.copyWith(color: colors.textSecondary),
+          style: context.jamCaption2.copyWith(color: colors.secondaryLabel),
         ),
       ],
     );
@@ -178,14 +178,14 @@ class _PlayButtonState extends State<_PlayButton> {
             height: 34,
             child: CircularProgressIndicator(
               strokeWidth: 3,
-              color: colors.onAccent,
+              color: colors.onTint,
             ),
           )
         : Icon(
             playing ? Icons.pause_rounded : Icons.play_arrow_rounded,
             key: ValueKey(playing),
             size: 34,
-            color: colors.onAccent,
+            color: colors.onTint,
           );
 
     final circle = Container(
@@ -196,20 +196,19 @@ class _PlayButtonState extends State<_PlayButton> {
         shape: BoxShape.circle,
         color: light && !pressed
             ? null
-            : (pressed ? colors.accentPressed : colors.accent),
+            : (pressed ? colors.tintPressed : colors.tint),
         gradient: light && !pressed
             ? LinearGradient(
                 begin: Alignment.topLeft,
                 end: Alignment.bottomRight,
-                colors: [JamColors.brandRaspberry, colors.accentDeep],
+                colors: [colors.tint, colors.tintPressed],
               )
             : null,
-        boxShadow: JamShadow.floating(colors),
       ),
       child: AnimatedSwitcher(
         duration: reduced ? Duration.zero : JamDuration.fast,
-        switchInCurve: JamCurve.fast,
-        switchOutCurve: JamCurve.fast,
+        switchInCurve: JamCurve.standard,
+        switchOutCurve: JamCurve.standard,
         // Not a swap: the old glyph shrinks out while the new one grows in.
         transitionBuilder: (child, animation) => FadeTransition(
           opacity: animation,
@@ -235,7 +234,7 @@ class _PlayButtonState extends State<_PlayButton> {
       child: AnimatedScale(
         scale: pressed && !reduced ? 0.94 : 1,
         duration: reduced ? Duration.zero : JamDuration.instant,
-        curve: JamCurve.instant,
+        curve: JamCurve.standard,
         child: GestureDetector(
           behavior: HitTestBehavior.opaque,
           // A loading button eats the tap rather than queueing a command
@@ -289,7 +288,7 @@ class _SkipButton extends StatelessWidget {
             child: Icon(
               icon,
               size: 32,
-              color: enabled ? colors.textPrimary : colors.textTertiary,
+              color: enabled ? colors.label : colors.tertiaryLabel,
             ),
           ),
         ),
@@ -410,7 +409,7 @@ class _JamScrubberState extends State<JamScrubber> {
     final dragging = _dragFraction != null;
     final remaining = _duration <= 0 ? null : _duration - _shownUs;
 
-    final numeric = context.jamNumeric.copyWith(color: colors.textSecondary);
+    final numeric = context.jamNumeric.copyWith(color: colors.secondaryLabel);
 
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -443,7 +442,7 @@ class _JamScrubberState extends State<JamScrubber> {
                           : (_interactive ? 7 : 0),
                     ),
                     duration: reduced ? Duration.zero : JamDuration.fast,
-                    curve: JamCurve.fast,
+                    curve: JamCurve.standard,
                     builder: (context, thumbRadius, _) => SizedBox(
                       key: jamScrubberTrackKey,
                       width: double.infinity,
@@ -454,11 +453,11 @@ class _JamScrubberState extends State<JamScrubber> {
                           thumbRadius: thumbRadius,
                           showHalo: dragging,
                           edge: _edge,
-                          active: colors.accent,
+                          active: colors.tint,
                           inactive: light
-                              ? colors.surfaceMuted
+                              ? colors.fillSecondary
                               : colors.separator,
-                          halo: colors.accent.withValues(alpha: 0.14),
+                          halo: colors.tint.withValues(alpha: 0.14),
                         ),
                       ),
                     ),

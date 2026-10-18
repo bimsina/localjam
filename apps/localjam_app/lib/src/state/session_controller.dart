@@ -290,13 +290,13 @@ class JamSessionController extends ChangeNotifier {
   /// for.
   bool _browseWanted = false;
 
-  /// Ambient artwork tints (§2.2), shared across the app.
+  /// Now Playing backdrops (D4), shared across the app.
   ///
   /// The room screen and the docked room bar are looking at the same cover,
   /// and deriving a tint decodes and quantises an image — one cache above
   /// both means one derivation per track for the life of the jam. Cleared
   /// when the session goes.
-  final JamTintCache tints = JamTintCache();
+  final JamBackdropCache backdrops = JamBackdropCache();
 
   /// The mediaId the last snapshot carried, for spotting a queue that wrapped.
   String? _lastMediaId;
@@ -1077,7 +1077,7 @@ class JamSessionController extends ChangeNotifier {
     _subs.clear();
     _peerNames.clear();
     _sourcePaths.clear();
-    tints.clear();
+    backdrops.clear();
     _lastMediaId = null;
     _position?.dispose();
     _position = null;

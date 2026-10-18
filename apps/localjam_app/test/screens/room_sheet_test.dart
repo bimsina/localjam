@@ -542,8 +542,9 @@ void main() {
     final sheet = tester.widget<DraggableScrollableSheet>(
       find.byType(DraggableScrollableSheet),
     );
-    expect(sheet.initialChildSize, 0.82);
-    expect(sheet.maxChildSize, 0.96);
+    // Opens at the large detent, clamped under the status bar.
+    expect(sheet.initialChildSize, sheet.maxChildSize);
+    expect(sheet.maxChildSize, greaterThan(0.9));
     expect(find.text(RoomSheetStrings.inTheRoom(1)), findsOneWidget);
     expect(tester.takeException(), isNull);
 

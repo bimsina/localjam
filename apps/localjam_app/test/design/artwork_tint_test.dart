@@ -1,114 +1,123 @@
 import 'dart:typed_data';
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:localjam_app/src/design/artwork_tint.dart';
-import 'package:localjam_app/src/design/tokens.dart';
+
+Future<Uint8List> _solidPng(Color color) async {
+  final recorder = ui.PictureRecorder();
+  Canvas(
+    recorder,
+  ).drawRect(const Rect.fromLTWH(0, 0, 8, 8), Paint()..color = color);
+  final image = await recorder.endRecording().toImage(8, 8);
+  final data = await image.toByteData(format: ui.ImageByteFormat.png);
+  image.dispose();
+  return data!.buffer.asUint8List();
+}
 
 void main() {
-  group('clampTint', () {
-    test('drags a neon cover back into the band', () {
-      // Pure electric cyan: saturation 1.0, lightness 0.5.
-      final tint = clampTint(const Color(0xFF00FFFF), Brightness.light);
-      final hsl = HSLColor.fromColor(tint.base);
-      expect(tint.isFallback, isFalse);
-      expect(hsl.saturation, lessThanOrEqualTo(0.60 + 0.01));
-      expect(hsl.saturation, greaterThanOrEqualTo(0.28 - 0.01));
-      expect(hsl.lightness, closeTo(0.46, 0.01));
-      // The hue survives — a cyan cover still washes the room cyan.
-      expect(hsl.hue, closeTo(180, 1));
+  group('backdropOverlayFor', () {
+    test('mid and dark covers get the spec floor', () {
+      expect(backdropOverlayFor(0.0), kJamBackdropMinOverlay);
+      expect(backdropOverlayFor(0.1), kJamBackdropMinOverlay);
+      expect(backdropOverlayFor(0.2), closeTo(0.25, 0.051));
     });
 
-    test('lifts a nearly-flat cover up to the floor saturation', () {
-      // A dull olive: saturation ~0.17 — enough colour to keep, not to see.
-      final tint = clampTint(const Color(0xFF706A50), Brightness.light);
-      expect(tint.isFallback, isFalse);
-      expect(
-        HSLColor.fromColor(tint.base).saturation,
-        greaterThanOrEqualTo(0.28 - 0.01),
-      );
+    test('pale covers get more black, capped', () {
+      final pale = backdropOverlayFor(0.6);
+      expect(pale, greaterThan(kJamBackdropMinOverlay));
+      expect(pale, lessThanOrEqualTo(kJamBackdropMaxOverlay));
+      expect(backdropOverlayFor(1.0), kJamBackdropMaxOverlay);
     });
 
-    test('pins lightness per theme, so the wash sits where it is drawn', () {
-      const source = Color(0xFF1B0F3A); // Very dark indigo.
-      expect(
-        HSLColor.fromColor(clampTint(source, Brightness.light).base).lightness,
-        closeTo(0.46, 0.01),
-      );
-      expect(
-        HSLColor.fromColor(clampTint(source, Brightness.dark).base).lightness,
-        closeTo(0.58, 0.01),
-      );
-    });
-
-    test('rejects covers with no colour in them', () {
-      for (final grey in [
-        const Color(0xFF000000),
-        const Color(0xFFFFFFFF),
-        const Color(0xFF808080),
-        const Color(0xFF8A8288), // Saturation ~0.04.
-      ]) {
-        final tint = clampTint(grey, Brightness.light);
-        expect(tint.isFallback, isTrue, reason: '$grey should fall back');
-        expect(tint.base, JamColors.brandRaspberry);
+    test('is monotonic in luminance', () {
+      var last = 0.0;
+      for (var l = 0.0; l <= 1.0; l += 0.05) {
+        final a = backdropOverlayFor(l);
+        expect(a, greaterThanOrEqualTo(last));
+        last = a;
       }
     });
+  });
 
-    test('the deep end is darker than the base', () {
-      final tint = clampTint(const Color(0xFFD9366B), Brightness.light);
+  group('backdropFromMean', () {
+    test('darkens the flat base by the overlay', () {
+      final b = backdropFromMean(
+        id: 'a',
+        image: MemoryImage(Uint8List(1)),
+        mean: const Color(0xFF808080),
+      );
+      expect(b.isPlaceholder, isFalse);
+      expect(b.id, 'a');
       expect(
-        HSLColor.fromColor(tint.deep).lightness,
-        lessThan(HSLColor.fromColor(tint.base).lightness),
+        b.base.computeLuminance(),
+        lessThan(const Color(0xFF808080).computeLuminance()),
       );
     });
 
-    test('lerps between two tints', () {
-      final a = clampTint(const Color(0xFFFF0000), Brightness.light);
-      final b = clampTint(const Color(0xFF0000FF), Brightness.light);
-      expect(JamTint.lerp(a, b, 0), a);
-      expect(JamTint.lerp(a, b, 1), b);
-      expect(JamTint.lerp(a, b, 0.5).base, isNot(a.base));
+    test('the placeholder is flat #1C1C1E with no overlay', () {
+      expect(JamBackdrop.placeholder.isPlaceholder, isTrue);
+      expect(JamBackdrop.placeholder.base, const Color(0xFF1C1C1E));
+      expect(JamBackdrop.placeholder.overlayOpacity, 0);
     });
   });
 
-  group('tintFor', () {
-    test('undecodable bytes fall back rather than throwing', () async {
-      expect(await tintFor(Uint8List(0), Brightness.light), JamTint.fallback);
+  testWidgets('derives a stronger overlay for a white cover than a dark one', (
+    tester,
+  ) async {
+    await tester.runAsync(() async {
+      final white = await backdropFor('w', await _solidPng(Colors.white));
+      final navy = await backdropFor(
+        'n',
+        await _solidPng(const Color(0xFF101830)),
+      );
+      expect(white.isPlaceholder, isFalse);
+      expect(navy.isPlaceholder, isFalse);
+      expect(white.overlayOpacity, greaterThan(navy.overlayOpacity));
+      expect(white.overlayOpacity, kJamBackdropMaxOverlay);
+      expect(navy.overlayOpacity, kJamBackdropMinOverlay);
+    });
+  });
+
+  testWidgets('bytes that do not decode fall back to the placeholder', (
+    tester,
+  ) async {
+    await tester.runAsync(() async {
+      expect(await backdropFor('x', Uint8List(0)), JamBackdrop.placeholder);
       expect(
-        await tintFor(Uint8List.fromList([1, 2, 3, 4]), Brightness.light),
-        JamTint.fallback,
+        await backdropFor('y', Uint8List.fromList([1, 2, 3, 4])),
+        JamBackdrop.placeholder,
       );
     });
   });
 
-  group('JamTintCache', () {
-    test('a hit is answerable synchronously', () async {
-      final cache = JamTintCache();
-      expect(cache.peek('a', Brightness.light), isNull);
-      await cache.resolve('a', Uint8List(0), Brightness.light);
-      expect(cache.peek('a', Brightness.light), JamTint.fallback);
-      // Keyed by brightness too: the same cover tints differently per theme.
-      expect(cache.peek('a', Brightness.dark), isNull);
+  group('JamBackdropCache', () {
+    final image = MemoryImage(Uint8List(1));
+    JamBackdrop fake(String id) => JamBackdrop(
+      id: id,
+      image: image,
+      overlayOpacity: 0.3,
+      base: const Color(0xFF112233),
+    );
+
+    test('peek misses until stored', () {
+      final cache = JamBackdropCache();
+      expect(cache.peek('a'), isNull);
+      cache.store('a', fake('a'));
+      expect(cache.peek('a'), fake('a'));
     });
 
-    test('evicts the least recently used past capacity', () async {
-      final cache = JamTintCache(capacity: 2);
-      const tint = JamTint(base: Color(0xFF112233), deep: Color(0xFF001122));
-      cache
-        ..store('a', Brightness.light, tint)
-        ..store('b', Brightness.light, tint);
-      // A hit through resolve marks 'a' as most recently used, which leaves
-      // 'b' as the one to drop.
-      expect(await cache.resolve('a', Uint8List(0), Brightness.light), tint);
-      cache.store('c', Brightness.light, tint);
+    test('evicts least recently used past capacity', () async {
+      final cache = JamBackdropCache(capacity: 2)
+        ..store('a', fake('a'))
+        ..store('b', fake('b'));
+      await cache.resolve('a', Uint8List(0)); // a is now most recent
+      cache.store('c', fake('c'));
+      expect(cache.peek('b'), isNull);
+      expect(cache.peek('a'), isNotNull);
+      expect(cache.peek('c'), isNotNull);
       expect(cache.length, 2);
-      expect(cache.peek('b', Brightness.light), isNull);
-      expect(cache.peek('c', Brightness.light), tint);
-    });
-
-    test('clears', () async {
-      final cache = JamTintCache();
-      await cache.resolve('a', Uint8List(0), Brightness.light);
       cache.clear();
       expect(cache.length, 0);
     });

@@ -1,108 +1,225 @@
-/// A titled group of rows — the Apple Music / iOS Settings idiom the old
-/// screens spelled out by hand eight times ("a Card wrapping a bare Column of
-/// ListTiles").
+/// Grouped sections (DESIGN_SPEC v3 §5 "Grouped list").
 ///
-/// Restyled to §4: the heading is `jamTitle` on the canvas, the group under it
-/// is `flat` — no shadow at all, just a 0.5 dp hairline around it and between
-/// its rows — and consecutive sections are separated by [JamSpace.section].
+/// ```dart
+/// JamSection(
+///   header: 'Appearance',
+///   footer: 'Follows your device unless you pick one.',
+///   children: [
+///     JamRow(title: 'System', checked: mode == system, onTap: …),
+///     JamRow(title: 'Light', checked: mode == light, onTap: …),
+///   ],
+/// )
+/// ```
+///
+/// Inset grouped by default: a rounded [JamRadius.section] block in
+/// `groupedSurface` (or `elevatedGroupedSurface` inside a grouped sheet), 16
+/// from the screen edge, rows separated by hairlines inset to their text.
+/// [JamSection.plain] drops the block for Apple-Music-style plain lists.
 library;
 
-import 'package:flutter/material.dart';
+import 'package:flutter/widgets.dart';
 
 import '../design/tokens.dart';
 import '../design/typography.dart';
+import 'list.dart';
 
+/// Tells sections below it which surface their rows sit on. Grouped sheets
+/// publish [JamColors.elevatedGroupedSurface]; screens need not publish
+/// anything.
+class JamGroupedSurface extends InheritedWidget {
+  const JamGroupedSurface({
+    super.key,
+    required this.elevated,
+    required super.child,
+  });
+
+  /// Whether sections should use the elevated (sheet) surface.
+  final bool elevated;
+
+  static bool elevatedOf(BuildContext context) =>
+      context
+          .dependOnInheritedWidgetOfExactType<JamGroupedSurface>()
+          ?.elevated ??
+      false;
+
+  @override
+  bool updateShouldNotify(JamGroupedSurface old) => old.elevated != elevated;
+}
+
+/// A titled group of rows.
 class JamSection extends StatelessWidget {
   const JamSection({
     super.key,
-    this.title,
-    this.trailing,
-    this.child,
+    this.header,
+    this.headerTrailing,
+    this.prominentHeader = false,
+    this.footer,
     this.children,
-  }) : assert(
+    this.child,
+    this.margin,
+    this.elevated,
+  }) : plain = false,
+       assert(
          child != null || children != null,
          'A JamSection needs either a child or children.',
        );
 
-  /// Section heading, above the group.
-  final String? title;
+  /// A plain (ungrouped) section: no rounded block, no side margin — rows
+  /// run edge to edge on the screen's `background`.
+  const JamSection.plain({
+    super.key,
+    this.header,
+    this.headerTrailing,
+    this.prominentHeader = true,
+    this.footer,
+    this.children,
+    this.child,
+    this.margin,
+  }) : plain = true,
+       elevated = false,
+       assert(
+         child != null || children != null,
+         'A JamSection needs either a child or children.',
+       );
 
-  /// Optional right-aligned adornment for the heading (a count, an action).
-  final Widget? trailing;
+  /// Sentence case. Footnote `secondaryLabel` by default; title3 `label`
+  /// when [prominentHeader] ("Recent", "Up Next").
+  final String? header;
 
-  /// The group's content, laid out by the caller.
+  /// Right-aligned beside the header: a count, a `JamButton.plain`
+  /// ("See All").
+  final Widget? headerTrailing;
+
+  /// Title3 header in `label` instead of footnote `secondaryLabel`.
+  final bool prominentHeader;
+
+  /// One sentence under the block, footnote `secondaryLabel`.
+  final String? footer;
+
+  /// Rows. `JamRow`s draw their own inset hairlines; anything else gets a
+  /// 16-inset hairline between it and the next child.
+  final List<Widget>? children;
+
+  /// Custom content instead of rows.
   final Widget? child;
 
-  /// Rows to lay out as a list group, separated by 0.5 dp hairlines. Use this
-  /// instead of building a `Column` with `Divider`s by hand — the hairlines
-  /// go *between* rows only, never above the first or below the last, which
-  /// is what stops a group from growing a double rule against its own border.
-  final List<Widget>? children;
+  /// Overrides the outer margin (default: the page margin left/right).
+  final EdgeInsetsGeometry? margin;
+
+  /// Forces the elevated (sheet) row surface. Null reads [JamGroupedSurface].
+  final bool? elevated;
+
+  final bool plain;
 
   @override
   Widget build(BuildContext context) {
     final colors = context.jamColors;
-    final heading = title;
+    final width = MediaQuery.sizeOf(context).width;
+    final side = plain ? 0.0 : JamSpace.pageFor(width);
     final rows = children;
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        if (heading != null)
-          Padding(
-            padding: const EdgeInsets.only(
-              left: JamSpace.xs,
-              bottom: JamSpace.md,
+    Widget? body = child;
+    if (rows != null) {
+      body = Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          for (var i = 0; i < rows.length; i++)
+            JamRowScope(
+              isLast: i == rows.length - 1,
+              child: rows[i] is JamSelfSeparatingRow
+                  ? rows[i]
+                  : (i == rows.length - 1
+                        ? rows[i]
+                        : Column(
+                            mainAxisSize: MainAxisSize.min,
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              rows[i],
+                              const JamHairline(indent: kJamRowInset),
+                            ],
+                          )),
             ),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Semantics(
-                    header: true,
-                    child: Text(heading, style: context.jamTitle),
-                  ),
-                ),
-                ?trailing,
-              ],
-            ),
-          ),
-        // Material, not a DecoratedBox: ListTile paints its background and
-        // ink on the nearest Material ancestor, so a coloured box in between
-        // hides every splash (Flutter asserts on exactly this).
-        Material(
-          color: colors.surface,
-          clipBehavior: Clip.antiAlias,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(JamRadius.lg),
-            side: BorderSide(color: colors.separator, width: 0.5),
-          ),
-          child:
-              child ??
-              Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
+        ],
+      );
+    }
+
+    if (!plain) {
+      final elevated = this.elevated ?? JamGroupedSurface.elevatedOf(context);
+      body = ClipRRect(
+        borderRadius: BorderRadius.circular(JamRadius.section),
+        child: ColoredBox(
+          color: elevated
+              ? colors.elevatedGroupedSurface
+              : colors.groupedSurface,
+          child: body,
+        ),
+      );
+    }
+
+    final header = this.header;
+    final footer = this.footer;
+    const textInset = kJamRowInset;
+
+    return Padding(
+      padding: margin ?? EdgeInsets.symmetric(horizontal: side),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          if (header != null || headerTrailing != null)
+            Padding(
+              padding: EdgeInsetsDirectional.fromSTEB(
+                textInset,
+                0,
+                headerTrailing == null ? textInset : JamSpace.xs,
+                prominentHeader ? JamSpace.xs : JamSpace.sectionHeader,
+              ),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
-                  for (var i = 0; i < rows!.length; i++) ...[
-                    if (i > 0)
-                      Divider(
-                        height: 0.5,
-                        thickness: 0.5,
-                        indent: JamSpace.lg,
-                        color: colors.separator,
-                      ),
-                    rows[i],
-                  ],
+                  Expanded(
+                    child: header == null
+                        ? const SizedBox.shrink()
+                        : Semantics(
+                            header: true,
+                            child: Text(
+                              header,
+                              style: prominentHeader
+                                  ? context.jamTitle3
+                                  : context.jamFootnote.copyWith(
+                                      color: colors.secondaryLabel,
+                                    ),
+                            ),
+                          ),
+                  ),
+                  ?headerTrailing,
                 ],
               ),
-        ),
-      ],
+            ),
+          body!,
+          if (footer != null)
+            Padding(
+              padding: EdgeInsetsDirectional.fromSTEB(
+                textInset,
+                JamSpace.sectionHeader,
+                textInset,
+                0,
+              ),
+              child: Text(
+                footer,
+                style: context.jamFootnote.copyWith(
+                  color: colors.secondaryLabel,
+                ),
+              ),
+            ),
+        ],
+      ),
     );
   }
 }
 
-/// Stacks [JamSection]s with the standard [JamSpace.section] gap between them,
-/// so a screen never has to remember the number.
+/// Stacks sections with the standard [JamSpace.section] gap.
 class JamSectionList extends StatelessWidget {
   const JamSectionList({super.key, required this.children});
 

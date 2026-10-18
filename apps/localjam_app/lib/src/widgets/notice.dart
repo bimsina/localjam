@@ -1,32 +1,29 @@
-/// The one way the app says something happened.
+/// The one way the app says something happened: the toast / HUD.
 ///
 /// [JamSessionController.notices] is a single channel and the router shell is
-/// the single subscriber; this is the single *look*. Floating, radius `md`,
-/// a `textPrimary` ground with `canvas` text (so it reads as a piece of the
-/// chrome speaking rather than a page element), a 20 dp status glyph, and at
-/// most one action.
+/// the single subscriber; this is the single *look* (DESIGN_SPEC v3 §5): a
+/// capsule of blurred `material` near the bottom, above the mini player — a
+/// glyph, one line of subheadline text, at most one tint action — that
+/// dismisses itself. No full-width snackbars.
 ///
-/// It is hosted in the **root navigator's overlay**, not in a
-/// `ScaffoldMessenger`. A messenger's snackbar is a child of the messenger's
-/// own subtree, which sits *below* every modal route — so "Room code copied",
-/// raised from inside the People sheet, was painted behind the sheet and
-/// nobody ever saw it. An `OverlayEntry` on the root overlay is above modal
-/// routes by construction, and it keeps the messenger's semantics: one at a
-/// time, four seconds, at most one action.
+/// It is hosted in the **root navigator's overlay**, not a
+/// `ScaffoldMessenger`, so a notice raised from inside a sheet is drawn above
+/// the sheet rather than behind it. One at a time, four seconds.
 library;
 
 import 'dart:async';
 
-import 'package:flutter/material.dart';
+import 'package:flutter/cupertino.dart';
 
 import '../design/tokens.dart';
+import '../design/typography.dart';
 import '../state/session_controller.dart';
+import 'glass.dart';
+import 'pressable.dart';
 
 export '../state/session_controller.dart' show JamNotice;
 
-/// How loud a notice is. Only two tints exist by design — apricot for "you
-/// should know", red for "that did not work" — because a snackbar that can be
-/// five colours stops carrying meaning.
+/// How loud a notice is: the glyph and its colour change, nothing else.
 enum JamNoticeKind {
   /// Something happened and it was fine. "Ana joined."
   info,
@@ -50,13 +47,14 @@ const double _kNoticeRise = 24;
 
 extension on JamNoticeKind {
   IconData get glyph => switch (this) {
-    JamNoticeKind.info => Icons.info_rounded,
-    JamNoticeKind.warning => Icons.error_outline_rounded,
-    JamNoticeKind.error => Icons.error_rounded,
+    JamNoticeKind.info => CupertinoIcons.info_circle_fill,
+    JamNoticeKind.warning => CupertinoIcons.exclamationmark_triangle_fill,
+    JamNoticeKind.error => CupertinoIcons.xmark_octagon_fill,
   };
 
   Color tint(JamColors colors) => switch (this) {
-    JamNoticeKind.info || JamNoticeKind.warning => colors.highlight,
+    JamNoticeKind.info => colors.secondaryLabel,
+    JamNoticeKind.warning => colors.warning,
     JamNoticeKind.error => colors.danger,
   };
 
@@ -84,25 +82,23 @@ class JamNoticeBody extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = context.jamColors;
-    final style =
-        Theme.of(context).snackBarTheme.contentTextStyle ??
-        Theme.of(context).textTheme.bodyMedium!.copyWith(color: colors.canvas);
-
     return Semantics(
       liveRegion: true,
       label: '${kind.semanticPrefix}$message',
       excludeSemantics: true,
       child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(kind.glyph, size: 20, color: kind.tint(colors)),
-          const SizedBox(width: JamSpace.md),
-          Expanded(
+          Icon(kind.glyph, size: 18, color: kind.tint(colors)),
+          const SizedBox(width: JamSpace.sm),
+          Flexible(
             child: Text(
               message,
-              style: style,
-              maxLines: 3,
+              style: context.jamSubheadline.copyWith(
+                color: colors.label,
+                fontWeight: FontWeight.w500,
+              ),
+              maxLines: 2,
               overflow: TextOverflow.ellipsis,
             ),
           ),
@@ -112,11 +108,10 @@ class JamNoticeBody extends StatelessWidget {
   }
 }
 
-/// The whole floating card: the ground, the body, and at most one action.
+/// The capsule: blurred `material`, the body, and at most one tint action.
 ///
-/// Separate from the overlay plumbing so a test — or a wide layout that wants
-/// a docked banner — can render exactly what the app shows without an
-/// `Overlay` in the tree.
+/// Separate from the overlay plumbing so a test, or a wide layout that wants
+/// it docked, can render exactly what the app shows.
 class JamNoticeCard extends StatelessWidget {
   const JamNoticeCard({
     super.key,
@@ -136,38 +131,64 @@ class JamNoticeCard extends StatelessWidget {
     final colors = context.jamColors;
     final label = notice.actionLabel;
     final action = onAction ?? notice.onAction;
+    final hasAction = label != null && notice.onAction != null;
 
-    return Material(
-      color: colors.textPrimary,
-      borderRadius: BorderRadius.circular(JamRadius.md),
-      clipBehavior: Clip.antiAlias,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(
-          JamSpace.lg,
-          JamSpace.md,
-          JamSpace.sm,
-          JamSpace.md,
-        ),
-        child: Row(
-          children: [
-            Expanded(
-              child: JamNoticeBody(message: notice.message, kind: kind),
-            ),
-            if (label != null && notice.onAction != null)
-              Padding(
-                padding: const EdgeInsets.only(left: JamSpace.sm),
-                child: TextButton(
-                  onPressed: action,
-                  style: TextButton.styleFrom(
-                    foregroundColor: colors.highlight,
-                    minimumSize: const Size(44, 44),
+    return JamBlurSurface(
+      shape: const StadiumBorder(),
+      border: BorderSide(
+        color: colors.separator,
+        width: 1 / MediaQuery.devicePixelRatioOf(context),
+      ),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(minHeight: JamMetrics.hitTarget),
+        child: Padding(
+          padding: EdgeInsetsDirectional.fromSTEB(
+            JamSpace.lg,
+            JamSpace.sm,
+            hasAction ? JamSpace.xs : JamSpace.lg,
+            JamSpace.sm,
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Flexible(
+                child: JamNoticeBody(message: notice.message, kind: kind),
+              ),
+              if (hasAction) ...[
+                const SizedBox(width: JamSpace.xs),
+                Semantics(
+                  button: true,
+                  label: label,
+                  onTap: action,
+                  excludeSemantics: true,
+                  child: JamPressable(
+                    onTap: action,
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(
+                        minWidth: JamMetrics.hitTarget,
+                        minHeight: JamMetrics.hitTarget,
+                      ),
+                      child: Center(
+                        widthFactor: 1,
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: JamSpace.md,
+                          ),
+                          child: Text(
+                            label,
+                            style: context.jamSubheadline.copyWith(
+                              color: colors.tint,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
                   ),
-                  child: Text(label),
                 ),
-              )
-            else
-              const SizedBox(width: JamSpace.sm),
-          ],
+              ],
+            ],
+          ),
         ),
       ),
     );
@@ -314,7 +335,6 @@ class _JamNoticeOverlayState extends State<_JamNoticeOverlay>
 
   @override
   Widget build(BuildContext context) {
-    final colors = context.jamColors;
     // The overlay is the window, so the notice clears the home indicator
     // itself; the caller's margin is what it keeps clear *on top of* that.
     return SafeArea(
@@ -331,21 +351,15 @@ class _JamNoticeOverlayState extends State<_JamNoticeOverlay>
                   Tween<Offset>(
                     begin: const Offset(0, _kNoticeRise / 56),
                     end: Offset.zero,
-                  ).chain(CurveTween(curve: JamCurve.base)),
+                  ).chain(CurveTween(curve: JamCurve.standard)),
                 ),
-                child: DecoratedBox(
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(JamRadius.md),
-                    boxShadow: JamShadow.floating(colors),
-                  ),
-                  child: JamNoticeCard(
-                    notice: widget.notice,
-                    kind: widget.kind,
-                    onAction: () {
-                      widget.notice.onAction?.call();
-                      dismiss();
-                    },
-                  ),
+                child: JamNoticeCard(
+                  notice: widget.notice,
+                  kind: widget.kind,
+                  onAction: () {
+                    widget.notice.onAction?.call();
+                    dismiss();
+                  },
                 ),
               ),
             ),

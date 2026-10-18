@@ -5,6 +5,10 @@ library;
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:localjam_app/src/design/theme.dart';
+import 'package:localjam_app/src/design/tokens.dart';
+import 'package:localjam_app/src/widgets/buttons.dart';
+import 'package:localjam_app/src/widgets/list.dart';
+import 'package:localjam_app/src/widgets/section.dart';
 import 'package:localjam_app/src/widgets/sheet.dart';
 
 Widget _host(void Function(BuildContext) onTap, {ThemeData? theme}) =>
@@ -187,5 +191,83 @@ void main() {
 
     expect(find.text('Dark'), findsOneWidget);
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('iOS chrome: 36×5 grabber, centred headline title, Done', (
+    tester,
+  ) async {
+    var done = 0;
+    await tester.pumpWidget(
+      _host(
+        (context) => showJamSheet<void>(
+          context,
+          title: 'People',
+          trailing: JamTextButton(
+            label: JamSheetStrings.done,
+            bold: true,
+            onPressed: () => done++,
+          ),
+          builder: (_) => const SizedBox(height: 40),
+        ),
+      ),
+    );
+    await tester.tap(find.text('Open'));
+    await tester.pumpAndSettle();
+
+    final grabber = find.descendant(
+      of: find.byType(JamSheetGrabber),
+      matching: find.byType(Container),
+    );
+    expect(tester.getSize(grabber), const Size(36, 5));
+    final title = tester.widget<Text>(find.text('People')).style!;
+    expect(title.fontSize, 17);
+    expect(title.fontWeight, FontWeight.w600);
+    final sheetCenter = tester.getCenter(find.byType(JamSheetHeader)).dx;
+    expect(tester.getCenter(find.text('People')).dx, closeTo(sheetCenter, 1));
+    await tester.tap(find.text('Done'));
+    expect(done, 1);
+  });
+
+  testWidgets('a grouped sheet uses the grouped ground and elevated rows', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      _host(
+        (context) => showJamSheet<void>(
+          context,
+          title: 'People',
+          grouped: true,
+          builder: (_) =>
+              const JamSection(children: [JamRow(title: 'Invite People')]),
+        ),
+        theme: jamDarkTheme(),
+      ),
+    );
+    await tester.tap(find.text('Open'));
+    await tester.pumpAndSettle();
+    final grounds = tester
+        .widgetList<ColoredBox>(find.byType(ColoredBox))
+        .map((b) => b.color)
+        .toList();
+    expect(grounds, contains(JamColors.dark.elevatedGroupedBackground));
+    expect(grounds, contains(JamColors.dark.elevatedGroupedSurface));
+  });
+
+  testWidgets('the glass close button pops the sheet', (tester) async {
+    await tester.pumpWidget(
+      _host(
+        (context) => showJamSheet<void>(
+          context,
+          title: 'Invite People',
+          trailing: const JamSheetCloseButton(),
+          builder: (_) => const SizedBox(height: 40),
+        ),
+      ),
+    );
+    await tester.tap(find.text('Open'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byType(JamSheetCloseButton));
+    await tester.pumpAndSettle();
+    expect(find.text('Invite People'), findsNothing);
   });
 }

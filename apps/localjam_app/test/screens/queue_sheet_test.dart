@@ -4,6 +4,7 @@ library;
 
 import 'dart:io';
 
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:localjam_app/src/design/theme.dart';
@@ -236,7 +237,7 @@ void main() {
 
     // Reorderable, and the grip is visible rather than a hidden long-press.
     expect(find.byType(SliverReorderableList), findsOneWidget);
-    expect(find.byIcon(Icons.drag_handle_rounded), findsNWidgets(2));
+    expect(find.byIcon(CupertinoIcons.line_horizontal_3), findsNWidgets(2));
 
     await tester.runAsync(host.leave);
   });
@@ -328,7 +329,7 @@ void main() {
     final add = tester.widget<JamButton>(
       find.widgetWithText(JamButton, QueueSheetStrings.add),
     );
-    expect(add.variant, JamButtonVariant.tertiary);
+    expect(add.variant, JamButtonVariant.plain);
     expect(add.onPressed, isNull);
 
     await tester.runAsync(guest.leave);
@@ -369,7 +370,7 @@ void main() {
     await tester.pump();
 
     // The grip on the last NEXT UP row, dragged onto the one above it.
-    final grip = find.byIcon(Icons.drag_handle_rounded).last;
+    final grip = find.byIcon(CupertinoIcons.line_horizontal_3).last;
     final drag = await tester.startGesture(tester.getCenter(grip));
     await tester.pump(const Duration(milliseconds: 200));
     await drag.moveBy(const Offset(0, -kJamTrackRowHeight));
@@ -476,8 +477,9 @@ void main() {
     final sheet = tester.widget<DraggableScrollableSheet>(
       find.byType(DraggableScrollableSheet),
     );
-    expect(sheet.initialChildSize, 0.82);
-    expect(sheet.maxChildSize, 0.96);
+    // Opens at the large detent, clamped under the status bar.
+    expect(sheet.initialChildSize, sheet.maxChildSize);
+    expect(sheet.maxChildSize, greaterThan(0.9));
     expect(find.text(QueueSheetStrings.title), findsOneWidget);
     expect(tester.takeException(), isNull);
 

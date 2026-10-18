@@ -135,7 +135,7 @@ class _JoinLinkDialogState extends State<JoinLinkDialog> {
               autocorrect: false,
               enableSuggestions: false,
               textInputAction: TextInputAction.go,
-              style: context.jamBody.copyWith(color: colors.textPrimary),
+              style: context.jamBody.copyWith(color: colors.label),
               // The app's filled field, applied explicitly. The stock
               // outline-notch label ("Jam link" cut into a raspberry border)
               // is the one Material tell this dialog had left, and with a
@@ -149,7 +149,7 @@ class _JoinLinkDialogState extends State<JoinLinkDialog> {
                     ? JamJoinLinkStrings.pasted
                     : null,
                 helperStyle: context.jamFootnote.copyWith(
-                  color: colors.textTertiary,
+                  color: colors.tertiaryLabel,
                 ),
               ).applyDefaults(jamFilledInput(colors, text)),
               onChanged: (_) {

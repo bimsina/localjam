@@ -133,7 +133,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
       _pages.animateToPage(
         _index + 1,
         duration: still ? JamDuration.instant : JamDuration.base,
-        curve: JamCurve.base,
+        curve: JamCurve.standard,
       ),
     );
   }
@@ -159,7 +159,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
             gradient: LinearGradient(
               begin: Alignment(-math.cos(angle), -math.sin(angle)),
               end: Alignment(math.cos(angle), math.sin(angle)),
-              colors: const [JamColors.brandRaspberry, Color(0xFF2B1332)],
+              colors: const [Color(0xFFD92C64), Color(0xFF2B1332)],
             ),
           ),
           child: SafeArea(
@@ -180,7 +180,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                           style: TextButton.styleFrom(
                             foregroundColor: Colors.white,
                             minimumSize: const Size(64, 44),
-                            textStyle: context.jamRowTitle,
+                            textStyle: context.jamHeadline,
                           ),
                           child: const Text(OnboardingStrings.skip),
                         ),
@@ -249,7 +249,7 @@ class _WhiteButton extends StatelessWidget {
       onPressed: onPressed,
       style: FilledButton.styleFrom(
         backgroundColor: Colors.white,
-        foregroundColor: JamColors.light.textPrimary,
+        foregroundColor: JamColors.light.label,
         textStyle: Theme.of(context).textTheme.labelLarge,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(JamRadius.md),
@@ -276,13 +276,13 @@ class _Pager extends StatelessWidget {
         for (var i = 0; i < count; i++)
           AnimatedContainer(
             duration: JamDuration.fast,
-            curve: JamCurve.fast,
+            curve: JamCurve.standard,
             margin: const EdgeInsets.only(right: JamSpace.sm),
             width: i == index ? 20 : 8,
             height: 8,
             decoration: BoxDecoration(
               color: Colors.white.withValues(alpha: i == index ? 1 : 0.4),
-              borderRadius: BorderRadius.circular(JamRadius.pill),
+              borderRadius: BorderRadius.circular(JamRadius.capsule),
             ),
           ),
       ],
@@ -322,7 +322,10 @@ class _Panel extends StatelessWidget {
             ),
           ),
           const SizedBox(height: JamSpace.xxl),
-          Text(title, style: context.jamDisplay.copyWith(color: Colors.white)),
+          Text(
+            title,
+            style: context.jamLargeTitle.copyWith(color: Colors.white),
+          ),
           const SizedBox(height: JamSpace.lg),
           Text(
             body,
@@ -500,7 +503,7 @@ class _QueueMock extends StatelessWidget {
                           title,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: context.jamRowTitle.copyWith(
+                          style: context.jamHeadline.copyWith(
                             color: Colors.white,
                           ),
                         ),
@@ -522,13 +525,15 @@ class _QueueMock extends StatelessWidget {
                     children: [
                       Text(
                         OnboardingStrings.addedBy,
-                        style: context.jamCaption.copyWith(
+                        style: context.jamCaption2.copyWith(
                           color: Colors.white.withValues(alpha: 0.6),
                         ),
                       ),
                       Text(
                         who.split(' ').first.toUpperCase(),
-                        style: context.jamCaption.copyWith(color: Colors.white),
+                        style: context.jamCaption2.copyWith(
+                          color: Colors.white,
+                        ),
                       ),
                     ],
                   ),

@@ -1,142 +1,276 @@
-/// The LocalJam type scale.
+/// The LocalJam type scale (DESIGN_SPEC v3 §3).
 ///
-/// One bundled family — Plus Jakarta Sans (Tokotype, OFL 1.1) — instead of the
-/// platform UI face, because the app has a voice of its own and a shared
-/// screen should look the same whoever is holding the phone. Its open
-/// apertures stay warm at a 15 dp byline while ExtraBold holds an
-/// Apple-Music-scale title without reading as a tech logotype, and it ships
-/// real tabular figures, which is what keeps the room timer from jittering.
+/// The platform's own face — SF Pro on iOS/macOS, Roboto on Android, Segoe UI
+/// on Windows, the platform default on Linux — at iOS's text-style sizes. SF's
+/// tracking table is applied on Apple platforms only; other faces track at 0.
 ///
-/// The scale is set tight and confident: hard negative tracking on the big
-/// titles, a comfortable 16 dp body, and generous row text, because this UI
-/// gets read at arm's length in a moving vehicle.
+/// Screens never hand-roll a size: they read a named getter
+/// (`context.jamBody`, `context.jamFootnote`, …) and `copyWith` a colour.
+/// Every getter resolves in [JamColors.label]; secondary text says so at the
+/// call site (`context.jamSubheadline.copyWith(color: colors.secondaryLabel)`).
 library;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
-/// The bundled family. Declared once here and applied once in `theme.dart`.
-const String jamFontFamily = 'Plus Jakarta Sans';
+import 'tokens.dart';
 
-/// Builds the [TextTheme] for a palette's primary/secondary text colours.
-TextTheme buildJamTextTheme({
-  required Color primary,
-  required Color secondary,
-}) {
-  TextStyle style(
-    double size,
-    FontWeight weight, {
-    Color? color,
-    double tracking = 0,
-    double? height,
-    List<FontFeature>? features,
-  }) => TextStyle(
-    // Named here rather than left to `ThemeData(fontFamily:)`. That applies
-    // the family to the *theme's* text theme, but every component theme in
-    // `theme.dart` (app bar titles, dialogs, snackbars, tooltips) is built
-    // from this TextTheme value directly, before the apply runs — so an
-    // unnamed family there fell back to the system face and app-bar titles
-    // shipped in San Francisco / Roboto.
-    fontFamily: jamFontFamily,
-    fontSize: size,
-    fontWeight: weight,
-    color: color ?? primary,
-    letterSpacing: tracking,
-    height: height,
-    fontFeatures: features,
+/// Whether [platform] renders in SF and so takes SF's tracking table.
+bool jamIsApple(TargetPlatform platform) =>
+    platform == TargetPlatform.iOS || platform == TargetPlatform.macOS;
+
+/// The resolved type scale, carried on the theme as an extension.
+@immutable
+class JamTypeScale extends ThemeExtension<JamTypeScale> {
+  const JamTypeScale({
+    required this.largeTitle,
+    required this.title1,
+    required this.title2,
+    required this.title3,
+    required this.headline,
+    required this.body,
+    required this.callout,
+    required this.subheadline,
+    required this.footnote,
+    required this.caption1,
+    required this.caption2,
+  });
+
+  /// 34/41 bold. Large nav titles, onboarding.
+  final TextStyle largeTitle;
+
+  /// 28/34 bold.
+  final TextStyle title1;
+
+  /// 22/28 bold. Empty-state and terminal-state titles, detail headers.
+  final TextStyle title2;
+
+  /// 20/25 semibold. Section titles ("Recent"), the Now Playing title.
+  final TextStyle title3;
+
+  /// 17/22 semibold. Inline nav titles, sheet titles, alert titles.
+  final TextStyle headline;
+
+  /// 17/22 regular. Row titles, running text.
+  final TextStyle body;
+
+  /// 16/21 regular.
+  final TextStyle callout;
+
+  /// 15/20 regular. Row subtitles.
+  final TextStyle subheadline;
+
+  /// 13/18 regular. Section headers and footers, alert messages.
+  final TextStyle footnote;
+
+  /// 12/16 regular. Times under the scrubber.
+  final TextStyle caption1;
+
+  /// 11/13 regular.
+  final TextStyle caption2;
+
+  List<TextStyle> get _all => [
+    largeTitle,
+    title1,
+    title2,
+    title3,
+    headline,
+    body,
+    callout,
+    subheadline,
+    footnote,
+    caption1,
+    caption2,
+  ];
+
+  @override
+  JamTypeScale copyWith({
+    TextStyle? largeTitle,
+    TextStyle? title1,
+    TextStyle? title2,
+    TextStyle? title3,
+    TextStyle? headline,
+    TextStyle? body,
+    TextStyle? callout,
+    TextStyle? subheadline,
+    TextStyle? footnote,
+    TextStyle? caption1,
+    TextStyle? caption2,
+  }) => JamTypeScale(
+    largeTitle: largeTitle ?? this.largeTitle,
+    title1: title1 ?? this.title1,
+    title2: title2 ?? this.title2,
+    title3: title3 ?? this.title3,
+    headline: headline ?? this.headline,
+    body: body ?? this.body,
+    callout: callout ?? this.callout,
+    subheadline: subheadline ?? this.subheadline,
+    footnote: footnote ?? this.footnote,
+    caption1: caption1 ?? this.caption1,
+    caption2: caption2 ?? this.caption2,
   );
 
-  return TextTheme(
-    // The ceremonial sizes: onboarding, the jam-started moment, an empty home.
-    displayLarge: style(40, FontWeight.w800, tracking: -1.2, height: 1.05),
-    // Screen titles.
-    headlineLarge: style(32, FontWeight.w800, tracking: -0.8, height: 1.12),
-    // The now-playing track title.
-    headlineMedium: style(26, FontWeight.w700, tracking: -0.6, height: 1.15),
-    // Sheet titles and terminal-state titles.
-    headlineSmall: style(22, FontWeight.w700, tracking: -0.4, height: 1.20),
-    // Section headings and panel headers.
-    titleLarge: style(19, FontWeight.w700, tracking: -0.3, height: 1.25),
-    // Track and peer row titles, the room bar's title.
-    titleMedium: style(17, FontWeight.w600, tracking: -0.2, height: 1.30),
-    // Segmented buttons and inline labels.
-    titleSmall: style(15, FontWeight.w600, tracking: -0.1, height: 1.30),
-    // Running text and dialog bodies.
-    bodyLarge: style(16, FontWeight.w400, height: 1.45),
-    // Row bylines.
-    bodyMedium: style(15, FontWeight.w400, color: secondary, height: 1.40),
-    // Footnotes, counts, the sync label.
-    bodySmall: style(13, FontWeight.w400, color: secondary, height: 1.35),
-    // Button labels.
-    labelLarge: style(16, FontWeight.w700, tracking: 0.1, height: 1.20),
-    // Chip labels.
-    labelMedium: style(
-      13,
-      FontWeight.w600,
-      color: secondary,
-      tracking: 0.1,
-      height: 1.20,
-    ),
-    // Micro labels — always rendered uppercase at the call site.
-    labelSmall: style(
-      11,
-      FontWeight.w700,
-      color: secondary,
-      tracking: 0.6,
-      height: 1.20,
-    ),
+  @override
+  JamTypeScale lerp(covariant JamTypeScale? other, double t) {
+    if (other == null) return this;
+    final a = _all;
+    final b = other._all;
+    TextStyle at(int i) => TextStyle.lerp(a[i], b[i], t)!;
+    return JamTypeScale(
+      largeTitle: at(0),
+      title1: at(1),
+      title2: at(2),
+      title3: at(3),
+      headline: at(4),
+      body: at(5),
+      callout: at(6),
+      subheadline: at(7),
+      footnote: at(8),
+      caption1: at(9),
+      caption2: at(10),
+    );
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      other is JamTypeScale && listEquals(other._all, _all);
+
+  @override
+  int get hashCode => Object.hashAll(_all);
+}
+
+/// Builds the scale for [platform], in [color].
+JamTypeScale buildJamTypeScale({
+  required TargetPlatform platform,
+  required Color color,
+}) {
+  final apple = jamIsApple(platform);
+  // The face itself comes from the platform typography so it is *named* (a
+  // style with no family resolves through DefaultTextStyle, which outside a
+  // Material ancestor is the engine fallback). On iOS SF switches to its
+  // Display cut at 20 pt and up, exactly as UIKit does.
+  final platformBase = Typography.material2021(
+    platform: platform,
+  ).black.bodyMedium!;
+
+  TextStyle style(
+    double size,
+    double lineHeight,
+    FontWeight weight,
+    double tracking,
+  ) {
+    final String? family;
+    if (platform == TargetPlatform.iOS) {
+      family = size >= 20 ? 'CupertinoSystemDisplay' : 'CupertinoSystemText';
+    } else {
+      family = platformBase.fontFamily;
+    }
+    return TextStyle(
+      inherit: true,
+      fontFamily: family,
+      fontFamilyFallback: platformBase.fontFamilyFallback,
+      fontSize: size,
+      height: lineHeight / size,
+      fontWeight: weight,
+      letterSpacing: apple ? tracking : 0,
+      color: color,
+      decoration: TextDecoration.none,
+      leadingDistribution: TextLeadingDistribution.even,
+    );
+  }
+
+  return JamTypeScale(
+    largeTitle: style(34, 41, FontWeight.w700, 0.4),
+    title1: style(28, 34, FontWeight.w700, 0.38),
+    title2: style(22, 28, FontWeight.w700, -0.26),
+    title3: style(20, 25, FontWeight.w600, -0.45),
+    headline: style(17, 22, FontWeight.w600, -0.43),
+    body: style(17, 22, FontWeight.w400, -0.43),
+    callout: style(16, 21, FontWeight.w400, -0.31),
+    subheadline: style(15, 20, FontWeight.w400, -0.23),
+    footnote: style(13, 18, FontWeight.w400, -0.08),
+    caption1: style(12, 16, FontWeight.w400, 0),
+    caption2: style(11, 13, FontWeight.w400, 0.06),
   );
 }
 
-/// Timers, drift and byte counts: fixed-width digits so a value does not
-/// shuffle its own layout as it ticks. Built off the palette rather than the
-/// context so non-widget code (painters, tests) can reach it too.
-TextStyle jamNumericStyle(Color color) => TextStyle(
-  fontFamily: jamFontFamily,
-  fontSize: 13,
-  fontWeight: FontWeight.w500,
-  color: color,
-  height: 1.20,
-  fontFeatures: const [FontFeature.tabularFigures()],
+/// Maps the scale onto Material's [TextTheme] slots, so stock widgets that
+/// still read the text theme pick up the same sizes.
+TextTheme jamTextThemeFrom(JamTypeScale s) => TextTheme(
+  displayLarge: s.largeTitle,
+  displayMedium: s.title1,
+  displaySmall: s.title2,
+  headlineLarge: s.largeTitle,
+  headlineMedium: s.title1,
+  headlineSmall: s.title2,
+  titleLarge: s.title3,
+  titleMedium: s.headline,
+  titleSmall: s.subheadline.copyWith(fontWeight: FontWeight.w600),
+  bodyLarge: s.body,
+  bodyMedium: s.subheadline,
+  bodySmall: s.footnote,
+  labelLarge: s.headline,
+  labelMedium: s.footnote,
+  labelSmall: s.caption2,
 );
 
-/// Semantic type aliases, so call sites read as design rather than as
-/// Material slot names.
+/// Fixed-width digits for timers, durations, counts.
+TextStyle jamTabular(TextStyle style) =>
+    style.copyWith(fontFeatures: const [FontFeature.tabularFigures()]);
+
+/// Footnote-sized tabular figures in [color], for code that has a palette but
+/// no context (painters, tests).
+TextStyle jamNumericStyle(Color color, {TargetPlatform? platform}) =>
+    jamTabular(
+      buildJamTypeScale(
+        platform: platform ?? defaultTargetPlatform,
+        color: color,
+      ).footnote,
+    );
+
+/// Named type styles. All resolve in `label`; pass a colour with `copyWith`.
 extension JamTypography on BuildContext {
-  TextTheme get _text => Theme.of(this).textTheme;
+  JamTypeScale get jamType =>
+      Theme.of(this).extension<JamTypeScale>() ??
+      buildJamTypeScale(
+        platform: Theme.of(this).platform,
+        color: JamColors.light.label,
+      );
 
-  /// The ceremonial headline: onboarding, the jam-started overlay, the hero
-  /// on an empty home.
-  TextStyle get jamDisplay => _text.displayLarge!;
+  /// 34/41 bold.
+  TextStyle get jamLargeTitle => jamType.largeTitle;
 
-  /// The big screen title ("Nearby", "Past jams", "Start a jam").
-  TextStyle get jamLargeTitle => _text.headlineLarge!;
+  /// 28/34 bold.
+  TextStyle get jamTitle1 => jamType.title1;
 
-  /// The now-playing track title.
-  TextStyle get jamTrackTitle => _text.headlineMedium!;
+  /// 22/28 bold.
+  TextStyle get jamTitle2 => jamType.title2;
 
-  /// A sheet's title, and the title of a terminal state.
-  TextStyle get jamSheetTitle => _text.headlineSmall!;
+  /// 20/25 semibold.
+  TextStyle get jamTitle3 => jamType.title3;
 
-  /// A section heading inside a screen.
-  TextStyle get jamTitle => _text.titleLarge!;
+  /// 17/22 semibold.
+  TextStyle get jamHeadline => jamType.headline;
 
-  /// A list row's primary line (a track title, a person's name).
-  TextStyle get jamRowTitle => _text.titleMedium!;
+  /// 17/22 regular.
+  TextStyle get jamBody => jamType.body;
 
-  /// Running text.
-  TextStyle get jamBody => _text.bodyLarge!;
+  /// 16/21 regular.
+  TextStyle get jamCallout => jamType.callout;
 
-  /// The secondary line under a row title ("added by Silky Puffin").
-  TextStyle get jamByline => _text.bodyMedium!;
+  /// 15/20 regular.
+  TextStyle get jamSubheadline => jamType.subheadline;
 
-  /// Small supporting text.
-  TextStyle get jamFootnote => _text.bodySmall!;
+  /// 13/18 regular.
+  TextStyle get jamFootnote => jamType.footnote;
 
-  /// A micro label. Render the string uppercase — the style only sets the
-  /// tracking that makes uppercase readable.
-  TextStyle get jamCaption => _text.labelSmall!;
+  /// 12/16 regular.
+  TextStyle get jamCaption1 => jamType.caption1;
 
-  /// Durations, drift, counts — anything that must not jitter as it ticks.
+  /// 11/13 regular.
+  TextStyle get jamCaption2 => jamType.caption2;
+
+  /// Footnote in tabular figures, `secondaryLabel` — durations, drift, counts.
   TextStyle get jamNumeric =>
-      jamNumericStyle(_text.bodySmall?.color ?? _text.bodyMedium!.color!);
+      jamTabular(jamType.footnote).copyWith(color: jamColors.secondaryLabel);
 }

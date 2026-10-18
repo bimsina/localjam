@@ -121,7 +121,7 @@ class JamArtworkMosaic extends StatelessWidget {
           width: tile,
           height: tile,
           decoration: BoxDecoration(
-            color: colors.surfaceMuted,
+            color: colors.fillSecondary,
             borderRadius: BorderRadius.circular(JamRadius.artwork(tile)),
           ),
         );
@@ -379,10 +379,9 @@ class _Card extends StatelessWidget {
     return Container(
       clipBehavior: Clip.antiAlias,
       decoration: BoxDecoration(
-        color: colors.surface,
+        color: colors.groupedSurface,
         borderRadius: BorderRadius.circular(JamRadius.lg),
         border: Border.all(color: colors.separator, width: 0.5),
-        boxShadow: JamShadow.raised(colors),
       ),
       child: child,
     );
@@ -447,7 +446,9 @@ class _RecordCard extends StatelessWidget {
               ),
               child: Text(
                 HistoryStrings.more(total - preview.length),
-                style: context.jamFootnote.copyWith(color: colors.textTertiary),
+                style: context.jamFootnote.copyWith(
+                  color: colors.tertiaryLabel,
+                ),
               ),
             ),
           Divider(height: 0.5, thickness: 0.5, color: colors.separator),
@@ -459,7 +460,7 @@ class _RecordCard extends StatelessWidget {
               children: [
                 Row(
                   children: [
-                    JamButton.tertiary(
+                    JamButton.plain(
                       label: HistoryStrings.forget,
                       onPressed: onForget,
                       semanticLabel:
@@ -470,7 +471,7 @@ class _RecordCard extends StatelessWidget {
                     // "Host 0 again" on a record whose files are all gone,
                     // which is a sentence, not a button. What is missing goes
                     // in the footnote under it.
-                    JamButton.primary(
+                    JamButton.filled(
                       label: HistoryStrings.hostAgain,
                       onPressed: replayable == 0 ? null : onHostAgain,
                       semanticLabel:
@@ -487,7 +488,7 @@ class _RecordCard extends StatelessWidget {
                         : HistoryStrings.someLeft(replayable, total),
                     textAlign: TextAlign.end,
                     style: context.jamFootnote.copyWith(
-                      color: colors.textTertiary,
+                      color: colors.tertiaryLabel,
                     ),
                   ),
                 ],
@@ -536,14 +537,14 @@ class _Header extends StatelessWidget {
                           record.sessionName,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: context.jamRowTitle,
+                          style: context.jamHeadline,
                         ),
                       ),
                       const SizedBox(width: JamSpace.sm),
                       Text(
                         jamRelativeTime(record.updatedAt),
                         style: context.jamFootnote.copyWith(
-                          color: colors.textTertiary,
+                          color: colors.tertiaryLabel,
                         ),
                       ),
                     ],
@@ -554,7 +555,9 @@ class _Header extends StatelessWidget {
                     ' · ${HistoryStrings.tracks(total)}',
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: context.jamByline,
+                    style: context.jamSubheadline.copyWith(
+                      color: context.jamColors.secondaryLabel,
+                    ),
                   ),
                   if (record.peerNames.isNotEmpty) ...[
                     const SizedBox(height: JamSpace.sm),
@@ -589,7 +592,7 @@ class _ShimmerCard extends StatelessWidget {
       width: width,
       height: height,
       decoration: BoxDecoration(
-        color: colors.surfaceMuted,
+        color: colors.fillSecondary,
         borderRadius: BorderRadius.circular(JamRadius.xs),
       ),
     );
@@ -598,7 +601,7 @@ class _ShimmerCard extends StatelessWidget {
       child: AnimatedOpacity(
         opacity: lit ? 1 : 0.55,
         duration: _shimmerFade,
-        curve: JamCurve.ambient,
+        curve: JamCurve.standard,
         child: _Card(
           child: Padding(
             padding: const EdgeInsets.all(JamSpace.card),
@@ -611,7 +614,7 @@ class _ShimmerCard extends StatelessWidget {
                       width: 64,
                       height: 64,
                       decoration: BoxDecoration(
-                        color: colors.surfaceMuted,
+                        color: colors.fillSecondary,
                         borderRadius: BorderRadius.circular(
                           JamRadius.artwork(64),
                         ),

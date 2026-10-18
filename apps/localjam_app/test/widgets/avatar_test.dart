@@ -10,8 +10,6 @@ Future<void> pumpAvatar(
   bool dark = false,
 }) {
   final theme = dark ? jamDarkTheme() : jamLightTheme();
-  // An inner Theme, not just MaterialApp's: MaterialApp animates a theme
-  // change, so a single pump would still be halfway through the old palette.
   return tester.pumpWidget(
     MaterialApp(
       theme: theme,
@@ -28,7 +26,7 @@ BoxDecoration decorationOf(WidgetTester tester, Finder finder) =>
 
 void main() {
   group('JamAvatar', () {
-    testWidgets('draws initials in both themes', (tester) async {
+    testWidgets('draws white initials in both themes', (tester) async {
       for (final dark in [false, true]) {
         await pumpAvatar(
           tester,
@@ -36,64 +34,38 @@ void main() {
           dark: dark,
         );
         expect(find.text('SP'), findsOneWidget);
+        final text = tester.widget<Text>(find.text('SP'));
+        expect(text.style!.color, Colors.white);
+        expect(text.style!.fontWeight, FontWeight.w600);
       }
     });
 
-    testWidgets('uses the restated identity colour, per theme', (tester) async {
-      await pumpAvatar(tester, const JamAvatar(name: 'Silky Puffin'));
-      final light = decorationOf(
-        tester,
-        find.descendant(
-          of: find.byType(JamAvatar),
-          matching: find.byType(Container),
-        ),
-      );
-      expect(light.color, JamAvatar.colorFor('Silky Puffin', Brightness.light));
-      expect(HSLColor.fromColor(light.color!).lightness, closeTo(0.44, 0.01));
-
-      await pumpAvatar(
-        tester,
-        const JamAvatar(name: 'Silky Puffin'),
-        dark: true,
-      );
-      final dark = decorationOf(
-        tester,
-        find.descendant(
-          of: find.byType(JamAvatar),
-          matching: find.byType(Container),
-        ),
-      );
-      expect(HSLColor.fromColor(dark.color!).lightness, closeTo(0.66, 0.01));
-    });
-
-    testWidgets('rings the host in accent and you in highlight', (
+    testWidgets('a flat palette colour, no ring, the same in both themes', (
       tester,
     ) async {
       final finder = find.descendant(
         of: find.byType(JamAvatar),
         matching: find.byType(Container),
       );
-
-      await pumpAvatar(
-        tester,
-        const JamAvatar(name: 'Silky Puffin', ring: JamAvatarRing.host),
-      );
-      expect(
-        (decorationOf(tester, finder).border! as Border).top.color,
-        JamColors.light.accent,
-      );
-
-      await pumpAvatar(
-        tester,
-        const JamAvatar(name: 'Silky Puffin', ring: JamAvatarRing.you),
-      );
-      expect(
-        (decorationOf(tester, finder).border! as Border).top.color,
-        JamColors.light.highlight,
-      );
-
       await pumpAvatar(tester, const JamAvatar(name: 'Silky Puffin'));
-      expect(decorationOf(tester, finder).border, isNull);
+      final light = decorationOf(tester, finder);
+      expect(kJamAvatarPalette, contains(light.color));
+      expect(light.border, isNull);
+      expect(light.gradient, isNull);
+
+      await pumpAvatar(
+        tester,
+        const JamAvatar(name: 'Silky Puffin'),
+        dark: true,
+      );
+      expect(decorationOf(tester, finder).color, light.color);
+    });
+
+    test('every palette colour holds white initials at 3:1', () {
+      for (final c in kJamAvatarPalette) {
+        final ratio = 1.05 / (c.computeLuminance() + 0.05);
+        expect(ratio, greaterThanOrEqualTo(3));
+      }
     });
 
     testWidgets('announces the person, not their initials', (tester) async {
@@ -106,50 +78,44 @@ void main() {
   });
 
   group('JamAvatarStack', () {
-    testWidgets('collapses the overflow into a +N chip', (tester) async {
+    testWidgets('shows three faces then +N in secondaryLabel', (tester) async {
       await pumpAvatar(
         tester,
         const JamAvatarStack(
           names: ['One Fox', 'Two Owl', 'Three Bat', 'Four Elk', 'Five Ram'],
         ),
       );
-      expect(find.byType(JamAvatar), findsNWidgets(4));
-      expect(find.text('+1'), findsOneWidget);
+      expect(find.byType(JamAvatar), findsNWidgets(3));
+      expect(find.text('+2'), findsOneWidget);
+      expect(
+        tester.widget<Text>(find.text('+2')).style!.color,
+        JamColors.light.secondaryLabel,
+      );
     });
 
-    testWidgets('overlaps by -0.32 of the diameter', (tester) async {
+    testWidgets('overlaps by 30% with a 2 pt cutout', (tester) async {
       const size = 24.0;
       await pumpAvatar(
         tester,
         const JamAvatarStack(names: ['One Fox', 'Two Owl'], size: size),
       );
-      // Two faces, each with a 2 dp ring, pulled back 0.32 × size.
       const outer = size + 4;
-      const expected = outer + (outer - size * 0.32);
+      const expected = size * 0.7 + outer;
       expect(
         tester.getSize(find.byType(JamAvatarStack)).width,
         closeTo(expected, 0.01),
       );
     });
 
-    testWidgets('rings you over the host, and announces everyone', (
-      tester,
-    ) async {
+    testWidgets('announces everyone', (tester) async {
       final handle = tester.ensureSemantics();
       await pumpAvatar(
         tester,
         const JamAvatarStack(
           names: ['One Fox', 'Two Owl', 'Three Bat'],
-          hostName: 'One Fox',
-          youName: 'Two Owl',
           maxVisible: 2,
         ),
       );
-      final avatars = tester
-          .widgetList<JamAvatar>(find.byType(JamAvatar))
-          .toList();
-      expect(avatars[0].ring, JamAvatarRing.host);
-      expect(avatars[1].ring, JamAvatarRing.you);
       expect(
         find.bySemanticsLabel('One Fox, Two Owl and 1 more'),
         findsOneWidget,

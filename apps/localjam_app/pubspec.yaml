@@ -66,23 +66,6 @@ flutter:
   assets:
     - assets/brand/
 
-  # Plus Jakarta Sans (Tokotype, OFL 1.1) — see assets/fonts/OFL.txt. Roman
-  # weights only; the UI has no italics. Real tabular figures (`tnum`) ship in
-  # every weight, which is what keeps the room timer from jittering.
-  fonts:
-    - family: Plus Jakarta Sans
-      fonts:
-        - asset: assets/fonts/PlusJakartaSans-Regular.ttf
-          weight: 400
-        - asset: assets/fonts/PlusJakartaSans-Medium.ttf
-          weight: 500
-        - asset: assets/fonts/PlusJakartaSans-SemiBold.ttf
-          weight: 600
-        - asset: assets/fonts/PlusJakartaSans-Bold.ttf
-          weight: 700
-        - asset: assets/fonts/PlusJakartaSans-ExtraBold.ttf
-          weight: 800
-
 # App icon: the white headphones-and-mic mark on the raspberry gradient.
 #   dart run flutter_launcher_icons
 flutter_launcher_icons:
@@ -107,12 +90,13 @@ flutter_launcher_icons:
     image_path: "assets/brand/icon_1024.png"
     icon_size: 256
 
-# Launch screen: raspberry (light) / plum (dark) with the white mark centred.
+# Launch screen: system white (light) / black (dark) with the mark centred —
+# raspberry on white, white on black (the same mark, recoloured).
 #   dart run flutter_native_splash:create
 flutter_native_splash:
-  color: "#E63B6F"
-  color_dark: "#2B1332"
-  image: assets/brand/splash_logo.png
+  color: "#FFFFFF"
+  color_dark: "#000000"
+  image: assets/brand/splash_logo_light.png
   image_dark: assets/brand/splash_logo.png
 
   android: true
@@ -120,7 +104,7 @@ flutter_native_splash:
   web: false
 
   android_12:
-    color: "#E63B6F"
-    color_dark: "#2B1332"
-    image: assets/brand/splash_logo_android12.png
+    color: "#FFFFFF"
+    color_dark: "#000000"
+    image: assets/brand/splash_logo_android12_light.png
     image_dark: assets/brand/splash_logo_android12.png

@@ -170,7 +170,9 @@ class JamRoomBar extends StatelessWidget {
             ),
             child: DecoratedBox(
               decoration: BoxDecoration(
-                color: colors.surface.withValues(alpha: isDark ? 0.86 : 0.82),
+                color: colors.groupedSurface.withValues(
+                  alpha: isDark ? 0.86 : 0.82,
+                ),
                 border: floating
                     ? null
                     : Border(
@@ -307,7 +309,7 @@ class _BarRow extends StatelessWidget {
                 title,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: context.jamRowTitle,
+                style: context.jamHeadline,
               ),
               Text(
                 subtitle,
@@ -317,7 +319,9 @@ class _BarRow extends StatelessWidget {
                     ? context.jamFootnote.copyWith(
                         color: context.jamColors.warning,
                       )
-                    : context.jamFootnote,
+                    : context.jamFootnote.copyWith(
+                        color: context.jamColors.secondaryLabel,
+                      ),
               ),
             ],
           ),
@@ -351,7 +355,7 @@ class _ProgressLine extends StatelessWidget {
           child: FractionallySizedBox(
             widthFactor: value.clamp(0.0, 1.0),
             heightFactor: 1,
-            child: ColoredBox(color: colors.accent),
+            child: ColoredBox(color: colors.tint),
           ),
         ),
       ),
@@ -394,12 +398,12 @@ class _TransportButton extends StatelessWidget {
           onPressed: onPressed,
           icon: AnimatedSwitcher(
             duration: noMotion ? JamDuration.instant : JamDuration.fast,
-            switchInCurve: JamCurve.fast,
+            switchInCurve: JamCurve.standard,
             child: Icon(
               playing ? Icons.pause_rounded : Icons.play_arrow_rounded,
               key: ValueKey<bool>(playing),
               size: 30,
-              color: colors.textPrimary,
+              color: colors.label,
             ),
           ),
         ),
@@ -421,7 +425,7 @@ class JamRoomBarArtworkPlaceholder extends StatelessWidget {
     return ExcludeSemantics(
       child: DecoratedBox(
         decoration: BoxDecoration(
-          color: colors.surfaceMuted,
+          color: colors.fillSecondary,
           borderRadius: BorderRadius.circular(
             JamRadius.artwork(JamArtworkSize.bar),
           ),
@@ -429,7 +433,7 @@ class JamRoomBarArtworkPlaceholder extends StatelessWidget {
         child: Icon(
           Icons.music_note_rounded,
           size: 20,
-          color: colors.textTertiary,
+          color: colors.tertiaryLabel,
         ),
       ),
     );
@@ -570,11 +574,11 @@ class _RoomBarState extends State<RoomBar> {
         ? JamRoomBannerStrings.hostAsleep
         : null;
 
-    Widget bar(double? progress) => JamTintBuilder(
+    Widget bar(double? progress) => JamBackdropBuilder(
       engine: engine,
       // The same cache the room screen reads, so minimising the player does
       // not pay for the current cover's tint a second time.
-      cache: session.tints,
+      cache: session.backdrops,
       builder: (context, tint) => JamRoomBar(
         title: item == null ? engine.sessionName : jamDisplayTitle(item),
         subtitle: engine.sessionName,
@@ -587,8 +591,6 @@ class _RoomBarState extends State<RoomBar> {
           names: _roster(engine, session),
           size: JamAvatarSize.attribution,
           maxVisible: _kBarFaces,
-          hostName: _hostName(engine, session),
-          youName: _identity,
         ),
         tint: tint.base,
         floating: widget.floating,
@@ -654,7 +656,9 @@ class _EndedBar extends StatelessWidget {
         child: BackdropFilter(
           filter: ui.ImageFilter.blur(sigmaX: _kBlurSigma, sigmaY: _kBlurSigma),
           child: Material(
-            color: colors.surface.withValues(alpha: isDark ? 0.86 : 0.82),
+            color: colors.groupedSurface.withValues(
+              alpha: isDark ? 0.86 : 0.82,
+            ),
             child: InkWell(
               onTap: () => context.push('/room'),
               child: DecoratedBox(
@@ -679,7 +683,7 @@ class _EndedBar extends StatelessWidget {
                           Icon(
                             Icons.info_outline_rounded,
                             size: 20,
-                            color: colors.textSecondary,
+                            color: colors.secondaryLabel,
                           ),
                           const SizedBox(width: JamSpace.md),
                           Expanded(
@@ -689,17 +693,19 @@ class _EndedBar extends StatelessWidget {
                                   : JamRoomBarStrings.ended,
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
-                              style: context.jamRowTitle,
+                              style: context.jamHeadline,
                             ),
                           ),
                           Text(
                             JamRoomBarStrings.endedAction,
-                            style: context.jamFootnote,
+                            style: context.jamFootnote.copyWith(
+                              color: context.jamColors.secondaryLabel,
+                            ),
                           ),
                           const SizedBox(width: JamSpace.xs),
                           Icon(
                             Icons.chevron_right_rounded,
-                            color: colors.textTertiary,
+                            color: colors.tertiaryLabel,
                           ),
                         ],
                       ),

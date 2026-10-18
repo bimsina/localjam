@@ -111,15 +111,7 @@ class JamPeerRow extends StatelessWidget {
           onTap: onTap,
           child: Row(
             children: [
-              JamAvatar(
-                name: name,
-                size: _avatarSize,
-                ring: isYou
-                    ? JamAvatarRing.you
-                    : role == JamPeerRole.host
-                    ? JamAvatarRing.host
-                    : JamAvatarRing.none,
-              ),
+              JamAvatar(name: name, size: _avatarSize),
               const SizedBox(width: JamSpace.md),
               Expanded(
                 child: Column(
@@ -130,7 +122,7 @@ class JamPeerRow extends StatelessWidget {
                       name,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: context.jamRowTitle,
+                      style: context.jamHeadline,
                     ),
                     ..._detailLine(context, colors),
                   ],
@@ -165,7 +157,7 @@ class JamPeerRow extends StatelessWidget {
                   tooltip: '${JamPeerRowStrings.more} $name',
                   icon: Icon(
                     Icons.more_horiz_rounded,
-                    color: colors.textSecondary,
+                    color: colors.secondaryLabel,
                   ),
                 ),
               ),
@@ -183,7 +175,7 @@ class JamPeerRow extends StatelessWidget {
     final color = switch (readiness) {
       JamPeerReadiness.fetching => colors.warning,
       JamPeerReadiness.missing => colors.danger,
-      _ => colors.textSecondary,
+      _ => colors.secondaryLabel,
     };
     return [
       const SizedBox(height: JamSpace.xxs),
@@ -196,7 +188,7 @@ class JamPeerRow extends StatelessWidget {
               child: CircularProgressIndicator(
                 value: fetchProgress?.clamp(0.0, 1.0),
                 strokeWidth: 2,
-                backgroundColor: colors.surfaceMuted,
+                backgroundColor: colors.fillSecondary,
                 valueColor: AlwaysStoppedAnimation<Color>(colors.warning),
               ),
             ),
@@ -247,12 +239,12 @@ class _RoleBadge extends StatelessWidget {
         vertical: JamSpace.xs,
       ),
       decoration: BoxDecoration(
-        color: colors.accentSoft,
-        borderRadius: BorderRadius.circular(JamRadius.pill),
+        color: colors.tintFill,
+        borderRadius: BorderRadius.circular(JamRadius.capsule),
       ),
       child: Text(
         text,
-        style: context.jamCaption.copyWith(color: colors.accent),
+        style: context.jamCaption2.copyWith(color: colors.tint),
       ),
     );
   }

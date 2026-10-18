@@ -41,7 +41,13 @@ Color _dotColor(WidgetTester tester) {
 void main() {
   testWidgets('idle renders nothing at all', (tester) async {
     await tester.pumpWidget(_host(JamSyncState.idle));
-    expect(find.byType(DecoratedBox), findsNothing);
+    expect(
+      find.descendant(
+        of: find.byType(JamSyncIndicator),
+        matching: find.byType(DecoratedBox),
+      ),
+      findsNothing,
+    );
   });
 
   testWidgets('in sync is a quiet dot and a quiet word', (tester) async {
@@ -50,7 +56,7 @@ void main() {
     // A lone 6 dp dot read as a speck of dust on a review build, so the calm
     // state says so — in `textSecondary`, with no colour of its own.
     expect(find.text(JamSyncStrings.inSync), findsOneWidget);
-    expect(_dotColor(tester), JamColors.light.textSecondary);
+    expect(_dotColor(tester), JamColors.light.secondaryLabel);
     expect(tester.getSize(find.byType(JamSyncIndicator)).height, 44);
   });
 
@@ -68,7 +74,7 @@ void main() {
     await tester.pumpWidget(_host(JamSyncState.catchingUp));
     await tester.pumpAndSettle();
     expect(find.text('Catching up'), findsOneWidget);
-    expect(_dotColor(tester), JamColors.light.highlight);
+    expect(_dotColor(tester), JamColors.light.warning);
     expect(
       tester.widget<Text>(find.text('Catching up')).style!.color,
       JamColors.light.warning,

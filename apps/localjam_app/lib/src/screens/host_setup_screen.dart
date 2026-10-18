@@ -98,7 +98,9 @@ abstract final class HostSetupStrings {
 /// default text size and one and a half at XXL, where the second line was
 /// sliced through the middle.
 double jamPresetDetailHeight(BuildContext context) {
-  final style = context.jamFootnote;
+  final style = context.jamFootnote.copyWith(
+    color: context.jamColors.secondaryLabel,
+  );
   return (MediaQuery.textScalerOf(context).scale(style.fontSize ?? 13) *
               (style.height ?? 1.35) *
               2)
@@ -278,7 +280,7 @@ class _HostSetupScreenState extends State<HostSetupScreen> {
           child: AnimatedOpacity(
             opacity: _starting ? 0.5 : 1,
             duration: reduceMotion ? Duration.zero : JamDuration.base,
-            curve: JamCurve.base,
+            curve: JamCurve.standard,
             // Held to a readable column and centred on anything wider than a
             // phone (§5 "Medium"), the same as Home, Settings and history —
             // an editable heading stretched across a tablet is a form again.
@@ -325,7 +327,7 @@ class _HostSetupScreenState extends State<HostSetupScreen> {
                       header: true,
                       child: Text(
                         HostSetupStrings.guests,
-                        style: context.jamTitle,
+                        style: context.jamTitle3,
                       ),
                     ),
                     const SizedBox(height: JamSpace.md),
@@ -342,7 +344,9 @@ class _HostSetupScreenState extends State<HostSetupScreen> {
                       child: Text(
                         HostSetupStrings.detailFor(_policy),
                         maxLines: 2,
-                        style: context.jamFootnote,
+                        style: context.jamFootnote.copyWith(
+                          color: context.jamColors.secondaryLabel,
+                        ),
                       ),
                     ),
                     const SizedBox(height: JamSpace.section),
@@ -355,7 +359,6 @@ class _HostSetupScreenState extends State<HostSetupScreen> {
                           value: _discoverable,
                           onChanged: (value) =>
                               setState(() => _discoverable = value),
-                          padding: const EdgeInsets.all(JamSpace.card),
                         ),
                       ],
                     ),
@@ -374,14 +377,16 @@ class _HostSetupScreenState extends State<HostSetupScreen> {
                           Expanded(
                             child: Text(
                               HostSetupStrings.music,
-                              style: context.jamTitle,
+                              style: context.jamTitle3,
                             ),
                           ),
                           Text(
                             _paths.isEmpty
                                 ? HostSetupStrings.musicOptional
                                 : HostSetupStrings.trackCount(_paths.length),
-                            style: context.jamFootnote,
+                            style: context.jamFootnote.copyWith(
+                              color: context.jamColors.secondaryLabel,
+                            ),
                           ),
                         ],
                       ),
@@ -390,7 +395,7 @@ class _HostSetupScreenState extends State<HostSetupScreen> {
                     Row(
                       children: [
                         Expanded(
-                          child: JamButton.secondary(
+                          child: JamButton.gray(
                             label: HostSetupStrings.addFiles,
                             icon: Icons.folder_open_rounded,
                             expand: true,
@@ -400,7 +405,7 @@ class _HostSetupScreenState extends State<HostSetupScreen> {
                         if (jamLibraryAvailable) ...[
                           const SizedBox(width: JamSpace.md),
                           Expanded(
-                            child: JamButton.secondary(
+                            child: JamButton.gray(
                               label: HostSetupStrings.library,
                               icon: Icons.library_music_outlined,
                               expand: true,
@@ -423,7 +428,9 @@ class _HostSetupScreenState extends State<HostSetupScreen> {
                     else
                       Text(
                         HostSetupStrings.musicEmpty,
-                        style: context.jamFootnote,
+                        style: context.jamFootnote.copyWith(
+                          color: context.jamColors.secondaryLabel,
+                        ),
                       ),
                   ],
                 ),
@@ -453,7 +460,7 @@ class _HostSetupScreenState extends State<HostSetupScreen> {
           // textTertiary on surface is under 3:1; the control a host needs to
           // undo a mis-pick should not be the faintest thing on the row.
           icon: const Icon(Icons.close_rounded, size: 18),
-          color: colors.textSecondary,
+          color: colors.secondaryLabel,
           tooltip: HostSetupStrings.remove,
           onPressed: () => setState(() => _paths.remove(path)),
         ),
@@ -542,7 +549,7 @@ class _NameFieldState extends State<_NameField> {
                 excludeSemantics: true,
                 child: IconButton(
                   icon: const Icon(Icons.edit_rounded, size: 20),
-                  color: focused ? colors.accent : colors.textTertiary,
+                  color: focused ? colors.tint : colors.tertiaryLabel,
                   tooltip: HostSetupStrings.editName,
                   onPressed: () => _focus.requestFocus(),
                 ),
@@ -553,9 +560,9 @@ class _NameFieldState extends State<_NameField> {
             duration: MediaQuery.disableAnimationsOf(context)
                 ? Duration.zero
                 : JamDuration.fast,
-            curve: JamCurve.fast,
+            curve: JamCurve.standard,
             height: focused ? 1.5 : 1,
-            color: focused ? colors.accent : colors.separator,
+            color: focused ? colors.tint : colors.separator,
           ),
         ],
       ),
@@ -630,7 +637,7 @@ class _PresetCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final colors = context.jamColors;
     final reduceMotion = MediaQuery.disableAnimationsOf(context);
-    final tint = selected ? colors.accent : colors.textSecondary;
+    final tint = selected ? colors.tint : colors.secondaryLabel;
 
     return Semantics(
       button: true,
@@ -643,13 +650,13 @@ class _PresetCard extends StatelessWidget {
         onTap: onTap,
         child: AnimatedContainer(
           duration: reduceMotion ? Duration.zero : JamDuration.fast,
-          curve: JamCurve.fast,
+          curve: JamCurve.standard,
           height: 88,
           decoration: BoxDecoration(
-            color: selected ? colors.accentSoft : colors.surfaceMuted,
+            color: selected ? colors.tintFill : colors.fillSecondary,
             borderRadius: BorderRadius.circular(JamRadius.lg),
             border: Border.all(
-              color: selected ? colors.accent : Colors.transparent,
+              color: selected ? colors.tint : Colors.transparent,
               width: 1.5,
             ),
           ),
@@ -658,7 +665,7 @@ class _PresetCard extends StatelessWidget {
             children: [
               AnimatedSwitcher(
                 duration: reduceMotion ? Duration.zero : JamDuration.fast,
-                switchInCurve: JamCurve.fast,
+                switchInCurve: JamCurve.standard,
                 child: Icon(
                   selected ? icon : idleIcon,
                   key: ValueKey(selected),
@@ -702,7 +709,7 @@ class _StartBar extends StatelessWidget {
         filter: ui.ImageFilter.blur(sigmaX: 24, sigmaY: 24),
         child: DecoratedBox(
           decoration: BoxDecoration(
-            color: colors.surface.withValues(alpha: 0.86),
+            color: colors.groupedSurface.withValues(alpha: 0.86),
             border: Border(
               top: BorderSide(color: colors.separator, width: 0.5),
             ),
@@ -716,7 +723,7 @@ class _StartBar extends StatelessWidget {
                 JamSpace.page,
                 JamSpace.md,
               ),
-              child: JamButton.primary(
+              child: JamButton.filled(
                 label: HostSetupStrings.start,
                 semanticLabel: loading
                     ? HostSetupStrings.starting
@@ -853,15 +860,15 @@ class _Block extends StatelessWidget {
     width: width,
     height: height,
     decoration: BoxDecoration(
-      color: colors.surfaceMuted,
+      color: colors.fillSecondary,
       borderRadius: BorderRadius.circular(radius),
       gradient: LinearGradient(
         begin: Alignment(-1 + 3 * t, 0),
         end: Alignment(-0.4 + 3 * t, 0),
         colors: [
-          colors.surfaceMuted,
-          Color.lerp(colors.surfaceMuted, colors.canvas, 0.7)!,
-          colors.surfaceMuted,
+          colors.fillSecondary,
+          Color.lerp(colors.fillSecondary, colors.background, 0.7)!,
+          colors.fillSecondary,
         ],
         stops: const [0, 0.5, 1],
       ),
@@ -886,7 +893,7 @@ class _NetworkNotice extends StatelessWidget {
         child: _Notice(
           icon: Icons.wifi_off_rounded,
           color: colors.warning,
-          fill: colors.highlightSoft,
+          fill: colors.fillSecondary,
           title: HostSetupStrings.noNetworkTitle,
           detail: HostSetupStrings.noNetworkDetail,
         ),
@@ -897,8 +904,8 @@ class _NetworkNotice extends StatelessWidget {
         padding: const EdgeInsets.only(bottom: JamSpace.section),
         child: _Notice(
           icon: Icons.wifi_tethering_rounded,
-          color: colors.textSecondary,
-          fill: colors.surfaceMuted,
+          color: colors.secondaryLabel,
+          fill: colors.fillSecondary,
           title: HostSetupStrings.hotspotTitle,
           detail: HostSetupStrings.hotspotDetail,
         ),
@@ -945,10 +952,15 @@ class _Notice extends StatelessWidget {
                 children: [
                   Text(
                     title,
-                    style: context.jamRowTitle.copyWith(color: color),
+                    style: context.jamHeadline.copyWith(color: color),
                   ),
                   const SizedBox(height: JamSpace.xxs),
-                  Text(detail, style: context.jamFootnote),
+                  Text(
+                    detail,
+                    style: context.jamFootnote.copyWith(
+                      color: context.jamColors.secondaryLabel,
+                    ),
+                  ),
                 ],
               ),
             ),

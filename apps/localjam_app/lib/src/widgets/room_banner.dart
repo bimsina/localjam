@@ -152,7 +152,7 @@ class JamRoomBanner extends StatelessWidget {
         : TextButton(
             onPressed: action,
             style: TextButton.styleFrom(
-              foregroundColor: colors.accent,
+              foregroundColor: colors.tint,
               minimumSize: const Size(44, 40),
               padding: const EdgeInsets.symmetric(horizontal: JamSpace.md),
               textStyle: context.jamFootnote.copyWith(
@@ -202,7 +202,7 @@ class JamRoomBanner extends StatelessWidget {
       child: Container(
         width: double.infinity,
         constraints: const BoxConstraints(minHeight: 40),
-        color: colors.highlightSoft,
+        color: colors.fillSecondary,
         padding: const EdgeInsets.only(left: JamSpace.page, right: JamSpace.sm),
         child: content,
       ),
