@@ -1,49 +1,87 @@
-/// The §7 manual latency nudge: ±500 ms in 10 ms steps, persisted per output
-/// route by the engine. Positive values play audio earlier (compensating
-/// extra output latency, e.g. Bluetooth headphones). Works against either
-/// [JamHostEngine] or [JamGuestEngine] through the shared [JamEngine] surface.
+/// Sound Offset: the §7 manual latency nudge, ±500 ms in 10 ms steps,
+/// persisted per output route by the engine. Positive values play audio
+/// earlier (compensating extra output latency, e.g. Bluetooth headphones).
+/// Works against either engine through the shared [JamEngine] surface.
 ///
-/// The one number in the app a person can actually act on, so it is the one
-/// number that gets a control instead of a readout.
+/// The one number in the app a person can act on, so it gets a control
+/// rather than a readout: a slider with a step button at each end (fine
+/// adjustment without a steady thumb), the value in tabular figures, and a
+/// Reset.
 library;
 
-import 'package:flutter/material.dart';
+import 'package:flutter/cupertino.dart';
 import 'package:localjam_client/localjam_client.dart';
 
 import '../design/tokens.dart';
 import '../design/typography.dart';
+import 'buttons.dart';
 import 'sheet.dart';
 
 /// Every user-facing string this control can show.
 abstract final class JamNudgeStrings {
-  static const String label = 'Nudge sync';
-  static const String help =
-      'Positive plays earlier, for high-latency outputs like Bluetooth.';
+  static const String title = 'Sound Offset';
+
+  /// Kept for older call sites; the control's name is [title].
+  static const String label = title;
+
+  static const String reset = 'Reset';
+  static const String done = 'Done';
+  static const String earlier = 'Earlier';
+  static const String later = 'Later';
+
+  /// Under the big number on the Sound Offset sheet.
+  static const String playsEarlier = 'Your audio plays earlier';
+  static const String playsLater = 'Your audio plays later';
+  static const String noOffset = 'No offset';
+
+  /// The one footnote: when to reach for this.
+  static const String footnote =
+      'If your headphones sound behind or ahead of everyone else, move the '
+      'slider until you line up. Bluetooth adds a delay LocalJam can’t '
+      'measure. Saved separately for each speaker or pair of headphones.';
+
   static String value(int ms) =>
-      ms == 0 ? '0 ms' : '${ms > 0 ? '+' : ''}$ms ms';
+      ms == 0 ? '0 ms' : '${ms > 0 ? '+' : '−'}${ms.abs()} ms';
 }
 
+/// How [NudgeSlider] presents its value.
+enum NudgeSliderStyle {
+  /// A row: "Sound Offset" and the value, the slider under it — for a
+  /// grouped section (Diagnostics).
+  row,
+
+  /// The value large and centred above the slider — the Sound Offset sheet.
+  hero,
+}
+
+const int _maxMs = 500;
+const int _stepMs = 10;
+
+/// The nudge control. Follows the engine's per-route value; writes it live
+/// while dragging and persists it when the drag ends.
 class NudgeSlider extends StatefulWidget {
-  const NudgeSlider({super.key, required this.engine});
+  const NudgeSlider({
+    super.key,
+    required this.engine,
+    this.style = NudgeSliderStyle.row,
+  });
 
   final JamEngine engine;
+  final NudgeSliderStyle style;
 
   @override
   State<NudgeSlider> createState() => _NudgeSliderState();
 }
 
 class _NudgeSliderState extends State<NudgeSlider> {
-  static const _maxMs = 500;
-  static const _stepMs = 10;
-
   int _ms = 0;
 
   @override
   void initState() {
     super.initState();
     _ms = _clampMs(widget.engine.nudgeUs.value);
-    // The engine restores the persisted nudge asynchronously at startup;
-    // follow whatever value it lands on.
+    // The engine restores the persisted nudge asynchronously at startup and
+    // on every output-route change; follow whatever value it lands on.
     widget.engine.nudgeUs.addListener(_onEngineNudge);
   }
 
@@ -61,61 +99,224 @@ class _NudgeSliderState extends State<NudgeSlider> {
     setState(() => _ms = ms);
   }
 
+  void _drag(double v) {
+    final ms = (v / _stepMs).round() * _stepMs;
+    if (ms == _ms) return;
+    setState(() => _ms = ms);
+    widget.engine.setNudgeUs(ms * 1000, persist: false);
+  }
+
+  void _step(int delta) {
+    final ms = (_ms + delta).clamp(-_maxMs, _maxMs);
+    if (ms == _ms) return;
+    JamHaptics.selection();
+    setState(() => _ms = ms);
+    widget.engine.setNudgeUs(ms * 1000);
+  }
+
   @override
   Widget build(BuildContext context) {
     final colors = context.jamColors;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
+    final value = JamNudgeStrings.value(_ms);
+
+    final slider = Row(
       children: [
-        Row(
-          children: [
-            Text(
-              JamNudgeStrings.label,
-              style: context.jamHeadline.copyWith(color: colors.label),
-            ),
-            const Spacer(),
-            Text(
-              JamNudgeStrings.value(_ms),
-              style: context.jamNumeric.copyWith(color: colors.tint),
-            ),
-          ],
+        JamIconButton(
+          icon: CupertinoIcons.minus,
+          semanticLabel: JamNudgeStrings.later,
+          size: 17,
+          color: colors.secondaryLabel,
+          onPressed: _ms > -_maxMs ? () => _step(-_stepMs) : null,
         ),
-        Semantics(
-          slider: true,
-          label: JamNudgeStrings.label,
-          value: JamNudgeStrings.value(_ms),
-          child: Slider(
-            value: _ms.toDouble(),
-            min: -_maxMs.toDouble(),
-            max: _maxMs.toDouble(),
-            divisions: (2 * _maxMs) ~/ _stepMs,
-            label: JamNudgeStrings.value(_ms),
-            onChanged: (v) {
-              final ms = (v / _stepMs).round() * _stepMs;
-              if (ms == _ms) return;
-              setState(() => _ms = ms);
-              widget.engine.setNudgeUs(ms * 1000, persist: false);
-            },
-            onChangeEnd: (_) => widget.engine.setNudgeUs(_ms * 1000),
+        Expanded(
+          child: Semantics(
+            slider: true,
+            label: JamNudgeStrings.title,
+            value: value,
+            increasedValue: JamNudgeStrings.value(
+              (_ms + _stepMs).clamp(-_maxMs, _maxMs),
+            ),
+            decreasedValue: JamNudgeStrings.value(
+              (_ms - _stepMs).clamp(-_maxMs, _maxMs),
+            ),
+            onIncrease: () => _step(_stepMs),
+            onDecrease: () => _step(-_stepMs),
+            excludeSemantics: true,
+            child: CupertinoSlider(
+              value: _ms.toDouble(),
+              min: -_maxMs.toDouble(),
+              max: _maxMs.toDouble(),
+              divisions: (2 * _maxMs) ~/ _stepMs,
+              // Zero sits in the middle: a fill from the left end would
+              // read as an amount, so the track stays neutral.
+              activeColor: colors.fill,
+              onChanged: _drag,
+              onChangeEnd: (_) => widget.engine.setNudgeUs(_ms * 1000),
+            ),
           ),
         ),
-        Text(
-          JamNudgeStrings.help,
-          style: context.jamFootnote.copyWith(color: colors.tertiaryLabel),
+        JamIconButton(
+          icon: CupertinoIcons.plus,
+          semanticLabel: JamNudgeStrings.earlier,
+          size: 17,
+          color: colors.secondaryLabel,
+          onPressed: _ms < _maxMs ? () => _step(_stepMs) : null,
         ),
       ],
+    );
+
+    switch (widget.style) {
+      case NudgeSliderStyle.row:
+        return Padding(
+          padding: const EdgeInsets.only(top: JamSpace.md, bottom: JamSpace.xs),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ExcludeSemantics(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: JamSpace.lg),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          JamNudgeStrings.title,
+                          style: context.jamBody,
+                        ),
+                      ),
+                      Text(
+                        value,
+                        style: jamTabular(
+                          context.jamBody,
+                        ).copyWith(color: colors.secondaryLabel),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              // The step buttons' 44 hit areas reach into the row inset, so
+              // their glyphs line up with the text above.
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: JamSpace.xxs),
+                child: slider,
+              ),
+            ],
+          ),
+        );
+      case NudgeSliderStyle.hero:
+        final caption = _ms == 0
+            ? JamNudgeStrings.noOffset
+            : _ms > 0
+            ? JamNudgeStrings.playsEarlier
+            : JamNudgeStrings.playsLater;
+        return Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            ExcludeSemantics(
+              child: Text(
+                value,
+                textAlign: TextAlign.center,
+                style: jamTabular(context.jamLargeTitle),
+              ),
+            ),
+            const SizedBox(height: JamSpace.xxs),
+            Text(
+              caption,
+              textAlign: TextAlign.center,
+              style: context.jamSubheadline.copyWith(
+                color: colors.secondaryLabel,
+              ),
+            ),
+            const SizedBox(height: JamSpace.lg),
+            slider,
+          ],
+        );
+    }
+  }
+}
+
+/// Opens the Sound Offset sheet: the value, the slider, Reset and Done, and
+/// one footnote on when to use it.
+Future<void> showSoundOffsetSheet(BuildContext context, JamEngine engine) =>
+    showJamSheet<void>(
+      context,
+      title: JamNudgeStrings.title,
+      leading: _ResetButton(engine: engine),
+      trailing: Builder(
+        builder: (context) => JamTextButton(
+          label: JamNudgeStrings.done,
+          bold: true,
+          onPressed: () => Navigator.of(context).maybePop(),
+        ),
+      ),
+      grouped: true,
+      scrollable: false,
+      builder: (_) =>
+          SingleChildScrollView(child: SoundOffsetPanel(engine: engine)),
+    );
+
+/// The Sound Offset sheet's body.
+class SoundOffsetPanel extends StatelessWidget {
+  const SoundOffsetPanel({super.key, required this.engine});
+
+  final JamEngine engine;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.jamColors;
+    final side = JamSpace.pageFor(MediaQuery.sizeOf(context).width);
+    return Padding(
+      padding: EdgeInsets.fromLTRB(side, JamSpace.xl, side, JamSpace.xxl),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          DecoratedBox(
+            decoration: BoxDecoration(
+              color: colors.elevatedGroupedSurface,
+              borderRadius: BorderRadius.circular(JamRadius.section),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(
+                JamSpace.xs,
+                JamSpace.xxl,
+                JamSpace.xs,
+                JamSpace.md,
+              ),
+              child: NudgeSlider(engine: engine, style: NudgeSliderStyle.hero),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(
+              JamSpace.lg,
+              JamSpace.sectionHeader,
+              JamSpace.lg,
+              0,
+            ),
+            child: Text(
+              JamNudgeStrings.footnote,
+              style: context.jamFootnote.copyWith(color: colors.secondaryLabel),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
 
-/// Opens the Sound Offset sheet: the nudge control on its own.
-///
-/// Placeholder for the redesign; the sheets pass owns the final layout, the
-/// signature stays.
-Future<void> showSoundOffsetSheet(BuildContext context, JamEngine engine) =>
-    showJamSheet<void>(
-      context,
-      title: JamNudgeStrings.label,
-      scrollable: false,
-      builder: (_) => NudgeSlider(engine: engine),
-    );
+/// "Reset", live only while there is an offset to reset.
+class _ResetButton extends StatelessWidget {
+  const _ResetButton({required this.engine});
+
+  final JamEngine engine;
+
+  @override
+  Widget build(BuildContext context) => ValueListenableBuilder<int>(
+    valueListenable: engine.nudgeUs,
+    builder: (context, us, _) => JamTextButton(
+      label: JamNudgeStrings.reset,
+      onPressed: us ~/ 1000 == 0 ? null : () => engine.setNudgeUs(0),
+    ),
+  );
+}

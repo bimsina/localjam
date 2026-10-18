@@ -2,11 +2,12 @@
 /// nearby.
 library;
 
-import 'package:flutter/material.dart';
+import 'package:flutter/cupertino.dart';
+import 'package:flutter/material.dart'
+    show ElevatedButton, MaterialApp, Scaffold, SnackBar, ThemeData;
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:localjam_app/src/design/theme.dart';
-import 'package:localjam_app/src/widgets/dialogs.dart';
 import 'package:localjam_app/src/widgets/join_link_dialog.dart';
 
 const String _link =
@@ -87,7 +88,10 @@ void main() {
     mockClipboard(null);
     await openDialog(tester);
 
-    await tester.enterText(find.byType(TextField), 'https://example.com');
+    await tester.enterText(
+      find.byType(CupertinoTextField),
+      'https://example.com',
+    );
     await tester.pumpAndSettle();
     await tester.tap(find.text(JamJoinLinkStrings.join));
     await tester.pumpAndSettle();
@@ -98,7 +102,7 @@ void main() {
     expect(find.text(JamJoinLinkStrings.title), findsOneWidget);
 
     // ...and typing clears it rather than leaving a stale accusation.
-    await tester.enterText(find.byType(TextField), _link);
+    await tester.enterText(find.byType(CupertinoTextField), _link);
     await tester.pumpAndSettle();
     expect(find.text(JamJoinLinkStrings.invalid), findsNothing);
   });
@@ -110,10 +114,11 @@ void main() {
     await openDialog(tester);
 
     // The confirming action is disabled, not just untappable.
-    final button = tester.widget<JamDialogPrimaryButton>(
-      find.byType(JamDialogPrimaryButton),
+    final button = tester.widget<CupertinoDialogAction>(
+      find.widgetWithText(CupertinoDialogAction, JamJoinLinkStrings.join),
     );
     expect(button.onPressed, isNull);
+    expect(button.isDefaultAction, isTrue);
   });
 
   testWidgets('cancelling answers with nothing, on either palette', (
@@ -125,5 +130,74 @@ void main() {
     await tester.tap(find.text(JamJoinLinkStrings.cancel));
     await tester.pumpAndSettle();
     expect(await pending, isNull);
+  });
+
+  testWidgets('a bad link shows its error in the alert, in danger red', (
+    tester,
+  ) async {
+    mockClipboard(null);
+    await openDialog(tester);
+    expect(find.byType(CupertinoAlertDialog), findsOneWidget);
+    expect(find.text(JamJoinLinkStrings.message), findsOneWidget);
+
+    await tester.enterText(find.byType(CupertinoTextField), 'not a link');
+    await tester.pump();
+    await tester.tap(find.text(JamJoinLinkStrings.join));
+    await tester.pumpAndSettle();
+    final error = tester.widget<Text>(find.text(JamJoinLinkStrings.invalid));
+    expect(error.style!.color, const Color(0xFFFF3B30));
+  });
+
+  group('the deep-link confirmation', () {
+    Future<bool>? answer;
+
+    Future<void> openConfirm(WidgetTester tester, {String? roomName}) async {
+      answer = null;
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: jamLightTheme(),
+          home: Builder(
+            builder: (context) => Scaffold(
+              body: Center(
+                child: ElevatedButton(
+                  onPressed: () =>
+                      answer = confirmLinkJoin(context, roomName: roomName),
+                  child: const Text('open'),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.tap(find.text('open'));
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('names the jam, and Join answers yes', (tester) async {
+      await openConfirm(tester, roomName: "Mia's Jam");
+      expect(find.text("Join Mia's Jam?"), findsOneWidget);
+      expect(find.text(JamJoinLinkStrings.confirmBody), findsOneWidget);
+      expect(find.text(JamJoinLinkStrings.cancel), findsOneWidget);
+      await tester.tap(find.text(JamJoinLinkStrings.join));
+      await tester.pumpAndSettle();
+      expect(await answer, isTrue);
+    });
+
+    testWidgets('without a name it still asks, and Cancel answers no', (
+      tester,
+    ) async {
+      await openConfirm(tester);
+      expect(
+        find.text(
+          JamJoinLinkStrings.confirmTitle(
+            JamJoinLinkStrings.confirmFallbackName,
+          ),
+        ),
+        findsOneWidget,
+      );
+      await tester.tap(find.text(JamJoinLinkStrings.cancel));
+      await tester.pumpAndSettle();
+      expect(await answer, isFalse);
+    });
   });
 }

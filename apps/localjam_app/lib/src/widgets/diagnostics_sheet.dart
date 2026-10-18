@@ -1,46 +1,52 @@
-/// The sync numbers, demoted.
+/// Diagnostics (DESIGN_SPEC v3 §6.6): the sync numbers, as a grouped list of
+/// label/value rows with tabular values, a Copy action in the header, and
+/// the one control that is actionable — Sound Offset, for Bluetooth latency
+/// the engine cannot see past the OS.
 ///
-/// Drift, clock offset, slew and hard-resync counts used to sit on both main
-/// screens. They are debug output: nobody in a van acts on "+3.2 ms". They
-/// live here now, behind a long-press on the ambient sync indicator, together
-/// with the one control that *is* actionable — the manual nudge for Bluetooth
-/// headphone latency, which the engine cannot see past the OS.
-///
-/// Slew and resync *counts* are gone even from here (§6.3): a running total
-/// of corrections is not something anyone can act on, and three numbers with
-/// a fourth that means nothing devalues the two that do.
+/// Slew and resync *counts* stay out: a running total of corrections is not
+/// something anyone can act on.
 library;
 
 import 'dart:async';
 
-import 'package:flutter/material.dart';
+import 'package:flutter/cupertino.dart';
+import 'package:flutter/services.dart';
 import 'package:localjam_client/localjam_client.dart';
 
 import '../design/tokens.dart';
 import '../design/typography.dart';
+import '../state/session_controller.dart';
 import '../util/format.dart';
+import 'buttons.dart';
+import 'list.dart';
 import 'nudge_slider.dart';
+import 'section.dart';
 import 'sheet.dart';
-
-/// The gap above the nudge control, matched to the sheet's other pairs.
-const double _kNudgeGap = 10;
 
 /// Every user-facing string this sheet can show.
 abstract final class JamDiagnosticsStrings {
-  static const String title = 'Sync';
-  static const String clockOffset = 'Clock offset';
-  static const String clockSyncing = 'syncing…';
+  static const String title = 'Diagnostics';
+  static const String copy = 'Copy';
+  static const String done = 'Done';
+  static const String copied = 'Diagnostics Copied';
+
+  static const String syncHeader = 'Sync';
+  static const String clockOffset = 'Clock Offset';
+  static const String clockSyncing = 'Syncing…';
   static const String drift = 'Drift';
-  static const String lastCorrection = 'Last correction';
-  static const String none = 'none';
-  static const String slew = 'slew';
-  static const String hardResync = 'hard resync';
+  static const String lastCorrection = 'Last Correction';
+  static const String none = 'None';
+  static const String slew = 'Slew';
+  static const String hardResync = 'Hard resync';
   static const String empty = '—';
-  static const String playerError = 'Player';
-  static const String delayTitle = 'Headphone delay';
-  static const String delayBody =
-      'Bluetooth adds delay the engine cannot measure. Nudge until you line '
-      'up with the room.';
+
+  static const String playerHeader = 'Player';
+  static const String playerError = 'Last Error';
+
+  static const String playbackHeader = 'Playback';
+  static const String soundOffsetFooter =
+      'Bluetooth adds a delay LocalJam can’t measure. Move the slider '
+      'until you line up with the room.';
 }
 
 /// Opens the diagnostics sheet.
@@ -52,14 +58,78 @@ Future<void> showDiagnosticsSheet(
   return showJamSheet<void>(
     context,
     title: JamDiagnosticsStrings.title,
-    // Min-height, no drag scroll: three figures and a slider do not want a
-    // sheet that fills the screen.
+    leading: Builder(
+      builder: (context) => JamTextButton(
+        label: JamDiagnosticsStrings.copy,
+        onPressed: () => unawaited(
+          copyDiagnostics(context, engine, clockOffsetUs: clockOffsetUs),
+        ),
+      ),
+    ),
+    trailing: Builder(
+      builder: (context) => JamTextButton(
+        label: JamDiagnosticsStrings.done,
+        bold: true,
+        onPressed: () => Navigator.of(context).maybePop(),
+      ),
+    ),
+    grouped: true,
+    // Sized to its content; scrolls rather than clips at large text sizes.
     scrollable: false,
-    builder: (_) =>
-        DiagnosticsSheet(engine: engine, clockOffsetUs: clockOffsetUs),
+    builder: (_) => SingleChildScrollView(
+      child: DiagnosticsSheet(engine: engine, clockOffsetUs: clockOffsetUs),
+    ),
   );
 }
 
+/// The figures, as text: what Copy puts on the clipboard.
+String diagnosticsReport(JamEngine engine, {int? Function()? clockOffsetUs}) {
+  final sample = engine.lastDriftSample;
+  final lines = <String>[
+    if (clockOffsetUs != null)
+      '${JamDiagnosticsStrings.clockOffset}: '
+          '${_clockOffset(clockOffsetUs())}',
+    '${JamDiagnosticsStrings.drift}: ${_drift(sample)}',
+    '${JamDiagnosticsStrings.lastCorrection}: ${_describe(sample?.action)}',
+    '${JamNudgeStrings.title}: '
+        '${JamNudgeStrings.value(engine.nudgeUs.value ~/ 1000)}',
+    if (engine.lastPlayerError.value != null)
+      '${JamDiagnosticsStrings.playerError}: ${engine.lastPlayerError.value}',
+  ];
+  return lines.join('\n');
+}
+
+/// Copies [diagnosticsReport] and says so.
+Future<void> copyDiagnostics(
+  BuildContext context,
+  JamEngine engine, {
+  int? Function()? clockOffsetUs,
+}) async {
+  final session = context.getInheritedWidgetOfExactType<JamSession>()?.notifier;
+  await Clipboard.setData(
+    ClipboardData(
+      text: diagnosticsReport(engine, clockOffsetUs: clockOffsetUs),
+    ),
+  );
+  session?.notify(JamDiagnosticsStrings.copied);
+}
+
+String _clockOffset(int? us) =>
+    us == null ? JamDiagnosticsStrings.clockSyncing : formatDriftMs(us);
+
+String _drift(DriftSample? sample) => sample == null
+    ? JamDiagnosticsStrings.empty
+    : formatDriftMs(sample.errorUs);
+
+String _describe(DriftAction? action) => switch (action) {
+  null => JamDiagnosticsStrings.empty,
+  DriftNone() => JamDiagnosticsStrings.none,
+  DriftSlew(:final rateMultiplier) =>
+    '${JamDiagnosticsStrings.slew} ×${rateMultiplier.toStringAsFixed(3)}',
+  DriftHardResync() => JamDiagnosticsStrings.hardResync,
+};
+
+/// The diagnostics sheet's body.
 class DiagnosticsSheet extends StatefulWidget {
   const DiagnosticsSheet({super.key, required this.engine, this.clockOffsetUs});
 
@@ -96,108 +166,75 @@ class _DiagnosticsSheetState extends State<DiagnosticsSheet> {
     super.dispose();
   }
 
-  String _describe(DriftAction? action) => switch (action) {
-    null => JamDiagnosticsStrings.empty,
-    DriftNone() => JamDiagnosticsStrings.none,
-    DriftSlew(:final rateMultiplier) =>
-      '${JamDiagnosticsStrings.slew} ×${rateMultiplier.toStringAsFixed(3)}',
-    DriftHardResync() => JamDiagnosticsStrings.hardResync,
-  };
-
   @override
   Widget build(BuildContext context) {
     final colors = context.jamColors;
     final engine = widget.engine;
     final sample = engine.lastDriftSample;
-    final offsetUs = widget.clockOffsetUs?.call();
+    final clockOffsetUs = widget.clockOffsetUs;
     final error = engine.lastPlayerError.value;
 
     return Padding(
-      padding: const EdgeInsets.fromLTRB(
-        JamSpace.page,
-        JamSpace.lg,
-        JamSpace.page,
-        JamSpace.xl,
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
+      padding: const EdgeInsets.only(top: JamSpace.sm, bottom: JamSpace.xxl),
+      child: JamSectionList(
         children: [
-          Wrap(
-            spacing: JamSpace.section,
-            runSpacing: JamSpace.md,
+          JamSection(
+            header: JamDiagnosticsStrings.syncHeader,
             children: [
-              if (widget.clockOffsetUs != null)
-                _Cell(
+              if (clockOffsetUs != null)
+                _ValueRow(
                   label: JamDiagnosticsStrings.clockOffset,
-                  value: offsetUs == null
-                      ? JamDiagnosticsStrings.clockSyncing
-                      : formatDriftMs(offsetUs),
+                  value: _clockOffset(clockOffsetUs()),
                 ),
-              _Cell(
+              _ValueRow(
                 label: JamDiagnosticsStrings.drift,
-                value: sample == null
-                    ? JamDiagnosticsStrings.empty
-                    : formatDriftMs(sample.errorUs),
+                value: _drift(sample),
               ),
-              _Cell(
+              _ValueRow(
                 label: JamDiagnosticsStrings.lastCorrection,
                 value: _describe(sample?.action),
               ),
             ],
           ),
-          if (error != null) ...[
-            const SizedBox(height: JamSpace.lg),
-            Text(
-              '${JamDiagnosticsStrings.playerError}: $error',
-              style: context.jamFootnote.copyWith(color: colors.danger),
+          if (error != null)
+            JamSection(
+              header: JamDiagnosticsStrings.playerHeader,
+              children: [
+                JamRow(
+                  title: JamDiagnosticsStrings.playerError,
+                  subtitle: error,
+                  subtitleColor: colors.danger,
+                  subtitleMaxLines: 4,
+                ),
+              ],
             ),
-          ],
-          const SizedBox(height: JamSpace.section),
-          Divider(height: 0.5, color: colors.separator),
-          const SizedBox(height: JamSpace.lg),
-          Text(JamDiagnosticsStrings.delayTitle, style: context.jamTitle3),
-          const SizedBox(height: JamSpace.xs),
-          Text(
-            JamDiagnosticsStrings.delayBody,
-            style: context.jamSubheadline.copyWith(
-              color: colors.secondaryLabel,
-            ),
+          JamSection(
+            header: JamDiagnosticsStrings.playbackHeader,
+            footer: JamDiagnosticsStrings.soundOffsetFooter,
+            children: [NudgeSlider(engine: engine)],
           ),
-          // The nudge used to butt straight against the paragraph above it
-          // while every other pair in this sheet had air between them.
-          const SizedBox(height: _kNudgeGap),
-          NudgeSlider(engine: engine),
         ],
       ),
     );
   }
 }
 
-class _Cell extends StatelessWidget {
-  const _Cell({required this.label, required this.value});
+/// A label with a tabular value on the right.
+class _ValueRow extends StatelessWidget implements JamSelfSeparatingRow {
+  const _ValueRow({required this.label, required this.value});
 
   final String label;
   final String value;
 
   @override
-  Widget build(BuildContext context) {
-    final colors = context.jamColors;
-    return Semantics(
-      label: '$label: $value',
-      excludeSemantics: true,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Text(
-            label,
-            style: context.jamCaption2.copyWith(color: colors.tertiaryLabel),
-          ),
-          const SizedBox(height: JamSpace.xxs),
-          Text(value, style: context.jamNumeric.copyWith(color: colors.label)),
-        ],
-      ),
-    );
-  }
+  Widget build(BuildContext context) => JamRow(
+    title: label,
+    trailing: Text(
+      value,
+      maxLines: 1,
+      style: jamTabular(
+        context.jamBody,
+      ).copyWith(color: context.jamColors.secondaryLabel),
+    ),
+  );
 }

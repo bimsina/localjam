@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:localjam_app/src/design/theme.dart';
 import 'package:localjam_app/src/util/permissions.dart';
+import 'package:localjam_app/src/widgets/buttons.dart';
 import 'package:localjam_app/src/widgets/permission_sheet.dart';
 
 Widget _host(Future<void> Function(BuildContext) onTap, {ThemeData? theme}) =>
@@ -21,10 +22,11 @@ Widget _host(Future<void> Function(BuildContext) onTap, {ThemeData? theme}) =>
     );
 
 void main() {
-  test('the rationales are the copy from permissions.dart', () {
+  test('the bodies are the copy from permissions.dart; titles are Title '
+      'Case', () {
     expect(
       JamPermissionRationale.localNetwork.title,
-      JamPermissionCopy.localNetworkTitle,
+      JamPermissionSheetStrings.localNetworkTitle,
     );
     expect(
       JamPermissionRationale.localNetwork.body,
@@ -32,7 +34,7 @@ void main() {
     );
     expect(
       JamPermissionRationale.notifications.title,
-      JamPermissionCopy.notificationsTitle,
+      JamPermissionSheetStrings.notificationsTitle,
     );
     expect(
       JamPermissionRationale.audioLibrary.body,
@@ -52,16 +54,19 @@ void main() {
     await tester.tap(find.text('Go'));
     await tester.pumpAndSettle();
 
-    expect(find.text(JamPermissionCopy.localNetworkTitle), findsOneWidget);
-    expect(find.text(JamPermissionCopy.localNetworkDetail), findsOneWidget);
     expect(
-      find.text(JamPermissionSheetStrings.doesHeading.toUpperCase()),
+      find.text(JamPermissionSheetStrings.localNetworkTitle),
       findsOneWidget,
     );
+    expect(find.text(JamPermissionCopy.localNetworkDetail), findsOneWidget);
+    // The promise, headed in plain words — never an uppercase label.
+    expect(find.text(JamPermissionSheetStrings.doesHeading), findsOneWidget);
+    expect(find.text(JamPermissionSheetStrings.neverHeading), findsOneWidget);
     expect(
       find.text(JamPermissionSheetStrings.neverHeading.toUpperCase()),
-      findsOneWidget,
+      findsNothing,
     );
+    expect(find.byType(JamButton), findsNWidgets(2));
     expect(find.text(JamPermissionSheetStrings.continueLabel), findsOneWidget);
     expect(find.text(JamPermissionSheetStrings.dismissLabel), findsOneWidget);
   });
