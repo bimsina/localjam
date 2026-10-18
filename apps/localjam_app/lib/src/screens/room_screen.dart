@@ -2294,6 +2294,8 @@ class _OnBackdrop extends StatelessWidget {
       fillPressed: JamNowPlayingColors.pressed,
       tint: JamNowPlayingColors.text,
       tintPressed: JamNowPlayingColors.secondary,
+      danger: JamNowPlayingColors.destructive,
+      warning: JamNowPlayingColors.warning,
     );
     return Theme(
       data: theme.copyWith(

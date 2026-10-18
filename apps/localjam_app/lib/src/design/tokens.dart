@@ -337,6 +337,15 @@ abstract final class JamNowPlayingColors {
   /// white, never an opaque card.
   static const Color groupedRow = Color(0x17FFFFFF);
 
+  /// Destructive *text* on the backdrop ("End Jam" in the docked panel).
+  /// System red is 2–3:1 on a darkened cover; this light red holds 4.5:1
+  /// over the backdrop's brightest allowed ground and still reads as red.
+  static const Color destructive = Color(0xFFFFBAB5);
+
+  /// Warning *text* on the backdrop ("Still loading songs…"), for the same
+  /// reason.
+  static const Color warning = Color(0xFFFFD27A);
+
   /// Hairlines between grouped rows on the backdrop.
   static const Color separator = Color(0x29FFFFFF);
 
