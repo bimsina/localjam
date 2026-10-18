@@ -1,7 +1,11 @@
-/// Diagnostics (DESIGN_SPEC v3 §6.6): the sync numbers, as a grouped list of
-/// label/value rows with tabular values, a Copy action in the header, and
-/// the one control that is actionable — Sound Offset, for Bluetooth latency
-/// the engine cannot see past the OS.
+/// Diagnostics (DESIGN_SPEC v3 §6.6, §10.1, §10.2, §10.5): the sync
+/// numbers, as a grouped list of label/value rows with tabular values.
+///
+/// Sound Offset has one home — its own sheet. Here it is a read-only row
+/// showing the current value that opens that sheet, not a second slider.
+/// Copy lives in the content (the header's leading slot is for Cancel
+/// only) and confirms in place: "Copied" with a checkmark for a moment,
+/// no toast.
 ///
 /// Slew and resync *counts* stay out: a running total of corrections is not
 /// something anyone can act on.
@@ -15,7 +19,6 @@ import 'package:localjam_client/localjam_client.dart';
 
 import '../design/tokens.dart';
 import '../design/typography.dart';
-import '../state/session_controller.dart';
 import '../util/format.dart';
 import 'buttons.dart';
 import 'list.dart';
@@ -26,9 +29,11 @@ import 'sheet.dart';
 /// Every user-facing string this sheet can show.
 abstract final class JamDiagnosticsStrings {
   static const String title = 'Diagnostics';
-  static const String copy = 'Copy';
+  static const String copy = 'Copy Diagnostics';
   static const String done = 'Done';
-  static const String copied = 'Diagnostics Copied';
+
+  /// Copy's label for a moment after it worked.
+  static const String copied = 'Copied';
 
   static const String syncHeader = 'Sync';
   static const String clockOffset = 'Clock Offset';
@@ -37,17 +42,17 @@ abstract final class JamDiagnosticsStrings {
   static const String lastCorrection = 'Last Correction';
   static const String none = 'None';
   static const String slew = 'Slew';
-  static const String hardResync = 'Hard resync';
+  static const String hardResync = 'Resync';
   static const String empty = '—';
 
   static const String playerHeader = 'Player';
   static const String playerError = 'Last Error';
 
   static const String playbackHeader = 'Playback';
-  static const String soundOffsetFooter =
-      'Bluetooth adds a delay LocalJam can’t measure. Move the slider '
-      'until you line up with the room.';
 }
+
+/// How long Copy says "Copied" before it goes back.
+const Duration _copiedFor = Duration(milliseconds: 1500);
 
 /// Opens the diagnostics sheet.
 Future<void> showDiagnosticsSheet(
@@ -58,14 +63,6 @@ Future<void> showDiagnosticsSheet(
   return showJamSheet<void>(
     context,
     title: JamDiagnosticsStrings.title,
-    leading: Builder(
-      builder: (context) => JamTextButton(
-        label: JamDiagnosticsStrings.copy,
-        onPressed: () => unawaited(
-          copyDiagnostics(context, engine, clockOffsetUs: clockOffsetUs),
-        ),
-      ),
-    ),
     trailing: Builder(
       builder: (context) => JamTextButton(
         label: JamDiagnosticsStrings.done,
@@ -99,27 +96,41 @@ String diagnosticsReport(JamEngine engine, {int? Function()? clockOffsetUs}) {
   return lines.join('\n');
 }
 
-/// Copies [diagnosticsReport] and says so.
+/// Copies [diagnosticsReport]. The caller confirms it in place.
 Future<void> copyDiagnostics(
   BuildContext context,
   JamEngine engine, {
   int? Function()? clockOffsetUs,
-}) async {
-  final session = context.getInheritedWidgetOfExactType<JamSession>()?.notifier;
-  await Clipboard.setData(
-    ClipboardData(
-      text: diagnosticsReport(engine, clockOffsetUs: clockOffsetUs),
-    ),
-  );
-  session?.notify(JamDiagnosticsStrings.copied);
+}) => Clipboard.setData(
+  ClipboardData(text: diagnosticsReport(engine, clockOffsetUs: clockOffsetUs)),
+);
+
+/// A signed duration from µs for the diagnostics rows: a real minus sign
+/// (U+2212), milliseconds with one decimal below a second, seconds with
+/// one decimal and grouped thousands above — "−272.4 s", not
+/// "-272391.4 ms". Anything that rounds to zero is unsigned, as in
+/// [formatSignedMs].
+String formatDiagnosticsDuration(int us) {
+  final ms = us / 1000;
+  if (ms.abs() < kJamZeroMs) return '0.0 ms';
+  final sign = ms > 0 ? '+' : '−';
+  final abs = ms.abs();
+  if (abs < 1000) return '$sign${abs.toStringAsFixed(1)} ms';
+  final fixed = (abs / 1000).toStringAsFixed(1);
+  final dot = fixed.indexOf('.');
+  final grouped = fixed
+      .substring(0, dot)
+      .replaceAllMapped(RegExp(r'\B(?=(\d{3})+(?!\d))'), (_) => ',');
+  return '$sign$grouped${fixed.substring(dot)} s';
 }
 
-String _clockOffset(int? us) =>
-    us == null ? JamDiagnosticsStrings.clockSyncing : formatDriftMs(us);
+String _clockOffset(int? us) => us == null
+    ? JamDiagnosticsStrings.clockSyncing
+    : formatDiagnosticsDuration(us);
 
 String _drift(DriftSample? sample) => sample == null
     ? JamDiagnosticsStrings.empty
-    : formatDriftMs(sample.errorUs);
+    : formatDiagnosticsDuration(sample.errorUs);
 
 String _describe(DriftAction? action) => switch (action) {
   null => JamDiagnosticsStrings.empty,
@@ -145,6 +156,8 @@ class DiagnosticsSheet extends StatefulWidget {
 
 class _DiagnosticsSheetState extends State<DiagnosticsSheet> {
   StreamSubscription<DriftSample>? _sub;
+  Timer? _copiedReset;
+  bool _copied = false;
 
   @override
   void initState() {
@@ -162,8 +175,24 @@ class _DiagnosticsSheetState extends State<DiagnosticsSheet> {
   @override
   void dispose() {
     unawaited(_sub?.cancel());
+    _copiedReset?.cancel();
     widget.engine.lastPlayerError.removeListener(_onError);
     super.dispose();
+  }
+
+  Future<void> _copy() async {
+    await copyDiagnostics(
+      context,
+      widget.engine,
+      clockOffsetUs: widget.clockOffsetUs,
+    );
+    if (!mounted) return;
+    JamHaptics.selection();
+    _copiedReset?.cancel();
+    setState(() => _copied = true);
+    _copiedReset = Timer(_copiedFor, () {
+      if (mounted) setState(() => _copied = false);
+    });
   }
 
   @override
@@ -210,8 +239,35 @@ class _DiagnosticsSheetState extends State<DiagnosticsSheet> {
             ),
           JamSection(
             header: JamDiagnosticsStrings.playbackHeader,
-            footer: JamDiagnosticsStrings.soundOffsetFooter,
-            children: [NudgeSlider(engine: engine)],
+            children: [
+              // Read-only here: the one place to change it is its own sheet.
+              ValueListenableBuilder<int>(
+                valueListenable: engine.nudgeUs,
+                builder: (context, us, _) => JamRow(
+                  title: JamNudgeStrings.title,
+                  value: JamNudgeStrings.value(us ~/ 1000),
+                  chevron: true,
+                  onTap: () => unawaited(showSoundOffsetSheet(context, engine)),
+                ),
+              ),
+            ],
+          ),
+          JamSection(
+            children: [
+              Semantics(
+                liveRegion: _copied,
+                child: JamRow(
+                  title: _copied
+                      ? JamDiagnosticsStrings.copied
+                      : JamDiagnosticsStrings.copy,
+                  icon: _copied
+                      ? CupertinoIcons.checkmark
+                      : CupertinoIcons.doc_on_doc,
+                  tinted: true,
+                  onTap: () => unawaited(_copy()),
+                ),
+              ),
+            ],
           ),
         ],
       ),

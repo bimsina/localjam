@@ -4,9 +4,11 @@
 /// Works against either engine through the shared [JamEngine] surface.
 ///
 /// The one number in the app a person can act on, so it gets a control
-/// rather than a readout: a slider with a step button at each end (fine
-/// adjustment without a steady thumb), the value in tabular figures, and a
-/// Reset.
+/// rather than a readout: a two-way slider in the Balance pattern — a tick
+/// at zero, the ends labelled Later and Earlier — with a step button at
+/// each end (fine adjustment without a steady thumb), the value in tabular
+/// figures, and Reset under it while there is something to reset. The
+/// sheet's header holds only Done (§10.2).
 library;
 
 import 'package:flutter/cupertino.dart';
@@ -56,6 +58,10 @@ enum NudgeSliderStyle {
 
 const int _maxMs = 500;
 const int _stepMs = 10;
+
+/// The zero mark behind the track: 1.5 × 14, centred.
+const double _zeroTickWidth = 1.5;
+const double _zeroTickHeight = 14;
 
 /// The nudge control. Follows the engine's per-route value; writes it live
 /// while dragging and persists it when the drag ends.
@@ -119,7 +125,69 @@ class _NudgeSliderState extends State<NudgeSlider> {
     final colors = context.jamColors;
     final value = JamNudgeStrings.value(_ms);
 
+    final track = Semantics(
+      slider: true,
+      label: JamNudgeStrings.title,
+      value: value,
+      increasedValue: JamNudgeStrings.value(
+        (_ms + _stepMs).clamp(-_maxMs, _maxMs),
+      ),
+      decreasedValue: JamNudgeStrings.value(
+        (_ms - _stepMs).clamp(-_maxMs, _maxMs),
+      ),
+      onIncrease: () => _step(_stepMs),
+      onDecrease: () => _step(-_stepMs),
+      excludeSemantics: true,
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          // Zero, marked: the track is symmetric, so its centre is 0 ms.
+          // The thumb covers the mark while there is no offset.
+          Container(
+            width: _zeroTickWidth,
+            height: _zeroTickHeight,
+            decoration: BoxDecoration(
+              color: colors.tertiaryLabel,
+              borderRadius: BorderRadius.circular(_zeroTickWidth),
+            ),
+          ),
+          CupertinoSlider(
+            value: _ms.toDouble(),
+            min: -_maxMs.toDouble(),
+            max: _maxMs.toDouble(),
+            divisions: (2 * _maxMs) ~/ _stepMs,
+            // Zero sits in the middle: a fill from the left end would
+            // read as an amount, so the track stays neutral.
+            activeColor: colors.fill,
+            onChanged: _drag,
+            onChangeEnd: (_) => widget.engine.setNudgeUs(_ms * 1000),
+          ),
+        ],
+      ),
+    );
+
+    // The ends say which way is which, as Balance's L and R do.
+    final ends = ExcludeSemantics(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: JamSpace.xs),
+        child: Row(
+          children: [
+            Text(
+              JamNudgeStrings.later,
+              style: context.jamFootnote.copyWith(color: colors.secondaryLabel),
+            ),
+            const Spacer(),
+            Text(
+              JamNudgeStrings.earlier,
+              style: context.jamFootnote.copyWith(color: colors.secondaryLabel),
+            ),
+          ],
+        ),
+      ),
+    );
+
     final slider = Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         JamIconButton(
           icon: CupertinoIcons.minus,
@@ -129,30 +197,13 @@ class _NudgeSliderState extends State<NudgeSlider> {
           onPressed: _ms > -_maxMs ? () => _step(-_stepMs) : null,
         ),
         Expanded(
-          child: Semantics(
-            slider: true,
-            label: JamNudgeStrings.title,
-            value: value,
-            increasedValue: JamNudgeStrings.value(
-              (_ms + _stepMs).clamp(-_maxMs, _maxMs),
-            ),
-            decreasedValue: JamNudgeStrings.value(
-              (_ms - _stepMs).clamp(-_maxMs, _maxMs),
-            ),
-            onIncrease: () => _step(_stepMs),
-            onDecrease: () => _step(-_stepMs),
-            excludeSemantics: true,
-            child: CupertinoSlider(
-              value: _ms.toDouble(),
-              min: -_maxMs.toDouble(),
-              max: _maxMs.toDouble(),
-              divisions: (2 * _maxMs) ~/ _stepMs,
-              // Zero sits in the middle: a fill from the left end would
-              // read as an amount, so the track stays neutral.
-              activeColor: colors.fill,
-              onChanged: _drag,
-              onChangeEnd: (_) => widget.engine.setNudgeUs(_ms * 1000),
-            ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              SizedBox(height: JamMetrics.hitTarget, child: track),
+              ends,
+            ],
           ),
         ),
         JamIconButton(
@@ -230,19 +281,20 @@ class _NudgeSliderState extends State<NudgeSlider> {
             ),
             const SizedBox(height: JamSpace.lg),
             slider,
+            const SizedBox(height: JamSpace.sm),
+            _ResetButton(ms: _ms, onReset: () => _step(-_ms)),
           ],
         );
     }
   }
 }
 
-/// Opens the Sound Offset sheet: the value, the slider, Reset and Done, and
-/// one footnote on when to use it.
+/// Opens the Sound Offset sheet: the value, the slider, Reset under it, one
+/// footnote on when to use it, and Done.
 Future<void> showSoundOffsetSheet(BuildContext context, JamEngine engine) =>
     showJamSheet<void>(
       context,
       title: JamNudgeStrings.title,
-      leading: _ResetButton(engine: engine),
       trailing: Builder(
         builder: (context) => JamTextButton(
           label: JamNudgeStrings.done,
@@ -305,18 +357,35 @@ class SoundOffsetPanel extends StatelessWidget {
   }
 }
 
-/// "Reset", live only while there is an offset to reset.
+/// Reset, under the slider: there only while there is an offset to reset.
+/// Its space stays, so the sheet doesn't jump when it comes and goes.
 class _ResetButton extends StatelessWidget {
-  const _ResetButton({required this.engine});
+  const _ResetButton({required this.ms, required this.onReset});
 
-  final JamEngine engine;
+  final int ms;
+  final VoidCallback onReset;
 
   @override
-  Widget build(BuildContext context) => ValueListenableBuilder<int>(
-    valueListenable: engine.nudgeUs,
-    builder: (context, us, _) => JamTextButton(
-      label: JamNudgeStrings.reset,
-      onPressed: us ~/ 1000 == 0 ? null : () => engine.setNudgeUs(0),
-    ),
-  );
+  Widget build(BuildContext context) {
+    final shown = ms != 0;
+    return ExcludeSemantics(
+      excluding: !shown,
+      child: IgnorePointer(
+        ignoring: !shown,
+        child: AnimatedOpacity(
+          opacity: shown ? 1 : 0,
+          duration: MediaQuery.disableAnimationsOf(context)
+              ? Duration.zero
+              : JamDuration.fast,
+          child: Center(
+            child: JamButton.plain(
+              label: JamNudgeStrings.reset,
+              size: JamButtonSize.small,
+              onPressed: onReset,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }
