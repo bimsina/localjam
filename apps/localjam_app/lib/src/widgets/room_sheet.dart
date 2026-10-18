@@ -571,10 +571,15 @@ JamSection _section({
       )
     : JamSection(header: header, footer: footer, children: children);
 
+/// System red lifted toward white: ≥ 4.5:1 on the backdrop under its
+/// overlay, where `danger` itself drops to about 2.7:1 on a vivid cover.
+const Color _backdropDanger = Color(0xFFFFA8A0);
+
 /// [base] with the Now Playing backdrop's colours: white text at the
 /// backdrop's secondary and tertiary strengths, white for what can be
 /// tapped (as on the rest of Now Playing), see-through row grounds and a
-/// white press highlight. Switches stay green; destructive stays red.
+/// white press highlight. Switches stay green; destructive stays red, lifted
+/// to [_backdropDanger] so End Jam still reads on a saturated cover.
 ThemeData _themeForBackdrop(ThemeData base) {
   final colors = (base.extension<JamColors>() ?? JamColors.dark).copyWith(
     groupedSurface: JamFixedColors.clear,
@@ -586,6 +591,7 @@ ThemeData _themeForBackdrop(ThemeData base) {
     fillPressed: JamNowPlayingColors.pressed,
     tint: JamNowPlayingColors.text,
     tintPressed: JamNowPlayingColors.fill,
+    danger: _backdropDanger,
   );
   return base.copyWith(
     extensions: [

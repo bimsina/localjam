@@ -361,6 +361,8 @@ void main() {
     expect(colors.label, JamNowPlayingColors.text);
     expect(colors.secondaryLabel, JamNowPlayingColors.secondary);
     expect(colors.groupedSurface.a, 0);
+    // End Jam is lifted off system red, which sinks into a vivid cover.
+    expect(colors.danger, isNot(JamColors.dark.danger));
     final invite = tester.widget<Text>(
       find.text(RoomSheetStrings.invitePeople),
     );
