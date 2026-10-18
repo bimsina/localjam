@@ -6,7 +6,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:localjam_app/src/design/theme.dart';
 import 'package:localjam_app/src/design/tokens.dart';
-import 'package:localjam_app/src/widgets/buttons.dart';
 import 'package:localjam_app/src/widgets/list.dart';
 import 'package:localjam_app/src/widgets/section.dart';
 import 'package:localjam_app/src/widgets/sheet.dart';
@@ -33,7 +32,7 @@ void main() {
         (context) => showJamSheet<void>(
           context,
           title: 'Queue',
-          trailing: const Text('Add'),
+          actions: JamSheetActions.confirm(label: 'Add', onConfirm: () {}),
           builder: (_) => const Text('Nothing queued'),
         ),
       ),
@@ -202,11 +201,7 @@ void main() {
         (context) => showJamSheet<void>(
           context,
           title: 'People',
-          trailing: JamTextButton(
-            label: JamSheetStrings.done,
-            bold: true,
-            onPressed: () => done++,
-          ),
+          actions: JamSheetActions.done(onDone: () => done++),
           builder: (_) => const SizedBox(height: 40),
         ),
       ),
@@ -418,7 +413,7 @@ void main() {
         (context) => showJamSheet<void>(
           context,
           title: 'Invite People',
-          trailing: const JamSheetCloseButton(),
+          actions: const JamSheetActions.close(),
           builder: (_) => const SizedBox(height: 40),
         ),
       ),

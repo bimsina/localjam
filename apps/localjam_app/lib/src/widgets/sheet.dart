@@ -24,8 +24,8 @@
 /// the sheet's action verb (Start, Join); a sheet that only closes has a
 /// glass xmark there instead, never both an xmark and Done. Anything else —
 /// Copy, Reset — lives in the content, not the header. [JamSheetActions]
-/// can only say legal things: pass one to [showJamSheet] (or
-/// [JamSheetHeader]) rather than hand-placing `leading` / `trailing`.
+/// can only say legal things, and is the only way to fill the slots: pass
+/// one to [showJamSheet], [JamSheetScaffold] or [JamSheetHeader].
 ///
 /// Ground: `elevated`, or for sheets that host grouped rows
 /// `elevatedGroupedBackground` with `elevatedGroupedSurface` rows. No
@@ -317,7 +317,8 @@ class JamSheetActions {
       onConfirm = null,
       onCancel = null,
       showCancel = false,
-      busy = false;
+      busy = false,
+      busyLabel = null;
 
   /// A trailing semibold **Done** ([label]). [onDone] defaults to popping
   /// the sheet.
@@ -329,7 +330,8 @@ class JamSheetActions {
   }) : _kind = _JamSheetActionKind.done,
        onConfirm = onDone,
        onClose = null,
-       busy = false;
+       busy = false,
+       busyLabel = null;
 
   /// Leading **Cancel**, trailing semibold [label] ("Start"). A null
   /// [onConfirm] disables the verb; [busy] swaps it for a spinner and
@@ -339,6 +341,7 @@ class JamSheetActions {
     required this.onConfirm,
     this.onCancel,
     this.busy = false,
+    this.busyLabel,
   }) : _kind = _JamSheetActionKind.confirm,
        showCancel = true,
        onClose = null;
@@ -363,6 +366,9 @@ class JamSheetActions {
   /// The verb is running: a spinner in its place, Cancel disabled.
   final bool busy;
 
+  /// What the spinner announces ("Starting"); defaults to [label].
+  final String? busyLabel;
+
   /// The leading slot, or null for none.
   Widget? leading(BuildContext context) {
     if (!showCancel) return null;
@@ -385,7 +391,7 @@ class JamSheetActions {
     _JamSheetActionKind.confirm =>
       busy
           ? Semantics(
-              label: label,
+              label: busyLabel ?? label,
               liveRegion: true,
               child: const SizedBox(
                 width: JamMetrics.hitTarget,
@@ -400,29 +406,19 @@ class JamSheetActions {
 /// A sheet's header row: leading slot left, centred headline [title],
 /// trailing slot right; a hairline under it once [scrolledUnder].
 ///
-/// Prefer [actions] — it can only express the header rule (§10.2).
-/// [leading] / [trailing] still work for older call sites and are ignored
-/// when [actions] is given.
+/// The slots come only from [actions], which can only express the header
+/// rule (§10.2).
 class JamSheetHeader extends StatelessWidget {
   const JamSheetHeader({
     super.key,
     required this.title,
-    this.leading,
-    this.trailing,
     this.actions,
     this.scrolledUnder = false,
   });
 
   final String title;
 
-  /// "Cancel" (`JamTextButton`) or nothing. Superseded by [actions].
-  final Widget? leading;
-
-  /// "Done" (`JamTextButton(bold: true)`), the verb, or
-  /// `JamSheetCloseButton`. Superseded by [actions].
-  final Widget? trailing;
-
-  /// The header's slots, by the rule.
+  /// The header's slots, by the rule. Null: a bare title.
   final JamSheetActions? actions;
 
   /// Shows the hairline (content is scrolled under the header).
@@ -432,10 +428,8 @@ class JamSheetHeader extends StatelessWidget {
   Widget build(BuildContext context) {
     final colors = context.jamColors;
     final actions = this.actions;
-    final leading = actions == null ? this.leading : actions.leading(context);
-    final trailing = actions == null
-        ? this.trailing
-        : actions.trailing(context);
+    final leading = actions?.leading(context);
+    final trailing = actions?.trailing(context);
     // The header buttons' *text* sits on the content's margin: a text
     // button carries 4 of padding inside its hit area.
     final width = MediaQuery.sizeOf(context).width;
@@ -488,8 +482,6 @@ class JamSheetScaffold extends StatefulWidget {
   const JamSheetScaffold({
     super.key,
     this.title,
-    this.leading,
-    this.trailing,
     this.actions,
     this.header,
     required this.child,
@@ -501,14 +493,7 @@ class JamSheetScaffold extends StatefulWidget {
   /// Title for the default [JamSheetHeader]. Ignored when [header] is given.
   final String? title;
 
-  /// Leading action for the default header (see [JamSheetHeader.leading]).
-  final Widget? leading;
-
-  /// Trailing action for the default header (see [JamSheetHeader.trailing]).
-  final Widget? trailing;
-
-  /// The default header's slots, by the rule (wins over [leading] /
-  /// [trailing]).
+  /// The default header's slots, by the rule.
   final JamSheetActions? actions;
 
   /// A header of your own, replacing the default one entirely.
@@ -560,8 +545,6 @@ class _JamSheetScaffoldState extends State<JamSheetScaffold> {
             ? null
             : JamSheetHeader(
                 title: widget.title!,
-                leading: widget.leading,
-                trailing: widget.trailing,
                 actions: widget.actions,
                 scrolledUnder: _scrolledUnder,
               ));
@@ -1083,9 +1066,7 @@ Future<T?> showJamModalSheet<T>(
 /// [builder] is built inside the sheet, under a [JamSheetScrollController]
 /// the content attaches its scroll view to when [scrollable].
 ///
-/// [actions] lays out the header by the rule (§10.2) — prefer it to
-/// [leading] / [trailing], which still work and are ignored when [actions]
-/// is given.
+/// [actions] lays out the header by the rule (§10.2).
 ///
 /// [initialChildSize]: [kJamSheetLargeSize] (default) or
 /// [kJamSheetMediumSize]. [grouped] uses the grouped sheet ground for
@@ -1094,8 +1075,6 @@ Future<T?> showJamModalSheet<T>(
 Future<T?> showJamSheet<T>(
   BuildContext context, {
   required String title,
-  Widget? leading,
-  Widget? trailing,
   JamSheetActions? actions,
   required WidgetBuilder builder,
   double initialChildSize = kJamSheetInitialSize,
@@ -1121,8 +1100,6 @@ Future<T?> showJamSheet<T>(
             top: false,
             child: JamSheetScaffold(
               title: title,
-              leading: leading,
-              trailing: trailing,
               actions: actions,
               showHandle: enableDrag,
               child: content,
@@ -1138,8 +1115,6 @@ Future<T?> showJamSheet<T>(
           grouped: grouped,
           child: JamSheetScaffold(
             title: title,
-            leading: leading,
-            trailing: trailing,
             actions: actions,
             showHandle: enableDrag,
             scrollController: scrollController,

@@ -295,13 +295,8 @@ Future<void> showSoundOffsetSheet(BuildContext context, JamEngine engine) =>
     showJamSheet<void>(
       context,
       title: JamNudgeStrings.title,
-      trailing: Builder(
-        builder: (context) => JamTextButton(
-          label: JamNudgeStrings.done,
-          bold: true,
-          onPressed: () => Navigator.of(context).maybePop(),
-        ),
-      ),
+      // The offset applies as it is dragged; Done just closes.
+      actions: const JamSheetActions.done(),
       grouped: true,
       scrollable: false,
       builder: (_) =>

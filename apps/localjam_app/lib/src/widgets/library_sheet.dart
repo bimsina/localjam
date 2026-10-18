@@ -172,14 +172,10 @@ class _JamLibraryPickerState extends State<JamLibraryPicker> {
         title: count == 0
             ? LibrarySheetStrings.title
             : LibrarySheetStrings.selectedCount(count),
-        leading: JamTextButton(
-          label: LibrarySheetStrings.cancel,
-          onPressed: () => Navigator.of(context).pop(),
-        ),
-        trailing: JamTextButton(
+        actions: JamSheetActions.confirm(
           label: LibrarySheetStrings.done,
-          bold: true,
-          onPressed: count == 0 ? null : _submit,
+          onConfirm: count == 0 ? null : _submit,
+          onCancel: () => Navigator.of(context).pop(),
         ),
       ),
       child: CustomScrollView(

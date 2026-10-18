@@ -170,13 +170,7 @@ Future<void> showRoomSheet(
 }) => showJamSheet<void>(
   context,
   title: RoomSheetStrings.title,
-  trailing: Builder(
-    builder: (context) => JamTextButton(
-      label: RoomSheetStrings.done,
-      bold: true,
-      onPressed: () => Navigator.of(context).maybePop(),
-    ),
-  ),
+  actions: const JamSheetActions.done(),
   grouped: true,
   initialChildSize: kJamSheetMediumSize,
   builder: (_) => RoomPanel(
@@ -196,7 +190,7 @@ Future<void> showInviteSheet(
 }) => showJamSheet<void>(
   context,
   title: RoomSheetStrings.inviteTitle,
-  trailing: const JamSheetCloseButton(),
+  actions: const JamSheetActions.close(),
   grouped: true,
   // Sized to its content: the code, two buttons, nothing to scroll — except
   // at large text sizes, where it scrolls rather than clips.
@@ -1040,57 +1034,20 @@ class _Invite extends StatelessWidget {
             onPressed: () => unawaited(_share(context)),
           ),
           const SizedBox(height: JamSpace.sm),
-          _CopyLinkButton(joinUri: joinUri),
+          // Confirms in place: a toast would land on Share Link, the very
+          // control beside it (§10.5).
+          JamCopyButton(
+            label: RoomSheetStrings.copyLink,
+            copiedLabel: RoomSheetStrings.copied,
+            expand: true,
+            onCopy: () async {
+              await Clipboard.setData(ClipboardData(text: joinUri.toString()));
+              JamHaptics.selection();
+              return true;
+            },
+          ),
         ],
       ),
     );
   }
-}
-
-/// How long a copy button says "Copied" before it goes back.
-const Duration kJamCopiedFeedback = Duration(milliseconds: 1500);
-
-/// Copy Link, which confirms in place: for [kJamCopiedFeedback] the label
-/// reads "Copied" behind a checkmark, then returns. No toast — it would land
-/// on Share Link, the very control beside it (§10.5).
-class _CopyLinkButton extends StatefulWidget {
-  const _CopyLinkButton({required this.joinUri});
-
-  final Uri joinUri;
-
-  @override
-  State<_CopyLinkButton> createState() => _CopyLinkButtonState();
-}
-
-class _CopyLinkButtonState extends State<_CopyLinkButton> {
-  Timer? _reset;
-  bool _copied = false;
-
-  Future<void> _copy() async {
-    await Clipboard.setData(ClipboardData(text: widget.joinUri.toString()));
-    if (!mounted) return;
-    JamHaptics.selection();
-    _reset?.cancel();
-    setState(() => _copied = true);
-    _reset = Timer(kJamCopiedFeedback, () {
-      if (mounted) setState(() => _copied = false);
-    });
-  }
-
-  @override
-  void dispose() {
-    _reset?.cancel();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) => Semantics(
-    liveRegion: _copied,
-    child: JamButton.plain(
-      label: _copied ? RoomSheetStrings.copied : RoomSheetStrings.copyLink,
-      icon: _copied ? CupertinoIcons.checkmark : null,
-      expand: true,
-      onPressed: () => unawaited(_copy()),
-    ),
-  );
 }

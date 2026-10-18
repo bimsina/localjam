@@ -524,7 +524,7 @@ class JamCopyButton extends StatelessWidget {
       liveRegion: copied,
       child: JamButton(
         label: copied ? copiedLabel : label,
-        icon: copied ? CupertinoIcons.checkmark_alt : icon,
+        icon: copied ? CupertinoIcons.checkmark : icon,
         variant: variant,
         size: size,
         expand: expand,

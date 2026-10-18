@@ -51,9 +51,6 @@ abstract final class JamDiagnosticsStrings {
   static const String playbackHeader = 'Playback';
 }
 
-/// How long Copy says "Copied" before it goes back.
-const Duration _copiedFor = Duration(milliseconds: 1500);
-
 /// Opens the diagnostics sheet.
 Future<void> showDiagnosticsSheet(
   BuildContext context,
@@ -63,13 +60,8 @@ Future<void> showDiagnosticsSheet(
   return showJamSheet<void>(
     context,
     title: JamDiagnosticsStrings.title,
-    trailing: Builder(
-      builder: (context) => JamTextButton(
-        label: JamDiagnosticsStrings.done,
-        bold: true,
-        onPressed: () => Navigator.of(context).maybePop(),
-      ),
-    ),
+    // Shows figures and changes nothing: close-only (§10.2).
+    actions: const JamSheetActions.close(),
     grouped: true,
     // Sized to its content; scrolls rather than clips at large text sizes.
     scrollable: false,
@@ -156,8 +148,6 @@ class DiagnosticsSheet extends StatefulWidget {
 
 class _DiagnosticsSheetState extends State<DiagnosticsSheet> {
   StreamSubscription<DriftSample>? _sub;
-  Timer? _copiedReset;
-  bool _copied = false;
 
   @override
   void initState() {
@@ -175,7 +165,6 @@ class _DiagnosticsSheetState extends State<DiagnosticsSheet> {
   @override
   void dispose() {
     unawaited(_sub?.cancel());
-    _copiedReset?.cancel();
     widget.engine.lastPlayerError.removeListener(_onError);
     super.dispose();
   }
@@ -186,13 +175,7 @@ class _DiagnosticsSheetState extends State<DiagnosticsSheet> {
       widget.engine,
       clockOffsetUs: widget.clockOffsetUs,
     );
-    if (!mounted) return;
     JamHaptics.selection();
-    _copiedReset?.cancel();
-    setState(() => _copied = true);
-    _copiedReset = Timer(_copiedFor, () {
-      if (mounted) setState(() => _copied = false);
-    });
   }
 
   @override
@@ -254,17 +237,20 @@ class _DiagnosticsSheetState extends State<DiagnosticsSheet> {
           ),
           JamSection(
             children: [
-              Semantics(
-                liveRegion: _copied,
-                child: JamRow(
-                  title: _copied
-                      ? JamDiagnosticsStrings.copied
-                      : JamDiagnosticsStrings.copy,
-                  icon: _copied
-                      ? CupertinoIcons.checkmark
-                      : CupertinoIcons.doc_on_doc,
-                  tinted: true,
-                  onTap: () => unawaited(_copy()),
+              // Confirms in place, the way every copy does (§10.5).
+              JamInPlaceConfirmation(
+                builder: (context, copied, confirm) => Semantics(
+                  liveRegion: copied,
+                  child: JamRow(
+                    title: copied
+                        ? JamDiagnosticsStrings.copied
+                        : JamDiagnosticsStrings.copy,
+                    icon: copied
+                        ? CupertinoIcons.checkmark
+                        : CupertinoIcons.doc_on_doc,
+                    tinted: true,
+                    onTap: () => confirm(_copy),
+                  ),
                 ),
               ),
             ],

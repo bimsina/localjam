@@ -215,7 +215,7 @@ void main() {
     await tester.pump();
     expect(copies, 1);
     expect(find.text(JamConfirmationStrings.copied), findsOneWidget);
-    expect(find.byIcon(CupertinoIcons.checkmark_alt), findsOneWidget);
+    expect(find.byIcon(CupertinoIcons.checkmark), findsOneWidget);
     await tester.pump(kJamInPlaceConfirmation);
     expect(find.text('Copy Link'), findsOneWidget);
   });

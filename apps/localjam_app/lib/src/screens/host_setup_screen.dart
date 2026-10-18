@@ -24,7 +24,6 @@ import '../design/typography.dart';
 import '../state/session_controller.dart';
 import '../util/media_picking.dart';
 import '../util/network.dart';
-import '../widgets/buttons.dart';
 import '../widgets/guests_can.dart';
 import '../widgets/list.dart';
 import '../widgets/section.dart';
@@ -288,25 +287,13 @@ class _HostSetupScreenState extends State<HostSetupScreen> {
     final header = JamSheetHeader(
       title: HostSetupStrings.title,
       scrolledUnder: _scrolledUnder,
-      leading: JamTextButton(
-        label: HostSetupStrings.cancel,
-        onPressed: _starting ? null : _cancel,
+      actions: JamSheetActions.confirm(
+        label: HostSetupStrings.start,
+        onConfirm: () => unawaited(_start()),
+        onCancel: _cancel,
+        busy: _starting,
+        busyLabel: HostSetupStrings.starting,
       ),
-      trailing: _starting
-          ? Semantics(
-              label: HostSetupStrings.starting,
-              liveRegion: true,
-              child: const SizedBox(
-                width: JamMetrics.hitTarget,
-                height: JamMetrics.hitTarget,
-                child: CupertinoActivityIndicator(),
-              ),
-            )
-          : JamTextButton(
-              label: HostSetupStrings.start,
-              bold: true,
-              onPressed: () => unawaited(_start()),
-            ),
     );
 
     final list = ListView(
