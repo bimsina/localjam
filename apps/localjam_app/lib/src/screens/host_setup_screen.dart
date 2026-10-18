@@ -263,7 +263,10 @@ class _HostSetupScreenState extends State<HostSetupScreen> {
       // lands on home instead of back in the form that created it.
       context.pushReplacement('/room');
     } else {
-      session.notify(session.error ?? HostSetupStrings.couldNotStart);
+      session.notify(
+        session.error ?? HostSetupStrings.couldNotStart,
+        tone: JamNoticeTone.error,
+      );
     }
   }
 

@@ -147,7 +147,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (opened || !mounted) return;
     await Clipboard.setData(const ClipboardData(text: kRepositoryUrl));
     if (!mounted) return;
-    JamSession.read(context).notify(SettingsStrings.linkCopied);
+    JamSession.read(
+      context,
+    ).notify(SettingsStrings.linkCopied, tone: JamNoticeTone.done);
   }
 
   /// The licence list: grouped iOS rows, no Material chrome.

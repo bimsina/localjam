@@ -264,7 +264,7 @@ class _HomeScreenState extends State<HomeScreen> {
     setState(() => _probing = null);
     if (!alive) {
       browser.remove(room);
-      session.notify(kJamRoomGone);
+      session.notify(kJamRoomGone, tone: JamNoticeTone.neutral);
       return;
     }
     await _join(room.joinUri, roomName: room.sessionName);
@@ -311,7 +311,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   void _showError(String? message) {
     if (message == null || !mounted) return;
-    JamSession.read(context).notify(message);
+    JamSession.read(context).notify(message, tone: JamNoticeTone.error);
   }
 
   /// Marks which rooms are new, and buzzes for arrivals after the first
