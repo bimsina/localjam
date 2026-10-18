@@ -68,10 +68,15 @@ class JamAvatar extends StatelessWidget {
     this.dimmed = false,
     this.semanticLabel,
     this.initials,
+    this.colorKey,
   });
 
   /// The display name the colour and the initials both derive from.
   final String name;
+
+  /// A stable id (the peer's client id) to pick the colour from instead of
+  /// [name]. Reserved for the per-jam colour assignment (spec §10.10).
+  final String? colorKey;
 
   /// Diameter — see [JamAvatarSize].
   final double size;
@@ -130,10 +135,14 @@ class JamAvatarStack extends StatelessWidget {
     this.cutoutColor,
     this.overflowColor,
     this.semanticLabel,
+    this.colorKeys,
   });
 
   /// Display names, in room order.
   final List<String> names;
+
+  /// Stable ids parallel to [names] (see [JamAvatar.colorKey]).
+  final List<String>? colorKeys;
 
   /// Diameter of each face.
   final double size;
