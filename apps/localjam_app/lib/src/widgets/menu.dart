@@ -10,10 +10,10 @@
 ///   by which side of the screen the trigger is on;
 /// - from a **row** (a trigger wider than most of the screen), against the
 ///   row's trailing edge where its value and chevrons are — never centred
-///   over the row and the controls below it;
-/// - from a **point** ([JamMenuHandle.open] with a position — a long-press
-///   on a list row), right at the finger, so it overlaps the row it acts on
-///   rather than the next one.
+///   over the row and the controls below it.
+///
+/// A long-press on a list row is a *context* menu, not a pull-down: the
+/// queue's lifted-row menu (`queue_sheet.dart`) is the one implementation.
 ///
 /// ```dart
 /// JamMenuButton(
@@ -124,30 +124,6 @@ enum JamMenuAlignment {
   trailing,
 }
 
-/// What a custom trigger ([JamMenuButton.anchorBuilder]) gets to work with.
-class JamMenuHandle {
-  const JamMenuHandle._(this._controller, this.isOpen, this._enabled);
-
-  final MenuController _controller;
-  final bool _enabled;
-
-  /// Whether the menu is showing (highlight the trigger while it is).
-  final bool isOpen;
-
-  /// Opens the menu — at [localPosition] within the trigger when given (the
-  /// point a long-press landed), else against the trigger's edge.
-  void open([Offset? localPosition]) {
-    if (!_enabled) return;
-    _controller.open(position: localPosition);
-  }
-
-  /// Closes the menu.
-  void close() => _controller.close();
-
-  /// Opens a closed menu, closes an open one.
-  void toggle() => isOpen ? close() : open();
-}
-
 /// A "•••" button that opens a pull-down menu, or any custom trigger.
 class JamMenuButton extends StatefulWidget {
   const JamMenuButton({
@@ -159,12 +135,9 @@ class JamMenuButton extends StatefulWidget {
     this.visualSize = JamMetrics.glassButton,
     this.iconColor,
     this.builder,
-    this.anchorBuilder,
     this.enabled = true,
     this.brightness,
     this.alignment = JamMenuAlignment.automatic,
-    this.dimsBackground = false,
-    this.onOpenChanged,
     this.triggerAlignment = Alignment.center,
   });
 
@@ -186,11 +159,6 @@ class JamMenuButton extends StatefulWidget {
   /// A custom trigger: build anything and call `open()` from it.
   final Widget Function(BuildContext context, VoidCallback open)? builder;
 
-  /// A custom trigger that can open at a point (a long-press on a row) and
-  /// knows whether the menu is open. Wins over [builder].
-  final Widget Function(BuildContext context, JamMenuHandle menu)?
-  anchorBuilder;
-
   final bool enabled;
 
   /// Forces the menu's light or dark look (Now Playing's menus are always
@@ -199,13 +167,6 @@ class JamMenuButton extends StatefulWidget {
 
   /// Which edge of the trigger the menu lines up with.
   final JamMenuAlignment alignment;
-
-  /// Dims everything behind the menu — for a context menu on a list row,
-  /// so the row it acts on is unmistakable.
-  final bool dimsBackground;
-
-  /// Told when the menu opens and closes.
-  final ValueChanged<bool>? onOpenChanged;
 
   /// Where a glass trigger's circle sits in its 44 hit box (see
   /// `JamGlassButton.alignment`) — `centerRight` to put the circle's edge
@@ -235,7 +196,6 @@ class _JamMenuButtonState extends State<JamMenuButton>
   void _setOpen(bool open) {
     if (_open == open) return;
     if (mounted) setState(() => _open = open);
-    widget.onOpenChanged?.call(open);
   }
 
   void _onOpenRequested(Offset? position, VoidCallback showOverlay) {
@@ -297,14 +257,12 @@ class _JamMenuButtonState extends State<JamMenuButton>
       info: info,
       animation: _animation,
       alignment: widget.alignment,
-      dimsBackground: widget.dimsBackground,
       children: jamMenuChildren(widget.groups),
     ),
     builder: (context, controller, _) {
-      final handle = JamMenuHandle._(controller, _open, widget.enabled);
-      final anchor = widget.anchorBuilder;
-      if (anchor != null) return anchor(context, handle);
-      final open = widget.enabled ? handle.toggle : null;
+      final VoidCallback? open = widget.enabled
+          ? () => _open ? controller.close() : controller.open()
+          : null;
       final custom = widget.builder;
       if (custom != null) return custom(context, open ?? () {});
       return switch (widget.trigger) {
@@ -341,14 +299,12 @@ class _JamMenuOverlay extends StatelessWidget {
     required this.info,
     required this.animation,
     required this.alignment,
-    required this.dimsBackground,
     required this.children,
   });
 
   final RawMenuOverlayInfo info;
   final Animation<double> animation;
   final JamMenuAlignment alignment;
-  final bool dimsBackground;
   final List<Widget> children;
 
   @override
@@ -368,7 +324,6 @@ class _JamMenuOverlay extends StatelessWidget {
       overlay: overlay,
       safe: safe,
       width: width,
-      point: info.position,
       alignment: alignment,
     );
 
@@ -420,15 +375,6 @@ class _JamMenuOverlay extends StatelessWidget {
 
     return Stack(
       children: [
-        if (dimsBackground)
-          Positioned.fill(
-            child: IgnorePointer(
-              child: FadeTransition(
-                opacity: curved,
-                child: const ColoredBox(color: Color(0x33000000)),
-              ),
-            ),
-          ),
         CustomSingleChildLayout(
           delegate: _MenuLayout(placement: placement, safe: safe),
           child: FadeTransition(
@@ -478,12 +424,9 @@ _Placement _placeMenu({
   required Size overlay,
   required EdgeInsets safe,
   required double width,
-  required Offset? point,
   required JamMenuAlignment alignment,
 }) {
-  final at = point == null ? null : anchor.topLeft + point;
-  final focusX = at?.dx ?? anchor.center.dx;
-  final ratio = focusX / overlay.width;
+  final ratio = anchor.center.dx / overlay.width;
 
   // Horizontal: which edge lines up.
   double left;
@@ -492,7 +435,7 @@ _Placement _placeMenu({
   final side = switch (alignment) {
     JamMenuAlignment.leading => -1,
     JamMenuAlignment.trailing => 1,
-    JamMenuAlignment.automatic when at == null && rowLike => 1,
+    JamMenuAlignment.automatic when rowLike => 1,
     JamMenuAlignment.automatic =>
       ratio < 0.4
           ? -1
@@ -500,31 +443,23 @@ _Placement _placeMenu({
           ? 1
           : 0,
   };
-  if (at != null) {
-    left = switch (side) {
-      -1 => at.dx,
-      1 => at.dx - width,
-      _ => at.dx - width / 2,
-    };
-  } else {
-    // A row's trailing edge is its last control, a little inside the row.
-    final trailingEdge = rowLike ? anchor.right - JamSpace.lg : anchor.right;
-    left = switch (side) {
-      -1 => anchor.left,
-      1 => trailingEdge - width,
-      _ => anchor.center.dx - width / 2,
-    };
-  }
+  // A row's trailing edge is its last control, a little inside the row.
+  final trailingEdge = rowLike ? anchor.right - JamSpace.lg : anchor.right;
+  left = switch (side) {
+    -1 => anchor.left,
+    1 => trailingEdge - width,
+    _ => anchor.center.dx - width / 2,
+  };
   left = left.clamp(
     safe.left,
     math.max(safe.left, overlay.width - safe.right - width),
   );
   growX = side.toDouble();
 
-  // Vertical: below the trigger (or the finger) when there is room for a
-  // typical menu, else above it.
-  final belowY = (at?.dy ?? anchor.bottom) + _kMenuGap;
-  final aboveY = (at?.dy ?? anchor.top) - _kMenuGap;
+  // Vertical: below the trigger when there is room for a typical menu,
+  // else above it.
+  final belowY = anchor.bottom + _kMenuGap;
+  final aboveY = anchor.top - _kMenuGap;
   final roomBelow = overlay.height - safe.bottom - belowY;
   final roomAbove = aboveY - safe.top;
   const typical = 220.0;

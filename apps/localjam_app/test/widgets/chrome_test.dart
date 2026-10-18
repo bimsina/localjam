@@ -539,36 +539,6 @@ void main() {
       expect(menu.top, greaterThan(row.bottom));
     });
 
-    testWidgets('a menu opened at a point opens at the finger', (tester) async {
-      await tester.pumpWidget(
-        _app(
-          Scaffold(
-            body: Align(
-              alignment: Alignment.topLeft,
-              child: JamMenuButton(
-                groups: [
-                  [JamMenuItem(title: 'Remove', onPressed: () {})],
-                ],
-                anchorBuilder: (context, menu) => GestureDetector(
-                  onLongPressStart: (d) => menu.open(d.localPosition),
-                  child: const SizedBox(
-                    width: 800,
-                    height: 60,
-                    child: Text('Low Tide'),
-                  ),
-                ),
-              ),
-            ),
-          ),
-        ),
-      );
-      await tester.longPressAt(const Offset(120, 30));
-      await tester.pumpAndSettle();
-      final menu = tester.getRect(find.byType(CupertinoMenuItem));
-      expect(menu.left, closeTo(120, 1));
-      expect(menu.top, lessThan(60));
-    });
-
     testWidgets('the glass trigger over artwork', (tester) async {
       await tester.pumpWidget(
         _host(
