@@ -18,6 +18,7 @@ import 'package:localjam_app/src/util/format.dart';
 import 'package:localjam_app/src/util/network.dart';
 import 'package:localjam_app/src/widgets/avatar.dart';
 import 'package:localjam_app/src/widgets/guests_can.dart';
+import 'package:localjam_app/src/widgets/list.dart';
 import 'package:localjam_app/src/widgets/peer_row.dart';
 import 'package:localjam_app/src/widgets/room_sheet.dart';
 import 'package:localjam_app/src/widgets/section.dart';
@@ -133,12 +134,13 @@ void main() {
     // The preset and the three switches it stands for, summarised in a
     // sentence — `jam` is what `startHost` defaults to.
     expect(find.text(JamPresetStrings.guestsCan), findsOneWidget);
-    expect(find.byType(JamSwitch), findsNWidgets(3));
+    // The three guest switches, then Show to People Nearby.
+    expect(find.byType(JamSwitch), findsNWidgets(4));
     expect(find.text(JamPresetStrings.summary(JamPolicy.jam)), findsOneWidget);
-    // Invite-only jam: said as a fact under the people, not drawn as a
-    // setting that can't be changed.
+    // An invite-only jam, which the host can still show mid-jam.
+    expect(find.text(RoomSheetStrings.nearby), findsOneWidget);
     expect(find.text(RoomSheetStrings.nearbyOffFooter), findsOneWidget);
-    expect(find.text(RoomSheetStrings.nearby), findsNothing);
+    expect(tester.widget<JamSwitch>(find.byType(JamSwitch).last).value, false);
 
     // The way out, a row a screen reader can press.
     expect(find.text(RoomSheetStrings.endJam), findsOneWidget);
@@ -445,12 +447,14 @@ void main() {
     await tester.tap(find.text(RoomSheetStrings.removePeer));
     await tester.pumpAndSettle();
     expect(find.text(RoomSheetStrings.removeTitle('Ana')), findsOneWidget);
-    expect(find.text(RoomSheetStrings.removeDetail), findsOneWidget);
+    // The app identifies its device when it joins, so the host can keep it
+    // out — and the alert can say so.
+    expect(
+      host.hostEngine!.kickKeepsOut(host.engine!.peers.single.peerId),
+      true,
+    );
+    expect(find.text(RoomSheetStrings.removeDetailHeld), findsOneWidget);
     expect(find.textContaining('room code'), findsNothing);
-    // The panel can't know whether the device can be kept out (a guest that
-    // never identified itself can't be), so the alert doesn't promise it;
-    // the Removed list says so once it's true.
-    expect(RoomSheetStrings.removeDetail, isNot(contains('rejoin')));
 
     await tester.tap(find.text(RoomSheetStrings.remove));
     await tester.pumpAndSettle();
@@ -460,6 +464,94 @@ void main() {
     expect(find.text(RoomSheetStrings.letBackIn), findsOneWidget);
 
     await tester.runAsync(guest.leave);
+    await tester.runAsync(host.leave);
+  });
+
+  testWidgets('a guest that never said who it is gets the softer removal '
+      'wording: nothing can keep it out', (tester) async {
+    final host = testSession();
+    late JamGuestClient bare;
+    await tester.runAsync(() async {
+      await host.startHost(sessionName: 'Van Jam', discoverable: false);
+      // A client with no `hello.clientId` (an old CLI, a third-party tool).
+      bare = await JamGuestClient.connect(
+        host.hostEngine!.joinUriFor(InternetAddress.loopbackIPv4),
+        clientName: 'Terminal',
+        clientKind: 'cli',
+      );
+      expect(await _waitFor(() => host.engine!.peers.isNotEmpty), isTrue);
+    });
+    await tester.pump();
+    await _pump(tester, host, _panel(host));
+    expect(host.hostEngine!.kickKeepsOut(bare.selfPeerId), isFalse);
+
+    await tester.tap(find.byIcon(CupertinoIcons.ellipsis));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text(RoomSheetStrings.removePeer));
+    await tester.pumpAndSettle();
+    expect(find.text(RoomSheetStrings.removeDetail), findsOneWidget);
+    expect(find.text(RoomSheetStrings.removeDetailHeld), findsNothing);
+    expect(RoomSheetStrings.removeDetail, isNot(contains('rejoin')));
+    await tester.tap(find.text(RoomSheetStrings.cancel));
+    await tester.pumpAndSettle();
+
+    await tester.runAsync(bare.close);
+    await tester.runAsync(host.leave);
+  });
+
+  testWidgets('the host shows and hides the jam to people nearby from the '
+      'People sheet', (tester) async {
+    // No mDNS in a widget test: an advertiser that answers at once.
+    var live = 0;
+    JamHostEngine.roomAdvertiserStarter =
+        ({
+          required String sessionName,
+          required int port,
+          required String token,
+          List<InternetAddress> addresses = const [],
+          Duration timeout = JamRoomAdvertiser.defaultTimeout,
+        }) async {
+          live++;
+          return JamRoomAdvertiser.fake(onStop: () async => live--);
+        };
+    addTearDown(
+      () => JamHostEngine.roomAdvertiserStarter = JamRoomAdvertiser.start,
+    );
+    final host = testSession();
+    await tester.runAsync(
+      () => host.startHost(sessionName: 'Van Jam', discoverable: false),
+    );
+    await tester.pump();
+    await _pump(tester, host, _panel(host));
+    final engine = host.hostEngine!;
+    Finder nearbySwitch() => find.descendant(
+      of: find.widgetWithText(JamRow, RoomSheetStrings.nearby),
+      matching: find.byType(JamSwitch),
+    );
+    expect(tester.widget<JamSwitch>(nearbySwitch()).value, isFalse);
+
+    await tester.tap(nearbySwitch());
+    expect(engine.discoveryEnabled, isTrue, reason: 'at once, for the UI');
+    // The advertisement catches up across both zones the test runs in.
+    for (var i = 0; i < 50 && !engine.discoverable; i++) {
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 5)),
+      );
+      await tester.pump();
+    }
+    expect(engine.discoverable, isTrue);
+    expect(live, 1);
+    expect(tester.widget<JamSwitch>(nearbySwitch()).value, isTrue);
+    expect(find.text(RoomSheetStrings.nearbyOnFooter), findsOneWidget);
+    expect(find.text(RoomSheetStrings.nearbyOffFooter), findsNothing);
+
+    // A change made elsewhere (the docked panel, the engine) shows here too.
+    await tester.runAsync(() => engine.setDiscoverable(false));
+    await tester.pump();
+    expect(tester.widget<JamSwitch>(nearbySwitch()).value, isFalse);
+    expect(find.text(RoomSheetStrings.nearbyOffFooter), findsOneWidget);
+    expect(live, 0, reason: 'withdrawn');
+
     await tester.runAsync(host.leave);
   });
 

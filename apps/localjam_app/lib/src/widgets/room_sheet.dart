@@ -3,9 +3,9 @@
 /// Two sheets where there used to be one long page:
 ///
 /// * **People** ([showRoomSheet], [RoomPanel]) — a grouped list: Invite
-///   People, who is here (with the host's per-guest "•••" and, under the
-///   list, whether people nearby can see the jam), anyone removed, what
-///   guests can do, and the way out in its own last section.
+///   People, who is here (with the host's per-guest "•••"), anyone removed,
+///   what guests can do, the host's Show to People Nearby switch, and the
+///   way out in its own last section.
 /// * **Invite** ([showInviteSheet], [InvitePanel]) — the QR on a white
 ///   plate, the jam's name, Share Link and Copy Link. With no network
 ///   there is no code to show, and the sheet says what would make one.
@@ -64,17 +64,13 @@ abstract final class RoomSheetStrings {
   static const String controlPlayback = JamPresetStrings.controlPlayback;
   static const String editQueue = JamPresetStrings.editQueue;
 
-  // Whether people nearby can see the jam: chosen in Start a Jam and fixed
-  // for the jam's life, so it is said as a fact under the people list, not
-  // drawn as a setting that cannot be changed.
+  // Whether people nearby can see the jam: chosen in Start a Jam, and the
+  // host's to change while it runs. Same words as Start a Jam's switch.
   static const String nearby = 'Show to People Nearby';
-  static const String on = 'On';
-  static const String off = 'Off';
   static const String nearbyOnFooter =
-      'People on this Wi‑Fi can see this jam and join it.';
+      'People on this Wi‑Fi can see and join this jam.';
   static const String nearbyOffFooter =
-      'This jam is hidden from people nearby. Only people with the link or '
-      'code can join.';
+      'Only people with the link or the code can join.';
 
   // The per-guest menu.
   static const String makeCohost = 'Make Co-host';
@@ -85,10 +81,14 @@ abstract final class RoomSheetStrings {
   static String removeTitle(String name) => 'Remove $name?';
 
   /// What removing someone does for certain. Whether the device also stays
-  /// out depends on whether it identified itself when it joined — which the
-  /// host engine keeps to itself — so the alert promises only this, and the
-  /// Removed list (with its own footer) appears when the hold is real.
+  /// out depends on whether it identified itself when it joined
+  /// ([JamHostEngine.kickKeepsOut]): every LocalJam app does, a bare client
+  /// may not. [removeDetailHeld] when it did; this when it didn't, so the
+  /// alert never promises a hold the room can't keep.
   static const String removeDetail = 'They’ll stop hearing the jam right away.';
+  static const String removeDetailHeld =
+      'They’ll stop hearing the jam right away. They can’t rejoin until you '
+      'let them back in.';
 
   /// The subtitle words for what the host changed for one person.
   static String capabilityDetail(JamCapability capability, bool allowed) =>
@@ -395,13 +395,6 @@ class _RoomPanelState extends State<RoomPanel> {
           _section(
             plain: plain,
             header: RoomSheetStrings.peopleCount(count),
-            // Fixed when the jam started, so said as a fact rather than
-            // drawn as a setting that can't be changed.
-            footer: !isHost
-                ? null
-                : host.discoverable
-                ? RoomSheetStrings.nearbyOnFooter
-                : RoomSheetStrings.nearbyOffFooter,
             children: people,
           ),
           if (isHost)
@@ -438,6 +431,7 @@ class _RoomPanelState extends State<RoomPanel> {
             ),
           ],
         ),
+      if (isHost) _Nearby(host: host, plain: plain),
       _LeaveSection(
         isHost: isHost,
         plain: plain,
@@ -553,7 +547,11 @@ class _RoomPanelState extends State<RoomPanel> {
     final confirmed = await JamDialogs.confirmDestructive(
       context,
       title: RoomSheetStrings.removeTitle(name),
-      message: RoomSheetStrings.removeDetail,
+      // Asked now, not when the jam started: it is about this person's
+      // device, and whether it said who it is.
+      message: host.kickKeepsOut(peer.peerId)
+          ? RoomSheetStrings.removeDetailHeld
+          : RoomSheetStrings.removeDetail,
       confirmLabel: RoomSheetStrings.remove,
       cancelLabel: RoomSheetStrings.cancel,
     );
@@ -752,6 +750,36 @@ class _Removed extends StatelessWidget {
         child: section,
       );
     },
+  );
+}
+
+/// The host's Show to People Nearby switch (§1 discovery): on, the jam is
+/// advertised to everyone on the Wi‑Fi; off, it is withdrawn at once and only
+/// the link or the code lets anyone in. Follows the engine, so a change made
+/// from the docked panel shows in the sheet too.
+class _Nearby extends StatelessWidget {
+  const _Nearby({required this.host, this.plain = false});
+
+  final JamHostEngine host;
+  final bool plain;
+
+  @override
+  Widget build(BuildContext context) => _whileLive(
+    host,
+    host.discoveryEnabledListenable,
+    (context, shown) => _section(
+      plain: plain,
+      footer: shown
+          ? RoomSheetStrings.nearbyOnFooter
+          : RoomSheetStrings.nearbyOffFooter,
+      children: [
+        JamRow.toggle(
+          title: RoomSheetStrings.nearby,
+          value: shown,
+          onChanged: (value) => unawaited(host.setDiscoverable(value)),
+        ),
+      ],
+    ),
   );
 }
 

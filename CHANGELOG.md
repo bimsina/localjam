@@ -35,6 +35,10 @@ Notable changes to LocalJam. Dates are the day the work landed on `main`.
 - Diagnostics, nudge sync and the appearance setting reworked to match the new
   design; dead widgets removed.
 - ~250 widget and state tests added for the app layer.
+- People sheet: "Show to People Nearby" is a switch the host can flip
+  mid-jam (it was a sentence saying it was fixed at the start), and Remove
+  says "They can’t rejoin until you let them back in." only when the engine
+  can actually hold that device.
 
 ### Engine / protocol
 
