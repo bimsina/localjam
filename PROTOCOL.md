@@ -211,7 +211,12 @@ identity, and "Host" is the fallback.
 
 `hello.clientId` is a stable, opaque per-device id — persisted by the
 client, never displayed, unrelated to `clientName` (which several devices may
-share, and which the user may change). See §3.3 and §5.6.
+share, and which the user may change). See §3.3 and §5.6. It is optional on
+the wire, but a client that leaves it out gives up everything keyed on it: it
+can never resume (§3.3), its role and tracks live and die with its peerId,
+and a kick cannot keep it out (§5.6). Clients SHOULD send one. (The
+reference CLI, where one machine often runs several guests, mints a fresh
+one per run rather than persisting it, since one id is one device.)
 
 ### 3.2 Presence
 
@@ -679,8 +684,13 @@ compare `addedBy` with their own peerId exactly as before.
 `goingAway` → `peer_left`. No grace slot is kept, the device loses any
 co-host role, and **the device stays out for the rest of the session**: a
 later `hello` with its `clientId` is answered `reject { reason: "kicked" }`
-(final, §3.1) until the host lets it back in. A kicked client MUST treat
-the fatal error as terminal and not auto-rejoin. An upload of the device's
+(final, §3.1) until the host lets it back in. A device that sent no
+`clientId` cannot be held: its later `hello` is an ordinary join. The host
+has nothing stable to refuse it by — not its `clientName`, which anyone may
+share, and not its address, which phones behind one NAT or on one hotspot
+share, so refusing by address would lock the room's other guests out with
+it. A host UI SHOULD NOT promise such a guest stays out. A kicked client
+MUST treat the fatal error as terminal and not auto-rejoin. An upload of the device's
 whose body is still arriving goes with it: it is refused when it lands
 (`403`, §6.4), and nothing of it is added or kept.
 

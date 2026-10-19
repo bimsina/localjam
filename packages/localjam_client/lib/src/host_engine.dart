@@ -1234,6 +1234,13 @@ class JamHostEngine extends JamEngine {
   /// known when kicked (peerId then, display name).
   List<PeerInfo> get kickedPeers => _server.kickedPeers;
 
+  /// Whether [kickPeer] would keep [peerId]'s device out until
+  /// [unkickPeer] — true when it identified itself with a `clientId` when
+  /// it joined (every LocalJam app does). Without one a kick is only a
+  /// removal: nothing recognises the device when it comes back (§5.6).
+  /// False for a peer that is not joined.
+  bool kickKeepsOut(String peerId) => _server.kickKeepsOut(peerId);
+
   /// [kickedPeers], listenable: changes on every kick and unkick, whoever
   /// made it (this engine, or a layer reaching the server directly).
   ValueListenable<List<PeerInfo>> get kickedPeersListenable => _kicked;

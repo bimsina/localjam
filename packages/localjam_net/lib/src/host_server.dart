@@ -623,6 +623,18 @@ class JamHostServer {
   /// device's `hello` is answered `reject { reason: "kicked" }`.
   List<PeerInfo> get kickedPeers => List.unmodifiable(_kicked.values);
 
+  /// Whether kicking [peerId] would keep its device out for the rest of the
+  /// session (§5.6): true when that joined peer's `hello` carried a
+  /// `clientId`, which is what a later `hello` is refused by. A device that
+  /// sent none cannot be recognised when it comes back — not by its name,
+  /// which anyone can share, nor by its address, which a NAT or a hotspot
+  /// shares between phones — so for it a kick is only a removal. False for
+  /// a peerId that is not joined.
+  bool kickKeepsOut(String peerId) {
+    final clientId = _peers[peerId]?.clientId;
+    return clientId != null && clientId.isNotEmpty;
+  }
+
   /// [kickedPeers] after every change to it — a kick ([kickPeer] without
   /// `allowResume`) or an [unkickPeer] that let someone back — whoever made
   /// it, so a host UI listing the kicked stays right when another layer

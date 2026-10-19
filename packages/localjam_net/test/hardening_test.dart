@@ -1204,6 +1204,44 @@ void main() {
     });
   });
 
+  group('who a kick keeps out (§5.6)', () {
+    test('a device that sent a clientId is held, and kickKeepsOut says so '
+        'before the kick', () async {
+      final host = await startHost();
+      final guest = await joinGuest(host, clientId: 'phone-1');
+      expect(host.kickKeepsOut(guest.selfPeerId), isTrue);
+      host.kickPeer(guest.selfPeerId);
+      await waitFor(() => host.peers.isEmpty, reason: 'the kick');
+      await expectLater(
+        joinGuest(host, clientId: 'phone-1'),
+        throwsA(
+          isA<JamRejectedException>().having(
+            (e) => e.reason,
+            'reason',
+            RejectReason.kicked,
+          ),
+        ),
+      );
+    });
+
+    test('a device that sent none cannot be recognised: kickKeepsOut is '
+        'false, and it can join again', () async {
+      final host = await startHost();
+      final guest = await joinGuest(host); // No clientId.
+      expect(host.kickKeepsOut(guest.selfPeerId), isFalse);
+      host.kickPeer(guest.selfPeerId);
+      await waitFor(() => host.peers.isEmpty, reason: 'the kick');
+      expect(host.kickedPeers, isEmpty, reason: 'nothing to hold it by');
+      final back = await joinGuest(host);
+      expect(host.peers.single.peerId, back.selfPeerId);
+    });
+
+    test('kickKeepsOut is false for a peer that is not joined', () async {
+      final host = await startHost();
+      expect(host.kickKeepsOut('nobody'), isFalse);
+    });
+  });
+
   group('end of media on time (§5.5)', () {
     test('the end policy runs at the end instant, not on the next liveness '
         'tick', () async {

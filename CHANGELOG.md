@@ -66,6 +66,10 @@ Notable changes to LocalJam. Dates are the day the work landed on `main`.
   (`… 6537b`): sharing the daemon's name let the registration the host had
   given up on rename itself into a second row, and its goodbye removed the
   live room from every browser a few seconds after it appeared.
+- A kick holds a device out only when its `hello` carried a `clientId`;
+  `JamHostServer.kickKeepsOut` / `JamHostEngine.kickKeepsOut` say so before
+  the kick. PROTOCOL §3.1/§5.6 now state that id-less clients cannot be held
+  (an address is shared by a NAT or a hotspot, so it is not used).
 
 ### Android
 
@@ -110,3 +114,7 @@ Notable changes to LocalJam. Dates are the day the work landed on `main`.
 - `CONTRIBUTING.md`, issue and pull-request templates, and a rewritten public
   `README.md`.
 - `dart format` across every first-party package and app.
+- `localjam join` sends a `hello.clientId` — a fresh random one per run, or
+  `--client-id` to be recognised across runs — so a host that removes a CLI
+  guest can keep it out. It is not persisted: two terminals on one machine
+  would share it, and one id is one device.

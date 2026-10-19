@@ -27,6 +27,26 @@ Keys: p = request play/pause  s = request seek +10s  S = request seek -10s
       q = quit
 ''';
 
+/// The `hello.clientId` this run announces (PROTOCOL.md §3.3): [requested]
+/// (`--client-id`) when given, otherwise a fresh random id for this process.
+///
+/// The id is what a host keeps a removed guest out by (§5.6) — without one
+/// a kicked CLI guest could join straight back. It is not persisted: a
+/// stored per-user id would be shared by every `localjam join` on the
+/// machine, and the host treats one id as one device, so a second terminal
+/// would push the first out of the room (§3.3). A guest that wants to be
+/// recognised across runs passes the same `--client-id` each time.
+String cliClientId(String? requested, {math.Random? random}) {
+  final pinned = requested?.trim() ?? '';
+  if (pinned.isNotEmpty) return pinned;
+  final rng = random ?? math.Random.secure();
+  final hex = StringBuffer('cli-');
+  for (var i = 0; i < 16; i++) {
+    hex.write(rng.nextInt(256).toRadixString(16).padLeft(2, '0'));
+  }
+  return hex.toString();
+}
+
 /// Runs the `join` command. Returns the process exit code.
 Future<int> runJoinCommand(ArgResults args) async {
   if (args.rest.length != 1) {
@@ -54,6 +74,7 @@ Future<int> runJoinCommand(ArgResults args) async {
       joinUri,
       clientName: args['name'] as String,
       clientKind: 'cli',
+      clientId: cliClientId(args['client-id'] as String?),
     );
   } on Object catch (e) {
     stderr.writeln('join: could not connect: $e');

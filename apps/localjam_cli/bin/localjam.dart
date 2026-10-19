@@ -28,6 +28,13 @@ ArgParser _buildParser() {
           '(e.g. 5000 = +0.5%; makes drift correction observable).',
     )
     ..addOption('name', defaultsTo: 'guest', help: 'Client name.')
+    ..addOption(
+      'client-id',
+      help:
+          'Stable device id sent in hello (a host keeps a removed guest\n'
+          'out by it). Default: a new random id each run; give each\n'
+          'terminal its own value to be recognised across runs.',
+    )
     ..addFlag('help', abbr: 'h', negatable: false, help: 'Show usage.');
 
   addClockSimOptions(parser.addCommand('clock-sim'));
