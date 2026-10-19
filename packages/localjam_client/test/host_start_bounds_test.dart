@@ -457,6 +457,27 @@ void main() {
       expect(utf8.encode(long).length, lessThanOrEqualTo(63));
     });
 
+    test('the built-in responder never announces the name the daemon was '
+        'asked to register', () {
+      // An abandoned registration under the same name auto-renames itself
+      // on meeting the fallback ("Van Jam cafe (2)": one room, two rows),
+      // and its goodbye names the fallback's own PTR record.
+      final daemon = JamRoomAdvertiser.instanceNameFor('Van Jam', 'cafebabe');
+      final builtin = JamRoomAdvertiser.instanceNameFor(
+        'Van Jam',
+        'cafebabe',
+        builtin: true,
+      );
+      expect(builtin, 'Van Jam cafeb');
+      expect(builtin, isNot(daemon));
+      final long = JamRoomAdvertiser.instanceNameFor(
+        '🎶' * 40,
+        'cafebabe',
+        builtin: true,
+      );
+      expect(utf8.encode(long).length, lessThanOrEqualTo(63));
+    });
+
     test('is never empty, even for an unnamed room', () {
       expect(JamRoomAdvertiser.instanceNameFor('   ', 'cafebabe'), isNotEmpty);
       expect(JamRoomAdvertiser.instanceNameFor('', ''), isNotEmpty);

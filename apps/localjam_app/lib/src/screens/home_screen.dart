@@ -128,12 +128,13 @@ class _HomeScreenState extends State<HomeScreen> {
   Timer? _networkPoll;
   List<JamHistoryRecord> _recents = const [];
 
-  /// Rooms already on screen, so only a *newly* discovered one animates in
-  /// and buzzes — a rebuild is not an arrival.
+  /// Rooms already on screen ([JamNearbyRoom.identity]), so only a *newly*
+  /// discovered one animates in and buzzes — a rebuild is not an arrival,
+  /// and nor is the same jam re-advertised under another mDNS name.
   final Set<String> _seenRooms = <String>{};
   bool _firstRoomsBuild = true;
 
-  /// The key of the room being verified right now, so its own row spins and
+  /// The identity of the room being verified right now, so its own row spins and
   /// the rest go quiet — same one-at-a-time rule a join follows.
   String? _probing;
 
@@ -251,7 +252,7 @@ class _HomeScreenState extends State<HomeScreen> {
       await _join(room.joinUri, roomName: room.sessionName);
       return;
     }
-    setState(() => _probing = room.key);
+    setState(() => _probing = room.identity);
     final alive = await browser.probe(room);
     if (!mounted) return;
     setState(() => _probing = null);
@@ -310,7 +311,7 @@ class _HomeScreenState extends State<HomeScreen> {
   /// Marks which rooms are new, and buzzes for arrivals after the first
   /// paint. Called from the list builder, so it sees exactly what is drawn.
   Set<String> _arrivals(List<JamNearbyRoom> rooms) {
-    final keys = {for (final room in rooms) room.key};
+    final keys = {for (final room in rooms) room.identity};
     final arrived = keys.difference(_seenRooms);
     _seenRooms
       ..retainWhere(keys.contains)
@@ -453,13 +454,13 @@ class _HomeScreenState extends State<HomeScreen> {
         itemBuilder: (context, index) {
           final room = rooms[index];
           return _RoomRow(
-            key: ValueKey(room.key),
+            key: ValueKey(room.identity),
             room: room,
             // One join at a time: the others go quiet rather than queueing
             // up handshakes behind the one in flight.
-            joining: joining == room.joinUri || _probing == room.key,
+            joining: joining == room.joinUri || _probing == room.identity,
             enabled: !busy,
-            animateIn: arrivals.contains(room.key),
+            animateIn: arrivals.contains(room.identity),
             separator: index < rooms.length - 1,
             onTap: () => unawaited(_joinNearby(room)),
           );

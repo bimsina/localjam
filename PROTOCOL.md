@@ -74,6 +74,16 @@ drop the room at once, and advertising again starts it afresh. Nothing else
 changes — guests already in the room stay, and the token is the same — and
 a withdrawn advertisement stays withdrawn until the host turns it back on,
 whatever the network does meanwhile.
+
+A room's identity is its `token`, not its instance name. One room can be on
+the wire under two names at once: DNS-SD conflict resolution renames a
+registration whose name another responder already answers for ("Van Jam
+6537 (2)" — the OS daemon and a host's own fallback responder meeting over
+one name), and a re-advertisement can go out under a new name while the old
+one is still cached. A joiner SHOULD list records that carry the same token
+as one room, showing the advertisement that arrived most recently (it
+carries the host's current addresses). A host SHOULD NOT announce one room
+from two responders under the same instance name.
 QR/link remains the first-class path — mDNS is blocked on hotspots,
 guest-isolated Wi-Fi, and unlisted Bonjour types on Apple platforms
 (`NSBonjourServices` must contain `_localjam._tcp`).

@@ -30,8 +30,15 @@ class JamNearbyRoom {
     DateTime? lastSeen,
   }) : lastSeen = lastSeen ?? DateTime.now();
 
-  /// Stable identity within one browse (the mDNS service name).
+  /// The mDNS instance name this entry was resolved from. Stable for one
+  /// advertisement, but one room can be advertised under more than one
+  /// (see [JamRoomBrowser]) — [identity] is the room's.
   final String key;
+
+  /// The room's identity: its [token], which every advertisement of one room
+  /// shares whatever instance name it went out under, or [key] for a record
+  /// without one. What a list of rooms should key its rows by.
+  String get identity => token ?? key;
 
   /// Human-readable room name.
   final String sessionName;
@@ -260,7 +267,8 @@ class JamRoomAdvertiser {
     if (broadcast != null) return JamRoomAdvertiser._(broadcast, null);
 
     final announcer = await MdnsAnnouncer.start(
-      serviceName: instanceName,
+      // Not the daemon's name: see [instanceNameFor]'s `builtin`.
+      serviceName: instanceNameFor(sessionName, token, builtin: true),
       serviceType: jamServiceType,
       port: port,
       attributes: attributes,
@@ -272,7 +280,8 @@ class JamRoomAdvertiser {
       return null;
     }
     debugPrint(
-      'localjam: advertising "$instanceName" via the built-in responder '
+      'localjam: advertising "${instanceNameFor(sessionName, token, builtin: true)}" '
+      'via the built-in responder '
       '(${_appleSimulator ? 'Apple Simulator: the daemon never confirms a '
                 'registration there' : 'the OS daemon did not take it'}).',
     );
@@ -283,18 +292,34 @@ class JamRoomAdvertiser {
   /// room, plus four hex digits of the session token. Purely a uniqueness
   /// device — the human-readable name travels in the `name` TXT attribute,
   /// which is what [JamRoomBrowser] displays.
+  ///
+  /// With [builtin] the name the built-in responder announces, which ends in
+  /// `b` ("Van Jam 6537b") so it is never the name the OS daemon was asked
+  /// to register. The daemon's registration is the one [start] gives up on
+  /// before the fallback starts, and it does not always leave quietly: one
+  /// still probing when the built-in responder announces the same name
+  /// treats it as a conflict and auto-renames itself ("Van Jam 6537 (2)",
+  /// one room listed twice), and the goodbye it sends on its way out names
+  /// the very PTR record the fallback is announcing, so every browser drops
+  /// the live room a few seconds after it appeared (both seen on the iOS 27
+  /// Simulator). Under its own name the fallback shares neither.
   @visibleForTesting
-  static String instanceNameFor(String sessionName, String token) {
+  static String instanceNameFor(
+    String sessionName,
+    String token, {
+    bool builtin = false,
+  }) {
     // A DNS-SD instance label is at most 63 BYTES; room names are free-form
     // UTF-8, so trim on encoded length, not characters.
-    const suffixBytes = 6; // ' ' + 4 hex + one byte of headroom.
+    const suffixBytes = 7; // ' ' + 4 hex + 'b' + one byte of headroom.
     var name = sessionName.trim();
     while (utf8.encode(name).length > 63 - suffixBytes) {
       name = name.substring(0, name.length - 1);
     }
-    final suffix = token.isEmpty
+    final hex = token.isEmpty
         ? '0000'
         : token.substring(0, token.length < 4 ? token.length : 4);
+    final suffix = builtin ? '${hex}b' : hex;
     return name.isEmpty ? 'Jam $suffix' : '$name $suffix';
   }
 
@@ -490,6 +515,19 @@ class JamRoomAdvertiser {
 /// ([MdnsQuerier]); anything not confirmed within [staleAfter] — two record
 /// TTLs — is dropped. A goodbye, when one does arrive, is still honoured
 /// immediately.
+///
+/// **One room, one row.** A room is its token, not its mDNS instance name,
+/// and the same room can be on the wire under two names at once: the OS
+/// daemon auto-renames a registration whose name another responder already
+/// answers for ("Van Jam 6537 (2)" — a registration the host had given up
+/// on, meeting the built-in responder that took over), and a re-advertise
+/// can go out under a new name while the old one is still cached. So every
+/// instance is tracked, but [rooms] lists one per token: the advertisement
+/// that arrived last, which is the one carrying the host's current
+/// addresses. A goodbye from that newest one hides the room's older ones
+/// until one of them is confirmed again — a re-query is sent at once — so
+/// the instance a re-advertise left behind cannot resurface as a ghost of a
+/// room that just left.
 class JamRoomBrowser {
   JamRoomBrowser({
     Duration? staleAfter,
@@ -573,6 +611,22 @@ class JamRoomBrowser {
   /// resolve it again — a resolve that succeeds is a room that is still
   /// there.
   final Map<String, BonsoirService> _services = {};
+
+  /// A counter that orders everything below: arrivals, confirmations and
+  /// goodbyes. A clock cannot — two events often share an instant.
+  int _seq = 0;
+
+  /// key → when that instance entered [_byKey] ([_seq]). The newest arrival
+  /// is the advertisement a room's row shows.
+  final Map<String, int> _arrived = {};
+
+  /// key → when that instance was last confirmed ([_seq]).
+  final Map<String, int> _confirmed = {};
+
+  /// token → when a goodbye (or a lost event) last retired one of that
+  /// room's instances ([_seq]). The room's other instances stay hidden
+  /// until confirmed after it.
+  final Map<String, int> _retired = {};
 
   String? _excludedToken;
   bool _started = false;
@@ -662,10 +716,7 @@ class JamRoomBrowser {
       for (final entry in _byKey.entries)
         if (entry.value.lastSeen.isBefore(cutoff)) entry.key,
     ];
-    for (final key in expired) {
-      _byKey.remove(key);
-      _services.remove(key);
-    }
+    expired.forEach(_drop);
     if (expired.isNotEmpty) _publish();
     // Re-resolving is how the platform half of this gets re-confirmed: a
     // resolve that succeeds lands as a resolved event and refreshes lastSeen,
@@ -693,16 +744,13 @@ class JamRoomBrowser {
       case BonsoirDiscoveryServiceUpdatedEvent(:final service):
         final room = _roomFrom(service, _clock());
         if (room == null) {
-          _byKey.remove(service.name);
-          _services.remove(service.name);
+          _drop(service.name);
         } else {
-          _byKey[room.key] = room;
-          _services[room.key] = service;
+          _confirm(room, service);
         }
         _publish();
       case BonsoirDiscoveryServiceLostEvent(:final service):
-        _byKey.remove(service.name);
-        _services.remove(service.name);
+        _retire(service.name);
         _publish();
       default:
         break;
@@ -719,8 +767,7 @@ class JamRoomBrowser {
     final key = _keyFor(answer.instanceName);
     if (key == null) return;
     if (answer.isGoodbye) {
-      _byKey.remove(key);
-      _services.remove(key);
+      _retire(key);
       _publish();
       return;
     }
@@ -741,8 +788,64 @@ class JamRoomBrowser {
   void _touch(String key) {
     final room = _byKey[key];
     if (room == null) return;
+    _confirmed[key] = ++_seq;
     _byKey[key] = room.withLastSeen(_clock());
     _publish();
+  }
+
+  /// Records [room] as just resolved: a new instance arrives, a known one is
+  /// confirmed (and keeps its place in the arrival order).
+  void _confirm(JamNearbyRoom room, BonsoirService service) {
+    _seq++;
+    _arrived.putIfAbsent(room.key, () => _seq);
+    _confirmed[room.key] = _seq;
+    _byKey[room.key] = room;
+    _services[room.key] = service;
+  }
+
+  /// Forgets one instance. Other instances of its room are untouched.
+  JamNearbyRoom? _drop(String key) {
+    _services.remove(key);
+    _arrived.remove(key);
+    _confirmed.remove(key);
+    final room = _byKey.remove(key);
+    final token = room?.token;
+    if (token != null && !_byKey.values.any((r) => r.token == token)) {
+      _retired.remove(token);
+    }
+    return room;
+  }
+
+  /// [key] has left — a goodbye, a lost event, a probe that found nobody.
+  ///
+  /// When it was its room's newest advertisement, every older one of the
+  /// room is hidden too until it is confirmed again (what a re-advertise
+  /// left behind is a ghost until it proves otherwise), and the survivors
+  /// are asked to prove it right away. An older advertisement leaving
+  /// changes nothing for a newer one: the room re-advertised after it.
+  void _retire(String key) {
+    final arrived = _arrived[key] ?? 0;
+    final room = _drop(key);
+    final token = room?.token;
+    if (token == null) return;
+    final survivors = [
+      for (final entry in _byKey.entries)
+        if (entry.value.token == token) entry.key,
+    ];
+    if (survivors.isEmpty) return;
+    if (survivors.any((k) => (_arrived[k] ?? 0) > arrived)) return;
+    _retired[token] = ++_seq;
+    final discovery = _discovery;
+    if (discovery != null) {
+      for (final survivor in survivors) {
+        final service = _services[survivor];
+        if (service == null) continue;
+        try {
+          discovery.serviceResolver.resolveService(service);
+        } catch (_) {}
+      }
+    }
+    _querier?.query();
   }
 
   // --- Verify and prune (the app's half) --------------------------------
@@ -771,12 +874,19 @@ class JamRoomBrowser {
   /// Drops [room] from the list. For the app to call when a [probe] or a join
   /// proved it dead — the record can outlive the room by two TTLs, and a user
   /// who has just been told "that jam has ended" should not still see it.
-  void remove(JamNearbyRoom room) => removeKey(room.key);
+  ///
+  /// The room goes as a whole: another advertisement of it (same token,
+  /// another instance name) stays hidden until it is confirmed again.
+  void remove(JamNearbyRoom room) {
+    if (!_byKey.containsKey(room.key)) return;
+    _retire(room.key);
+    _publish();
+  }
 
-  /// [remove] by mDNS key.
+  /// Forgets the one instance named [key], whatever else its room is
+  /// advertised as.
   void removeKey(String key) {
-    if (_byKey.remove(key) == null) return;
-    _services.remove(key);
+    if (_drop(key) == null) return;
     _publish();
   }
 
@@ -865,13 +975,30 @@ class JamRoomBrowser {
     );
   }
 
+  /// One row per room ([JamNearbyRoom.identity]): of its instances that are
+  /// not hidden behind a goodbye, the one that arrived last.
   void _publish() {
     if (_disposed) return;
     final excluded = _excludedToken;
-    final sorted = [
-      for (final room in _byKey.values)
-        if (excluded == null || room.token != excluded) room,
-    ]..sort((a, b) => a.sessionName.compareTo(b.sessionName));
+    final shown = <String, JamNearbyRoom>{};
+    final shownArrival = <String, int>{};
+    for (final MapEntry(:key, value: room) in _byKey.entries) {
+      final token = room.token;
+      if (excluded != null && token == excluded) continue;
+      final retired = token == null ? null : _retired[token];
+      if (retired != null && (_confirmed[key] ?? 0) <= retired) continue;
+      final arrived = _arrived[key] ?? 0;
+      final id = room.identity;
+      if ((shownArrival[id] ?? -1) < arrived) {
+        shown[id] = room;
+        shownArrival[id] = arrived;
+      }
+    }
+    final sorted = shown.values.toList()
+      ..sort((a, b) {
+        final byName = a.sessionName.compareTo(b.sessionName);
+        return byName != 0 ? byName : a.identity.compareTo(b.identity);
+      });
     rooms.value = List.unmodifiable(sorted);
   }
 
@@ -892,6 +1019,9 @@ class JamRoomBrowser {
     _discovery = null;
     _byKey.clear();
     _services.clear();
+    _arrived.clear();
+    _confirmed.clear();
+    _retired.clear();
     rooms.dispose();
   }
 }

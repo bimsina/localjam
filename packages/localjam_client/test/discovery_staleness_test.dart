@@ -199,9 +199,157 @@ void main() {
       await settle();
       expect(h.browser.rooms.value.map((r) => r.sessionName), ['Theirs']);
 
-      // Leaving the room brings it back rather than losing it forever.
+      // Leaving the room brings it back rather than losing it forever — as
+      // one row: both records are the one room.
       h.browser.excludedToken = null;
-      expect(h.browser.rooms.value, hasLength(3));
+      expect(h.browser.rooms.value.map((r) => r.sessionName), [
+        'Ours on the hotspot',
+        'Theirs',
+      ]);
+    });
+  });
+
+  group('one room, one row', () {
+    // The same room on the wire under two instance names: the OS daemon
+    // auto-renamed a registration the built-in responder already held the
+    // name of ("(2)"), or a re-advertise went out under a new name while the
+    // old one was still cached. Seen on an iPad Simulator as one jam listed
+    // twice.
+    BonsoirDiscoveryEvent resolved(
+      String name, {
+      String token = 'cafe',
+      List<String> hosts = const ['192.168.1.7'],
+    }) => BonsoirDiscoveryServiceResolvedEvent(
+      service: BonsoirService(
+        name: name,
+        type: jamServiceType,
+        port: 44100,
+        hostAddresses: hosts,
+        attributes: {'v': '1', 'name': 'Van Jam', 'token': token},
+      ),
+    );
+
+    MdnsPtrAnswer ptr(String name, {int ttl = 120}) => MdnsPtrAnswer(
+      serviceType: '_localjam._tcp.local',
+      instanceName: name,
+      ttl: ttl,
+    );
+
+    test('two instances with one token are one room: the advertisement '
+        'that arrived last, with its addresses', () async {
+      final h = harness();
+      await h.browser.start();
+      h.events
+        ..add(resolved('Van Jam 6537'))
+        ..add(resolved('Van Jam 6537 (2)', hosts: const ['10.0.0.5']))
+        ..add(resolved('Kitchen 8a01', token: 'beef'));
+      await settle();
+
+      final rooms = h.browser.rooms.value;
+      expect(rooms, hasLength(2));
+      final van = rooms.singleWhere((r) => r.token == 'cafe');
+      expect(van.key, 'Van Jam 6537 (2)');
+      expect(van.candidates.single.host, '10.0.0.5');
+      expect(van.identity, 'cafe');
+    });
+
+    test('re-confirming the older instance does not flip the row', () async {
+      final h = harness();
+      await h.browser.start();
+      h.events
+        ..add(resolved('Van Jam 6537'))
+        ..add(resolved('Van Jam 6537b'));
+      await settle();
+      expect(h.browser.rooms.value.single.key, 'Van Jam 6537b');
+
+      // A sweep's re-resolve and a PTR answer for the older one.
+      h.events.add(resolved('Van Jam 6537'));
+      h.answers.add(ptr('Van Jam 6537'));
+      await settle();
+      expect(h.browser.rooms.value.single.key, 'Van Jam 6537b');
+    });
+
+    test('when the newest advertisement says goodbye, the one it replaced '
+        'does not come back as a ghost', () async {
+      final h = harness();
+      await h.browser.start();
+      h.events
+        ..add(resolved('Van Jam 6537'))
+        ..add(resolved('Van Jam 6537b'));
+      await settle();
+
+      // The host turned "Show to People Nearby" off: a goodbye for what it
+      // was advertising. The older record is only in caches.
+      h.answers.add(ptr('Van Jam 6537b', ttl: 0));
+      await settle();
+      expect(h.browser.rooms.value, isEmpty);
+
+      // Nor does a sweep before it expires bring it back.
+      h.browser.sweep();
+      expect(h.browser.rooms.value, isEmpty);
+
+      // It ages out like any silent record.
+      h.advance(JamRoomBrowser.defaultStaleAfter + const Duration(seconds: 1));
+      h.browser.sweep();
+      // ...and the room advertised again is listed again at once.
+      h.events.add(resolved('Van Jam 6537b'));
+      await settle();
+      expect(h.browser.rooms.value.single.key, 'Van Jam 6537b');
+    });
+
+    test('an older instance that proves it is still there after the goodbye '
+        'is listed again', () async {
+      final h = harness();
+      await h.browser.start();
+      h.events
+        ..add(resolved('Van Jam 6537'))
+        ..add(resolved('Van Jam 6537 (2)'));
+      await settle();
+      h.events.add(
+        BonsoirDiscoveryServiceLostEvent(
+          service: BonsoirService(
+            name: 'Van Jam 6537 (2)',
+            type: jamServiceType,
+            port: 44100,
+          ),
+        ),
+      );
+      await settle();
+      expect(h.browser.rooms.value, isEmpty);
+
+      h.answers.add(ptr('Van Jam 6537'));
+      await settle();
+      expect(h.browser.rooms.value.single.key, 'Van Jam 6537');
+    });
+
+    test(
+      'an older instance leaving changes nothing for the newer one',
+      () async {
+        final h = harness();
+        await h.browser.start();
+        h.events
+          ..add(resolved('Van Jam 6537 (2)'))
+          ..add(resolved('Van Jam 6537b'));
+        await settle();
+        // The registration the host gave up on is withdrawn late.
+        h.answers.add(ptr('Van Jam 6537 (2)', ttl: 0));
+        await settle();
+        expect(h.browser.rooms.value.single.key, 'Van Jam 6537b');
+      },
+    );
+
+    test('a room proved dead goes as a whole', () async {
+      final h = harness();
+      await h.browser.start();
+      h.events
+        ..add(resolved('Van Jam 6537'))
+        ..add(resolved('Van Jam 6537b'));
+      await settle();
+      h.setReachable(false);
+      final room = h.browser.rooms.value.single;
+      expect(await h.browser.probe(room), isFalse);
+      h.browser.remove(room);
+      expect(h.browser.rooms.value, isEmpty);
     });
   });
 

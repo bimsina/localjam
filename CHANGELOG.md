@@ -58,6 +58,14 @@ Notable changes to LocalJam. Dates are the day the work landed on `main`.
   re-scan's responder restarts, and a re-scan never re-shows a room the host
   hid. `discoveryEnabled` / `discoveryEnabledListenable` carry the host's
   choice for the UI.
+- Nearby lists one row per jam. A room is its token: two mDNS instances with
+  one token (a DNS-SD "(2)" rename, a re-advertise under a new name) are one
+  row, the newest advertisement, and when that one says goodbye the
+  instances it replaced stay hidden until they prove they are still there.
+  The built-in fallback responder now announces its own instance name
+  (`… 6537b`): sharing the daemon's name let the registration the host had
+  given up on rename itself into a second row, and its goodbye removed the
+  live room from every browser a few seconds after it appeared.
 
 ### Android
 
