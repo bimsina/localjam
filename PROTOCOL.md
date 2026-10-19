@@ -68,6 +68,12 @@ Joiners resolve the service (addresses + port come from mDNS itself) and
 build the same `localjam://join` URI. Including the token makes a
 discoverable room one-tap joinable by ANYONE on the network — presence on
 the LAN is the invitation (§9), which is why it is host-opt-in per session.
+The host MAY change its mind while the room runs: withdrawing the
+advertisement sends goodbye records (TTL 0, RFC 6762 §10.1) so browsers
+drop the room at once, and advertising again starts it afresh. Nothing else
+changes — guests already in the room stay, and the token is the same — and
+a withdrawn advertisement stays withdrawn until the host turns it back on,
+whatever the network does meanwhile.
 QR/link remains the first-class path — mDNS is blocked on hotspots,
 guest-isolated Wi-Fi, and unlisted Bonjour types on Apple platforms
 (`NSBonjourServices` must contain `_localjam._tcp`).

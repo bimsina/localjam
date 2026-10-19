@@ -81,10 +81,26 @@ class JamNearbyRoom {
 /// invitation, exactly like being handed the QR; see PROTOCOL.md §9) —
 /// which is why hosts opt in via `JamHostEngine.start(discoverable:)`.
 class JamRoomAdvertiser {
-  JamRoomAdvertiser._(this._broadcast, this._announcer);
+  JamRoomAdvertiser._(this._broadcast, this._announcer)
+    : _testTransport = null,
+      _onStop = null;
+
+  /// An advertiser with nothing on the wire, for tests that need to count
+  /// starts and stops: it reports [transport] and runs [onStop] on [stop].
+  @visibleForTesting
+  JamRoomAdvertiser.fake({
+    String transport = 'builtin',
+    Future<void> Function()? onStop,
+  }) : _broadcast = null,
+       _announcer = null,
+       _testTransport = transport,
+       // ignore: prefer_initializing_formals
+       _onStop = onStop;
 
   final BonsoirBroadcast? _broadcast;
   final MdnsAnnouncer? _announcer;
+  final String? _testTransport;
+  final Future<void> Function()? _onStop;
 
   /// How long a room start will wait for the system Bonjour daemon before
   /// giving up on it and falling back. Hosting must never be held hostage by
@@ -104,7 +120,8 @@ class JamRoomAdvertiser {
   /// Which responder is carrying this advertisement — for diagnostics.
   /// `'bonjour'` when the OS daemon took it, `'builtin'` when our own
   /// responder did.
-  String get transport => _broadcast != null ? 'bonjour' : 'builtin';
+  String get transport =>
+      _testTransport ?? (_broadcast != null ? 'bonjour' : 'builtin');
 
   /// Set once the platform side of `bonsoir` has stopped answering at all in
   /// this process.
@@ -447,6 +464,7 @@ class JamRoomAdvertiser {
   }
 
   Future<void> stop() async {
+    await _onStop?.call();
     await _announcer?.stop();
     await _stopQuietly(_broadcast);
   }

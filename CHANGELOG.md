@@ -52,6 +52,12 @@ Notable changes to LocalJam. Dates are the day the work landed on `main`.
   timeout that drops sockets that never authenticate.
 - Discovery, keep-alive, identity, history and media-cache paths reworked and
   covered by new tests.
+- `JamHostEngine.setDiscoverable` turns a room's mDNS advertisement off and
+  on mid-jam (§1): off sends goodbyes, on starts it like `start()` does, both
+  inside the advertising budget; changes are queued behind the network
+  re-scan's responder restarts, and a re-scan never re-shows a room the host
+  hid. `discoveryEnabled` / `discoveryEnabledListenable` carry the host's
+  choice for the UI.
 
 ### Android
 

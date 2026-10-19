@@ -218,8 +218,9 @@ class JamHostEngine extends JamEngine {
   /// With [discoverable] (the default) the room is advertised over mDNS so
   /// nearby devices list it for one-tap join — which means ANYONE on the
   /// network can join without the QR (the advertisement carries the token,
-  /// §1/§9). Pass false for invite-only rooms. Best-effort: platforms
-  /// without mDNS just stay QR-only.
+  /// §1/§9). Pass false for invite-only rooms; [setDiscoverable] changes it
+  /// while the room runs. Best-effort: platforms without mDNS just stay
+  /// QR-only.
   ///
   /// [hostName] is how guests see the person hosting — in the room roster and
   /// in "added by" bylines. It defaults to this device's persistent
@@ -287,26 +288,17 @@ class JamHostEngine extends JamEngine {
       // both are bounded and both are allowed to fail.
       await _bounded<void>(engine.restorePersistedNudge(), _guardBudget, () {});
       await _bounded<void>(engine.startSessionGuards(), _guardBudget, () {});
+      engine._discoveryEnabled.value = discoverable;
       if (discoverable) {
-        final advertiser = await _bounded<JamRoomAdvertiser?>(
-          roomAdvertiserStarter(
-            sessionName: sessionName,
-            port: server.port,
-            token: server.token,
-            addresses: engine.lanAddresses.value,
-            timeout: _advertiseBudget,
-          ),
-          // The outer bound has to cover BOTH responders, or a daemon that
-          // eats its whole slice would take the fallback down with it.
-          JamRoomAdvertiser.totalTimeout,
-          () => null,
-        );
-        // The room may already be over by the time mDNS answered.
-        if (engine._closed) {
-          await advertiser?.stop();
-        } else {
-          engine._advertiser = advertiser;
-        }
+        await engine._serially(() async {
+          final advertiser = await engine._startAdvertiser();
+          // The room may already be over by the time mDNS answered.
+          if (engine._closed) {
+            await _stopAdvertiser(advertiser);
+          } else {
+            engine._advertiser = advertiser;
+          }
+        });
       }
       // Preload whatever the (idle) snapshot says — a no-op until setMedia.
       unawaited(engine.sync.onSnapshot(server.snapshot));
@@ -638,6 +630,20 @@ class JamHostEngine extends JamEngine {
   Timer? _addressTimer;
   Future<void>? _refreshing;
 
+  /// What the host asked for: whether the room should be advertised over
+  /// mDNS (§1). Set by [start]'s `discoverable`, then by [setDiscoverable].
+  /// Not the same as [discoverable], which says whether a responder is
+  /// actually carrying the room right now.
+  final ValueNotifier<bool> _discoveryEnabled = EngineValueNotifier<bool>(
+    false,
+  );
+
+  /// The tail of the advertising changes in flight. Every start, stop and
+  /// restart of [_advertiser] queues behind the one before it, so a host
+  /// switching visibility while a network change restarts the responder
+  /// never ends up with two advertisements, or with one it turned off.
+  Future<void> _advertising = Future<void>.value();
+
   /// Set while the built-in mDNS responder should be advertising the room
   /// but is not — its restart after an address change failed — so every
   /// re-scan tries again until it is back.
@@ -652,8 +658,100 @@ class JamHostEngine extends JamEngine {
   final ValueNotifier<List<PeerInfo>> _kicked =
       EngineValueNotifier<List<PeerInfo>>(const []);
 
-  /// Whether the room is currently advertised over mDNS (§1).
+  /// Whether the room is currently advertised over mDNS (§1): a responder
+  /// is carrying it right now. False on a platform without mDNS even when
+  /// the host asked for it ([discoveryEnabled]).
   bool get discoverable => _advertiser != null;
+
+  /// Whether the host wants the room shown to people nearby — what a
+  /// "Show to People Nearby" switch displays. [start]'s `discoverable`,
+  /// then whatever [setDiscoverable] last asked for.
+  bool get discoveryEnabled => _discoveryEnabled.value;
+
+  /// [discoveryEnabled], listenable: changes the moment [setDiscoverable]
+  /// is called, before the advertisement itself has caught up.
+  ValueListenable<bool> get discoveryEnabledListenable => _discoveryEnabled;
+
+  /// Turns the room's mDNS advertisement (§1) off or on while the jam runs.
+  ///
+  /// Off withdraws it with goodbye records (TTL 0), so browsers drop the
+  /// room at once rather than when its records expire; it stays off across
+  /// network changes until the host turns it back on. On starts it again
+  /// exactly as [start] does — the OS daemon first, the built-in responder
+  /// as the fallback — inside the same budget
+  /// ([JamRoomAdvertiser.totalTimeout]); stopping is bounded by it too.
+  /// Best-effort like the rest of advertising: a platform without mDNS
+  /// stays QR-only, and the next network re-scan tries again.
+  ///
+  /// [discoveryEnabledListenable] updates immediately. Calls are applied
+  /// in order, and the future completes once this one has been. A no-op
+  /// once the room has ended.
+  Future<void> setDiscoverable(bool enabled) {
+    if (_closed) return Future<void>.value();
+    _discoveryEnabled.value = enabled;
+    return _serially(_applyDiscovery);
+  }
+
+  Future<void> _applyDiscovery() async {
+    if (_closed) return;
+    // Read when this change runs, not when it was asked for: a burst of
+    // toggles settles on the last one instead of replaying each.
+    if (!_discoveryEnabled.value) {
+      _readvertisePending = false;
+      final current = _advertiser;
+      _advertiser = null;
+      await _stopAdvertiser(current);
+      return;
+    }
+    if (_advertiser != null) return;
+    final next = await _startAdvertiser();
+    if (_closed) {
+      await _stopAdvertiser(next);
+      return;
+    }
+    _advertiser = next;
+    // A host that asked for it gets the same retries as a room whose
+    // responder failed to restart: every re-scan until one takes.
+    _readvertisePending = next == null;
+  }
+
+  /// Queues [change] behind every advertising change already in flight.
+  /// Never fails: a change that throws is logged and the queue moves on.
+  Future<void> _serially(Future<void> Function() change) {
+    final next = _advertising.then((_) => change()).catchError((Object error) {
+      debugPrint('localjam: changing the mDNS advertisement failed ($error)');
+    });
+    _advertising = next;
+    return next;
+  }
+
+  /// Advertises the room as it stands now, or null when neither responder
+  /// took it inside the budget.
+  Future<JamRoomAdvertiser?> _startAdvertiser() => _bounded<JamRoomAdvertiser?>(
+    roomAdvertiserStarter(
+      sessionName: sessionName,
+      port: port,
+      token: token,
+      addresses: _lanAddresses.value,
+      timeout: _advertiseBudget,
+    ),
+    // The outer bound has to cover BOTH responders, or a daemon that eats
+    // its whole slice would take the fallback down with it.
+    JamRoomAdvertiser.totalTimeout,
+    () => null,
+  );
+
+  /// Withdraws [advertiser] (its goodbye records), inside the same budget a
+  /// start gets — a platform channel that stopped answering must not hold
+  /// up a toggle, a re-scan or the end of the room.
+  static Future<void> _stopAdvertiser(JamRoomAdvertiser? advertiser) async {
+    if (advertiser == null) return;
+    await _bounded<void>(
+      advertiser.stop(),
+      JamRoomAdvertiser.totalTimeout,
+      () {},
+    );
+  }
 
   /// Whether guests have been told this host is away (§3.5): true while the
   /// app is in the background in a state the OS may suspend.
@@ -1435,36 +1533,33 @@ class JamHostEngine extends JamEngine {
   /// changes by itself. A restart that fails leaves [_readvertisePending]
   /// set, and the next re-scan tries again — a failed restart must not leave
   /// the room undiscoverable for the rest of its life.
-  Future<void> _readvertise() async {
+  ///
+  /// Queued with [setDiscoverable]'s changes, and it only ever restores
+  /// what the host asked for: a room the host hid stays hidden whatever
+  /// the network does.
+  Future<void> _readvertise() => _serially(() async {
+    if (_closed) return;
+    if (!_discoveryEnabled.value) {
+      _readvertisePending = false;
+      return;
+    }
     final current = _advertiser;
     if (current != null && current.transport != 'builtin') return;
     if (current == null && !_readvertisePending) return; // Never advertised.
     _advertiser = null;
     _readvertisePending = true;
-    try {
-      await current?.stop();
-    } catch (error) {
-      debugPrint('localjam: stopping the mDNS responder failed ($error)');
-    }
+    // The old instance says goodbye before the new one announces, so a
+    // browser never holds both.
+    await _stopAdvertiser(current);
     if (_closed) return;
-    final next = await _bounded<JamRoomAdvertiser?>(
-      roomAdvertiserStarter(
-        sessionName: sessionName,
-        port: port,
-        token: token,
-        addresses: _lanAddresses.value,
-        timeout: _advertiseBudget,
-      ),
-      JamRoomAdvertiser.totalTimeout,
-      () => null,
-    );
+    final next = await _startAdvertiser();
     if (_closed) {
-      await next?.stop();
+      await _stopAdvertiser(next);
       return;
     }
     _advertiser = next;
     _readvertisePending = next == null;
-  }
+  });
 
   // --- Teardown ------------------------------------------------------------------
 
@@ -1497,6 +1592,7 @@ class JamHostEngine extends JamEngine {
     _away.dispose();
     _awaitingReadiness.dispose();
     _kicked.dispose();
+    _discoveryEnabled.dispose();
     _lanAddresses.dispose();
     _joinUri.dispose();
     disposeEngineState();
@@ -1530,7 +1626,8 @@ class JamHostEngine extends JamEngine {
     await _step('advertiser', () async {
       final advertiser = _advertiser;
       _advertiser = null;
-      await advertiser?.stop();
+      _readvertisePending = false;
+      await _stopAdvertiser(advertiser);
     });
     await _step('session guards', stopSessionGuards);
     await _step('subscriptions', () async {
