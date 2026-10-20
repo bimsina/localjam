@@ -21,6 +21,7 @@ import '../design/theme.dart';
 import '../design/tokens.dart';
 import '../design/typography.dart';
 import 'pressable.dart';
+import 'text_field.dart';
 
 /// Default labels.
 abstract final class JamDialogStrings {
@@ -325,10 +326,11 @@ class JamAlertButton extends StatelessWidget {
   }
 }
 
-/// The text field inside an alert: a filled rounded field with a
-/// `secondaryLabel` placeholder, and an optional footnote under it — [errorText] in `danger` (with a hairline
-/// round the field), else [helperText] in `secondaryLabel`. The keyboard
-/// follows the app's appearance, not the device's.
+/// The text field inside an alert: the app's one field ([JamTextField]) in
+/// subheadline, and an optional footnote under it — [errorText] in `danger`
+/// (with a hairline round the field), else [helperText] in
+/// `secondaryLabel`. The keyboard follows the app's appearance, not the
+/// device's.
 class JamAlertTextField extends StatelessWidget {
   const JamAlertTextField({
     super.key,
@@ -379,42 +381,24 @@ class JamAlertTextField extends StatelessWidget {
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Semantics(
-          label: semanticLabel ?? placeholder,
-          textField: true,
-          child: CupertinoTextField(
-            controller: controller,
-            autofocus: autofocus,
-            placeholder: placeholder,
-            keyboardType: keyboardType,
-            keyboardAppearance: jamKeyboardAppearance(context),
-            textCapitalization: textCapitalization,
-            textInputAction: textInputAction,
-            maxLength: maxLength,
-            minLines: minLines,
-            maxLines: maxLines,
-            autocorrect: autocorrect,
-            enableSuggestions: autocorrect,
-            clearButtonMode: OverlayVisibilityMode.editing,
-            style: context.jamSubheadline.copyWith(color: colors.label),
-            placeholderStyle: context.jamSubheadline.copyWith(
-              color: colors.secondaryLabel,
-            ),
-            cursorColor: colors.tint,
-            padding: const EdgeInsets.symmetric(
-              horizontal: JamSpace.md,
-              vertical: JamSpace.sm,
-            ),
-            decoration: BoxDecoration(
-              color: colors.fillSecondary,
-              border: errorText == null
-                  ? null
-                  : Border.all(color: colors.danger, width: 0.5),
-              borderRadius: BorderRadius.circular(JamRadius.field),
-            ),
-            onChanged: onChanged,
-            onSubmitted: onSubmitted,
-          ),
+        // The app's one field (CR-16): the same clear button, the same
+        // corner, as every other field.
+        JamTextField(
+          controller: controller,
+          autofocus: autofocus,
+          placeholder: placeholder,
+          semanticLabel: semanticLabel,
+          keyboardType: keyboardType,
+          textCapitalization: textCapitalization,
+          textInputAction: textInputAction,
+          maxLength: maxLength,
+          minLines: minLines,
+          maxLines: maxLines,
+          autocorrect: autocorrect,
+          style: context.jamSubheadline,
+          error: errorText != null,
+          onChanged: onChanged,
+          onSubmitted: onSubmitted,
         ),
         if (note != null) ...[
           const SizedBox(height: JamSpace.xs),
