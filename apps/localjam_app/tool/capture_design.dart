@@ -1258,6 +1258,17 @@ Future<void> captureStress(
       tolerateOverflow: true,
       note: 'Now Playing at 2× text (Android’s largest; iOS AX2 is 1.94×).',
     );
+    cap.scale = 3.1;
+    await cap.mount(const RoomScreen());
+    await cap.titleAtRest();
+    await cap.snap(
+      '48-player-ax5-text',
+      still: true,
+      tolerateOverflow: true,
+      note:
+          'Now Playing at iOS AX5 (3.1×): the accessibility layout, its '
+          'title wrapped between words, never inside one.',
+    );
     cap.scale = 1;
   } finally {
     await tester.pumpWidget(const SizedBox());
@@ -1300,6 +1311,7 @@ Future<void> captureStress(
   for (final (label, size, scale) in [
     ('narrow', const Size(360, 780), 1.0),
     ('narrow-2x-text', const Size(360, 780), 2.0),
+    ('ax5-text', const Size(402, 874), 3.1),
   ]) {
     cap.size = size;
     cap.scale = scale;
@@ -1315,7 +1327,8 @@ Future<void> captureStress(
       tolerateOverflow: true,
       note:
           'Long jam names and a seven-person Recent jam, '
-          '${size.width.toInt()} pt wide at ${scale.toStringAsFixed(0)}× '
+          '${size.width.toInt()} pt wide at '
+          '${scale == scale.roundToDouble() ? scale.toStringAsFixed(0) : scale}× '
           'text.',
     );
   }
