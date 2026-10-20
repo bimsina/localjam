@@ -427,10 +427,10 @@ void main() {
     });
     await tester.pump();
 
-    // We never left home, and the bar is still there saying so.
-    expect(find.text('This jam ended'), findsOneWidget);
+    // We never left home, and the bar is still there saying so — by name.
+    expect(find.text('Bar Room ended'), findsOneWidget);
 
-    await tester.tap(find.text('This jam ended'));
+    await tester.tap(find.text('Bar Room ended'));
     await tester.pumpAndSettle();
     // ...and it lands on the screen that explains it, with a way back in.
     expect(find.text('You Were Removed'), findsOneWidget);
@@ -449,7 +449,7 @@ void main() {
     expect(guest.phase, JamSessionPhase.idle);
     expect(find.text('Nearby'), findsOneWidget);
     expect(router.state.matchedLocation, '/');
-    expect(find.text('This jam ended'), findsNothing);
+    expect(find.text('Bar Room ended'), findsNothing);
 
     await tester.runAsync(host.leave);
 

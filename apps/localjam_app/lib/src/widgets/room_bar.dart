@@ -36,6 +36,9 @@ import 'sync_indicator.dart' show jamFadeThroughCurve;
 /// Strings the bar owns.
 abstract final class JamRoomBarStrings {
   static const String ended = 'This jam ended';
+
+  /// The same, naming the jam — as the page it opens names it.
+  static String endedNamed(String? jam) => jam == null ? ended : '$jam ended';
   static const String endedAction = 'Details';
   static const String rejoining = 'Getting back in…';
   static const String open = 'Open Now Playing';
@@ -430,6 +433,7 @@ class _RoomBarState extends State<RoomBar> {
     if (session.phase == JamSessionPhase.ended || session.rejoining) {
       return _place(
         _EndedBar(
+          name: session.endedJam?.name,
           borderRadius: widget.borderRadius,
           rejoining: session.rejoining,
         ),
@@ -493,7 +497,10 @@ class _RoomBarState extends State<RoomBar> {
 /// The same capsule in the terminal phase: what happened, and the way to
 /// the screen that explains it.
 class _EndedBar extends StatelessWidget {
-  const _EndedBar({this.borderRadius, this.rejoining = false});
+  const _EndedBar({this.name, this.borderRadius, this.rejoining = false});
+
+  /// The jam that ended, when known.
+  final String? name;
 
   final BorderRadius? borderRadius;
 
@@ -507,7 +514,7 @@ class _EndedBar extends StatelessWidget {
     void open() => context.push('/room');
     final label = rejoining
         ? JamRoomBarStrings.rejoining
-        : JamRoomBarStrings.ended;
+        : JamRoomBarStrings.endedNamed(name);
 
     return Semantics(
       container: true,
