@@ -5,6 +5,7 @@ library;
 
 export 'src/protocol/messages.dart';
 export 'src/protocol/codec.dart';
+export 'src/protocol/join_link.dart';
 export 'src/clock/clock_sync.dart';
 export 'src/session/permissions.dart';
 export 'src/session/playback_state.dart';
