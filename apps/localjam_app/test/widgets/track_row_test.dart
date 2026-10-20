@@ -6,6 +6,7 @@ import 'package:localjam_app/src/design/theme.dart';
 import 'package:localjam_app/src/design/tokens.dart';
 import 'package:localjam_app/src/widgets/avatar.dart';
 import 'package:localjam_app/src/widgets/list.dart';
+import 'package:localjam_app/src/widgets/progress.dart';
 import 'package:localjam_app/src/widgets/section.dart';
 import 'package:localjam_app/src/widgets/track_row.dart';
 
@@ -212,7 +213,7 @@ void main() {
         tester,
         const JamTrackRow(title: 'Blue Moon', prefetchProgress: 0.4),
       );
-      expect(find.byType(CupertinoActivityIndicator), findsOneWidget);
+      expect(find.byType(JamProgressRing), findsOneWidget);
     });
 
     testWidgets('offers a drag handle only when reordering is allowed', (

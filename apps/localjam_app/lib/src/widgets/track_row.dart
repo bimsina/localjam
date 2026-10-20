@@ -22,6 +22,7 @@ import 'artwork.dart';
 import 'avatar.dart';
 import 'list.dart';
 import 'pressable.dart';
+import 'progress.dart';
 
 /// Strings this row can put in front of a person.
 abstract final class JamTrackRowStrings {
@@ -379,10 +380,7 @@ class JamTrackRow extends StatelessWidget implements JamSelfSeparatingRow {
   Widget? _status(Color tertiary) {
     final progress = prefetchProgress;
     if (progress != null) {
-      return CupertinoActivityIndicator.partiallyRevealed(
-        progress: progress.clamp(0.0, 1.0),
-        color: tertiary,
-      );
+      return JamProgressRing(value: progress.clamp(0.0, 1.0), color: tertiary);
     }
     return null;
   }

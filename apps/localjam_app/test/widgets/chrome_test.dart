@@ -775,7 +775,7 @@ void main() {
       );
     });
 
-    testWidgets('progress is the iOS activity indicator and a capsule bar', (
+    testWidgets('progress is one ring — filling or turning — and a bar', (
       tester,
     ) async {
       await tester.pumpWidget(
@@ -790,8 +790,13 @@ void main() {
           ),
         ),
       );
-      expect(find.byType(CupertinoActivityIndicator), findsNWidgets(2));
+      expect(find.byType(JamProgressRing), findsNWidgets(2));
+      expect(find.byType(CupertinoActivityIndicator), findsNothing);
       expect(find.byType(CircularProgressIndicator), findsNothing);
+      expect(
+        tester.getSize(find.byType(JamProgressRing).first),
+        const Size.square(20),
+      );
       expect(tester.getSize(find.byType(JamProgressBar)).height, 4);
     });
   });

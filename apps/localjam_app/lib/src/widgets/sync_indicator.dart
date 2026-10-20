@@ -20,6 +20,7 @@ import 'package:localjam_client/localjam_client.dart';
 
 import '../design/tokens.dart';
 import '../design/typography.dart';
+import 'progress.dart';
 
 /// Everything this line says out loud.
 abstract final class JamSyncStrings {
@@ -306,9 +307,9 @@ class _StatusLineText extends StatelessWidget {
     final progress = line.progress;
     final icon = calm ? null : (line.icon ?? jamStatusToneIcon(line.tone));
     final Widget? lead = progress != null
-        ? CupertinoActivityIndicator.partiallyRevealed(
-            radius: scaler.scale(JamIconSize.inline) / 2 - 1,
-            progress: progress.clamp(0.0, 1.0),
+        ? JamProgressRing(
+            size: scaler.scale(JamProgressRing.inlineSize),
+            value: progress.clamp(0.0, 1.0),
             color: JamNowPlayingColors.text,
           )
         : icon == null
