@@ -79,7 +79,10 @@ class PlaybackSnapshot {
   /// Where [positionAt] saturates: 2^53 µs (~285 years), the largest span
   /// a double still counts in whole microseconds. No real position comes
   /// near it; it only bounds what an absurd anchor can make the formula say.
-  static const int maxPositionUs = 1 << 53;
+  /// A literal, not `1 << 53`: compiled to JS (the browser guest, §1.1) a
+  /// shift is 32-bit and that is 0, which saturated every playing position
+  /// to 0.
+  static const int maxPositionUs = 9007199254740992;
 
   final int rev;
   final PlaybackStatus status;
