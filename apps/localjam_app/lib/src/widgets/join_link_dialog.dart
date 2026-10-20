@@ -8,14 +8,15 @@
 /// It behaves like iOS's own text-field alerts:
 ///
 /// * **Join** stays disabled until the text parses as a jam link — no
-///   validating after the fact, no red field.
+///   validating while you type.
 /// * The clipboard is never read on open: on iOS that raises the system's
 ///   "Allow Paste" prompt every time, even for a clipboard that holds no
 ///   link. A **Paste** button reads it when asked to (shown only while the
 ///   clipboard has text, which iOS can tell without prompting).
 /// * Only a real attempt that fails — Return on a bad link, or pasting
-///   something that isn't one — says so, by swapping the alert's message
-///   line for the reason.
+///   something that isn't one — says so, as an error *on the field*: a red
+///   edge and the reason under it. The message keeps explaining what to
+///   paste, which is exactly when it is needed.
 library;
 
 import 'package:flutter/cupertino.dart';
@@ -159,10 +160,9 @@ class _JoinLinkDialogState extends State<JoinLinkDialog> {
           final valid = parseJoinUri(value.text) != null;
           return JamAlert(
             title: JamJoinLinkStrings.title,
-            // A failed attempt answers where the alert explains itself:
-            // centred, in the message's place — not a red line under the
-            // field.
-            message: _error ?? JamJoinLinkStrings.message,
+            // The instructions stay; a failed attempt is said where the
+            // mistake is, so it cannot be mistaken for them.
+            message: JamJoinLinkStrings.message,
             content: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -176,6 +176,7 @@ class _JoinLinkDialogState extends State<JoinLinkDialog> {
                   autocorrect: false,
                   onChanged: _onChanged,
                   onSubmitted: (_) => _submit(),
+                  errorText: _error,
                 ),
                 if (_canPaste && !valid) ...[
                   const SizedBox(height: JamSpace.xs),
