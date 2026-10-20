@@ -42,6 +42,7 @@ import 'package:localjam_app/src/widgets/notice.dart';
 import 'package:localjam_app/src/widgets/permission_sheet.dart';
 import 'package:localjam_app/src/widgets/room_sheet.dart';
 import 'package:localjam_app/src/widgets/scaffold.dart' show jamBottomBarInset;
+import 'package:localjam_app/src/widgets/text_field.dart' show JamTextField;
 import 'package:localjam_client/localjam_client.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
@@ -1053,10 +1054,7 @@ void main() {
       await tester.tap(find.text('Sunroom'));
       await tester.tap(find.text('Slow Morning'));
       await cap.snap('36-library-selected');
-      await tester.enterText(
-        find.byType(CupertinoSearchTextField),
-        'missing song',
-      );
+      await tester.enterText(find.byType(JamTextField), 'missing song');
       await cap.snap('37-library-no-results');
       await tester.pumpWidget(const SizedBox());
 
