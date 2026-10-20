@@ -101,30 +101,141 @@ String jamPeerName(PeerInfo peer) {
   return name.isEmpty ? kJamUnnamedPeer : name;
 }
 
+/// The words people are said in (R9): the same on every screen.
+abstract final class JamPeopleStrings {
+  /// Nobody but you.
+  static const String justYou = 'Just you';
+
+  /// What leads a summary of the people besides you: "With Mia".
+  static const String with_ = 'With';
+  static const String and = 'and';
+  static const String comma = ',';
+
+  /// "2 others": what is counted after the names. Never "1 other" — one
+  /// person left over is named instead.
+  static String others(int n) => '$n others';
+
+  /// The last resort when not even a letter of each name fits: "With 8
+  /// people".
+  static String withCount(int n) => '$with_ $n ${n == 1 ? 'person' : 'people'}';
+}
+
 /// People in a line, said the same way on every screen — the Now Playing
 /// footer, the Invite sheet, Past Jams: "Mia", "Mia and Theo", "Mia, Theo
 /// and Ana", "Mia, Theo and 2 others".
 ///
 /// At most [named] names before the rest are counted — except that one
-/// person left over is named rather than counted ("Mia, Theo and Ana", not
-/// "Mia, Theo and 1 other"), unless [countOne] asks for the short form a
-/// narrow line falls back to.
-String jamPeopleList(
-  List<String> names, {
-  int named = 2,
-  bool countOne = false,
-}) {
-  if (names.isEmpty) return '';
-  final shown = names.length == named + 1 && !countOne
-      ? names.length
-      : (names.length < named ? names.length : named);
-  final listed = names.take(shown).toList();
-  final rest = names.length - shown;
-  if (rest > 0) {
-    return '${listed.join(', ')} and $rest ${rest == 1 ? 'other' : 'others'}';
+/// person left over is always named rather than counted ("Mia, Theo and
+/// Ana", never "Mia, Theo and 1 other": the name is shorter to read and
+/// says more).
+String jamPeopleList(List<String> names, {int named = 2}) =>
+    JamPeoplePhrase.list(names, named: named).text;
+
+/// "Just you", "With Mia", "With Mia and Theo", "With Mia, Theo and Ana",
+/// "With Mia, Theo and 3 others" — the people in a jam besides you (R9),
+/// the one summary every screen says them with.
+String jamPeopleSummary(List<String> others) =>
+    JamPeoplePhrase.summary(others).text;
+
+/// A people phrase in its parts, so a narrow line can cut the *names* and
+/// keep the count whole ("With Electric Mongo… and 7 others" rather than
+/// "With Electric Mongoose Supreme an…").
+class JamPeoplePhrase {
+  const JamPeoplePhrase._(this.parts, this.total, {this.lead = ''});
+
+  /// The people besides you, as [jamPeopleSummary] says them.
+  factory JamPeoplePhrase.summary(List<String> others, {int named = 2}) {
+    if (others.isEmpty) {
+      return const JamPeoplePhrase._([
+        (text: JamPeopleStrings.justYou, name: false),
+      ], 0);
+    }
+    final list = JamPeoplePhrase.list(others, named: named);
+    return JamPeoplePhrase._(
+      [(text: '${JamPeopleStrings.with_} ', name: false), ...list.parts],
+      others.length,
+      lead: JamPeopleStrings.with_,
+    );
   }
-  if (listed.length == 1) return listed.single;
-  return '${listed.take(listed.length - 1).join(', ')} and ${listed.last}';
+
+  /// [names] in a line: "Mia", "Mia and Theo", "Mia, Theo and 2 others".
+  factory JamPeoplePhrase.list(List<String> names, {int named = 2}) {
+    if (names.isEmpty) return const JamPeoplePhrase._([], 0);
+    final cap = named < 1 ? 1 : named;
+    // One left over is named, not counted.
+    final shown = names.length <= cap + 1 ? names.length : cap;
+    final rest = names.length - shown;
+    final parts = <JamPeoplePart>[];
+    for (var i = 0; i < shown; i++) {
+      if (i > 0) {
+        final last = i == shown - 1 && rest == 0;
+        parts.add((
+          text: last
+              ? ' ${JamPeopleStrings.and} '
+              : '${JamPeopleStrings.comma} ',
+          name: false,
+        ));
+      }
+      parts.add((text: names[i], name: true));
+    }
+    if (rest > 0) {
+      parts.add((
+        text: ' ${JamPeopleStrings.and} ${JamPeopleStrings.others(rest)}',
+        name: false,
+      ));
+    }
+    return JamPeoplePhrase._(parts, names.length);
+  }
+
+  /// The phrase in order: the names ([JamPeoplePart.name]) and the words
+  /// between and after them.
+  final List<JamPeoplePart> parts;
+
+  /// How many people the phrase is about.
+  final int total;
+
+  /// The word before the names ("With"), or empty.
+  final String lead;
+
+  /// The whole phrase.
+  String get text => parts.map((p) => p.text).join();
+
+  /// The phrase with every name dropped for a count — "With 8 people" —
+  /// for a line too narrow for even a letter of each name. Null for a
+  /// phrase without names.
+  String? get counted {
+    if (total == 0) return null;
+    if (lead.isNotEmpty) return JamPeopleStrings.withCount(total);
+    return total == 1 ? '1 person' : '$total people';
+  }
+}
+
+/// One piece of a [JamPeoplePhrase]: a person's name (cut first when the
+/// line is short) or the words around them (never cut).
+typedef JamPeoplePart = ({String text, bool name});
+
+/// [names] with any repeated name told apart in [order] (indices into
+/// [names]; default: as given): the first "Sam" stays "Sam", the next is
+/// "Sam 2" (RB-19). Two people with one name are two people — two faces,
+/// two colours, "With Sam and Sam 2" — not one person counted twice.
+List<String> jamDistinctNames(List<String> names, {List<int>? order}) {
+  final out = List<String>.of(names);
+  final seen = <String, int>{};
+  final taken = names.toSet();
+  for (final i in order ?? [for (var i = 0; i < names.length; i++) i]) {
+    final name = names[i];
+    final n = (seen[name] ?? 0) + 1;
+    seen[name] = n;
+    if (n == 1) continue;
+    var k = n;
+    var candidate = '$name $k';
+    while (taken.contains(candidate)) {
+      candidate = '$name ${++k}';
+    }
+    taken.add(candidate);
+    out[i] = candidate;
+  }
+  return out;
 }
 
 /// Everyone in [engine]'s jam by peer id, in roster order: this device,

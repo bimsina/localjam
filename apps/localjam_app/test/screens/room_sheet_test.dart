@@ -705,7 +705,7 @@ void main() {
   });
 
   testWidgets('the Invite sheet shows the jam: its mark with the host\'s '
-      'face, its name once, and who is in it, host first', (tester) async {
+      'face, its name once, and who else is in it, host first', (tester) async {
     fakeLan([
       FakeInterface('en0', ['192.168.77.10']),
     ]);
@@ -724,21 +724,77 @@ void main() {
     expect(mark.name, 'Van Jam');
     expect(mark.hostName, 'Silky Puffin');
     expect(find.text('Van Jam'), findsOneWidget);
-    expect(find.text('Silky Puffin and Ana'), findsOneWidget);
+    // Said as the room's footer says it: the others, from your side.
+    expect(find.text('With Silky Puffin'), findsOneWidget);
+
+    // The host's own Invite: no face of their own on their own jam (R5).
+    await _pump(
+      tester,
+      host,
+      InvitePanel(
+        engine: host.engine!,
+        network: JamNetworkStatus.offline,
+        selfName: 'Silky Puffin',
+      ),
+    );
+    expect(tester.widget<JamMark>(find.byType(JamMark)).hostName, isNull);
+    expect(find.text('With Ana'), findsOneWidget);
 
     await tester.runAsync(guest.leave);
     await tester.runAsync(host.leave);
   });
 
-  test('who is in the jam, said briefly', () {
-    expect(RoomSheetStrings.everyone(['Bibek']), 'Bibek');
+  testWidgets('two people with one name are two people: told apart in the '
+      'roster, the People sheet and their colours', (tester) async {
+    final host = testSession();
+    await tester.runAsync(() async {
+      await host.startHost(sessionName: 'Van Jam', discoverable: false);
+      final uri = host.hostEngine!.joinUriFor(InternetAddress.loopbackIPv4);
+      for (final name in ['Sam', 'Sam', '']) {
+        final client = await JamGuestClient.connect(uri, clientName: name);
+        addTearDown(client.close);
+      }
+      expect(await _waitFor(() => host.engine!.peers.length == 3), isTrue);
+    });
+    final engine = host.engine!;
+    final names = jamRosterNames(engine, selfName: 'Silky Puffin');
+    expect(names.first, 'Silky Puffin');
+    expect(names.skip(1).toSet(), {'Sam', 'Sam 2', kJamUnnamedPeer});
+    final colors = jamRosterColors(engine, selfName: 'Silky Puffin');
+    final sams = [
+      for (final peer in engine.peers)
+        if (peer.clientName == 'Sam') colors[peer.peerId],
+    ];
+    expect(sams.toSet(), hasLength(2), reason: 'one colour each');
+
+    // Before this device's own name has loaded, its placeholder "You" is
+    // left out of the assignment: nobody else's colour depends on it
+    // (RB-20).
+    final early = jamRosterColors(engine, selfName: '');
+    final others = jamPeopleColors(names.skip(1));
+    for (final peer in engine.peers) {
+      final name = jamRosterNamesById(engine, selfName: '')[peer.peerId]!;
+      expect(early[peer.peerId], others[name], reason: name);
+    }
+
+    await _pump(tester, host, _panel(host));
+    expect(find.text('Sam'), findsOneWidget);
+    expect(find.text('Sam 2'), findsOneWidget);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.runAsync(host.leave);
+  });
+
+  test('who else is in the jam, said as every screen says it', () {
+    expect(RoomSheetStrings.everyone(const []), 'Just you');
+    expect(RoomSheetStrings.everyone(['Bibek']), 'With Bibek');
     expect(
       RoomSheetStrings.everyone(['Bibek', 'Mia', 'Theo']),
-      'Bibek, Mia and Theo',
+      'With Bibek, Mia and Theo',
     );
     expect(
       RoomSheetStrings.everyone(['Bibek', 'Mia', 'Theo', 'Ana', 'Okon']),
-      'Bibek, Mia and 3 others',
+      'With Bibek, Mia and 3 others',
     );
   });
 
@@ -763,6 +819,9 @@ void main() {
     expect(find.byType(QrImageView), findsNothing);
     expect(find.text(RoomSheetStrings.noNetworkTitle), findsOneWidget);
     expect(find.text(RoomSheetStrings.shareLink), findsNothing);
+    // The jam is still the jam above it: its mark and its name (CR-23).
+    expect(find.byType(JamMark), findsOneWidget);
+    expect(find.text('Van Jam'), findsOneWidget);
 
     // Wi-Fi comes up. Nobody reopens anything: the engine re-scans and the
     // code appears.

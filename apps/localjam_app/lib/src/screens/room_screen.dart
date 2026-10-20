@@ -80,15 +80,11 @@ abstract final class JamRoomStrings {
   static const String more = 'More';
 
   /// The footer names who you are listening with, from your side.
-  static const String justYou = 'Just you';
+  static const String justYou = JamPeopleStrings.justYou;
 
   /// "With Mia and Theo" — the people besides you, as every screen says
-  /// them ([jamPeopleList]).
-  static String withPeople(
-    List<String> others, {
-    int named = 2,
-    bool countOne = false,
-  }) => 'With ${jamPeopleList(others, named: named, countOne: countOne)}';
+  /// them ([jamPeopleSummary]).
+  static String withPeople(List<String> others) => jamPeopleSummary(others);
 
   // The ••• menu (spec §10.1): only what has no control of its own.
   static const String diagnostics = 'Diagnostics';
@@ -576,9 +572,8 @@ class _RoomScreenState extends State<RoomScreen>
         // and the Cupertino theme and platform brightness for the dynamic
         // colours Cupertino controls resolve (the segmented control).
         child: MediaQuery(
-          data: MediaQuery.of(
-            context,
-          ).copyWith(platformBrightness: Brightness.dark),
+          data: MediaQuery.of(context)
+              .copyWith(platformBrightness: Brightness.dark),
           child: Theme(
             data: _nowPlayingTheme(context),
             child: CupertinoTheme(
@@ -2189,16 +2184,10 @@ class _Footer extends StatelessWidget {
   final VoidCallback onPeople;
   final VoidCallback onQueue;
 
-  /// The label's candidates, longest first: the footer shows the first that
-  /// fits ("With Mia and Theo", then "With Mia and 1 other").
-  List<String> _labels() {
-    final others = roster.skip(1).toList();
-    if (others.isEmpty) return const [JamRoomStrings.justYou];
-    return [
-      if (others.length == 2) JamRoomStrings.withPeople(others),
-      JamRoomStrings.withPeople(others, named: 1, countOne: true),
-    ];
-  }
+  /// The label: the people besides you, said as every screen says them.
+  List<String> _labels() => [
+    JamRoomStrings.withPeople(roster.skip(1).toList()),
+  ];
 
   @override
   Widget build(BuildContext context) {

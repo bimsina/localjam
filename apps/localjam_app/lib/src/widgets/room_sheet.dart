@@ -137,10 +137,10 @@ abstract final class RoomSheetStrings {
       'People join your hotspot first, then scan to join.';
   static String qrLabel(String room) => 'Code to join $room';
 
-  /// Who is in the jam, under its name on the Invite sheet — the host
-  /// first: "Bibek", "Bibek and Mia", "Bibek, Mia and Theo", "Bibek, Mia
-  /// and 3 others".
-  static String everyone(List<String> names) => jamPeopleList(names);
+  /// Who else is in the jam, under its name on the Invite sheet — said as
+  /// the room's footer says it, the host first: "Just you", "With Bibek",
+  /// "With Bibek and Mia", "With Bibek, Mia and 3 others" (R9).
+  static String everyone(List<String> others) => jamPeopleSummary(others);
 
   static const String shareLink = 'Share Link';
   static const String copyLink = 'Copy Link';
@@ -152,11 +152,12 @@ abstract final class RoomSheetStrings {
 
   /// No Wi-Fi and no hotspot: there is no address a guest could reach, so
   /// there is no code to show. The engine re-checks every couple of seconds
-  /// and the code appears by itself once a network does.
-  static const String noNetworkTitle = 'No Network';
+  /// and the code appears by itself once a network does. Named as Nearby
+  /// names the same condition, in the same words (R11).
+  static const String noNetworkTitle = 'Not on Wi‑Fi';
   static const String noNetworkDetail =
-      'Connect to Wi‑Fi or turn on your hotspot. The code shows up here '
-      'as soon as there’s a network to share.';
+      'Join a Wi‑Fi network, or turn on your hotspot and have everyone '
+      'connect to it. The code shows up here as soon as you do.';
 
   /// What the OS share sheet is handed: a sentence, with the URI on a line
   /// of its own so the OS still linkifies it.
@@ -339,14 +340,17 @@ class _RoomPanelState extends State<RoomPanel> {
     final count = peers.length + (isHost ? 1 : 2);
 
     // Coloured over the same ordered names as the face pile, so a person
-    // is one colour on every screen of the jam (§10.10, D3).
+    // is one colour on every screen of the jam (§10.10, D3) — and named the
+    // way it names them, two Sams told apart.
     final faces = jamRosterColors(_engine, selfName: widget.selfName);
+    final names = jamRosterNamesById(_engine, selfName: widget.selfName);
     Color? faceOf(String peerId) => faces[peerId];
+    final hostId = _engine.hostPeer?.peerId ?? JamPermissions.hostPeerId;
 
     final people = <Widget>[
       // This device first, so you can see your own standing.
       JamPeerRow(
-        name: widget.selfName,
+        name: names[_engine.selfPeerId] ?? widget.selfName,
         color: faceOf(_engine.selfPeerId),
         role: isHost
             ? JamPeerRole.host
@@ -358,13 +362,13 @@ class _RoomPanelState extends State<RoomPanel> {
       // guest puts them back or the room looks a person short.
       if (!isHost)
         JamPeerRow(
-          name: _hostName(_engine),
-          color: faceOf(_engine.hostPeer?.peerId ?? JamPermissions.hostPeerId),
+          name: names[hostId] ?? _hostName(_engine),
+          color: faceOf(hostId),
           role: JamPeerRole.host,
         ),
       for (final peer in peers)
         JamPeerRow(
-          name: jamPeerName(peer),
+          name: names[peer.peerId] ?? jamPeerName(peer),
           color: faceOf(peer.peerId),
           role: _roleOf(permissions.roleOf(peer.peerId)),
           detail: _overrideDetail(permissions, peer.peerId),
@@ -650,13 +654,40 @@ String _hostName(JamEngine engine) {
 /// Everyone in [engine]'s jam by display name, in room order: this device
 /// ([selfName], or "You" before it is known), then — from a guest — the
 /// host, then everyone else. Parallel to `jamRosterPeerIds`.
+///
+/// Two people who share a name are told apart (RB-19): the host keeps the
+/// plain name, then the others take theirs in peer-id order — an order
+/// every phone in the jam agrees on — so the second "Sam" is "Sam 2" on
+/// every phone, in the footer, the People sheet and every credit.
 List<String> jamRosterNames(JamEngine engine, {required String selfName}) {
   final self = selfName.trim();
-  return <String>[
+  final names = <String>[
     self.isEmpty ? JamPeerRowStrings.you : self,
     if (engine is JamGuestEngine) _hostName(engine),
     for (final peer in engine.peers) jamPeerName(peer),
   ];
+  final ids = jamRosterPeerIds(engine);
+  final host = engine is JamGuestEngine ? 1 : 0;
+  final rest = [
+    for (var i = 0; i < names.length; i++)
+      if (i != host) i,
+  ]..sort((a, b) => _idAt(ids, a).compareTo(_idAt(ids, b)));
+  return jamDistinctNames(names, order: [host, ...rest]);
+}
+
+String _idAt(List<String> ids, int i) => i < ids.length ? ids[i] : '';
+
+/// [jamRosterNames] by peer id: who to name for a peer id — a credit, a
+/// row — the same way the footer and the People sheet name them.
+Map<String, String> jamRosterNamesById(
+  JamEngine engine, {
+  required String selfName,
+}) {
+  final ids = jamRosterPeerIds(engine);
+  final names = jamRosterNames(engine, selfName: selfName);
+  return {
+    for (var i = 0; i < ids.length && i < names.length; i++) ids[i]: names[i],
+  };
 }
 
 /// Each person's face colour in [engine]'s jam, by peer id (D3): the jam's
@@ -664,19 +695,27 @@ List<String> jamRosterNames(JamEngine engine, {required String selfName}) {
 /// in the jam agrees on — so a person is the same colour on every phone in
 /// the jam, and in the footer, the People sheet and every "Added by" credit
 /// on each, and on Past Jams afterwards.
+///
+/// Before this device's own name has loaded ([selfName] empty) it is left
+/// out of the assignment, so the placeholder "You" never pushes someone off
+/// their colour for the moment it takes the name to arrive (RB-20).
 Map<String, Color> jamRosterColors(
   JamEngine engine, {
   required String selfName,
 }) {
   final ids = jamRosterPeerIds(engine);
   final names = jamRosterNames(engine, selfName: selfName);
-  final byName = jamPeopleColors(
-    names,
-    host: names[engine is JamGuestEngine ? 1 : 0],
-  );
+  final known = selfName.trim().isNotEmpty;
+  final hostIndex = engine is JamGuestEngine ? 1 : 0;
+  final byName = jamPeopleColors([
+    for (var i = 0; i < names.length; i++)
+      if (known || i != 0) names[i],
+  ], host: known || hostIndex != 0 ? names[hostIndex] : null);
   return {
     for (var i = 0; i < ids.length && i < names.length; i++)
-      ids[i]: byName[names[i]] ?? identityColor(names[i]),
+      ids[i]:
+          (known || i != 0 ? byName[names[i]] : null) ??
+          identityColor(names[i]),
   };
 }
 
@@ -938,7 +977,7 @@ class InvitePanel extends StatelessWidget {
       host,
       host.lanAddresses,
       (context, addresses) => addresses.isEmpty
-          ? const _NoNetworkInvite()
+          ? _NoNetworkInvite(engine: host, selfName: selfName)
           : _whileLive(
               host,
               host.joinUriListenable,
@@ -956,25 +995,38 @@ class InvitePanel extends StatelessWidget {
   }
 }
 
-/// Where the code would be, while there is no network to put in it.
+/// Where the code would be, while there is no network to put in it: the
+/// jam is still the jam (its mark, its name, who is in it), and under it
+/// what would make a code.
 class _NoNetworkInvite extends StatelessWidget {
-  const _NoNetworkInvite();
+  const _NoNetworkInvite({required this.engine, required this.selfName});
+
+  final JamEngine engine;
+  final String selfName;
 
   @override
   Widget build(BuildContext context) => Padding(
     padding: const EdgeInsets.fromLTRB(
       JamSpace.page,
-      JamSpace.huge,
+      JamSpace.lg,
       JamSpace.page,
       JamSpace.giant,
     ),
-    child: Semantics(
-      liveRegion: true,
-      child: const JamEmptyState(
-        icon: CupertinoIcons.wifi_slash,
-        title: RoomSheetStrings.noNetworkTitle,
-        body: RoomSheetStrings.noNetworkDetail,
-      ),
+    child: Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _InviteIdentity(engine: engine, selfName: selfName),
+        const SizedBox(height: JamSpace.huge),
+        Semantics(
+          liveRegion: true,
+          child: const JamEmptyState(
+            icon: CupertinoIcons.wifi_slash,
+            title: RoomSheetStrings.noNetworkTitle,
+            body: RoomSheetStrings.noNetworkDetail,
+          ),
+        ),
+      ],
     ),
   );
 }
@@ -1031,14 +1083,10 @@ class _Invite extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // What is being shared, as the jam looks everywhere else (D4):
-          // on the code's own width, so the two read as one card's worth.
-          Center(
-            child: SizedBox(
-              width: _qrSize + _platePadding * 2,
-              child: _InviteIdentity(engine: engine, selfName: selfName),
-            ),
-          ),
+          // What is being shared, as the jam looks everywhere else (D4),
+          // across the sheet: a long name or a long list of people gets the
+          // width it needs, not the code's (RB-15).
+          _InviteIdentity(engine: engine, selfName: selfName),
           const SizedBox(height: JamSpace.xl),
           Center(
             child: Semantics(
@@ -1173,23 +1221,19 @@ class _InviteIdentityState extends State<_InviteIdentity> {
     final names = jamRosterNames(engine, selfName: widget.selfName);
     final faces = jamRosterColors(engine, selfName: widget.selfName);
     final guest = engine is JamGuestEngine;
-    final hostName = names[guest ? 1 : 0];
-    final hostId = guest
-        ? (engine.hostPeer?.peerId ?? JamPermissions.hostPeerId)
-        : engine.selfPeerId;
-    // The host first: it is their jam a guest is being asked into.
-    final people = [
-      hostName,
-      for (final n in names)
-        if (n != hostName) n,
-    ];
+    final hostId = engine.hostPeer?.peerId ?? JamPermissions.hostPeerId;
+    // Everyone but you, the host first (the roster's order already): it is
+    // their jam a guest is being asked into.
+    final others = names.skip(1).toList();
 
+    // The host's face only where it says something (R5): on a guest's
+    // Invite, whose jam this is. Never your own face on your own jam.
     Widget mark(Uint8List? cover) => JamMark(
       name: engine.sessionName,
       size: JamMarkSize.row,
       covers: [if (cover != null && cover.isNotEmpty) MemoryImage(cover)],
-      hostName: hostName,
-      hostColor: faces[hostId],
+      hostName: guest ? names[1] : null,
+      hostColor: guest ? faces[hostId] : null,
     );
     final future = _coverFor(engine.currentItem);
 
@@ -1214,10 +1258,9 @@ class _InviteIdentityState extends State<_InviteIdentity> {
                 overflow: TextOverflow.ellipsis,
                 style: context.jamTitle3,
               ),
-              Text(
-                RoomSheetStrings.everyone(people),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
+              // Names cut before the count is (R9).
+              JamPeopleLine(
+                JamPeoplePhrase.summary(others),
                 style: context.jamSubheadline.copyWith(
                   color: colors.secondaryLabel,
                 ),

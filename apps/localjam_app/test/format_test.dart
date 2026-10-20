@@ -10,6 +10,78 @@ import 'package:localjam_client/localjam_client.dart';
 import 'harness.dart';
 
 void main() {
+  group('people, said one way (R9)', () {
+    test('the summary, from your side', () {
+      const table = {
+        <String>[]: 'Just you',
+        ['Mia']: 'With Mia',
+        ['Mia', 'Theo']: 'With Mia and Theo',
+        ['Mia', 'Theo', 'Ana']: 'With Mia, Theo and Ana',
+        ['Mia', 'Theo', 'Ana', 'Jo']: 'With Mia, Theo and 2 others',
+        ['Mia', 'Theo', 'Ana', 'Jo', 'Okon']: 'With Mia, Theo and 3 others',
+      };
+      for (final MapEntry(key: others, value: said) in table.entries) {
+        expect(jamPeopleSummary(others), said, reason: '$others');
+        expect(JamPeoplePhrase.summary(others).text, said);
+      }
+    });
+
+    test('a list without the "With"', () {
+      expect(jamPeopleList(const []), '');
+      expect(jamPeopleList(['Mia']), 'Mia');
+      expect(jamPeopleList(['Mia', 'Theo', 'Ana']), 'Mia, Theo and Ana');
+      expect(
+        jamPeopleList(['Mia', 'Theo', 'Ana', 'Jo', 'Okon']),
+        'Mia, Theo and 3 others',
+      );
+    });
+
+    test('never "and 1 other": one person left over is named', () {
+      final names = [for (var i = 0; i < 12; i++) 'P$i'];
+      for (var n = 1; n <= names.length; n++) {
+        final said = jamPeopleSummary(names.take(n).toList());
+        expect(said, isNot(contains(' and 1 other')), reason: said);
+        for (final named in [1, 2, 3]) {
+          expect(
+            jamPeopleList(names.take(n).toList(), named: named),
+            isNot(contains(' and 1 other')),
+          );
+        }
+      }
+    });
+
+    test('its parts: the names apart from the words that are never cut', () {
+      final phrase = JamPeoplePhrase.summary(['Mia', 'Theo', 'Ana', 'Jo']);
+      expect(
+        [
+          for (final p in phrase.parts)
+            if (p.name) p.text,
+        ],
+        ['Mia', 'Theo'],
+      );
+      expect(phrase.parts.last, (text: ' and 2 others', name: false));
+      expect(phrase.counted, 'With 4 people');
+      expect(JamPeoplePhrase.summary(const []).counted, isNull);
+    });
+
+    test('two people with one name are two people', () {
+      expect(jamDistinctNames(['Sam', 'Mia', 'Sam']), ['Sam', 'Mia', 'Sam 2']);
+      expect(jamDistinctNames(['Guest', 'Guest', 'Guest']), [
+        'Guest',
+        'Guest 2',
+        'Guest 3',
+      ]);
+      // A real "Sam 2" keeps their name; the next Sam takes the next one.
+      expect(jamDistinctNames(['Sam', 'Sam 2', 'Sam']), [
+        'Sam',
+        'Sam 2',
+        'Sam 3',
+      ]);
+      // In the order asked: who keeps the plain name is decided by it.
+      expect(jamDistinctNames(['Sam', 'Sam'], order: [1, 0]), ['Sam 2', 'Sam']);
+    });
+  });
+
   group('jamPeerName', () {
     test('a name, trimmed', () {
       expect(

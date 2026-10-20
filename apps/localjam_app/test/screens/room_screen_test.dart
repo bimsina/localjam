@@ -847,15 +847,12 @@ void main() {
     });
   });
 
-  test('the footer label shortens before it cuts a name', () {
+  test('the footer says people the one way every screen does', () {
+    expect(JamRoomStrings.withPeople(const []), JamRoomStrings.justYou);
     expect(JamRoomStrings.withPeople(['Mia', 'Theo']), 'With Mia and Theo');
     expect(
-      JamRoomStrings.withPeople(['Mia', 'Theo'], named: 1, countOne: true),
-      'With Mia and 1 other',
-    );
-    expect(
-      JamRoomStrings.withPeople(['Mia', 'Theo', 'Ana', 'Jo'], named: 1),
-      'With Mia and 3 others',
+      JamRoomStrings.withPeople(['Mia', 'Theo', 'Ana', 'Jo']),
+      'With Mia, Theo and 2 others',
     );
   });
 
@@ -1004,9 +1001,8 @@ void main() {
         child: MaterialApp(
           theme: jamLightTheme(),
           builder: (context, child) => MediaQuery(
-            data: MediaQuery.of(
-              context,
-            ).copyWith(textScaler: const TextScaler.linear(1.3)),
+            data: MediaQuery.of(context)
+                .copyWith(textScaler: const TextScaler.linear(1.3)),
             child: child!,
           ),
           home: const RoomScreen(),
