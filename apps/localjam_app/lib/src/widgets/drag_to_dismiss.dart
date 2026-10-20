@@ -65,6 +65,20 @@ class _DragToDismissState extends State<DragToDismiss>
     });
   }
 
+  /// Springs the page back from wherever the finger left it — or, under
+  /// reduced motion, puts it straight back.
+  void _springBack() {
+    if (MediaQuery.maybeDisableAnimationsOf(context) ?? false) {
+      _settle.stop();
+      setState(() => _offset = 0);
+      return;
+    }
+    _settleFrom = _offset;
+    _settle
+      ..reset()
+      ..forward();
+  }
+
   @override
   void dispose() {
     _settle
@@ -91,10 +105,7 @@ class _DragToDismissState extends State<DragToDismiss>
       widget.onDismiss();
       return;
     }
-    _settleFrom = _offset;
-    _settle
-      ..reset()
-      ..forward();
+    _springBack();
   }
 
   @override
@@ -119,12 +130,7 @@ class _DragToDismissState extends State<DragToDismiss>
       // Vertical only, so the scrubber's horizontal drag still wins the arena.
       onVerticalDragUpdate: _onUpdate,
       onVerticalDragEnd: _onEnd,
-      onVerticalDragCancel: () {
-        _settleFrom = _offset;
-        _settle
-          ..reset()
-          ..forward();
-      },
+      onVerticalDragCancel: _springBack,
       child: Transform.translate(offset: Offset(0, _offset), child: page),
     );
   }

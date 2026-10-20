@@ -4,17 +4,20 @@
 /// `engine.can(JamCapability…)`, so a host and a guest render the same screen
 /// and the difference is what you may touch.
 ///
-/// Immersive in both themes (D4): the current cover, blurred, fills the
-/// window behind white text — the only gradient-like surface in the app. The
-/// subtree is themed dark so every shared component on it (menus, glass
-/// buttons, the docked People panel) resolves its dark, white-on-colour
-/// variant whatever the app's appearance. The queue opens in place (D5): the
-/// cover shrinks into a thumbnail beside the title and the list takes the
-/// middle of the page, with the scrubber and transport pinned.
+/// Immersive in both themes (D4): a matte wash of the cover's colour that
+/// falls into warm charcoal fills the window behind white text. The subtree
+/// is themed dark so every shared component on it (menus, the docked People
+/// panel through `JamOnBackdrop`) resolves its dark, white-on-colour variant
+/// whatever the app's appearance. The song is the focus — cover, title,
+/// artist, timeline, the ivory play square; the people are one line in the
+/// footer and, when someone else put the song on, one quiet credit. The
+/// queue opens in place (D5): the cover shrinks into a thumbnail beside the
+/// title and the list takes the middle of the page, with the scrubber and
+/// transport pinned.
 ///
 /// Quiet when correct: nothing says "in sync". A problem is one footnote
-/// under the room's name; a state that wants something done is a glass
-/// capsule under the header with its one action.
+/// under the room's name; a state that wants something done is a notice
+/// above the cover with its one action.
 ///
 /// Leaving is explicit. The chevron (and the drag down) minimises back to
 /// Home with the session still running; ending or leaving is in the •••
@@ -1288,8 +1291,8 @@ class _SideOnStage extends StatelessWidget {
   }
 }
 
-/// Grabber, then: glass chevron · room name (and its one problem line) ·
-/// glass invite.
+/// Grabber, then: chevron · room name (and its one problem line) · invite,
+/// the glyphs on the player's margin.
 class _Header extends StatelessWidget {
   const _Header({
     required this.engine,
@@ -1598,8 +1601,9 @@ class _EngineNotice extends StatelessWidget {
   }
 }
 
-/// The cover: square, radius 12, the one shadow; springs to 0.86 while the
-/// room is paused (§6.3), and shrinks into the 56 thumbnail as [t] runs.
+/// The cover: square, the large-cover radius, the one shadow; springs to
+/// 0.96 while the room is paused (§6.3), and shrinks into the 56 thumbnail
+/// as [t] runs.
 class _Art extends StatefulWidget {
   const _Art({
     required this.engine,

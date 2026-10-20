@@ -460,6 +460,27 @@ class _RoomPanelState extends State<RoomPanel> {
       children: [JamSectionList(children: sections)],
     );
 
+    if (widget.inSheet) {
+      // The sheet opens at its floating medium height, whose bottom corners
+      // would otherwise slice the card scrolled under them: the list fades
+      // out over the corner's height instead, so it reads as "more below".
+      // An alpha mask, not a painted gradient.
+      return ShaderMask(
+        blendMode: BlendMode.dstIn,
+        shaderCallback: (rect) {
+          final fade = rect.height <= 0
+              ? 0.0
+              : (JamRadius.sheetFloating / rect.height).clamp(0.0, 1.0);
+          return LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: const [JamFixedColors.white, JamFixedColors.clear],
+            stops: [1 - fade, 1],
+          ).createShader(rect);
+        },
+        child: list,
+      );
+    }
     if (!_onBackdrop) return list;
     // Docked beside the player (D7): no cards on the cover's colours. The
     // panel's shade is the ground, the rows are plain, and the text is the
