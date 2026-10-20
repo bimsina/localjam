@@ -213,6 +213,55 @@ void main() {
   });
 
   group('JamSection', () {
+    testWidgets('lone rows share one corner whatever their height; more '
+        'rows take the section\'s 20', (tester) async {
+      RRect clipOf(Finder section) {
+        final box = find.descendant(
+          of: section,
+          matching: find.byType(ClipRRect),
+        );
+        return tester
+            .widget<ClipRRect>(box)
+            .clipper!
+            .getClip(tester.getSize(box));
+      }
+
+      await tester.pumpWidget(
+        _host(
+          const Column(
+            children: [
+              JamSection(
+                key: ValueKey('short'),
+                children: [JamRow(title: 'Guests can')],
+              ),
+              JamSection(
+                key: ValueKey('tall'),
+                children: [
+                  JamRow(title: 'Show to people nearby', subtitle: 'Detail'),
+                ],
+              ),
+              JamSection(key: ValueKey('cell'), child: SizedBox(height: 64)),
+              JamSection(
+                key: ValueKey('two'),
+                children: [
+                  JamRow(title: 'One'),
+                  JamRow(title: 'Two'),
+                ],
+              ),
+            ],
+          ),
+        ),
+      );
+      for (final key in ['short', 'tall', 'cell']) {
+        expect(
+          clipOf(find.byKey(ValueKey(key))).tlRadiusX,
+          JamRadius.loneRow,
+          reason: key,
+        );
+      }
+      expect(clipOf(find.byKey(const ValueKey('two'))).tlRadiusX, 20);
+    });
+
     testWidgets('inset grouped: radius, surface, page margin, header/footer', (
       tester,
     ) async {
@@ -231,7 +280,7 @@ void main() {
           matching: find.byType(ClipRRect),
         ),
       );
-      // Rounded by its height: 26, held under half a lone row.
+      // A lone row is a soft rectangle at 12, whatever its height.
       final block = tester.getSize(
         find.descendant(
           of: find.byType(JamSection),
@@ -242,7 +291,7 @@ void main() {
         clip.clipper!.getClip(block),
         RRect.fromRectAndRadius(
           Offset.zero & block,
-          Radius.circular(JamRadius.sectionFor(block.height)),
+          const Radius.circular(JamRadius.loneRow),
         ),
       );
       expect(

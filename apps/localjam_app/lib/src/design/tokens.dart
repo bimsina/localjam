@@ -656,7 +656,7 @@ abstract final class JamMetrics {
 /// | Toast, player banner | 16 ([notice]) |
 /// | Mini player | 20 ([miniPlayer]) |
 /// | Play square (continuous corners) | 28 ([playSquare]) |
-/// | Inset-grouped section | 20 (a lone row: 12 — see [sectionFor]) |
+/// | Inset-grouped section | 20 ([sectionFor]); a lone row 12 ([loneRow]) |
 /// | Sheet, edge-attached / floating | 38 |
 /// | Alert | 34 |
 /// | Pull-down menu | 22 |
@@ -708,9 +708,14 @@ abstract final class JamRadius {
   static const double section = 20;
 
   /// The section radius for a block [height] tall: [section], but never
-  /// so round that a single row reads as a pill (CR-17) — held 10 under
-  /// half its height, so a lone 44 row is a soft rectangle at [md].
+  /// so round that a short block reads as a pill (CR-17) — held 10 under
+  /// half its height.
   static double sectionFor(double height) => _softFor(height, section);
+
+  /// A block of one row — a toggle, Guests can, the one Add songs row, the
+  /// jam's name field — whatever its height: lone rows stacked on one page
+  /// share one corner rather than each drifting with its own height.
+  static const double loneRow = md;
 
   /// [max], held [_kSoftMargin] under half of [height] and never under [md]:
   /// the one rule that keeps a short block from turning into a capsule

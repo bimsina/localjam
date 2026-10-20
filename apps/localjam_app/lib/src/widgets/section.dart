@@ -159,10 +159,12 @@ class JamSection extends StatelessWidget {
 
     if (!plain) {
       final elevated = this.elevated ?? JamGroupedSurface.elevatedOf(context);
+      // A block of one row (or of one custom cell) is a lone row: 12,
+      // whatever its height. More rows: 20, held under half the block's
+      // height.
+      final lone = rows == null || rows.length == 1;
       body = ClipRRect(
-        // 20, but a block of one 44 row would be a pill at 20: the radius
-        // is held under half the block's height.
-        clipper: const _SectionClipper(),
+        clipper: _SectionClipper(lone: lone),
         child: ColoredBox(
           color: elevated
               ? colors.elevatedGroupedSurface
@@ -172,7 +174,7 @@ class JamSection extends StatelessWidget {
       );
       if (bordered) {
         body = CustomPaint(
-          foregroundPainter: _SectionEdge(colors.separator),
+          foregroundPainter: _SectionEdge(colors.separator, lone: lone),
           child: body,
         );
       }
@@ -250,25 +252,33 @@ class JamSection extends StatelessWidget {
   }
 }
 
-/// Rounds a section's block by [JamRadius.sectionFor] its height.
+/// A section block's corner: [JamRadius.loneRow] for a [lone] row,
+/// otherwise [JamRadius.sectionFor] its height.
+double _blockRadius(Size size, {required bool lone}) =>
+    lone ? JamRadius.loneRow : JamRadius.sectionFor(size.height);
+
+/// Rounds a section's block ([_blockRadius]).
 class _SectionClipper extends CustomClipper<RRect> {
-  const _SectionClipper();
+  const _SectionClipper({required this.lone});
+
+  final bool lone;
 
   @override
   RRect getClip(Size size) => RRect.fromRectAndRadius(
     Offset.zero & size,
-    Radius.circular(JamRadius.sectionFor(size.height)),
+    Radius.circular(_blockRadius(size, lone: lone)),
   );
 
   @override
-  bool shouldReclip(_SectionClipper oldClipper) => false;
+  bool shouldReclip(_SectionClipper oldClipper) => oldClipper.lone != lone;
 }
 
 /// A [JamSection.bordered] block's edge, on the block's own radius.
 class _SectionEdge extends CustomPainter {
-  const _SectionEdge(this.color);
+  const _SectionEdge(this.color, {required this.lone});
 
   final Color color;
+  final bool lone;
 
   static const double _width = 0.5;
 
@@ -278,7 +288,7 @@ class _SectionEdge extends CustomPainter {
     canvas.drawRRect(
       RRect.fromRectAndRadius(
         (Offset.zero & size).deflate(inset),
-        Radius.circular(JamRadius.sectionFor(size.height) - inset),
+        Radius.circular(_blockRadius(size, lone: lone) - inset),
       ),
       Paint()
         ..style = PaintingStyle.stroke
@@ -288,7 +298,8 @@ class _SectionEdge extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(_SectionEdge old) => old.color != color;
+  bool shouldRepaint(_SectionEdge old) =>
+      old.color != color || old.lone != lone;
 }
 
 /// Stacks sections with the standard [JamSpace.section] gap.
