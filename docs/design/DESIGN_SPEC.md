@@ -102,8 +102,9 @@ no status dots or connection badges, no emoji and no filler copy.
     it adds something: a guest's Invite sheet and the page a jam ends on. It
     never appears on list rows (Nearby, Recent, Past jams), never shows your
     own face, and is never guessed from a name.
-  - Sizes: Nearby 44, rows and Invite 56, ended and past-jam pages 88. On the
-    Now Playing backdrop it is the empty room's quiet see-through tile.
+  - Sizes: Nearby 44, rows and Invite 56, ended and past-jam pages 88, the
+    empty room 152. Its monogram is always 0.46 of the tile. On the Now
+    Playing backdrop it is a quiet see-through tile.
 - **People phrasing (R9).** One function produces every summary: "Just
   you", "With Mia", "With Mia and Theo", "With Mia, Theo and 3 others".
   - It never says "and 1 other"; a single extra person is named instead.
@@ -141,8 +142,10 @@ no status dots or connection badges, no emoji and no filler copy.
   The queue opens in place. The cover shrinks to a 56 pt thumbnail beside the
   title, and the scrubber and transport stay pinned. Problems are one footnote
   under the jam's name. A state that needs action is a banner above the cover
-  with one action. With nothing playing, the room shows its mark, "Nothing
-  playing", and Add songs where the play square will be.
+  with one action. With nothing playing, the room shows its 152 mark on
+  the title's edge in the cover's square, "Nothing playing", and Add songs
+  right under it, so the three read as one invitation. Side-on and in the
+  accessibility layout, Add songs stands where the play square will be.
 - **The room's palette (R2).** Everything opened from inside the room
   (sheets, alerts, menus, People, Invite, Sound offset, Diagnostics) uses the
   room's dark palette in both themes.

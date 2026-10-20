@@ -75,8 +75,10 @@ void main() {
     expect(mark.onBackdrop, isTrue);
     expect(mark.name, 'Van Jam');
     expect(mark.cover, isNull);
-    // "Nothing playing" alone, and Add Songs where play will be: on the
-    // play square's line (IR-1), the ivory object always the next step.
+    // "Nothing playing" alone, and — side-on, as this window has it — Add
+    // songs where play will be: on the play square's line (IR-1), the ivory
+    // object always the next step. (Upright, it sits under the title: see
+    // "an empty room on a phone".)
     expect(find.text(JamRoomStrings.nothingQueuedBody), findsNothing);
     final square = find.descendant(
       of: find.byType(JamTransport),
@@ -431,6 +433,84 @@ void main() {
     );
     await tester.pumpAndSettle();
   }
+
+  testWidgets('an empty room on a phone: the jam\'s mark, not a cover-sized '
+      'slab, and Add songs right under "Nothing playing"', (tester) async {
+    final session = testSession();
+    await startTestHost(tester, session, 'Sunday');
+    await resize(tester, const Size(402, 874));
+    await pumpRoom(tester, session);
+    expect(tester.takeException(), isNull);
+
+    // The mark at the size a page draws a jam, on the title's edge just
+    // over it, in the square the first cover will fill — not a 345 grey
+    // tile with a small letter.
+    final mark = find.descendant(
+      of: find.byType(RoomScreen),
+      matching: find.byType(JamMark),
+    );
+    final markRect = tester.getRect(mark);
+    expect(markRect.width, closeTo(152, 0.01));
+    expect(markRect.height, closeTo(152, 0.01));
+    final title = tester.getRect(find.text(JamRoomStrings.nothingPlaying));
+    expect(markRect.left, closeTo(title.left, 0.5));
+    expect(title.top - markRect.bottom, inInclusiveRange(24, 64));
+    // Its letter is a page mark's: nearly half the tile.
+    expect(
+      tester
+          .widget<Text>(find.descendant(of: mark, matching: find.text('S')))
+          .style!
+          .fontSize,
+      closeTo(152 * 0.46, 0.01),
+    );
+
+    // Add songs is the title's one action, on its edge and just under it —
+    // not 120 pt further down where play will be.
+    final add = tester.getRect(
+      find.ancestor(
+        of: find.text(JamRoomStrings.addSongs),
+        matching: find.byType(JamButton),
+      ),
+    );
+    expect(add.left, closeTo(title.left, 0.5));
+    expect(add.top - title.bottom, inInclusiveRange(12, 40));
+    final square = tester.getRect(
+      find.descendant(
+        of: find.byType(JamTransport),
+        matching: find.byType(AnimatedContainer),
+      ),
+    );
+    expect(add.bottom, lessThan(square.top));
+    // Still the only Add songs, and it takes the tap: the hidden timeline
+    // and transport under it don't.
+    expect(find.text(JamRoomStrings.addSongs), findsOneWidget);
+    final button = tester.renderObject(
+      find.ancestor(
+        of: find.text(JamRoomStrings.addSongs),
+        matching: find.byType(JamButton),
+      ),
+    );
+    expect(
+      tester.hitTestOnBinding(add.center).path.any((e) => e.target == button),
+      isTrue,
+    );
+
+    // The list opens in place: its own Add songs row takes over, and the
+    // mark fills the 56 thumbnail.
+    await tester.tap(find.bySemanticsLabel(JamRoomStrings.queue));
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+    expect(tester.getSize(mark).width, closeTo(JamArtworkSize.list, 0.01));
+    expect(
+      find.ancestor(
+        of: find.text(JamRoomStrings.addSongs),
+        matching: find.byType(JamButton),
+      ),
+      findsNothing,
+    );
+
+    await leaveTestSession(tester, session);
+  });
 
   testWidgets('the room holds its shape in landscape', (tester) async {
     // An Android landscape build overflowed the player by 113 px: the hero

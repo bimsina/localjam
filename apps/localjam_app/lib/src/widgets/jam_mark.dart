@@ -27,9 +27,11 @@
 /// JamMark(name: room.name, size: JamMarkSize.nearby)                      // Nearby: monogram only
 /// JamMark(name: record.sessionName, size: JamMarkSize.row, cover: cover)  // Past Jams
 /// JamMark(name: jam, size: JamMarkSize.row, cover: cover, hostName: host) // Invite, as a guest
-/// JamMark(name: jam, size: 332, onBackdrop: true)                         // the empty room
+/// JamMark(name: jam, size: 152, onBackdrop: true)                         // the empty room
 /// ```
 library;
+
+import 'dart:math' as math;
 
 import 'package:flutter/widgets.dart';
 import 'package:flutter_svg/flutter_svg.dart';
@@ -126,11 +128,10 @@ class JamMark extends StatelessWidget {
   static double badgeSizeFor(double size) =>
       (size * 0.42).roundToDouble().clamp(16.0, 36.0);
 
-  /// The monogram's size on a mark [size] across: nearly half the tile on
-  /// a list or page mark, but quiet on a cover-sized one, where half the
-  /// tile would be a shout (IR-1).
-  static double monogramSizeFor(double size) =>
-      size <= 96 ? size * 0.46 : (size * 0.2).clamp(44.0, 72.0);
+  /// The monogram's size on a mark [size] across: nearly half the tile, at
+  /// every size a mark is drawn — Nearby's, a page's, the empty room's — so
+  /// it is always the same object. Capped where a mark would be a poster.
+  static double monogramSizeFor(double size) => math.min(size * 0.46, 72);
 
   /// The letter a jam called [name] is marked with: its first letter or
   /// digit, upper-cased; null when it has none.

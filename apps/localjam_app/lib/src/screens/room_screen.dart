@@ -173,6 +173,11 @@ const double _kTransportFooterMaxGap = 56;
 const double _kThumb = JamArtworkSize.list;
 const double _kThumbGap = 12;
 
+/// The empty room's jam mark at rest: the jam as a page draws it (its
+/// monogram at the page marks' proportion), not a cover-sized slab that
+/// reads as missing artwork. Never more than half the cover's square.
+const double _kEmptyMark = 152;
+
 /// How far the paused cover springs back (§6.3).
 const double _kPausedScale = 0.96;
 
@@ -824,20 +829,26 @@ class _Player extends StatelessWidget {
       session: session,
       canControl: canControl,
     );
-    final transport = chrome(
+    // An empty room's one way forward — not while the host's own files are
+    // still coming in, and not once the list opens with its own Add songs
+    // row.
+    final add = importing ? null : onAdd;
+    final roomHasSongs =
+        engine.playlist.isNotEmpty || engine.outputSuspension.value != null;
+    Widget transportOffering(VoidCallback? add) => chrome(
       _TransportArea(
         engine: engine,
         session: session,
         canControl: canControl,
         hasQueue: engine.playlist.isNotEmpty,
         gatedMessage: gated,
-        // An empty room's one way forward stands where play will (IR-1) —
-        // not while the host's own files are still coming in, and not once
-        // the list below opens with its own Add Songs row.
-        onAdd: importing ? null : onAdd,
+        onAdd: add,
         queue: wide ? null : queue,
       ),
     );
+    // Side-on and in the accessibility layout, Add songs stands where play
+    // will; upright it sits right under "Nothing playing" (its own slot).
+    final transport = transportOffering(add);
 
     final footer = chrome(
       _Footer(
@@ -937,6 +948,7 @@ class _Player extends StatelessWidget {
                     selfName: identity,
                   );
                 }
+                final uprightTransport = transportOffering(null);
                 return AnimatedBuilder(
                   animation: inPlace,
                   builder: (context, _) {
@@ -960,12 +972,27 @@ class _Player extends StatelessWidget {
                             paused: paused,
                             t: t,
                             onTap: inPlace.value == 1 ? onQueue : null,
+                            // Upright, the empty room's mark stands on the
+                            // title's edge, just over it: the jam, "Nothing
+                            // playing" and Add songs read as one invitation.
+                            markAlignment: AlignmentDirectional.bottomStart,
                           ),
                         ),
                         _StageSlot(
                           slot: _Slot.title,
                           child: title(accessible: false),
                         ),
+                        if (add != null)
+                          _StageSlot(
+                            slot: _Slot.add,
+                            child: chrome(
+                              _EmptyRoomAdd(
+                                offered: !roomHasSongs,
+                                onAdd: add,
+                                queue: wide ? null : queue,
+                              ),
+                            ),
+                          ),
                         if (open)
                           _StageSlot(
                             slot: _Slot.queue,
@@ -986,7 +1013,10 @@ class _Player extends StatelessWidget {
                             ),
                           ),
                         _StageSlot(slot: _Slot.scrubber, child: scrubber),
-                        _StageSlot(slot: _Slot.transport, child: transport),
+                        _StageSlot(
+                          slot: _Slot.transport,
+                          child: uprightTransport,
+                        ),
                         _StageSlot(slot: _Slot.footer, child: footer),
                       ],
                     );
@@ -1230,7 +1260,7 @@ class _AccessibleStage extends StatelessWidget {
   }
 }
 
-enum _Slot { notice, art, title, queue, scrubber, transport, footer }
+enum _Slot { notice, art, title, add, queue, scrubber, transport, footer }
 
 /// Below this the stage stops narrowing its column to a height-capped
 /// cover: the transport and the title need the room more than they need to
@@ -1548,6 +1578,16 @@ class _RenderStage extends RenderBox
         ),
       );
       _place(queue, Offset(math.max(0, left - margin), top));
+    }
+
+    // The empty room's Add songs: right under "Nothing playing", where the
+    // timeline will be (it is hidden until a song lands), on the title's
+    // edge — the title and its one action read as one invitation. It never
+    // moves anything else: the timeline's and the transport's places stay.
+    final add = slots[_Slot.add];
+    if (add != null) {
+      _layout(add, BoxConstraints(maxWidth: cw));
+      _place(add, Offset(left, bigScrubY));
     }
 
     _place(slots[_Slot.scrubber], Offset(left, bigScrubY));
@@ -2017,12 +2057,17 @@ class _Art extends StatefulWidget {
     required this.paused,
     required this.t,
     required this.onTap,
+    this.markAlignment = Alignment.center,
   });
 
   final JamEngine engine;
   final MediaItem? item;
   final bool paused;
   final double t;
+
+  /// Where the empty room's mark sits in the square the first cover will
+  /// fill.
+  final AlignmentGeometry markAlignment;
 
   /// Restores the big cover from the thumbnail.
   final VoidCallback? onTap;
@@ -2052,53 +2097,76 @@ class _ArtState extends State<_Art> {
     final t = widget.t;
     final empty = widget.item == null;
     final future = _futureFor(widget.item);
-    // An empty room's tile is the backdrop's own material, not an object
+    // An empty room's mark is the backdrop's own material, not an object
     // lifted off it: no shadow under a see-through ground.
-    final shadow = empty
-        ? const <BoxShadow>[]
-        : BoxShadow.lerpList(JamShadow.artwork, const <BoxShadow>[], t);
+    final shadow = BoxShadow.lerpList(
+      JamShadow.artwork,
+      const <BoxShadow>[],
+      t,
+    );
     final radius = lerpDouble(JamRadius.largeCover, JamRadius.artworkS, t)!;
 
-    // The mini player's cover grows into this one (and back).
-    Widget tile(double size, Uint8List? bytes) => JamArtworkHero(
-      child: DecoratedBox(
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(radius),
-          boxShadow: shadow,
-        ),
-        // A hairline on the cover's edge, so a dark sleeve on its own dark
-        // wash still has one (RB-23) — on the mark's own outline when the
-        // room is empty.
+    // Nothing playing: not a song without art (a music note), and not a
+    // cover-sized tile that reads as one missing, but the jam itself — its
+    // mark at the size a page draws a jam, on the same see-through ground
+    // as a song with no cover, in the open space the first cover will fill
+    // (IR-1). As the queue opens it grows to fill the thumbnail, where it
+    // is the jam's 56 mark.
+    Widget mark(double slot) {
+      final size = math.min(
+        lerpDouble(slot / 2, slot, t)!,
+        lerpDouble(_kEmptyMark, _kThumb, t)!,
+      );
+      final radius = lerpDouble(
+        JamRadius.artwork(_kEmptyMark),
+        JamRadius.artwork(_kThumb),
+        t,
+      )!;
+      return JamArtworkHero(
         child: DecoratedBox(
           position: DecorationPosition.foreground,
-          decoration: empty
-              ? ShapeDecoration(
-                  shape: jamMarkShape(size, radius: radius, side: _kCoverEdge),
-                )
-              : BoxDecoration(
+          // The hairline every cover on the backdrop has (RB-23), on the
+          // mark's own outline.
+          decoration: ShapeDecoration(
+            shape: jamMarkShape(size, radius: radius, side: _kCoverEdge),
+          ),
+          child: JamMark(
+            name: widget.engine.sessionName,
+            size: size,
+            radius: radius,
+            onBackdrop: true,
+          ),
+        ),
+      );
+    }
+
+    // The mini player's cover grows into this one (and back).
+    Widget tile(double size, Uint8List? bytes) => empty
+        ? mark(size)
+        : JamArtworkHero(
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(radius),
+                boxShadow: shadow,
+              ),
+              // A hairline on the cover's edge, so a dark sleeve on its own
+              // dark wash still has one (RB-23).
+              child: DecoratedBox(
+                position: DecorationPosition.foreground,
+                decoration: BoxDecoration(
                   borderRadius: BorderRadius.circular(radius),
                   border: Border.fromBorderSide(_kCoverEdge),
                 ),
-          // Nothing playing: not a song without art (a music note) but the
-          // jam itself — its mark, quietly, on the same see-through ground
-          // as a song with no cover (IR-1).
-          child: empty
-              ? JamMark(
-                  name: widget.engine.sessionName,
-                  size: size,
-                  radius: radius,
-                  onBackdrop: true,
-                )
-              : JamArtworkTile(
+                child: JamArtworkTile(
                   bytes: bytes,
                   imageKey: _artworkId,
                   size: size,
                   radius: radius,
                   onBackdrop: true,
                 ),
-        ),
-      ),
-    );
+              ),
+            ),
+          );
 
     final art = LayoutBuilder(
       builder: (context, constraints) {
@@ -2113,11 +2181,15 @@ class _ArtState extends State<_Art> {
         // empty room, whose tile has nothing to pause. Under reduced motion
         // it dims instead of moving (RB-18).
         final rest = widget.paused && !empty;
+        final placed = Align(
+          alignment: empty ? widget.markAlignment : Alignment.center,
+          child: body,
+        );
         if (reduced) {
           return AnimatedOpacity(
             opacity: rest ? _kPausedDim : 1,
             duration: JamDuration.fast,
-            child: Center(child: body),
+            child: placed,
           );
         }
         return TweenAnimationBuilder<double>(
@@ -2126,7 +2198,7 @@ class _ArtState extends State<_Art> {
           curve: JamCurve.spring,
           builder: (context, scale, child) =>
               Transform.scale(scale: lerpDouble(scale, 1, t)!, child: child),
-          child: Center(child: body),
+          child: placed,
         );
       },
     );
@@ -2160,8 +2232,9 @@ const double _kCreditGap = JamSpace.xs + JamSpace.xxs;
 /// so the transport never moves for a long name; in the accessibility
 /// layout it wraps instead, as far as it needs.
 ///
-/// An empty room says "Nothing playing" here and nothing else; its Add Songs
-/// stands where the play square will (IR-1, [_TransportArea]).
+/// An empty room says "Nothing playing" here and nothing else; its Add songs
+/// sits right under it upright, and where the play square will be side-on
+/// and in the accessibility layout (IR-1, [_EmptyRoomAdd]).
 class _TitleBlock extends StatelessWidget {
   const _TitleBlock({
     required this.engine,
@@ -2521,10 +2594,11 @@ JamTrackFetch jamTrackFetchOf(JamPrefetchState? state) {
 /// doing: a track that will not come down is exactly when someone wants
 /// "next".
 ///
-/// An empty room has nothing to play: the transport steps back and Add Songs
-/// stands in the play square's place, centred on its line (IR-1). When the
-/// first song lands, Add Songs fades out and the transport fades in, and
-/// nothing on the page moves.
+/// An empty room has nothing to play: the transport steps back, keeping its
+/// place, and — side-on and in the accessibility layout, given [onAdd] —
+/// Add songs stands in the play square's place, centred on its line (IR-1).
+/// When the first song lands, Add songs fades out and the transport fades
+/// in, and nothing on the page moves.
 class _TransportArea extends StatelessWidget {
   const _TransportArea({
     required this.engine,
@@ -2618,32 +2692,54 @@ class _TransportArea extends StatelessWidget {
     );
     final add = onAdd;
     if (add == null) return bar;
-
-    Widget slot(bool listOpen) {
-      final offered = !shown && !listOpen;
-      return Stack(
-        children: [
-          bar,
-          Positioned(
-            left: 0,
-            right: 0,
-            top: 0,
-            height: JamMetrics.playSquare,
-            child: Center(
-              child: AnimatedSwitcher(
-                duration: reduced ? Duration.zero : JamDuration.fast,
-                switchInCurve: JamCurve.standard,
-                switchOutCurve: JamCurve.standard,
-                child: offered
-                    ? _AddSongsButton(onPressed: add)
-                    : const SizedBox.shrink(),
-              ),
-            ),
+    return Stack(
+      children: [
+        bar,
+        Positioned(
+          left: 0,
+          right: 0,
+          top: 0,
+          height: JamMetrics.playSquare,
+          child: Center(
+            child: _EmptyRoomAdd(offered: !shown, onAdd: add, queue: queue),
           ),
-        ],
-      );
-    }
+        ),
+      ],
+    );
+  }
+}
 
+/// The empty room's Add songs, fading in and out where the stage puts it:
+/// [offered] while the room has nothing to play, and stepping aside once
+/// [queue] opens the list, which has its own Add songs row.
+class _EmptyRoomAdd extends StatelessWidget {
+  const _EmptyRoomAdd({
+    required this.offered,
+    required this.onAdd,
+    required this.queue,
+  });
+
+  final bool offered;
+  final VoidCallback onAdd;
+
+  /// The queue in place, on phones.
+  final Animation<double>? queue;
+
+  @override
+  Widget build(BuildContext context) {
+    final reduced = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
+    Widget slot(bool listOpen) => AnimatedSwitcher(
+      duration: reduced ? Duration.zero : JamDuration.fast,
+      switchInCurve: JamCurve.standard,
+      switchOutCurve: JamCurve.standard,
+      layoutBuilder: (current, previous) => Stack(
+        alignment: AlignmentDirectional.topStart,
+        children: [...previous, ?current],
+      ),
+      child: offered && !listOpen
+          ? _AddSongsButton(onPressed: onAdd)
+          : const SizedBox.shrink(),
+    );
     final animation = queue;
     if (animation == null) return slot(false);
     return AnimatedBuilder(

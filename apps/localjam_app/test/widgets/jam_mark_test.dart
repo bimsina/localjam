@@ -108,15 +108,15 @@ void main() {
     ) async {
       await _pump(
         tester,
-        const JamMark(name: 'Sunday', size: 332, onBackdrop: true),
+        const JamMark(name: 'Sunday', size: 152, onBackdrop: true),
         dark: true,
       );
       expect(_ground(tester).color, JamNowPlayingColors.placeholderGround);
       final letter = tester.widget<Text>(find.text('S'));
       expect(letter.style!.color, JamNowPlayingColors.placeholderGlyph);
-      // A cover-sized mark keeps its letter quiet (IR-1); list marks don't
-      // change.
-      expect(letter.style!.fontSize, closeTo(66.4, 0.01));
+      // The empty room's mark is the same object as a page's: its letter
+      // at the same proportion as every other mark's.
+      expect(letter.style!.fontSize, closeTo(152 * 0.46, 0.01));
       expect(JamMark.monogramSizeFor(JamMarkSize.nearby), 44 * 0.46);
       expect(JamMark.monogramSizeFor(JamMarkSize.ended), 88 * 0.46);
       expect(JamMark.monogramSizeFor(1000), 72);
