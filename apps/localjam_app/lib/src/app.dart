@@ -31,7 +31,7 @@ import 'widgets/session_gate.dart';
 
 /// What the app root says out loud.
 abstract final class AppStrings {
-  static const String notAnInvite = 'That link isn’t a jam invite.';
+  static const String notAnInvite = JamJoinLinkStrings.invalid;
   static const String notLocal =
       'That link points outside your Wi‑Fi. A jam only works between '
       'devices on the same network.';

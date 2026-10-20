@@ -37,9 +37,9 @@ import '../widgets/join_link_dialog.dart';
 /// Every user-facing string this screen can show.
 abstract final class JamScanStrings {
   /// Announced for the viewfinder.
-  static const String title = 'Scan a Code';
+  static const String title = 'Scan Code';
   static const String hint = 'Point at a LocalJam code';
-  static const String wrongCode = 'That isn’t a LocalJam code.';
+  static const String wrongCode = 'That code isn’t a jam invite.';
   static const String found = 'Joining…';
   static const String enterLink = 'Enter Link';
   static const String close = 'Close';

@@ -38,7 +38,7 @@ abstract final class JamJoinLinkStrings {
   /// placeholder, not a title.
   static const String hint = 'Jam link';
   static const String paste = 'Paste';
-  static const String invalid = 'That isn’t a LocalJam link.';
+  static const String invalid = 'That link isn’t a jam invite.';
   static const String cancel = 'Cancel';
   static const String join = 'Join';
 

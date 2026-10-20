@@ -125,7 +125,9 @@ abstract final class RoomSheetStrings {
   static const String leaveTitle = 'Leave Jam?';
   static const String leaveDetail =
       'You can rejoin as long as the jam is still going.';
-  static const String leave = 'Leave';
+
+  /// The confirmation's button: the action's own name, as End Jam's is.
+  static const String leave = leaveJam;
 
   // Invite sheet.
   static const String inviteTitle = 'Invite People';

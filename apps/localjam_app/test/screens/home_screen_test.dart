@@ -228,7 +228,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text(HomeStrings.notListed), findsOneWidget);
-    expect(find.text(HomeStrings.scanShort), findsOneWidget);
+    expect(find.text(HomeStrings.scan), findsOneWidget);
     await tester.tap(find.text(HomeStrings.enterLink));
     await tester.pumpAndSettle();
     // Straight to the link alert: no camera primer on the way.
@@ -295,7 +295,7 @@ void main() {
 
     expect(find.byType(JamEmptyState), findsNothing);
     expect(find.text(HomeStrings.quietLine), findsOneWidget);
-    expect(find.text(HomeStrings.scanShort), findsOneWidget);
+    expect(find.text(HomeStrings.scan), findsOneWidget);
     expect(find.text(HomeStrings.enterLink), findsOneWidget);
   });
 

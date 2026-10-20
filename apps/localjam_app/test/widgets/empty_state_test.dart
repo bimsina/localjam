@@ -22,7 +22,7 @@ void main() {
           icon: CupertinoIcons.dot_radiowaves_left_right,
           title: 'No Jams Nearby',
           body: 'Jams on this Wi‑Fi show up here.',
-          actionLabel: 'Scan a Code',
+          actionLabel: 'Scan Code',
           actionVariant: JamButtonVariant.plain,
           onAction: () => taps++,
         ),

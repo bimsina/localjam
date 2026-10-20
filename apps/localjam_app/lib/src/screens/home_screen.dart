@@ -49,7 +49,9 @@ abstract final class HomeStrings {
   static String joining(String room) => 'Joining $room…';
   static String joinRoom(String room) => 'Join $room';
 
-  static const String scan = 'Scan a Code';
+  /// The scanner — the same two words on every button that opens it, and
+  /// the scanner's own title.
+  static const String scan = 'Scan Code';
   static const String host = 'Start a Jam';
 
   /// The paste-a-link way in: the nav-bar action on platforms with no
@@ -87,10 +89,6 @@ abstract final class HomeStrings {
   static const String offlineLine = 'Not on Wi‑Fi. Nearby jams need one.';
   static const String hotspotLine = 'Jams can’t be listed over your hotspot.';
   static const String quietLine = 'No jams nearby on this Wi‑Fi.';
-
-  /// The scanner and the link, side by side on a line: two verbs with their
-  /// nouns, so they read as two actions rather than one phrase.
-  static const String scanShort = 'Scan Code';
 
   /// Under the rooms: mDNS misses jams (hotspots, client isolation), so the
   /// other ways in are offered right where a missing jam is noticed.
@@ -362,7 +360,7 @@ class _HomeScreenState extends State<HomeScreen> {
   /// alert, never through the camera's permission sheet — and Join with
   /// Link where there is not.
   List<_LineAction> get _waysIn => [
-    if (canScanQrCodes) (HomeStrings.scanShort, () => unawaited(_scan())),
+    if (canScanQrCodes) (HomeStrings.scan, () => unawaited(_scan())),
     (
       canScanQrCodes ? HomeStrings.enterLink : HomeStrings.joinWithLink,
       () => unawaited(_joinWithLink()),
