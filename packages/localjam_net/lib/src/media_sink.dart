@@ -14,11 +14,10 @@ import 'dart:typed_data';
 /// `200` (never for a refused request, so a failed request leaves nothing
 /// behind), [add] for each body chunk, [close] once the body has ended or
 /// the transfer stopped — always, even on failure — and then, only when the
-/// transfer failed (a stall, an over-size body, a sha256 mismatch), [abandon]
-/// before `media_status: none` is reported (§6.3). A transfer whose
-/// connection breaks mid-body is the exception: the error propagates after
-/// [close], without [abandon] (the native guest has always behaved so), so a
-/// sink that must not keep partial data checks for a completed fetch.
+/// transfer failed (a stall, an over-size body, a sha256 mismatch, a
+/// connection that broke mid-body), [abandon] before `media_status: none` is
+/// reported (§6.3). A sink that saw [close] without [abandon] holds the
+/// whole, verified body.
 abstract class JamMediaSink {
   /// Prepares to receive the body. Called once, before the first [add].
   Future<void> open() async {}

@@ -392,9 +392,15 @@ class JamGuestSession {
     String mediaId,
     JamMediaSink sink, {
     void Function(double progress)? onProgress,
+    bool reportReady = true,
   }) {
     _ensureConnected();
-    return _client.fetchMediaToSink(mediaId, sink, onProgress: onProgress);
+    return _client.fetchMediaToSink(
+      mediaId,
+      sink,
+      onProgress: onProgress,
+      reportReady: reportReady,
+    );
   }
 
   /// Fetches artwork bytes (`GET /artwork/{artworkId}`, §6.5) via the

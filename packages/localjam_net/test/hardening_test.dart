@@ -155,6 +155,91 @@ void main() {
       );
     });
 
+    test('a media fetch whose connection breaks mid-body deletes the '
+        'partial file and reports none', () async {
+      final item = MediaItem(
+        mediaId: 'm_break',
+        kind: MediaKind.audio,
+        name: 'break.bin',
+        mime: 'application/octet-stream',
+        sizeBytes: 100000,
+        sha256: '',
+      );
+      final fake = await FakeHost.start(
+        onHello: (ws, _) {
+          ws.add(_codec.encode(fakeWelcome(playlist: [item]), seq: 0));
+        },
+        onMedia: (req) async {
+          req.response.contentLength = 100000;
+          req.response.add(Uint8List(1000));
+          await req.response.flush();
+          // Ends short of the declared length: the server tears the
+          // connection down, and the guest is left with a fragment.
+          try {
+            await req.response.close();
+          } catch (_) {}
+        },
+      );
+      final guest = await JamGuestClient.connect(joinUriForPort(fake.port));
+      addTearDown(guest.close);
+
+      final dir = await Directory.systemTemp.createTemp('localjam_break');
+      addTearDown(() => dir.delete(recursive: true));
+      final dest = File('${dir.path}/break.bin');
+      await expectLater(
+        guest.fetchMediaToFile('m_break', dest),
+        throwsA(isNot(isA<TimeoutException>())),
+      );
+      expect(dest.existsSync(), isFalse, reason: 'partial file removed');
+      await waitFor(
+        () => fake.received.any(
+          (f) =>
+              f['type'] == 'media_status' &&
+              (f['payload'] as Map)['state'] == 'none',
+        ),
+        reason: 'media_status none (§6.3)',
+      );
+    });
+
+    test('a verified fetch with reportReady: false reports fetching, never '
+        'ready', () async {
+      final bytes = Uint8List.fromList(List.generate(5000, (i) => i & 0xff));
+      final item = MediaItem(
+        mediaId: 'm_quiet',
+        kind: MediaKind.audio,
+        name: 'quiet.bin',
+        mime: 'application/octet-stream',
+        sizeBytes: bytes.length,
+        sha256: '',
+      );
+      final fake = await FakeHost.start(
+        onHello: (ws, _) {
+          ws.add(_codec.encode(fakeWelcome(playlist: [item]), seq: 0));
+        },
+        onMedia: (req) async {
+          req.response.contentLength = bytes.length;
+          req.response.add(bytes);
+          await req.response.close();
+        },
+      );
+      final guest = await JamGuestClient.connect(joinUriForPort(fake.port));
+      addTearDown(guest.close);
+      final sink = JamBytesMediaSink();
+      await guest.fetchMediaToSink('m_quiet', sink, reportReady: false);
+      expect(sink.takeBytes(), bytes);
+      await waitFor(
+        () => fake.received.any((f) => f['type'] == 'media_status'),
+        reason: 'the fetching report',
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      final states = [
+        for (final f in fake.received)
+          if (f['type'] == 'media_status') (f['payload'] as Map)['state'],
+      ];
+      expect(states, isNot(contains('ready')));
+      expect(states, contains('fetching'));
+    });
+
     test('an upload to a host that never answers times out', () async {
       final fake = await FakeHost.start(
         onHello: (ws, _) {
