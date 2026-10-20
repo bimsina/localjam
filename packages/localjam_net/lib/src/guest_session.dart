@@ -394,6 +394,7 @@ class JamGuestSession {
     JamMediaSink sink, {
     void Function(double progress)? onProgress,
     bool reportReady = true,
+    int maxBytes = JamGuestClient.defaultMaxMediaBytes,
   }) {
     _ensureConnected();
     return _client.fetchMediaToSink(
@@ -401,6 +402,7 @@ class JamGuestSession {
       sink,
       onProgress: onProgress,
       reportReady: reportReady,
+      maxBytes: maxBytes,
     );
   }
 

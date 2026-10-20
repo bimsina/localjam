@@ -9,6 +9,7 @@ library;
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:localjam_net/localjam_net.dart';
@@ -238,6 +239,149 @@ void main() {
       ];
       expect(states, isNot(contains('ready')));
       expect(states, contains('fetching'));
+    });
+
+    group('a fetch that ends reports none, whatever ended it (§6.3)', () {
+      Future<(FakeHost, JamGuestClient)> serving(
+        MediaItem item,
+        Uint8List body, {
+        bool framed = true,
+      }) async {
+        final fake = await FakeHost.start(
+          onHello: (ws, _) {
+            ws.add(_codec.encode(fakeWelcome(playlist: [item]), seq: 0));
+          },
+          onMedia: (req) async {
+            // Unframed: chunked, so nothing but the guest bounds the body.
+            if (framed) req.response.contentLength = body.length;
+            try {
+              for (var at = 0; at < body.length; at += 16 * 1024) {
+                req.response.add(
+                  Uint8List.sublistView(
+                    body,
+                    at,
+                    min(at + 16 * 1024, body.length),
+                  ),
+                );
+                await req.response.flush();
+              }
+              await req.response.close();
+            } catch (_) {
+              // The guest hung up: the point of some of these.
+            }
+          },
+        );
+        final guest = await JamGuestClient.connect(joinUriForPort(fake.port));
+        addTearDown(guest.close);
+        return (fake, guest);
+      }
+
+      List<Object?> statesOf(FakeHost fake) => [
+        for (final f in fake.received)
+          if (f['type'] == 'media_status') (f['payload'] as Map)['state'],
+      ];
+
+      Future<void> reportsNone(FakeHost fake) => waitFor(
+        () => statesOf(fake).contains('none'),
+        reason: 'media_status none (§6.3)',
+      );
+
+      MediaItem itemOf(String id, int sizeBytes) => MediaItem(
+        mediaId: id,
+        kind: MediaKind.audio,
+        name: '$id.bin',
+        mime: 'application/octet-stream',
+        sizeBytes: sizeBytes,
+        sha256: '',
+      );
+
+      test('a sink whose open throws', () async {
+        final body = Uint8List(5000);
+        final (fake, guest) = await serving(itemOf('m_open', 5000), body);
+        final sink = _ScriptedSink(failOpen: true);
+        await expectLater(
+          guest.fetchMediaToSink('m_open', sink),
+          throwsA(isA<FileSystemException>()),
+        );
+        await reportsNone(fake);
+        expect(statesOf(fake), ['fetching', 'none']);
+        expect(sink.calls, ['open', 'close', 'abandon']);
+      });
+
+      test('a sink whose close throws (a full disk)', () async {
+        final body = Uint8List(5000);
+        final (fake, guest) = await serving(itemOf('m_close', 5000), body);
+        final sink = _ScriptedSink(failClose: true);
+        await expectLater(
+          guest.fetchMediaToSink('m_close', sink),
+          throwsA(isA<FileSystemException>()),
+        );
+        await reportsNone(fake);
+        expect(statesOf(fake), isNot(contains('ready')));
+        expect(sink.calls, ['open', 'add', 'close', 'abandon']);
+      });
+
+      test('an unframed body with no sizeBytes stops at maxBytes', () async {
+        final body = Uint8List(300 * 1024);
+        final (fake, guest) = await serving(
+          itemOf('m_unbounded', 0),
+          body,
+          framed: false,
+        );
+        final sink = JamBytesMediaSink();
+        await expectLater(
+          guest.fetchMediaToSink('m_unbounded', sink, maxBytes: 100 * 1024),
+          throwsA(
+            isA<StateError>().having(
+              (e) => e.message,
+              'message',
+              contains('declared size'),
+            ),
+          ),
+        );
+        expect(sink.length, lessThanOrEqualTo(100 * 1024));
+        await reportsNone(fake);
+      });
+
+      test('an absurd sizeBytes is no size at all', () async {
+        // 2^60 (dart2js would take 1e300 the same way): past maxBytes, so
+        // it is not the bound — the ceiling is.
+        final body = Uint8List(300 * 1024);
+        final (fake, guest) = await serving(
+          itemOf('m_absurd', 1 << 60),
+          body,
+          framed: false,
+        );
+        await expectLater(
+          guest.fetchMediaToSink(
+            'm_absurd',
+            JamBytesMediaSink(),
+            maxBytes: 100 * 1024,
+          ),
+          throwsStateError,
+        );
+        await reportsNone(fake);
+      });
+
+      test('with no usable sizeBytes, Content-Length is the size', () async {
+        final body = Uint8List.fromList(List.generate(50000, (i) => i & 0xff));
+        for (final declared in [0, 1 << 60]) {
+          final (_, guest) = await serving(itemOf('m_framed', declared), body);
+          final progress = <double>[];
+          final sink = JamBytesMediaSink();
+          await guest.fetchMediaToSink(
+            'm_framed',
+            sink,
+            onProgress: progress.add,
+            maxBytes: 1024 * 1024,
+          );
+          expect(sink.takeBytes(), body, reason: '$declared');
+          // Progress is measured against the Content-Length: without a
+          // size it would read 0 until the end.
+          expect(progress, everyElement(greaterThan(0)), reason: '$declared');
+          expect(progress.last, 1.0);
+        }
+      });
     });
 
     test('an upload to a host that never answers times out', () async {
@@ -1582,4 +1726,34 @@ Future<bool> _canBind(InternetAddress address) async {
   } on SocketException {
     return false;
   }
+}
+
+/// A [JamMediaSink] that records what the guest asks of it and fails where
+/// it is told to, the way a native file sink does on a full disk.
+class _ScriptedSink extends JamMediaSink {
+  _ScriptedSink({this.failOpen = false, this.failClose = false});
+
+  final bool failOpen;
+  final bool failClose;
+  final List<String> calls = [];
+
+  @override
+  Future<void> open() async {
+    calls.add('open');
+    if (failOpen) throw const FileSystemException('cannot open');
+  }
+
+  @override
+  void add(List<int> chunk) {
+    if (calls.last != 'add') calls.add('add');
+  }
+
+  @override
+  Future<void> close() async {
+    calls.add('close');
+    if (failClose) throw const FileSystemException('no space left');
+  }
+
+  @override
+  Future<void> abandon() async => calls.add('abandon');
 }
