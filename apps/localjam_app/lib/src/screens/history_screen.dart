@@ -29,7 +29,6 @@ import '../design/typography.dart';
 import '../router.dart';
 import '../state/session_controller.dart';
 import '../util/format.dart';
-import '../widgets/artwork.dart';
 import '../widgets/avatar.dart';
 import '../widgets/buttons.dart';
 import '../widgets/dialogs.dart';
@@ -315,21 +314,19 @@ ImageProvider _coverImage(BuildContext context, Uint8List bytes, double size) {
   return ResizeImage(MemoryImage(bytes), width: px, height: px);
 }
 
-/// A past jam's art: a 2×2 mosaic when the queue has at least four distinct
-/// real covers still on this device, otherwise the first cover.
+/// A past jam's mark (`JamMark`, D4) from the covers still on this device:
+/// a 2×2 mosaic when the queue has at least four distinct real covers,
+/// otherwise the first cover — and with none here, the jam's monogram
+/// rather than a music note (a note is a *song* without art; this is a jam).
 ///
-/// Given the jam's [name], it is drawn as the jam's mark (`JamMark`, D4):
-/// with no cover on this device, its monogram rather than a music note — a
-/// note is a *song* without art, and this is a jam. Without one (Home's
-/// Recent section, until it passes the name) the plain placeholder tile.
-///
-/// Used by Past Jams, the detail page and Home's Recent section.
+/// Used by every past-jam row (Past Jams, Home's Recent) and the detail
+/// page.
 class JamArtworkMosaic extends StatefulWidget {
   const JamArtworkMosaic({
     super.key,
     required this.tracks,
     required this.size,
-    this.name,
+    required this.name,
     this.semanticLabel,
     this.shadow = false,
   });
@@ -339,8 +336,8 @@ class JamArtworkMosaic extends StatefulWidget {
   /// Edge length of the whole tile.
   final double size;
 
-  /// The jam's name: draws the art as its mark, monogram included.
-  final String? name;
+  /// The jam's name: where its monogram comes from.
+  final String name;
 
   final String? semanticLabel;
 
@@ -390,69 +387,36 @@ class _JamArtworkMosaicState extends State<JamArtworkMosaic> {
   Widget build(BuildContext context) {
     final size = widget.size;
     final covers = _covers ?? const <Uint8List>[];
-    final name = widget.name;
-
-    if (name != null) {
-      final grid = covers.length >= 4;
-      final edge = grid ? size / 2 : size;
-      return JamMark(
-        name: name,
-        size: size,
-        covers: [
-          for (final bytes in covers.take(grid ? 4 : 1))
-            _coverImage(context, bytes, edge),
-        ],
-        semanticLabel: widget.semanticLabel,
-        shadow: widget.shadow && covers.isNotEmpty,
-      );
-    }
-
-    final radius = BorderRadius.circular(JamRadius.artwork(size));
-    if (covers.length < 4) {
-      return JamArtworkTile(
-        size: size,
-        image: covers.isEmpty ? null : _coverImage(context, covers.first, size),
-        imageKey: covers.isEmpty ? null : identityHashCode(covers.first),
-        semanticLabel: widget.semanticLabel,
-        shadow: widget.shadow && covers.isNotEmpty,
-      );
-    }
-
-    final half = size / 2;
-    Widget quad(Uint8List bytes) => Image(
-      image: _coverImage(context, bytes, half),
-      width: half,
-      height: half,
-      fit: BoxFit.cover,
-      gaplessPlayback: true,
-    );
-    Widget grid = ClipRRect(
-      borderRadius: radius,
-      child: SizedBox.square(
-        dimension: size,
-        child: Column(
-          children: [
-            Row(children: [quad(covers[0]), quad(covers[1])]),
-            Row(children: [quad(covers[2]), quad(covers[3])]),
-          ],
-        ),
-      ),
-    );
-    if (widget.shadow) {
-      grid = DecoratedBox(
-        decoration: BoxDecoration(
-          borderRadius: radius,
-          boxShadow: JamShadow.artwork,
-        ),
-        child: grid,
-      );
-    }
-    return Semantics(
-      image: true,
-      label: widget.semanticLabel,
-      child: ExcludeSemantics(child: grid),
+    final grid = covers.length >= 4;
+    final edge = grid ? size / 2 : size;
+    return JamMark(
+      name: widget.name,
+      size: size,
+      covers: [
+        for (final bytes in covers.take(grid ? 4 : 1))
+          _coverImage(context, bytes, edge),
+      ],
+      semanticLabel: widget.semanticLabel,
+      shadow: widget.shadow && covers.isNotEmpty,
     );
   }
+}
+
+/// The faces of [record]'s people, coloured as the jam coloured them (D3):
+/// this device ([self]) and everyone the record names, through
+/// [jamPeopleColors] — with this device as the host when it hosted. A
+/// joined jam's record does not say who hosted, so there everyone is in
+/// name order. Parallel to [JamHistoryRecord.peerNames].
+List<Color> jamRecordFaceColors(
+  JamHistoryRecord record, {
+  required String self,
+}) {
+  final me = self.trim();
+  final byName = jamPeopleColors([
+    if (me.isNotEmpty) me,
+    ...record.peerNames,
+  ], host: record.wasHost && me.isNotEmpty ? me : null);
+  return [for (final name in record.peerNames) byName[name]!];
 }
 
 // ---------------------------------------------------------------------------
@@ -505,10 +469,20 @@ class _HistoryScreenState extends State<HistoryScreen> {
   JamHistoryStore? _store;
   List<JamHistoryRecord>? _records;
 
+  /// This device's name: the jam counted it when it gave out the faces'
+  /// colours, so the rows do too ([jamRecordFaceColors]).
+  String _self = '';
+
   @override
   void initState() {
     super.initState();
     unawaited(_load());
+    unawaited(_loadSelf());
+  }
+
+  Future<void> _loadSelf() async {
+    final name = await JamIdentity.displayName();
+    if (mounted && name != _self) setState(() => _self = name);
   }
 
   Future<void> _load() async {
@@ -628,8 +602,9 @@ class _HistoryScreenState extends State<HistoryScreen> {
                 semanticLabel: HistoryStrings.forgetHint(record.sessionName),
                 onAction: () => _forget(record),
                 onRemoved: () => _drop(record),
-                child: _RecordRow(
+                child: JamHistoryRow(
                   record: record,
+                  self: _self,
                   separator: index < records.length - 1,
                   onTap: () => unawaited(_open(record)),
                 ),
@@ -642,19 +617,29 @@ class _HistoryScreenState extends State<HistoryScreen> {
   }
 }
 
-/// One past jam in the list, drawn the way a jam is drawn everywhere: its
-/// mark, its name in Manrope, the faces of who was there, then what it was
-/// and when.
-class _RecordRow extends StatelessWidget {
-  const _RecordRow({
+/// One past jam, drawn the way a jam is drawn everywhere: its mark, its
+/// name in Manrope, the faces of who was there, then what it was and when.
+/// Past Jams lists these, and Home's Recent section lists its last few.
+///
+/// It draws its own hairline ([separator]), inset to the text.
+class JamHistoryRow extends StatelessWidget implements JamSelfSeparatingRow {
+  const JamHistoryRow({
+    super.key,
     required this.record,
-    required this.separator,
     required this.onTap,
+    this.self = '',
+    this.separator = false,
   });
 
   final JamHistoryRecord record;
-  final bool separator;
   final VoidCallback onTap;
+
+  /// This device's display name, for the faces' colours
+  /// ([jamRecordFaceColors]).
+  final String self;
+
+  /// A hairline under the row — every row but the last.
+  final bool separator;
 
   @override
   Widget build(BuildContext context) {
@@ -695,7 +680,11 @@ class _RecordRow extends StatelessWidget {
                 ),
                 if (peers.isNotEmpty) ...[
                   const SizedBox(height: JamSpace.xs),
-                  _People(names: peers, size: JamAvatarSize.attribution),
+                  _People(
+                    names: peers,
+                    colors: jamRecordFaceColors(record, self: self),
+                    size: JamAvatarSize.attribution,
+                  ),
                 ],
                 const SizedBox(height: JamSpace.xxs),
                 // Two lines before an ellipsis: the time at the end is what
@@ -758,9 +747,16 @@ class _RecordRow extends StatelessWidget {
 
 /// Who was there: their faces, then their names ("With Mia and Theo").
 class _People extends StatelessWidget {
-  const _People({required this.names, required this.size});
+  const _People({
+    required this.names,
+    required this.colors,
+    required this.size,
+  });
 
   final List<String> names;
+
+  /// The faces' colours, parallel to [names] ([jamRecordFaceColors]).
+  final List<Color> colors;
   final double size;
 
   @override
@@ -769,7 +765,11 @@ class _People extends StatelessWidget {
       // The names beside it say who, and how many more; the faces — the
       // first three, with no "+N" to repeat that count — are how they look.
       ExcludeSemantics(
-        child: JamAvatarStack(names: names.take(3).toList(), size: size),
+        child: JamAvatarStack(
+          names: names.take(3).toList(),
+          colors: colors.take(3).toList(),
+          size: size,
+        ),
       ),
       const SizedBox(width: JamSpace.sm),
       Flexible(
@@ -839,6 +839,9 @@ class HistoryDetailScreen extends StatefulWidget {
 class _HistoryDetailScreenState extends State<HistoryDetailScreen> {
   final ScrollController _scroll = ScrollController();
 
+  /// This device's name, for the faces' colours ([jamRecordFaceColors]).
+  String _self = '';
+
   /// The inline nav title appears once the name has scrolled under the bar.
   bool _titleShown = false;
 
@@ -851,6 +854,12 @@ class _HistoryDetailScreenState extends State<HistoryDetailScreen> {
   void initState() {
     super.initState();
     _scroll.addListener(_onScroll);
+    unawaited(_loadSelf());
+  }
+
+  Future<void> _loadSelf() async {
+    final name = await JamIdentity.displayName();
+    if (mounted && name != _self) setState(() => _self = name);
   }
 
   @override
@@ -972,7 +981,11 @@ class _HistoryDetailScreenState extends State<HistoryDetailScreen> {
           ),
           if (peers.isNotEmpty) ...[
             const SizedBox(height: JamSpace.lg),
-            _People(names: peers, size: JamAvatarSize.strip),
+            _People(
+              names: peers,
+              colors: jamRecordFaceColors(record, self: _self),
+              size: JamAvatarSize.strip,
+            ),
           ],
           const SizedBox(height: JamSpace.xl),
           // The page's one action, filled like every other primary.

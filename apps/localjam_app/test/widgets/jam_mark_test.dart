@@ -130,7 +130,7 @@ void main() {
 
     test('badge sizes follow the mark, clamped 16–36', () {
       expect(JamMark.badgeSizeFor(JamMarkSize.nearby), 18);
-      expect(JamMark.badgeSizeFor(JamMarkSize.recent), 20);
+      expect(JamMark.badgeSizeFor(48), 20);
       expect(JamMark.badgeSizeFor(JamMarkSize.row), 24);
       expect(JamMark.badgeSizeFor(JamMarkSize.ended), 36);
       expect(JamMark.badgeSizeFor(24), 16);

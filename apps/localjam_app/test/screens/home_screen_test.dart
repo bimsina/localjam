@@ -299,14 +299,21 @@ void main() {
     expect(find.text(HomeStrings.enterLink), findsOneWidget);
   });
 
-  testWidgets('a recent jam with no cover left is its monogram, not a '
-      'missing-art note', (tester) async {
+  testWidgets('a recent jam is the row Past Jams draws it with: its mark — '
+      'its monogram with no cover left — name and people', (tester) async {
     await pumpHome(tester, network: lan, records: [record('Van Jam')]);
 
+    expect(find.byType(JamHistoryRow), findsOneWidget);
     final mark = tester.widget<JamMark>(find.byType(JamMark));
     expect(mark.name, 'Van Jam');
-    expect(mark.size, JamMarkSize.recent);
+    expect(mark.size, JamMarkSize.row);
+    expect(mark.covers, isEmpty);
     expect(find.byIcon(CupertinoIcons.music_note), findsNothing);
+    // The jam's name in Manrope, as on Past Jams.
+    expect(
+      tester.widget<Text>(find.text('Van Jam')).style?.fontFamily,
+      'Manrope',
+    );
   });
 
   testWidgets('home says you are hosting rather than "nobody is hosting"', (

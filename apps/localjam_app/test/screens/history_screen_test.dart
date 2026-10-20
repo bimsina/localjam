@@ -200,6 +200,29 @@ void main() {
     expect(find.text('With Mia, Theo and 2 others'), findsOneWidget);
   });
 
+  test('faces wear the colours the jam gave them (D3)', () {
+    // Hosted here: this device was the host, so it kept its colour and the
+    // others moved around it in name order — what the room's faces did.
+    final hosted = _record(name: 'Van Jam', peers: ['Theo', 'Mia']);
+    final room = jamPeopleColors(['Bibek', 'Theo', 'Mia'], host: 'Bibek');
+    expect(jamRecordFaceColors(hosted, self: 'Bibek'), [
+      room['Theo'],
+      room['Mia'],
+    ]);
+    // Joined: the record does not say who hosted, so name order alone —
+    // with this device still counted.
+    final joined = _record(
+      name: 'Van Jam',
+      peers: ['Theo', 'Mia'],
+      wasHost: false,
+    );
+    final named = jamPeopleColors(['Mia', 'Theo', 'Bibek']);
+    expect(jamRecordFaceColors(joined, self: 'Bibek'), [
+      named['Theo'],
+      named['Mia'],
+    ]);
+  });
+
   testWidgets('tapping a record opens its detail page', (tester) async {
     final session = testSession();
     await pumpHistory(tester, session, records: [_barRoom()]);

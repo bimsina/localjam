@@ -40,12 +40,7 @@ import '../widgets/room_sheet.dart' show showInviteSheet;
 import '../widgets/scaffold.dart';
 import '../widgets/section.dart';
 import '../widgets/session_gate.dart';
-import 'history_screen.dart'
-    show
-        HistoryStrings,
-        JamArtworkMosaic,
-        jamHistorySummary,
-        showJamHistoryDetail;
+import 'history_screen.dart' show JamHistoryRow, showJamHistoryDetail;
 
 /// Every user-facing string on this screen, in one place.
 abstract final class HomeStrings {
@@ -162,10 +157,6 @@ class _HomeScreenState extends State<HomeScreen> {
   Timer? _networkPoll;
   List<JamHistoryRecord> _recents = const [];
 
-  /// The [_recents] with a cover still on this device ([JamHistoryRecord.
-  /// sessionId]); the rest are drawn as their jam's monogram.
-  Set<String> _covered = const {};
-
   /// Rooms already on screen ([JamNearbyRoom.identity]), so only a *newly*
   /// discovered one animates in and buzzes — a rebuild is not an arrival,
   /// and nor is the same jam re-advertised under another mDNS name.
@@ -243,19 +234,7 @@ class _HomeScreenState extends State<HomeScreen> {
         )) {
       return;
     }
-    // Which of them still have a cover on this device — asked once here
-    // (it touches the file system), not on every build.
-    final covered = {
-      for (final record in next)
-        if (record.tracks.any(
-          (t) => t.item.artworkId != null && t.existsLocally,
-        ))
-          record.sessionId,
-    };
-    setState(() {
-      _recents = next;
-      _covered = covered;
-    });
+    setState(() => _recents = next);
   }
 
   /// A past jam's detail page; Forget there has to take the row away
@@ -476,7 +455,7 @@ class _HomeScreenState extends State<HomeScreen> {
             padding: const EdgeInsets.only(top: JamSpace.lg),
             child: _RecentSection(
               records: records,
-              covered: _covered,
+              self: _identity,
               onSeeAll: () => unawaited(context.push('/history')),
               onOpen: (record) => unawaited(_openRecent(record)),
             ),
@@ -748,19 +727,21 @@ class _RoomRow extends StatelessWidget {
   }
 }
 
-/// The last few jams, as plain rows under a "Recent" header.
+/// The last few jams under a "Recent" header — each one the row Past Jams
+/// draws it with (`JamHistoryRow`): its mark, its name, who was there, what
+/// it was and when.
 class _RecentSection extends StatelessWidget {
   const _RecentSection({
     required this.records,
-    required this.covered,
+    required this.self,
     required this.onSeeAll,
     required this.onOpen,
   });
 
   final List<JamHistoryRecord> records;
 
-  /// The records with a cover still on this device.
-  final Set<String> covered;
+  /// This device's name, for the faces' colours.
+  final String self;
   final VoidCallback onSeeAll;
   final ValueChanged<JamHistoryRecord> onOpen;
 
@@ -774,30 +755,12 @@ class _RecentSection extends StatelessWidget {
         onPressed: onSeeAll,
       ),
       children: [
-        for (final record in records)
-          JamRow(
+        for (final (i, record) in records.indexed)
+          JamHistoryRow(
             key: ValueKey(record.sessionId),
-            title: record.sessionName,
-            subtitle: jamHistorySummary(
-              record,
-              use24HourFormat: MediaQuery.alwaysUse24HourFormatOf(context),
-            ),
-            // Two lines before an ellipsis: the time at the end is what
-            // tells two jams from one evening apart.
-            subtitleMaxLines: 2,
-            // The same detail page Past Jams pushes, so the same chevron.
-            chevron: true,
-            // The jam's mark: the covers Past Jams reads back off this
-            // device, or — with none left — its monogram, never a
-            // missing-artwork note.
-            leading: covered.contains(record.sessionId)
-                ? JamArtworkMosaic(
-                    tracks: record.tracks,
-                    size: JamMarkSize.recent,
-                    semanticLabel: HistoryStrings.cover(record.sessionName),
-                  )
-                : JamMark(name: record.sessionName, size: JamMarkSize.recent),
-            leadingWidth: JamMarkSize.recent,
+            record: record,
+            self: self,
+            separator: i < records.length - 1,
             onTap: () => onOpen(record),
           ),
       ],

@@ -35,10 +35,8 @@ abstract final class JamMarkSize {
   /// A Nearby row.
   static const double nearby = 44;
 
-  /// A Recent row on Home.
-  static const double recent = 48;
-
-  /// A Past Jams row; the Invite sheet's identity row.
+  /// A past jam's row (Past Jams, Home's Recent); the Invite sheet's
+  /// identity row.
   static const double row = 56;
 
   /// The page a jam ends on.
