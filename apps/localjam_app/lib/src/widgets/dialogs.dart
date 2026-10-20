@@ -21,6 +21,7 @@ import '../design/theme.dart';
 import '../design/tokens.dart';
 import '../design/typography.dart';
 import 'pressable.dart';
+import 'text_field.dart';
 
 /// Default labels.
 abstract final class JamDialogStrings {
@@ -257,7 +258,9 @@ class _JamAlertButtons extends StatelessWidget {
 
 /// One of an alert's buttons, a soft rectangle: filled tint for the
 /// preferred action, filled `dangerFilled` for a destructive one, grey
-/// `fill` with `label` text otherwise.
+/// `fill` with `label` text otherwise. Disabled, any of them is the one
+/// disabled look (R8): `fill` under `tertiaryLabel`. [JamMetrics.
+/// alertButtonHeight] is a minimum: a large text size grows the button.
 class JamAlertButton extends StatelessWidget {
   const JamAlertButton({super.key, required this.action});
 
@@ -267,11 +270,22 @@ class JamAlertButton extends StatelessWidget {
   Widget build(BuildContext context) {
     final colors = context.jamColors;
     final enabled = action.onPressed != null;
-    final (Color ground, Color fg, bool strong) = action.destructive
+    final (Color ground, Color fg, bool strong) = !enabled
+        ? (
+            colors.fill,
+            colors.tertiaryLabel,
+            action.destructive || action.isDefault,
+          )
+        : action.destructive
         ? (colors.dangerFilled, colors.onTint, true)
         : action.isDefault
         ? (colors.tintFilled, colors.onTint, true)
         : (colors.fill, colors.label, false);
+    final style = (strong ? context.jamHeadline : context.jamBody).copyWith(
+      color: fg,
+      fontWeight: strong ? null : FontWeight.w500,
+    );
+    final line = (style.fontSize ?? 17) * (style.height ?? 1.3);
     return Semantics(
       container: true,
       button: true,
@@ -279,32 +293,32 @@ class JamAlertButton extends StatelessWidget {
       label: action.label,
       onTap: action.onPressed,
       excludeSemantics: true,
-      child: Opacity(
-        opacity: enabled ? 1 : 0.35,
-        child: JamPressable(
-          onTap: action.onPressed,
-          pressedOpacity: 0.7,
-          child: Container(
-            height: JamMetrics.alertButtonHeight,
-            alignment: Alignment.center,
-            padding: const EdgeInsets.symmetric(
-              horizontal: _JamAlertButtons._inset,
+      child: JamPressable(
+        onTap: action.onPressed,
+        pressedOpacity: 0.7,
+        child: Container(
+          constraints: const BoxConstraints(
+            minHeight: JamMetrics.alertButtonHeight,
+          ),
+          alignment: Alignment.center,
+          padding: EdgeInsets.symmetric(
+            horizontal: _JamAlertButtons._inset,
+            vertical: ((JamMetrics.alertButtonHeight - line) / 2).clamp(
+              0.0,
+              JamSpace.md,
             ),
-            decoration: ShapeDecoration(
-              color: ground,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(JamRadius.alertButton),
-              ),
+          ),
+          decoration: ShapeDecoration(
+            color: ground,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(JamRadius.alertButton),
             ),
-            child: Text(
-              action.label,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: (strong ? context.jamHeadline : context.jamBody).copyWith(
-                color: fg,
-                fontWeight: strong ? null : FontWeight.w500,
-              ),
-            ),
+          ),
+          child: Text(
+            action.label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: style,
           ),
         ),
       ),
@@ -312,10 +326,11 @@ class JamAlertButton extends StatelessWidget {
   }
 }
 
-/// The text field inside an alert: a filled rounded field with a
-/// `secondaryLabel` placeholder, and an optional footnote under it — [errorText] in `danger` (with a hairline
-/// round the field), else [helperText] in `secondaryLabel`. The keyboard
-/// follows the app's appearance, not the device's.
+/// The text field inside an alert: the app's one field ([JamTextField]) in
+/// subheadline, and an optional footnote under it — [errorText] in `danger`
+/// (with a hairline round the field), else [helperText] in
+/// `secondaryLabel`. The keyboard follows the app's appearance, not the
+/// device's.
 class JamAlertTextField extends StatelessWidget {
   const JamAlertTextField({
     super.key,
@@ -366,42 +381,24 @@ class JamAlertTextField extends StatelessWidget {
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Semantics(
-          label: semanticLabel ?? placeholder,
-          textField: true,
-          child: CupertinoTextField(
-            controller: controller,
-            autofocus: autofocus,
-            placeholder: placeholder,
-            keyboardType: keyboardType,
-            keyboardAppearance: jamKeyboardAppearance(context),
-            textCapitalization: textCapitalization,
-            textInputAction: textInputAction,
-            maxLength: maxLength,
-            minLines: minLines,
-            maxLines: maxLines,
-            autocorrect: autocorrect,
-            enableSuggestions: autocorrect,
-            clearButtonMode: OverlayVisibilityMode.editing,
-            style: context.jamSubheadline.copyWith(color: colors.label),
-            placeholderStyle: context.jamSubheadline.copyWith(
-              color: colors.secondaryLabel,
-            ),
-            cursorColor: colors.tint,
-            padding: const EdgeInsets.symmetric(
-              horizontal: JamSpace.md,
-              vertical: JamSpace.sm,
-            ),
-            decoration: BoxDecoration(
-              color: colors.fillSecondary,
-              border: errorText == null
-                  ? null
-                  : Border.all(color: colors.danger, width: 0.5),
-              borderRadius: BorderRadius.circular(JamRadius.field),
-            ),
-            onChanged: onChanged,
-            onSubmitted: onSubmitted,
-          ),
+        // The app's one field (CR-16): the same clear button, the same
+        // corner, as every other field.
+        JamTextField(
+          controller: controller,
+          autofocus: autofocus,
+          placeholder: placeholder,
+          semanticLabel: semanticLabel,
+          keyboardType: keyboardType,
+          textCapitalization: textCapitalization,
+          textInputAction: textInputAction,
+          maxLength: maxLength,
+          minLines: minLines,
+          maxLines: maxLines,
+          autocorrect: autocorrect,
+          style: context.jamSubheadline,
+          error: errorText != null,
+          onChanged: onChanged,
+          onSubmitted: onSubmitted,
         ),
         if (note != null) ...[
           const SizedBox(height: JamSpace.xs),
@@ -418,18 +415,20 @@ class JamAlertTextField extends StatelessWidget {
   }
 }
 
-/// Presents an alert on the root navigator over the `scrim`.
+/// Presents an alert on the root navigator over the `scrim`, in the
+/// appearance of where it was opened from ([jamPresentationBrightness]):
+/// End Jam? over the room is the room's dark, in both appearances (R2).
 Future<T?> showJamAlert<T>(
   BuildContext context, {
   required WidgetBuilder builder,
   bool barrierDismissible = false,
 }) {
-  final colors = context.jamColors;
+  final appearance = jamPresentationBrightness(context);
   return Navigator.of(context, rootNavigator: true).push<T>(
     CupertinoDialogRoute<T>(
       context: context,
-      builder: builder,
-      barrierColor: colors.scrim,
+      builder: jamPresentedIn(appearance, builder),
+      barrierColor: jamPresentationColors(context, appearance).scrim,
       barrierDismissible: barrierDismissible,
     ),
   );

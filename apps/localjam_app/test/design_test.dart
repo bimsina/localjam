@@ -80,7 +80,8 @@ void main() {
     expect(JamRadius.sheetFloating, 38);
     expect(JamRadius.section, 20);
     // A lone 44 row is not a pill; a taller block keeps the full 26.
-    expect(JamRadius.sectionFor(44), lessThan(22));
+    expect(JamRadius.sectionFor(44), JamRadius.md);
+    expect(JamRadius.menuFor(44), JamRadius.md);
     expect(JamRadius.sectionFor(120), JamRadius.section);
     // Filled tint holds white at AA in both themes.
     double contrast(Color a, Color b) {
@@ -212,6 +213,47 @@ void main() {
           contrast(hc.onTint, hc.dangerFilled),
           greaterThanOrEqualTo(contrast(base.onTint, base.dangerFilled)),
         );
+      }
+    });
+
+    test('R7: light inks are warm, and no ratio fell to get there', () {
+      const l = JamColors.light;
+      final hc = JamColors.lightHighContrast;
+      // R ≥ G > B: the paper's (and the dark theme's) temperature, not plum.
+      for (final c in [
+        l.label,
+        l.secondaryLabel,
+        l.tertiaryLabel,
+        l.separator,
+        l.fillPressed,
+        l.scrim,
+        hc.secondaryLabel,
+        hc.tertiaryLabel,
+        hc.separator,
+      ]) {
+        expect(c.r, greaterThanOrEqualTo(c.g), reason: '$c');
+        expect(c.g, greaterThan(c.b), reason: '$c');
+      }
+      // The plum inks they replaced, ratio for ratio on every ground.
+      final before = <(String, Color, Color)>[
+        ('label', const Color(0xFF292428), l.label),
+        ('secondaryLabel', const Color(0xFF71686D), l.secondaryLabel),
+        ('tertiaryLabel', const Color(0xFF857A80), l.tertiaryLabel),
+        ('HC secondaryLabel', const Color(0xFF5E565B), hc.secondaryLabel),
+        ('HC tertiaryLabel', const Color(0xFF72686E), hc.tertiaryLabel),
+      ];
+      for (final (name, was, now) in before) {
+        for (final (g, ground) in [
+          ...grounds(l),
+          ('fill', l.fill),
+          ('tintFill', l.tintFill),
+        ]) {
+          expect(
+            contrast(now, ground),
+            greaterThanOrEqualTo(contrast(was, ground)),
+            reason: '$name on $g',
+          );
+        }
       }
     });
 

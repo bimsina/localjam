@@ -545,6 +545,34 @@ void main() {
       expect(one, greaterThanOrEqualTo(JamRadius.md));
     });
 
+    testWidgets('the menu\'s hairline edge is drawn in front of its rows', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        _host(
+          JamMenuButton(
+            groups: [
+              [JamMenuItem(title: 'One', onPressed: () {})],
+              [JamMenuItem(title: 'Two', onPressed: () {})],
+            ],
+          ),
+        ),
+      );
+      await tester.tap(find.byType(JamMenuButton));
+      await tester.pumpAndSettle();
+      final edges = tester
+          .widgetList<DecoratedBox>(
+            find.descendant(
+              of: find.byType(JamMenuPanel),
+              matching: find.byType(DecoratedBox),
+            ),
+          )
+          .where((b) => b.position == DecorationPosition.foreground);
+      expect(edges, hasLength(1));
+      final shape = (edges.single.decoration as ShapeDecoration).shape;
+      expect((shape as JamMenuBorder).side.style, BorderStyle.solid);
+    });
+
     testWidgets('preferUp opens above the trigger where there is room, and '
         'below where there is not', (tester) async {
       Future<(Rect, Rect)> open(Alignment where) async {
@@ -635,6 +663,39 @@ void main() {
         tester.widget<Text>(find.text('End Jam')).style!.color,
         JamColors.dark.danger,
       );
+    });
+
+    testWidgets('inside the room — or on its backdrop — a menu is the room\'s '
+        'solid dark (R2)', (tester) async {
+      for (final backdrop in [false, true]) {
+        await tester.pumpWidget(const SizedBox());
+        Widget menu = JamMenuButton(
+          groups: [
+            [JamMenuItem(title: 'Diagnostics', onPressed: () {})],
+          ],
+        );
+        if (backdrop) menu = JamOnBackdrop(child: menu);
+        await tester.pumpWidget(
+          _host(
+            Stack(
+              alignment: Alignment.center,
+              children: [
+                const JamPresentationAppearance(brightness: Brightness.dark),
+                menu,
+              ],
+            ),
+          ),
+        );
+        await tester.tap(find.byType(JamMenuButton));
+        await tester.pumpAndSettle();
+        final item = tester.element(find.text('Diagnostics'));
+        expect(Theme.of(item).brightness, Brightness.dark);
+        // The menu's own ground, never the backdrop's see-through one.
+        expect(
+          item.jamColors.elevatedGroupedSurface,
+          JamColors.dark.elevatedGroupedSurface,
+        );
+      }
     });
 
     testWidgets('JamMenuPanel hands the choice back when asked to', (
@@ -741,13 +802,98 @@ void main() {
           ),
         ),
       );
+      // LocalJam's own control, not the stock sliding one (CR-8).
       expect(
         find.byType(CupertinoSlidingSegmentedControl<String>),
-        findsOneWidget,
+        findsNothing,
       );
       await tester.tap(find.text('Dark'));
       await tester.pumpAndSettle();
       expect(mode, 'dark');
+      // 44 tall: every segment a full target (RB-22).
+      expect(
+        tester.getSize(find.byType(JamSegmentedControl<String>)).height,
+        greaterThanOrEqualTo(44),
+      );
+      // The choice reads from the words too: semibold label, quieter rest.
+      final dark = tester.widget<Text>(find.text('Dark'));
+      final light = tester.widget<Text>(find.text('Light'));
+      final darkStyle = DefaultTextStyle.of(
+        tester.element(find.text('Dark')),
+      ).style.merge(dark.style);
+      final lightStyle = DefaultTextStyle.of(
+        tester.element(find.text('Light')),
+      ).style.merge(light.style);
+      expect(darkStyle.fontWeight, FontWeight.w600);
+      expect(darkStyle.color, JamColors.light.label);
+      expect(lightStyle.fontWeight, FontWeight.w500);
+      expect(lightStyle.color, JamColors.light.secondaryLabel);
+      // A drag along the track moves the choice with it.
+      await tester.dragFrom(
+        tester.getCenter(find.text('Dark')),
+        Offset(
+          -tester.getSize(find.byType(JamSegmentedControl<String>)).width / 1.5,
+          0,
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(mode, 'system');
+      // No shadow anywhere on it.
+      for (final box in tester.widgetList<DecoratedBox>(
+        find.descendant(
+          of: find.byType(JamSegmentedControl<String>),
+          matching: find.byType(DecoratedBox),
+        ),
+      )) {
+        final d = box.decoration;
+        if (d is ShapeDecoration) expect(d.shadows, isNull);
+      }
+    });
+
+    testWidgets('the selection check: the brand fill in both themes (CR-5)', (
+      tester,
+    ) async {
+      for (final dark in [false, true]) {
+        final colors = dark ? JamColors.dark : JamColors.light;
+        await tester.pumpWidget(
+          _host(const JamSelectionCheck(selected: true), dark: dark),
+        );
+        await tester.pumpAndSettle();
+        final painter =
+            tester
+                    .widget<CustomPaint>(
+                      find.descendant(
+                        of: find.byType(JamSelectionCheck),
+                        matching: find.byType(CustomPaint),
+                      ),
+                    )
+                    .painter!
+                as dynamic;
+        // The switch's fill, not the bright dark-mode text pink.
+        expect(painter.fill, colors.tintFilled);
+        expect(painter.mark, colors.onTint);
+        expect(
+          tester.getSize(find.byType(JamSelectionCheck)),
+          const Size.square(kJamSelectionCheckSize),
+        );
+      }
+      // Its own mark, not the stock iOS glyph.
+      expect(find.byIcon(CupertinoIcons.checkmark_circle_fill), findsNothing);
+
+      final handle = tester.ensureSemantics();
+      await tester.pumpWidget(
+        _host(
+          const JamSelectionCheck(selected: true, semanticLabel: 'Selected'),
+        ),
+      );
+      expect(find.bySemanticsLabel('Selected'), findsOneWidget);
+      await tester.pumpWidget(
+        _host(
+          const JamSelectionCheck(selected: false, semanticLabel: 'Selected'),
+        ),
+      );
+      expect(find.bySemanticsLabel('Selected'), findsNothing);
+      handle.dispose();
     });
 
     testWidgets('JamPressable dims on press and restores', (tester) async {
@@ -775,7 +921,41 @@ void main() {
       );
     });
 
-    testWidgets('progress is the iOS activity indicator and a capsule bar', (
+    testWidgets('a squeezing control dims under reduced motion instead '
+        '(RB-18)', (tester) async {
+      await tester.pumpWidget(
+        MediaQuery(
+          data: const MediaQueryData(disableAnimations: true),
+          child: _host(
+            JamPressable(
+              style: JamPressStyle.scale,
+              onTap: () {},
+              child: const SizedBox(width: 76, height: 76),
+            ),
+          ),
+        ),
+      );
+      double opacity() => tester
+          .widget<Opacity>(
+            find.descendant(
+              of: find.byType(JamPressable),
+              matching: find.byType(Opacity),
+            ),
+          )
+          .opacity;
+      expect(opacity(), 1);
+      final g = await tester.startGesture(
+        tester.getCenter(find.byType(JamPressable)),
+      );
+      await tester.pump();
+      expect(opacity(), lessThan(1));
+      expect(tester.widget<AnimatedScale>(find.byType(AnimatedScale)).scale, 1);
+      await g.up();
+      await tester.pump();
+      expect(opacity(), 1);
+    });
+
+    testWidgets('progress is one ring — filling or turning — and a bar', (
       tester,
     ) async {
       await tester.pumpWidget(
@@ -790,8 +970,13 @@ void main() {
           ),
         ),
       );
-      expect(find.byType(CupertinoActivityIndicator), findsNWidgets(2));
+      expect(find.byType(JamProgressRing), findsNWidgets(2));
+      expect(find.byType(CupertinoActivityIndicator), findsNothing);
       expect(find.byType(CircularProgressIndicator), findsNothing);
+      expect(
+        tester.getSize(find.byType(JamProgressRing).first),
+        const Size.square(20),
+      );
       expect(tester.getSize(find.byType(JamProgressBar)).height, 4);
     });
   });

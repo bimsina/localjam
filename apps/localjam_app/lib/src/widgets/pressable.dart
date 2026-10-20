@@ -21,12 +21,16 @@ enum JamPressStyle {
   /// Scales the child down to [JamPressable.pressedScale] over
   /// [JamDuration.instant] and springs it back on release — for a large
   /// filled control where dimming would turn its colour muddy (the play
-  /// square). No scale under reduced motion.
+  /// square). Under reduced motion it dims to 0.7 instead, with no motion.
   scale,
 
   /// Shows nothing (the caller draws its own pressed state).
   none,
 }
+
+/// The opacity a [JamPressStyle.scale] control dims to under reduced
+/// motion.
+const double _kStillPressedOpacity = 0.7;
 
 /// A tap target with an iOS press state and a 44 pt minimum.
 class JamPressable extends StatefulWidget {
@@ -120,6 +124,14 @@ class _JamPressableState extends State<JamPressable> {
           curve: pressed ? JamCurve.standard : JamCurve.spring,
           child: child,
         );
+        // Under reduced motion nothing shrinks, but a press still shows:
+        // the control dims, as a button does (RB-18).
+        if (still) {
+          child = Opacity(
+            opacity: pressed ? _kStillPressedOpacity : 1,
+            child: child,
+          );
+        }
       case JamPressStyle.none:
         break;
     }

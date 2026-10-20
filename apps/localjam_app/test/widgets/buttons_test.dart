@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:localjam_app/src/design/theme.dart';
 import 'package:localjam_app/src/design/tokens.dart';
 import 'package:localjam_app/src/widgets/buttons.dart';
+import 'package:localjam_app/src/widgets/progress.dart';
 
 Widget _host(Widget child, {bool dark = false}) => MaterialApp(
   theme: dark ? jamDarkTheme() : jamLightTheme(),
@@ -26,17 +27,6 @@ ShapeDecoration? _groundOf(WidgetTester tester) {
 
 TextStyle _labelStyle(WidgetTester tester, String label) =>
     tester.widget<Text>(find.text(label)).style!;
-
-double _opacityOf(WidgetTester tester) => tester
-    .widget<Opacity>(
-      find
-          .descendant(
-            of: find.byType(JamButton),
-            matching: find.byType(Opacity),
-          )
-          .first,
-    )
-    .opacity;
 
 void main() {
   testWidgets('filled: tint rounded rectangle, white 17 semibold, 50 tall', (
@@ -123,7 +113,7 @@ void main() {
     expect(_labelStyle(tester, 'Leave Jam').color, JamColors.light.danger);
   });
 
-  testWidgets('tapping fires; disabled dims to 0.35 and ignores taps', (
+  testWidgets('tapping fires; disabled is neutral and ignores taps', (
     tester,
   ) async {
     var taps = 0;
@@ -132,13 +122,74 @@ void main() {
     );
     await tester.tap(find.byType(JamButton));
     expect(taps, 1);
-    expect(_opacityOf(tester), 1);
 
     await tester.pumpWidget(_host(const JamButton.filled(label: 'Join')));
     await tester.tap(find.byType(JamButton), warnIfMissed: false);
     await tester.pump();
     expect(taps, 1);
-    expect(_opacityOf(tester), 0.35);
+    // One disabled look for every kind (R8): no faded raspberry, no
+    // see-through button.
+    expect(
+      find.descendant(
+        of: find.byType(JamButton),
+        matching: find.byType(Opacity),
+      ),
+      findsNothing,
+    );
+    for (final dark in [false, true]) {
+      final colors = dark ? JamColors.dark : JamColors.light;
+      for (final button in const [
+        JamButton.filled(label: 'Join'),
+        JamButton.filled(label: 'Join', destructive: true),
+        JamButton.tinted(label: 'Join'),
+        JamButton.gray(label: 'Join'),
+      ]) {
+        await tester.pumpWidget(_host(button, dark: dark));
+        await tester.pumpAndSettle();
+        expect(_groundOf(tester)!.color, colors.fill);
+        expect(_labelStyle(tester, 'Join').color, colors.tertiaryLabel);
+      }
+      await tester.pumpWidget(
+        _host(const JamButton.plain(label: 'Join'), dark: dark),
+      );
+      await tester.pumpAndSettle();
+      expect(_groundOf(tester), isNull);
+      expect(_labelStyle(tester, 'Join').color, colors.tertiaryLabel);
+    }
+  });
+
+  testWidgets('buttons grow with their label at a large text size', (
+    tester,
+  ) async {
+    for (final size in JamButtonSize.values) {
+      await tester.pumpWidget(
+        MediaQuery(
+          data: const MediaQueryData(textScaler: TextScaler.linear(2.4)),
+          child: _host(
+            JamButton.filled(label: 'Join', size: size, onPressed: () {}),
+          ),
+        ),
+      );
+      final painted = tester.getSize(
+        find
+            .descendant(
+              of: find.byType(JamButton),
+              matching: find.byType(Container),
+            )
+            .first,
+      );
+      final line = tester.getSize(find.text('Join')).height;
+      // The whole line shows, with the default size's padding round it.
+      expect(painted.height, greaterThan(line));
+      expect(
+        painted.height,
+        greaterThan(
+          size == JamButtonSize.large
+              ? JamMetrics.buttonHeight
+              : JamMetrics.buttonHeightSmall,
+        ),
+      );
+    }
   });
 
   testWidgets('pressing dims to 0.7, no ink', (tester) async {
@@ -162,7 +213,7 @@ void main() {
     );
   });
 
-  testWidgets('loading shows the activity indicator and holds the width', (
+  testWidgets('loading turns a ring in the label\'s place, holding the width', (
     tester,
   ) async {
     await tester.pumpWidget(
@@ -181,10 +232,35 @@ void main() {
       ),
     );
     await tester.pump();
-    expect(find.byType(CupertinoActivityIndicator), findsOneWidget);
+    final ring = tester.widget<JamProgressRing>(find.byType(JamProgressRing));
+    expect(ring.value, isNull);
+    // Full strength on the fill, not a fading spoke (CR-11).
+    expect(ring.color, JamColors.light.onTint);
+    expect(find.byType(CupertinoActivityIndicator), findsNothing);
     expect(tester.getSize(find.byType(JamButton)).width, idleWidth);
+    // Busy, not disabled: the ground keeps its colour.
+    expect(_groundOf(tester)!.color, JamColors.light.tintFilled);
     await tester.tap(find.byType(JamButton));
     expect(taps, 0);
+
+    // With a loading label the ring leads the words.
+    await tester.pumpWidget(
+      _host(
+        JamButton.filled(
+          label: 'Try Again',
+          loading: true,
+          loadingLabel: 'Trying…',
+          onPressed: () {},
+        ),
+      ),
+    );
+    await tester.pump();
+    expect(find.text('Trying…'), findsOneWidget);
+    expect(find.text('Try Again'), findsNothing);
+    expect(
+      tester.getCenter(find.byType(JamProgressRing)).dx,
+      lessThan(tester.getCenter(find.text('Trying…')).dx),
+    );
   });
 
   testWidgets('an icon sits before the label', (tester) async {

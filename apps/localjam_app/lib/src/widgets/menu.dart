@@ -312,6 +312,7 @@ class JamMenuPanel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = context.jamColors;
+    const shape = JamMenuBorder();
     final edge = JamMenuBorder(
       side: BorderSide(
         color: colors.separator,
@@ -319,11 +320,11 @@ class JamMenuPanel extends StatelessWidget {
       ),
     );
     Widget panel = ClipPath(
-      clipper: ShapeBorderClipper(shape: edge),
+      clipper: const ShapeBorderClipper(shape: shape),
       child: DecoratedBox(
         decoration: ShapeDecoration(
           color: colors.elevatedGroupedSurface,
-          shape: edge,
+          shape: shape,
         ),
         // The panel is often drawn in the root overlay: a complete ambient
         // text style keeps its titles off the framework's fallback.
@@ -341,6 +342,13 @@ class JamMenuPanel extends StatelessWidget {
           ),
         ),
       ),
+    );
+    // The hairline edge is drawn in front of the rows, so a group's gap
+    // band cannot paint over it (CR-12).
+    panel = DecoratedBox(
+      position: DecorationPosition.foreground,
+      decoration: ShapeDecoration(shape: edge),
+      child: panel,
     );
     final w = width;
     if (w != null) panel = SizedBox(width: w, child: panel);
@@ -466,8 +474,9 @@ class JamMenuAnchor extends StatefulWidget {
   /// Which edge of the trigger the menu lines up with.
   final JamMenuAlignment alignment;
 
-  /// Forces the menu's light or dark palette (Now Playing's menus are
-  /// always dark, whatever the app theme). Null follows the ambient theme.
+  /// Forces the menu's light or dark palette. Null: the appearance of
+  /// where the menu was opened from ([jamPresentationBrightness]) — the
+  /// room's dark inside the room, otherwise the app's.
   final Brightness? brightness;
 
   /// Names the open menu for a screen reader.
@@ -531,7 +540,9 @@ class _JamMenuAnchorState extends State<JamMenuAnchor>
         groups: widget.groups,
         semanticLabel: widget.semanticLabel,
       );
-      final forced = widget.brightness;
+      // Inside the room (or on its backdrop) the menu is the room's dark,
+      // in its solid palette (R2), unless told otherwise.
+      final forced = widget.brightness ?? jamPresentationBrightness(context);
       if (forced != null) {
         overlay = JamForcedAppearance(brightness: forced, child: overlay);
       }
@@ -579,8 +590,8 @@ class JamMenuButton extends StatelessWidget {
 
   final bool enabled;
 
-  /// Forces the menu's light or dark palette (Now Playing's menus are always
-  /// dark, whatever the app theme). Null follows the ambient theme.
+  /// Forces the menu's light or dark palette. Null: the appearance of
+  /// where the menu was opened from — the room's dark inside the room.
   final Brightness? brightness;
 
   /// Which edge of the trigger the menu lines up with.

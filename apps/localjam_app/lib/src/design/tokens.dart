@@ -138,7 +138,14 @@ class JamColors extends ThemeExtension<JamColors> {
   Color get tintFilled => _tintFilled ?? tint;
   final Color? _tintFilled;
 
-  /// Warm paper and ink, with raspberry reserved for interaction.
+  /// Warm paper and warm ink (R ≥ G > B, hue 24–28° — the dark theme's
+  /// temperature, R7), with raspberry reserved for interaction.
+  ///
+  /// | Ink | On `background` | On `groupedBackground` | On `fill` |
+  /// |---|---|---|---|
+  /// | label `2A2420` | 14.44 (was 14.38) | 13.36 (13.30) | 12.01 (11.96) |
+  /// | secondaryLabel `6F6761` | 5.23 (5.08) | 4.84 (4.69) | 4.35 (4.22) |
+  /// | tertiaryLabel `82786F` | 4.07 (3.89) | 3.77 (3.60) | 3.39 (3.23) |
   static const JamColors light = JamColors(
     background: Color(0xFFFAF8F5),
     groupedBackground: Color(0xFFF2EFEB),
@@ -148,11 +155,11 @@ class JamColors extends ThemeExtension<JamColors> {
     elevatedGroupedSurface: Color(0xFFFFFEFC),
     fill: Color(0xFFE8E3DE),
     fillSecondary: Color(0xFFF0EBE6),
-    fillPressed: Color(0x102C2529),
-    separator: Color(0x242C2529),
-    label: Color(0xFF292428),
-    secondaryLabel: Color(0xFF71686D),
-    tertiaryLabel: Color(0xFF857A80),
+    fillPressed: Color(0x102A2420),
+    separator: Color(0x242A2420),
+    label: Color(0xFF2A2420),
+    secondaryLabel: Color(0xFF6F6761),
+    tertiaryLabel: Color(0xFF82786F),
     tint: Color(0xFFB82F59),
     tintPressed: Color(0xFF922343),
     tintFill: Color(0xFFF6E3E8),
@@ -160,7 +167,7 @@ class JamColors extends ThemeExtension<JamColors> {
     success: Color(0xFF3E8068),
     warning: Color(0xFFA54C20),
     danger: Color(0xFFB5343A),
-    scrim: Color(0x66211C20),
+    scrim: Color(0x66201C19),
     material: Color(0xF5FAF8F5),
     glass: Color(0x14FFFFFF),
     tintFilled: Color(0xFFB82F59),
@@ -203,9 +210,9 @@ class JamColors extends ThemeExtension<JamColors> {
   /// 50%, the tint and the reds deeper. Every pair is at or above the
   /// normal palette's.
   static final JamColors lightHighContrast = light.copyWith(
-    secondaryLabel: const Color(0xFF5E565B),
-    tertiaryLabel: const Color(0xFF72686E),
-    separator: const Color(0x80292428),
+    secondaryLabel: const Color(0xFF5C544F),
+    tertiaryLabel: const Color(0xFF6F665F),
+    separator: const Color(0x802A2420),
     tint: const Color(0xFFA82450),
     tintPressed: const Color(0xFF8A1D41),
     tintFilled: const Color(0xFFA82450),
@@ -369,7 +376,9 @@ class JamColors extends ThemeExtension<JamColors> {
 
 /// [base] re-pointed at the Now Playing backdrop: white text at the
 /// backdrop's three strengths, white (not raspberry) for what can be tapped,
-/// see-through grounds, white hairlines and press highlights, and the
+/// see-through grounds (a control's `fill` — a switch's off track, a
+/// disabled button — is the backdrop's glass), white hairlines and press
+/// highlights, and the
 /// backdrop's own red and amber — the one "danger on artwork" and "warning on
 /// artwork" in the app (each ≥ 4.5:1 on the brightest ground the backdrop
 /// allows).
@@ -387,6 +396,7 @@ JamColors jamBackdropColors(JamColors base) => base.copyWith(
   label: JamNowPlayingColors.text,
   secondaryLabel: JamNowPlayingColors.secondary,
   tertiaryLabel: JamNowPlayingColors.tertiary,
+  fill: JamNowPlayingColors.glass,
   fillPressed: JamNowPlayingColors.pressed,
   tint: JamNowPlayingColors.text,
   tintPressed: JamNowPlayingColors.secondary,
@@ -477,9 +487,10 @@ abstract final class JamFixedColors {
   static const Color black = Color(0xFF000000);
   static const Color clear = Color(0x00000000);
 
-  /// The segmented control's thumb in dark mode: a warm grey a step above
-  /// the dark fills (2.2:1 on its track; `label` on it 5.8:1).
-  static const Color segmentThumbDark = Color(0xFF665D57);
+  /// The segmented control's thumb in dark mode: a quiet warm grey a step
+  /// above the dark fills (1.5:1 on its track, with a hairline edge; `label`
+  /// on it 8.7:1) — the chosen word, set semibold, carries the choice.
+  static const Color segmentThumbDark = Color(0xFF4A433E);
 }
 
 /// Faces (D3): eight earthy hues at one luminance (OKLCH chroma ≈ 0.10), so
@@ -645,7 +656,7 @@ abstract final class JamMetrics {
 /// | Toast, player banner | 16 ([notice]) |
 /// | Mini player | 20 ([miniPlayer]) |
 /// | Play square (continuous corners) | 28 ([playSquare]) |
-/// | Inset-grouped section | 20 (never more than half a lone row: see [sectionFor]) |
+/// | Inset-grouped section | 20 (a lone row: 12 — see [sectionFor]) |
 /// | Sheet, edge-attached / floating | 38 |
 /// | Alert | 34 |
 /// | Pull-down menu | 22 |
@@ -697,11 +708,20 @@ abstract final class JamRadius {
   static const double section = 20;
 
   /// The section radius for a block [height] tall: [section], but never
-  /// so round that a single 44 row turns into a pill.
-  static double sectionFor(double height) {
-    final cap = height / 2 - 6;
-    return cap < section ? (cap < md ? md : cap) : section;
+  /// so round that a single row reads as a pill (CR-17) — held 10 under
+  /// half its height, so a lone 44 row is a soft rectangle at [md].
+  static double sectionFor(double height) => _softFor(height, section);
+
+  /// [max], held [_kSoftMargin] under half of [height] and never under [md]:
+  /// the one rule that keeps a short block from turning into a capsule
+  /// (D9).
+  static double _softFor(double height, double max) {
+    final cap = height / 2 - _kSoftMargin;
+    return cap < max ? (cap < md ? md : cap) : max;
   }
+
+  /// How far under half its height a short block's corner stays.
+  static const double _kSoftMargin = 10;
 
   /// A sheet's top corners when attached to the bottom edge (the large
   /// detent): follows the device's own corner, approximated here.
@@ -723,10 +743,7 @@ abstract final class JamRadius {
   /// The menu radius for a panel [height] tall: [menu], but never so round
   /// that a one-row menu turns into a pill (D9) — the rule [sectionFor]
   /// follows, capped at [menu].
-  static double menuFor(double height) {
-    final cap = height / 2 - 6;
-    return cap < menu ? (cap < md ? md : cap) : menu;
-  }
+  static double menuFor(double height) => _softFor(height, menu);
 
   /// Text and search fields.
   static const double field = 10;

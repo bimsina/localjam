@@ -18,6 +18,7 @@ import 'package:localjam_app/src/widgets/jam_mark.dart';
 import 'package:localjam_app/src/widgets/join_link_dialog.dart';
 import 'package:localjam_app/src/widgets/notice.dart';
 import 'package:localjam_app/src/widgets/permission_sheet.dart';
+import 'package:localjam_app/src/widgets/progress.dart';
 import 'package:localjam_app/src/widgets/room_sheet.dart';
 
 import '../harness.dart';
@@ -382,11 +383,11 @@ void main() {
 
     await tester.tap(find.text(HomeStrings.join));
     await tester.pump();
-    // The row's Join turns into a system spinner while the probe runs.
-    expect(find.byType(CupertinoActivityIndicator), findsOneWidget);
+    // The row's Join turns into a turning ring while the probe runs.
+    expect(find.byType(JamProgressRing), findsOneWidget);
     final join = tester.widget<JamButton>(
       find.ancestor(
-        of: find.byType(CupertinoActivityIndicator),
+        of: find.byType(JamProgressRing),
         matching: find.byType(JamButton),
       ),
     );

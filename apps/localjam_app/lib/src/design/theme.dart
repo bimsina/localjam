@@ -511,6 +511,148 @@ class JamForcedAppearance extends StatelessWidget {
   }
 }
 
+/// The appearance each route has declared for what it presents
+/// ([JamPresentationAppearance]).
+final Expando<Brightness> _declaredAppearance = Expando<Brightness>(
+  'jamPresentationAppearance',
+);
+
+/// Declares the appearance of everything presented from its route — sheets,
+/// alerts, menus — whatever the app's (R2): the room is dark in both
+/// appearances, and so is everything opened inside it, the way its docked
+/// panel and its menus already are. Paints nothing; put it anywhere in the
+/// route's page, for as long as the page is that appearance (the room drops
+/// it when it turns into the light "jam ended" page).
+///
+/// Needed because a presentation is usually asked for from a `State`'s own
+/// context, which sits *above* the dark theme that state builds. A call
+/// made from inside a subtree that already looks different from the app (a
+/// [JamForcedAppearance], a sheet that was itself presented dark) follows
+/// that subtree without it — see [jamPresentationBrightness].
+///
+/// ```dart
+/// Stack(children: [
+///   const JamPresentationAppearance(brightness: Brightness.dark),
+///   player,
+/// ])
+/// ```
+class JamPresentationAppearance extends StatefulWidget {
+  const JamPresentationAppearance({
+    super.key,
+    required this.brightness,
+    this.child = const SizedBox.shrink(),
+  });
+
+  /// What everything presented from this route is drawn in.
+  final Brightness brightness;
+
+  /// Usually nothing: the declaration paints nothing of its own.
+  final Widget child;
+
+  @override
+  State<JamPresentationAppearance> createState() =>
+      _JamPresentationAppearanceState();
+}
+
+class _JamPresentationAppearanceState extends State<JamPresentationAppearance> {
+  ModalRoute<Object?>? _route;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final route = ModalRoute.of(context);
+    if (!identical(route, _route)) {
+      _release();
+      _route = route;
+    }
+    _declare();
+  }
+
+  @override
+  void didUpdateWidget(JamPresentationAppearance oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _declare();
+  }
+
+  void _declare() {
+    final route = _route;
+    if (route != null) _declaredAppearance[route] = widget.brightness;
+  }
+
+  void _release() {
+    final route = _route;
+    if (route != null && _declaredAppearance[route] == widget.brightness) {
+      _declaredAppearance[route] = null;
+    }
+  }
+
+  @override
+  void dispose() {
+    _release();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => widget.child;
+}
+
+/// Marks a subtree re-themed by [JamOnBackdrop]: anything presented from
+/// inside it takes the solid palette underneath, never the see-through one.
+class _JamBackdropScope extends InheritedWidget {
+  const _JamBackdropScope({required super.child});
+
+  @override
+  bool updateShouldNotify(_JamBackdropScope oldWidget) => false;
+}
+
+/// The appearance something presented from [context] — a sheet, an alert,
+/// a menu — is drawn in, or null to follow the app (R2):
+///
+/// 1. what [context]'s route declared ([JamPresentationAppearance]: the
+///    room says dark);
+/// 2. otherwise, when [context] sits in a subtree whose appearance differs
+///    from the app's (a [JamForcedAppearance], a sheet presented from the
+///    room) — or on the backdrop ([JamOnBackdrop]) — that subtree's.
+///
+/// [showJamSheet], [showJamModalSheet], `showJamAlert` and every menu apply
+/// it, so callers pass their own context and nothing else.
+Brightness? jamPresentationBrightness(BuildContext context) {
+  final route = ModalRoute.of(context);
+  final declared = route == null ? null : _declaredAppearance[route];
+  if (declared != null) return declared;
+  final here = Theme.of(context).brightness;
+  if (context.getInheritedWidgetOfExactType<_JamBackdropScope>() != null) {
+    return here;
+  }
+  final navigator = Navigator.maybeOf(context, rootNavigator: true);
+  if (navigator == null) return null;
+  return Theme.of(navigator.context).brightness == here ? null : here;
+}
+
+/// The palette something presented in [brightness] (from
+/// [jamPresentationBrightness]) is drawn in — for what a route paints
+/// outside its own subtree, like its barrier. Null: [context]'s own.
+JamColors jamPresentationColors(BuildContext context, Brightness? brightness) {
+  if (brightness == null) return context.jamColors;
+  final highContrast = MediaQuery.maybeHighContrastOf(context) ?? false;
+  return switch ((brightness, highContrast)) {
+    (Brightness.dark, false) => JamColors.dark,
+    (Brightness.dark, true) => JamColors.darkHighContrast,
+    (Brightness.light, false) => JamColors.light,
+    (Brightness.light, true) => JamColors.lightHighContrast,
+  };
+}
+
+/// [builder] wrapped to draw in [brightness] (null: unchanged) — for a
+/// route's builder, decided when the route is pushed.
+WidgetBuilder jamPresentedIn(Brightness? brightness, WidgetBuilder builder) {
+  if (brightness == null) return builder;
+  return (context) => JamForcedAppearance(
+    brightness: brightness,
+    child: Builder(builder: builder),
+  );
+}
+
 /// Re-themes [child] for the Now Playing backdrop: its [JamColors] become
 /// [jamBackdropColors] of the ambient ones — white text, white for what can
 /// be tapped, see-through grounds, the backdrop's own red and amber.
@@ -537,7 +679,7 @@ class JamOnBackdrop extends StatelessWidget {
           colors,
         ],
       ),
-      child: child,
+      child: _JamBackdropScope(child: child),
     );
   }
 }

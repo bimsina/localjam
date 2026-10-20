@@ -20,12 +20,16 @@
 /// is the same centred form sheet as everything else ([JamFormSheetPage]).
 ///
 /// **The header rule (§10.2).** The leading slot holds *Cancel* — only when
-/// the sheet edits something — or nothing. The trailing slot holds *Done* or
-/// the sheet's action verb (Start, Join); a sheet that only closes has a
-/// glass xmark there instead, never both an xmark and Done. Anything else —
-/// Copy, Reset — lives in the content, not the header. [JamSheetActions]
-/// can only say legal things, and is the only way to fill the slots: pass
-/// one to [showJamSheet], [JamSheetScaffold] or [JamSheetHeader].
+/// the sheet edits something — or nothing. The trailing slot holds the
+/// sheet's action verb (Start, Join) or, for every other sheet, **Done** —
+/// one way to close a sheet, wherever it was opened from (CR-24): a sheet
+/// that only shows something (Invite, Diagnostics) closes with the same
+/// trailing Done as one that applies its changes as they are made (People,
+/// Sound Offset), never an xmark in one and a word in the next. Anything
+/// else — Copy, Reset — lives in the content, not the header.
+/// [JamSheetActions] can only say legal things, and is the only way to fill
+/// the slots: pass one to [showJamSheet], [JamSheetScaffold] or
+/// [JamSheetHeader].
 ///
 /// Ground: `elevated`, or for sheets that host grouped rows
 /// `elevatedGroupedBackground` with `elevatedGroupedSurface` rows. No
@@ -43,16 +47,18 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 
+import '../design/theme.dart';
 import '../design/tokens.dart';
 import '../design/typography.dart';
 import 'buttons.dart';
-import 'glass.dart';
 import 'list.dart';
 import 'section.dart';
 
 /// Strings the sheet chrome says.
 abstract final class JamSheetStrings {
-  static const String close = 'Close';
+  /// The word on the control that closes a sheet: Done, as on every other
+  /// sheet (CR-24).
+  static const String close = 'Done';
   static const String cancel = 'Cancel';
   static const String done = 'Done';
   static const String dismiss = 'Dismiss';
@@ -274,7 +280,8 @@ class JamSheetGrabber extends StatelessWidget {
   );
 }
 
-/// The round xmark that closes a sheet, on a flat `fill` circle.
+/// What closes a sheet that only shows something: the trailing semibold
+/// **Done** every sheet closes with (CR-24) — not an xmark.
 class JamSheetCloseButton extends StatelessWidget {
   const JamSheetCloseButton({super.key, this.onPressed});
 
@@ -282,15 +289,9 @@ class JamSheetCloseButton extends StatelessWidget {
   final VoidCallback? onPressed;
 
   @override
-  Widget build(BuildContext context) => JamGlassButton(
-    icon: CupertinoIcons.xmark,
-    semanticLabel: JamSheetStrings.close,
-    visualSize: 30,
-    iconSize: JamIconSize.disclosure,
-    iconColor: context.jamColors.secondaryLabel,
-    // iOS's sheet xmark is a flat `fill` circle: the blurred chrome
-    // material is the sheet's own colour in dark mode and disappears.
-    fillColor: context.jamColors.fill,
+  Widget build(BuildContext context) => JamTextButton(
+    label: JamSheetStrings.close,
+    bold: true,
     onPressed: onPressed ?? () => Navigator.of(context).maybePop(),
   );
 }
@@ -300,7 +301,8 @@ enum _JamSheetActionKind { close, done, confirm }
 /// The only header layouts a sheet may have (spec §10.2).
 ///
 /// - [JamSheetActions.close]: a sheet that only shows something (Invite,
-///   Diagnostics): a trailing glass xmark, nothing leading.
+///   Diagnostics): a trailing **Done** that closes it, nothing leading —
+///   the same control as [JamSheetActions.done].
 /// - [JamSheetActions.done]: a sheet whose changes apply as they are made
 ///   (People, Sound Offset): a trailing **Done**; add [showCancel] only when
 ///   Done commits something Cancel would throw away.
@@ -310,7 +312,8 @@ enum _JamSheetActionKind { close, done, confirm }
 /// Secondary actions (Copy, Reset) belong in the content.
 @immutable
 class JamSheetActions {
-  /// A trailing glass xmark. [onClose] defaults to popping the sheet.
+  /// A trailing **Done** that closes the sheet. [onClose] defaults to
+  /// popping it.
   const JamSheetActions.close({this.onClose})
     : _kind = _JamSheetActionKind.close,
       label = JamSheetStrings.done,
@@ -357,7 +360,7 @@ class JamSheetActions {
   /// Cancel's action; defaults to popping the sheet.
   final VoidCallback? onCancel;
 
-  /// The xmark's action; defaults to popping the sheet.
+  /// The closing Done's action; defaults to popping the sheet.
   final VoidCallback? onClose;
 
   /// Whether the leading Cancel shows.
@@ -1044,22 +1047,29 @@ class _JamSheetPageState<T> extends State<_JamSheetPage<T>>
 /// on top of this; a sheet that owns its header (the library picker, whose
 /// title follows the selection) or has none (a permission primer) calls it
 /// directly — never a bare `showModalBottomSheet`.
+///
+/// It takes the appearance of where it was opened from
+/// ([jamPresentationBrightness]): anything opened inside the room is the
+/// room's dark, in both appearances (R2), scrim included.
 Future<T?> showJamModalSheet<T>(
   BuildContext context, {
   required WidgetBuilder builder,
   bool enableDrag = true,
   bool isDismissible = true,
   RouteSettings? routeSettings,
-}) => Navigator.of(context, rootNavigator: true).push<T>(
-  JamSheetRoute<T>(
-    builder: builder,
-    formSheet: jamUsesFormSheet(context),
-    barrierColor: context.jamColors.scrim,
-    enableDrag: enableDrag,
-    isDismissible: isDismissible,
-    settings: routeSettings,
-  ),
-);
+}) {
+  final appearance = jamPresentationBrightness(context);
+  return Navigator.of(context, rootNavigator: true).push<T>(
+    JamSheetRoute<T>(
+      builder: jamPresentedIn(appearance, builder),
+      formSheet: jamUsesFormSheet(context),
+      barrierColor: jamPresentationColors(context, appearance).scrim,
+      enableDrag: enableDrag,
+      isDismissible: isDismissible,
+      settings: routeSettings,
+    ),
+  );
+}
 
 /// Opens a LocalJam sheet.
 ///

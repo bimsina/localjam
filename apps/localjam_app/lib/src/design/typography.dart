@@ -282,6 +282,16 @@ extension JamTypography on BuildContext {
   /// Manrope 20/27 semibold.
   TextStyle get jamTitle3 => jamType.title3;
 
+  /// Manrope 17/22 bold, −0.2 tracking: a jam's name in a list row
+  /// (Nearby, Recent, Past Jams) — the face says "a jam's name", the size
+  /// sits level with the row's 17 pt controls instead of reading as a
+  /// heading (R6). Page and sheet titles keep [jamTitle3] and up.
+  TextStyle get jamNameRow => jamType.headline.copyWith(
+    fontFamily: 'Manrope',
+    fontWeight: FontWeight.w700,
+    letterSpacing: -0.2,
+  );
+
   /// 17/22 semibold.
   TextStyle get jamHeadline => jamType.headline;
 

@@ -598,6 +598,9 @@ class _RoomScreenState extends State<RoomScreen>
                     child: Stack(
                       fit: StackFit.expand,
                       children: [
+                        const JamPresentationAppearance(
+                          brightness: Brightness.dark,
+                        ),
                         if (wide)
                           Row(
                             children: [

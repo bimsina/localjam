@@ -47,5 +47,14 @@ void main() {
       expect(identityInitials(''), '?');
       expect(identityInitials('   '), '?');
     });
+
+    test('only letters and digits count — never an emoji or a bracket', () {
+      expect(identityInitials('🎸 Mia'), 'M');
+      expect(identityInitials('(Mia)'), 'M');
+      expect(identityInitials('- DJ K'), 'DK');
+      expect(identityInitials('mia 2'), 'M2');
+      expect(identityInitials('!!! ???'), '?');
+      expect(jamFirstLetterOf('“élan”'), 'É');
+    });
   });
 }

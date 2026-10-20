@@ -48,10 +48,19 @@ class JamRowScope extends InheritedWidget {
 
 /// A 0.5 pt (one physical pixel) hairline in `separator`.
 class JamHairline extends StatelessWidget {
-  const JamHairline({super.key, this.indent = 0, this.color});
+  const JamHairline({
+    super.key,
+    this.indent = 0,
+    this.endIndent = 0,
+    this.color,
+  });
 
   /// Leading inset.
   final double indent;
+
+  /// Trailing inset: a plain list's hairline stops where its content does,
+  /// not at the screen's edge (CR-18).
+  final double endIndent;
 
   /// Overrides `separator`.
   final Color? color;
@@ -62,7 +71,7 @@ class JamHairline extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Padding(
-    padding: EdgeInsetsDirectional.only(start: indent),
+    padding: EdgeInsetsDirectional.only(start: indent, end: endIndent),
     child: SizedBox(
       height: thicknessOf(context),
       width: double.infinity,
@@ -82,22 +91,40 @@ const double kJamRowInset = JamSpace.lg;
 /// The gap between a row's leading widget and its title.
 const double kJamRowLeadingGap = JamSpace.md;
 
+/// How far inside its box the chevron's stroke ends: its glyph's side
+/// bearing.
+const double kJamChevronBearing = 4;
+
 /// The one disclosure chevron: `chevron_forward` at
 /// [JamIconSize.disclosure] in `tertiaryLabel` (or [color]) — on rows, the
 /// Now Playing footer's "With Mia and Theo", the ended mini player. A row
 /// says "this goes somewhere" exactly one way.
 class JamDisclosureChevron extends StatelessWidget {
-  const JamDisclosureChevron({super.key, this.color});
+  const JamDisclosureChevron({super.key, this.color, this.endAligned = false});
 
   /// Overrides `tertiaryLabel` (the backdrop's secondary white, say).
   final Color? color;
 
+  /// Moves the glyph [kJamChevronBearing] toward the end, so its *stroke*
+  /// — not its box — ends on the trailing edge, where values and other
+  /// rows' controls end (CR-13). Give it [kJamChevronBearing] less room
+  /// before it to keep the gap.
+  final bool endAligned;
+
   @override
-  Widget build(BuildContext context) => Icon(
-    CupertinoIcons.chevron_forward,
-    size: JamIconSize.disclosure,
-    color: color ?? context.jamColors.tertiaryLabel,
-  );
+  Widget build(BuildContext context) {
+    final glyph = Icon(
+      CupertinoIcons.chevron_forward,
+      size: JamIconSize.disclosure,
+      color: color ?? context.jamColors.tertiaryLabel,
+    );
+    if (!endAligned) return glyph;
+    final rtl = Directionality.of(context) == TextDirection.rtl;
+    return Transform.translate(
+      offset: Offset(rtl ? -kJamChevronBearing : kJamChevronBearing, 0),
+      child: glyph,
+    );
+  }
 }
 
 /// One iOS list row.
@@ -342,19 +369,33 @@ class _JamRowBody extends StatelessWidget {
             color: colors.tint,
           ),
         ),
+      // Both trailing glyphs end their *stroke* on the row's trailing
+      // inset, where a value without one ends (CR-13).
       if (row.external && !row.chevron)
         Padding(
-          padding: const EdgeInsetsDirectional.only(start: JamSpace.sm),
-          child: Icon(
-            CupertinoIcons.arrow_up_right,
-            size: JamIconSize.disclosure,
-            color: colors.tertiaryLabel,
+          padding: const EdgeInsetsDirectional.only(
+            start: JamSpace.sm - _kArrowBearing,
+          ),
+          child: Transform.translate(
+            offset: Offset(
+              Directionality.of(context) == TextDirection.rtl
+                  ? -_kArrowBearing
+                  : _kArrowBearing,
+              0,
+            ),
+            child: Icon(
+              CupertinoIcons.arrow_up_right,
+              size: JamIconSize.disclosure,
+              color: colors.tertiaryLabel,
+            ),
           ),
         ),
       if (row.chevron)
         const Padding(
-          padding: EdgeInsetsDirectional.only(start: JamSpace.sm),
-          child: JamDisclosureChevron(),
+          padding: EdgeInsetsDirectional.only(
+            start: JamSpace.sm - kJamChevronBearing,
+          ),
+          child: JamDisclosureChevron(endAligned: true),
         ),
     ];
 
@@ -400,7 +441,9 @@ class _JamRowBody extends StatelessWidget {
           content,
           PositionedDirectional(
             start: inset,
-            end: 0,
+            // In a section the hairline meets the block's edge; in a plain
+            // list it stops where the row's content does (CR-18).
+            end: scope == null ? kJamRowInset : 0,
             bottom: 0,
             child: const JamHairline(),
           ),
@@ -463,7 +506,7 @@ class JamAddSongsRow extends StatelessWidget implements JamSelfSeparatingRow {
     this.separator,
   });
 
-  /// Null disables the row (dimmed, as a disabled button is).
+  /// Null disables the row (the tertiary ink, as a disabled button).
   final VoidCallback? onTap;
 
   /// Title Case; also what a screen reader hears.
@@ -487,17 +530,29 @@ class JamAddSongsRow extends StatelessWidget implements JamSelfSeparatingRow {
   Widget build(BuildContext context) {
     final colors = context.jamColors;
     final enabled = onTap != null && !busy;
-    final accent = onBackdrop ? JamNowPlayingColors.text : colors.tint;
+    final disabled = onTap == null;
+    // Disabled is the one disabled look (R8): the tertiary ink, not the
+    // whole row at 35%.
+    final accent = disabled
+        ? (onBackdrop ? JamNowPlayingColors.tertiary : colors.tertiaryLabel)
+        : onBackdrop
+        ? JamNowPlayingColors.text
+        : colors.tint;
     final ground = onBackdrop
         ? JamNowPlayingColors.placeholderGround
         : colors.fillSecondary;
     final scope = JamRowScope.maybeOf(context);
     final showSeparator = separator ?? (scope != null && !scope.isLast);
 
-    Widget content = SizedBox(
-      height: kJamAddSongsRowHeight,
+    // A song row's height at the default text size — a minimum, so a large
+    // title grows the row rather than clipping (RB-3).
+    Widget content = ConstrainedBox(
+      constraints: const BoxConstraints(minHeight: kJamAddSongsRowHeight),
       child: Padding(
-        padding: EdgeInsets.symmetric(horizontal: horizontalPadding),
+        padding: EdgeInsets.symmetric(
+          horizontal: horizontalPadding,
+          vertical: (kJamAddSongsRowHeight - JamArtworkSize.row) / 2,
+        ),
         child: Row(
           children: [
             Container(
@@ -511,7 +566,7 @@ class JamAddSongsRow extends StatelessWidget implements JamSelfSeparatingRow {
                 ),
               ),
               child: busy
-                  ? JamSpinner(radius: 8, color: accent)
+                  ? JamProgressRing(color: accent)
                   : Icon(
                       CupertinoIcons.plus,
                       size: JamIconSize.row,
@@ -538,7 +593,7 @@ class JamAddSongsRow extends StatelessWidget implements JamSelfSeparatingRow {
           content,
           PositionedDirectional(
             start: horizontalPadding + JamArtworkSize.row + kJamRowLeadingGap,
-            end: 0,
+            end: scope == null ? horizontalPadding : 0,
             bottom: 0,
             child: JamHairline(
               color: onBackdrop ? JamNowPlayingColors.separator : null,
@@ -555,18 +610,18 @@ class JamAddSongsRow extends StatelessWidget implements JamSelfSeparatingRow {
       label: title,
       onTap: enabled ? onTap : null,
       excludeSemantics: true,
-      child: Opacity(
-        opacity: onTap == null ? 0.35 : 1,
-        child: JamPressable(
-          onTap: enabled ? onTap : null,
-          style: JamPressStyle.highlight,
-          highlightColor: onBackdrop ? JamNowPlayingColors.pressed : null,
-          child: content,
-        ),
+      child: JamPressable(
+        onTap: enabled ? onTap : null,
+        style: JamPressStyle.highlight,
+        highlightColor: onBackdrop ? JamNowPlayingColors.pressed : null,
+        child: content,
       ),
     );
   }
 }
+
+/// The ↗'s side bearing: how far inside its box its stroke ends.
+const double _kArrowBearing = 2.5;
 
 /// [JamAddSongsRow]'s height: a song row's (8 + cover 44 + 8).
 const double kJamAddSongsRowHeight = 60;

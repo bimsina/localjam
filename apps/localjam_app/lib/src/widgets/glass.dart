@@ -122,13 +122,16 @@ class JamGlassButton extends StatelessWidget {
   Widget build(BuildContext context) {
     final colors = context.jamColors;
     final enabled = onPressed != null;
-    final glyph =
-        iconColor ??
-        (selected
-            ? JamNowPlayingColors.selectedGlyph
-            : onArtwork
-            ? JamNowPlayingColors.text
-            : colors.label);
+    // Disabled is the one disabled look (R8): the circle stays, the glyph
+    // goes to the tertiary ink — not the whole button at 35%.
+    final glyph = !enabled
+        ? (onArtwork ? JamNowPlayingColors.tertiary : colors.tertiaryLabel)
+        : iconColor ??
+              (selected
+                  ? JamNowPlayingColors.selectedGlyph
+                  : onArtwork
+                  ? JamNowPlayingColors.text
+                  : colors.label);
 
     final fill = fillColor;
     final circle = fill != null && !selected
@@ -170,16 +173,13 @@ class JamGlassButton extends StatelessWidget {
       label: semanticLabel,
       onTap: onPressed,
       excludeSemantics: true,
-      child: Opacity(
-        opacity: enabled ? 1 : 0.35,
-        child: JamPressable(
-          onTap: onPressed,
-          child: SizedBox.square(
-            dimension: visualSize > JamMetrics.hitTarget
-                ? visualSize
-                : JamMetrics.hitTarget,
-            child: Align(alignment: alignment, child: circle),
-          ),
+      child: JamPressable(
+        onTap: onPressed,
+        child: SizedBox.square(
+          dimension: visualSize > JamMetrics.hitTarget
+              ? visualSize
+              : JamMetrics.hitTarget,
+          child: Align(alignment: alignment, child: circle),
         ),
       ),
     );
