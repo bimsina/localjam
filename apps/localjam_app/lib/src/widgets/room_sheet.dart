@@ -323,7 +323,8 @@ class _RoomPanelState extends State<RoomPanel> {
   @override
   Widget build(BuildContext context) {
     final host = _host;
-    final peers = _engine.peers;
+    // Host first, then by name: the order every list of people uses (N7).
+    final peers = jamPeersInOrder(_engine.peers);
     final permissions = _engine.permissions;
     final isHost = host != null;
     final mediaId = _engine.snapshot.mediaId;
@@ -650,7 +651,7 @@ String _hostName(JamEngine engine) {
 
 /// Everyone in [engine]'s jam by display name, in room order: this device
 /// ([selfName], or "You" before it is known), then — from a guest — the
-/// host, then everyone else. Parallel to `jamRosterPeerIds`.
+/// host, then everyone else by name (N7). Parallel to `jamRosterPeerIds`.
 ///
 /// Two people who share a name are told apart (RB-19): the host keeps the
 /// plain name, then the others take theirs in peer-id order — an order
@@ -661,7 +662,7 @@ List<String> jamRosterNames(JamEngine engine, {required String selfName}) {
   final names = <String>[
     self.isEmpty ? JamPeerRowStrings.you : self,
     if (engine is JamGuestEngine) _hostName(engine),
-    for (final peer in engine.peers) jamPeerName(peer),
+    for (final peer in jamPeersInOrder(engine.peers)) jamPeerName(peer),
   ];
   final ids = jamRosterPeerIds(engine);
   final host = engine is JamGuestEngine ? 1 : 0;

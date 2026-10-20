@@ -169,13 +169,26 @@ class JamPeerRow extends StatelessWidget implements JamSelfSeparatingRow {
 /// the words between them whole — and what a screen reader says for it,
 /// which is what the line shows (RB-9).
 class JamPeopleFit {
-  const JamPeopleFit._(this.runs, this.spoken);
+  const JamPeopleFit._(this.runs, this.spoken, {this.maxLines = 1});
+
+  /// From this text scale up the line may wrap to two lines (N7): at the
+  /// largest sizes cutting names left "With S… and F…" — letters, not
+  /// people.
+  static const double wrapScale = 1.5;
+
+  /// The fewest letters a cut name keeps before its ellipsis. Fewer is a
+  /// letter, not a name, and the count says more ("With 2 people").
+  static const int minLetters = 3;
 
   /// Fits [phrase] in [maxWidth] at [style]. The whole phrase when it fits;
   /// otherwise the names share what the fixed words leave, the shortest
   /// keeping all of theirs and the longest cut first ("With Electric
-  /// Mongo… and 7 others"); and when not even a letter of each would show,
-  /// the count alone ("With 8 people").
+  /// Mongo… and 7 others"); and when a name would keep fewer than
+  /// [minLetters] letters, the count alone ("With 8 people").
+  ///
+  /// At large text ([wrapScale] and up) nothing is cut: the phrase wraps
+  /// onto a second line between words, and when it does not fit two lines
+  /// the count is said instead (N7).
   factory JamPeopleFit.of(
     JamPeoplePhrase phrase, {
     required TextStyle style,
@@ -183,6 +196,8 @@ class JamPeopleFit {
     TextScaler textScaler = TextScaler.noScaling,
     TextDirection textDirection = TextDirection.ltr,
   }) {
+    final fontSize = style.fontSize ?? kDefaultFontSize;
+    final large = textScaler.scale(fontSize) / fontSize >= wrapScale;
     double measure(String text) {
       final painter = TextPainter(
         text: TextSpan(text: text, style: style),
@@ -198,6 +213,26 @@ class JamPeopleFit {
     final full = phrase.text;
     if (measure(full) <= maxWidth) {
       return JamPeopleFit._([(text: full, cut: false)], full);
+    }
+    if (large) {
+      // Whole words on up to two lines, or the count.
+      bool fitsTwoLines(String text) {
+        for (final word in text.split(' ')) {
+          if (measure(word) > maxWidth) return false;
+        }
+        final painter = TextPainter(
+          text: TextSpan(text: text, style: style),
+          textDirection: textDirection,
+          textScaler: textScaler,
+          maxLines: 2,
+        )..layout(maxWidth: maxWidth);
+        final fits = !painter.didExceedMaxLines;
+        painter.dispose();
+        return fits;
+      }
+
+      final text = fitsTwoLines(full) ? full : phrase.counted ?? full;
+      return JamPeopleFit._([(text: text, cut: false)], text, maxLines: 2);
     }
     final parts = phrase.parts;
     final names = [
@@ -216,10 +251,13 @@ class JamPeopleFit {
       if (!part.name) fixed += measure(part.text);
     }
     final natural = {for (final i in names) i: measure(parts[i].text)};
-    // A name cut to less than its first letter and an ellipsis is no name.
+    // A name cut to fewer than [minLetters] letters is no name ("S…").
     final floor = {
       for (final i in names)
-        i: math.min(natural[i]!, measure('${parts[i].text.characters.first}…')),
+        i: math.min(
+          natural[i]!,
+          measure('${parts[i].text.characters.take(minLetters)}…'),
+        ),
     };
     // A hair of slack: the runs are measured apart, and a sub-pixel sum must
     // not tip the row into overflow.
@@ -248,8 +286,8 @@ class JamPeopleFit {
     String cut(String name, double width) {
       final letters = name.characters.toList();
       String shown(int count) => '${letters.take(count).join().trimRight()}…';
-      var fits = 1;
-      var low = 2;
+      var fits = math.min(minLetters, letters.length);
+      var low = fits + 1;
       var high = letters.length - 1;
       while (low <= high) {
         final mid = (low + high) ~/ 2;
@@ -278,6 +316,9 @@ class JamPeopleFit {
 
   /// The line as a screen reader should say it.
   final String spoken;
+
+  /// How many lines it may take: two at large text, else one.
+  final int maxLines;
 }
 
 /// A people phrase on one line that cuts names, never the count (R9) —
@@ -323,8 +364,8 @@ class JamPeopleLine extends StatelessWidget {
   Widget _runs(JamPeopleFit fit) {
     Text text(String value) => Text(
       value,
-      maxLines: 1,
-      softWrap: false,
+      maxLines: fit.maxLines,
+      softWrap: fit.maxLines > 1,
       overflow: TextOverflow.ellipsis,
       style: style,
     );

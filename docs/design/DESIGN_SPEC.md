@@ -111,7 +111,13 @@ no status dots or connection badges, no emoji and no filler copy.
 - **People phrasing (R9).** One function produces every summary: "Just
   you", "With Mia", "With Mia and Theo", "With Mia, Theo and 3 others".
   - It never says "and 1 other"; a single extra person is named instead.
-  - `JamPeopleLine` cuts long names before it ever cuts the count. A screen
+  - People are always listed in one order: the host first when known, then
+    by name. A record of a jam you joined doesn't say who hosted, so Recent
+    and Past jams list everyone by name.
+  - `JamPeopleLine` cuts long names before it ever cuts the count, and never
+    to fewer than three letters. At large text the line wraps onto a
+    second line instead of cutting; if it still doesn't fit, it says the
+    count ("With 2 people"). It never reads "With S… and F…". A screen
     reader hears what the line shows.
   - The same phrasing is used in the Now Playing footer, the Invite sheet and
     Past jams.

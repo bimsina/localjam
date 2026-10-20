@@ -249,6 +249,80 @@ void main() {
       );
     });
 
+    test('a name is never cut to a letter or two: the count instead (N7)', () {
+      final two = JamPeoplePhrase.summary(['Sparkly Kiwi', 'Funky Macaw']);
+      for (var width = 60.0; width <= 300; width += 2) {
+        final line = fit(two, width);
+        for (final run in line.runs.where((r) => r.cut)) {
+          final letters = run.text.characters.length - 1;
+          expect(
+            letters,
+            greaterThanOrEqualTo(JamPeopleFit.minLetters),
+            reason: '"${run.text}" at $width',
+          );
+        }
+      }
+      // Narrow enough, it is "With 2 people" — never "With S… and F…".
+      expect(fit(two, 100).runs.single.text, 'With 2 people');
+    });
+
+    group('at large text (N7)', () {
+      const scaler = TextScaler.linear(3);
+      final two = JamPeoplePhrase.summary(['Sparkly Kiwi', 'Funky Macaw']);
+      JamPeopleFit large(JamPeoplePhrase phrase, double width) =>
+          JamPeopleFit.of(
+            phrase,
+            style: style,
+            maxWidth: width,
+            textScaler: scaler,
+          );
+
+      test('the line wraps onto two lines rather than cutting names', () {
+        // Room for two lines of it, not one.
+        final oneLine = _width(two.text, style) * 3;
+        final wrapped = large(two, oneLine * 0.6);
+        expect(wrapped.maxLines, 2);
+        expect(wrapped.runs.single, (text: two.text, cut: false));
+        expect(wrapped.spoken, two.text);
+      });
+
+      test('too long for two lines: the count, never letters', () {
+        final wrapped = large(two, _width('With Sparkly', style) * 3);
+        expect(wrapped.runs.single.text, 'With 2 people');
+        expect(wrapped.runs.any((r) => r.cut), isFalse);
+      });
+
+      test('at ordinary sizes it stays one line', () {
+        expect(fit(two, 2000).maxLines, 1);
+        expect(fit(two, 120).maxLines, 1);
+      });
+
+      testWidgets('drawn on two lines, whole words, no overflow', (
+        tester,
+      ) async {
+        final width = _width(two.text, style) * 3 * 0.6;
+        await tester.pumpWidget(
+          MediaQuery(
+            data: const MediaQueryData(textScaler: scaler),
+            child: Directionality(
+              textDirection: TextDirection.ltr,
+              child: Align(
+                alignment: Alignment.topLeft,
+                child: SizedBox(
+                  width: width,
+                  child: JamPeopleLine(two, style: style),
+                ),
+              ),
+            ),
+          ),
+        );
+        expect(tester.takeException(), isNull);
+        final text = tester.widget<Text>(find.text(two.text));
+        expect(text.maxLines, 2);
+        expect(find.textContaining('…'), findsNothing);
+      });
+    });
+
     test('too narrow for a letter of each name: the count alone', () {
       final counted = fit(eight, 160);
       expect(counted.runs.single.text, 'With 8 people');

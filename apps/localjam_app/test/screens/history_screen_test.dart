@@ -132,10 +132,11 @@ void main() {
       ),
       findsOneWidget,
     );
-    // Who was there: their faces, then their names.
-    expect(find.text('With Neon Walrus and Amber Fox'), findsOneWidget);
+    // Who was there: their faces, then their names — by name, the one
+    // people order (N7), whatever order the record kept them in.
+    expect(find.text('With Amber Fox and Neon Walrus'), findsOneWidget);
     final pile = tester.widget<JamAvatarStack>(find.byType(JamAvatarStack));
-    expect(pile.names, ['Neon Walrus', 'Amber Fox']);
+    expect(pile.names, ['Amber Fox', 'Neon Walrus']);
     expect(find.byType(JamDisclosureChevron), findsOneWidget);
     // The jam's mark, at a Past Jams row's size — with no face on it.
     final mark = tester.widget<JamHistoryMark>(find.byType(JamHistoryMark));
@@ -145,7 +146,7 @@ void main() {
     // One node that says it all, and opens the jam.
     expect(
       find.bySemanticsLabel(
-        RegExp(r'^Bar Room\. With Neon Walrus and Amber Fox\. You hosted'),
+        RegExp(r'^Bar Room\. With Amber Fox and Neon Walrus\. You hosted'),
       ),
       findsOneWidget,
     );
@@ -196,10 +197,10 @@ void main() {
       ],
     );
     final pile = tester.widget<JamAvatarStack>(find.byType(JamAvatarStack));
-    expect(pile.names, ['Mia', 'Theo', 'Ana']);
+    expect(pile.names, ['Ana', 'Jo', 'Mia']);
     // No "+1" beside "and 2 others".
     expect(find.text('+1'), findsNothing);
-    expect(find.text('With Mia, Theo and 2 others'), findsOneWidget);
+    expect(find.text('With Ana, Jo and 2 others'), findsOneWidget);
   });
 
   testWidgets('a long name is cut before the count is (RB-7)', (tester) async {
@@ -248,8 +249,8 @@ void main() {
     final hosted = _record(name: 'Van Jam', peers: ['Theo', 'Mia']);
     final room = jamPeopleColors(['Bibek', 'Theo', 'Mia'], host: 'Bibek');
     expect(jamRecordFaceColors(hosted, self: 'Bibek'), [
-      room['Theo'],
       room['Mia'],
+      room['Theo'],
     ]);
     // Joined: the record does not say who hosted, so name order alone —
     // with this device still counted.
@@ -260,8 +261,8 @@ void main() {
     );
     final named = jamPeopleColors(['Mia', 'Theo', 'Bibek']);
     expect(jamRecordFaceColors(joined, self: 'Bibek'), [
-      named['Theo'],
       named['Mia'],
+      named['Theo'],
     ]);
   });
 
@@ -280,7 +281,7 @@ void main() {
     expect(mark.name, 'Bar Room');
     expect(find.text('Bar Room'), findsOneWidget);
     final markRect = tester.getRect(find.byType(JamHistoryMark));
-    final people = tester.getRect(find.text('With Neon Walrus and Amber Fox'));
+    final people = tester.getRect(find.text('With Amber Fox and Neon Walrus'));
     expect(people.left, greaterThan(markRect.right));
     expect(
       people.left,
@@ -297,7 +298,7 @@ void main() {
       ),
       findsOneWidget,
     );
-    expect(find.text('With Neon Walrus and Amber Fox'), findsOneWidget);
+    expect(find.text('With Amber Fox and Neon Walrus'), findsOneWidget);
     expect(find.byType(JamAvatarStack), findsOneWidget);
     // The page's one action is a filled primary, like every other.
     final hostAgain = tester.widget<JamButton>(

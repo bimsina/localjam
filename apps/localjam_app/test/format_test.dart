@@ -10,6 +10,53 @@ import 'package:localjam_client/localjam_client.dart';
 import 'harness.dart';
 
 void main() {
+  group('one people order (N7)', () {
+    test('the host first when known, then everyone by name', () {
+      expect(
+        jamPeopleInOrder([
+          'Mia',
+          'Sparkly Kiwi',
+          'funky Macaw',
+        ], host: 'Sparkly Kiwi'),
+        ['Sparkly Kiwi', 'funky Macaw', 'Mia'],
+      );
+    });
+
+    test('with no host known, by name alone — whatever order it came in', () {
+      expect(jamPeopleInOrder(['Mia', 'Sparkly Kiwi', 'Funky Macaw']), [
+        'Funky Macaw',
+        'Mia',
+        'Sparkly Kiwi',
+      ]);
+      expect(jamPeopleInOrder(['Sparkly Kiwi', 'Mia']), [
+        'Mia',
+        'Sparkly Kiwi',
+      ]);
+      // A host who is not in the list changes nothing.
+      expect(jamPeopleInOrder(['Theo', 'Ana'], host: 'Zed'), ['Ana', 'Theo']);
+    });
+
+    test('peers by name, not by when they joined; ties by peer id', () {
+      PeerInfo peer(String id, String name) =>
+          PeerInfo(peerId: id, clientName: name, clientKind: 'app');
+      final joined = [
+        peer('p-3', 'Theo'),
+        peer('p-9', 'ana'),
+        peer('p-2', 'Sam'),
+        peer('p-1', 'Sam'),
+      ];
+      expect(
+        [for (final p in jamPeersInOrder(joined)) p.peerId],
+        ['p-9', 'p-1', 'p-2', 'p-3'],
+      );
+      // A rejoin reorders the engine's list; the order on screen holds.
+      expect(
+        [for (final p in jamPeersInOrder(joined.reversed)) p.peerId],
+        ['p-9', 'p-1', 'p-2', 'p-3'],
+      );
+    });
+  });
+
   group('people, said one way (R9)', () {
     test('the summary, from your side', () {
       const table = {

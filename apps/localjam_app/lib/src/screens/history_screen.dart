@@ -391,17 +391,23 @@ class _JamHistoryMarkState extends State<JamHistoryMark> {
   }
 }
 
+/// [record]'s people (everyone but this device) in the one people order
+/// (N7): by name. A record does not say who hosted a jam you joined, so
+/// there is no host to put first; on a jam you hosted, the host is you.
+List<String> jamRecordPeople(JamHistoryRecord record) =>
+    jamPeopleInOrder(record.peerNames);
+
 /// The faces of [record]'s people, coloured as the jam coloured them (D3):
 /// this device ([self]) and everyone the record names, through
 /// [jamPeopleColors] — with this device as the host when it hosted. A
 /// joined jam's record does not say who hosted, so there everyone is in
-/// name order. Parallel to [JamHistoryRecord.peerNames].
+/// name order. Parallel to [jamRecordPeople].
 List<Color> jamRecordFaceColors(
   JamHistoryRecord record, {
   required String self,
 }) {
   final byName = jamRecordColorsByName(record, self: self);
-  return [for (final name in record.peerNames) byName[name]!];
+  return [for (final name in jamRecordPeople(record)) byName[name]!];
 }
 
 /// Every face of [record] by name, this device's under [self] — the same
@@ -622,7 +628,7 @@ class JamHistoryRow extends StatelessWidget implements JamSelfSeparatingRow {
   @override
   Widget build(BuildContext context) {
     final colors = context.jamColors;
-    final peers = record.peerNames;
+    final peers = jamRecordPeople(record);
     final summary = jamHistorySummary(
       record,
       use24HourFormat: MediaQuery.alwaysUse24HourFormatOf(context),
@@ -881,7 +887,7 @@ class _HistoryDetailScreenState extends State<HistoryDetailScreen> {
     final colors = context.jamColors;
     final record = _record;
     final tracks = record.tracks;
-    final peers = record.peerNames;
+    final peers = jamRecordPeople(record);
     final replayable = record.replayableTracks.length;
     final total = tracks.length;
     final length = Duration(

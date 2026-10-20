@@ -95,6 +95,37 @@ String jamDisplayTitle(MediaItem item) =>
 /// credit that prints one is machine text on a page about people (§8 check 3).
 const String kJamUnnamedPeer = 'Guest';
 
+/// The one order people are listed in (N7): by name, ignoring case, so
+/// "Mia" and "mia" sit together and "Funky Macaw" comes before "Mia" on
+/// every screen and every phone. The host, when known, goes before
+/// everyone ([jamPeopleInOrder]).
+int jamCompareNames(String a, String b) {
+  final byLetters = a.toLowerCase().compareTo(b.toLowerCase());
+  return byLetters != 0 ? byLetters : a.compareTo(b);
+}
+
+/// [names] in the one people order (N7): [host] first when it is known and
+/// among them, then everyone else by name ([jamCompareNames]). The room's
+/// footer, Invite, People, Recent and Past jams all list people this way —
+/// they used to disagree ("With Sparkly Kiwi and Mia" in the room, "With
+/// Mia and Sparkly Kiwi" in Recent).
+List<String> jamPeopleInOrder(Iterable<String> names, {String? host}) {
+  final rest = [...names];
+  final hostAt = host == null ? -1 : rest.indexOf(host);
+  final first = hostAt < 0 ? null : rest.removeAt(hostAt);
+  rest.sort(jamCompareNames);
+  return [?first, ...rest];
+}
+
+/// [peers] in the one people order (N7): by display name, ties by peer id
+/// so every phone agrees. Neither the host nor this device is ever in a
+/// guest's `peers`; callers put them first.
+List<PeerInfo> jamPeersInOrder(Iterable<PeerInfo> peers) =>
+    [...peers]..sort((a, b) {
+      final byName = jamCompareNames(jamPeerName(a), jamPeerName(b));
+      return byName != 0 ? byName : a.peerId.compareTo(b.peerId);
+    });
+
 /// [peer]'s display name, or [kJamUnnamedPeer] when they shared none.
 String jamPeerName(PeerInfo peer) {
   final name = peer.clientName.trim();
@@ -234,7 +265,9 @@ List<String> jamDistinctNames(List<String> names, {List<int>? order}) {
 }
 
 /// Everyone in [engine]'s jam by peer id, in roster order: this device,
-/// then (from a guest) the host, then everyone in `peers`.
+/// then (from a guest) the host, then everyone else by name
+/// ([jamPeersInOrder]) — not in the order they happened to join, which
+/// changed the footer after a rejoin.
 ///
 /// The roster every face in the jam is coloured over (`jamRosterColors`),
 /// so a person has the same colour in the face pile, the People sheet and
@@ -245,7 +278,7 @@ List<String> jamRosterPeerIds(JamEngine engine) => <String>[
   engine.selfPeerId,
   if (engine is JamGuestEngine)
     engine.hostPeer?.peerId ?? JamPermissions.hostPeerId,
-  for (final peer in engine.peers) peer.peerId,
+  for (final peer in jamPeersInOrder(engine.peers)) peer.peerId,
 ];
 
 /// [JamEngine.addedByLabel] against the engine's own roster, in the app's
