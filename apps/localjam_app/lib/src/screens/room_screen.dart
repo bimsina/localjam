@@ -708,7 +708,15 @@ class _Player extends StatelessWidget {
       menu: menu,
       queue: queue,
       credit: credit,
-      reserveCredit: roster.length > 1,
+      // Kept while anyone else's song is in the queue, so the line coming
+      // and going between songs never moves the controls — and a host
+      // playing only their own music never carries an empty line.
+      reserveCredit: engine.playlist.any(
+        (song) =>
+            song.addedBy != null &&
+            song.addedBy != engine.selfPeerId &&
+            jamAddedByLabel(engine, song) != null,
+      ),
     );
 
     final scrubber = _Scrubber(
@@ -1747,9 +1755,9 @@ class _TitleBlock extends StatelessWidget {
   /// they left).
   final _Credit? credit;
 
-  /// Keep the credit's line even when there is none to show (a jam of more
-  /// than one person), so a song from someone else arriving never moves the
-  /// controls under the title.
+  /// Keep the credit's line even when there is none to show (someone else's
+  /// song is queued), so their song starting never moves the controls under
+  /// the title.
   final bool reserveCredit;
 
   @override
