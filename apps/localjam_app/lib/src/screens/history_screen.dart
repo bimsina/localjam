@@ -558,33 +558,13 @@ class _HistoryScreenState extends State<HistoryScreen> {
         switch (records) {
           // Read off disk in a moment; a spinner would only flash.
           null => const SliverToBoxAdapter(child: SizedBox.shrink()),
-          [] => SliverLayoutBuilder(
-            builder: (context, constraints) {
-              // Fill what is left of the screen (minus the scaffold's own
-              // bottom spacer), so the empty state sits in the middle
-              // without making an empty page scroll.
-              final bottom =
-                  JamSpace.xxxl + MediaQuery.paddingOf(context).bottom;
-              final height =
-                  constraints.viewportMainAxisExtent -
-                  constraints.precedingScrollExtent -
-                  bottom;
-              final fill = height < 280 ? 280.0 : height;
-              return SliverToBoxAdapter(
-                child: SizedBox(
-                  height: fill,
-                  // Optically centred: a touch above the true middle.
-                  child: Padding(
-                    padding: EdgeInsets.only(bottom: fill * 0.15),
-                    child: const JamEmptyState(
-                      icon: CupertinoIcons.clock,
-                      title: HistoryStrings.emptyTitle,
-                      body: HistoryStrings.emptyBody,
-                    ),
-                  ),
-                ),
-              );
-            },
+          // Placed as Nearby places its own.
+          [] => jamAnchoredEmptyState(
+            const JamEmptyState(
+              icon: CupertinoIcons.clock,
+              title: HistoryStrings.emptyTitle,
+              body: HistoryStrings.emptyBody,
+            ),
           ),
           _ => SliverList.builder(
             itemCount: records.length,

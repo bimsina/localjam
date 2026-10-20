@@ -21,6 +21,36 @@ import 'buttons.dart';
 /// The narrowest an empty state's primary action gets (spec §10.6).
 const double kJamEmptyStateActionMinWidth = 140;
 
+/// The tallest empty state (glyph, title, a sentence and two actions), with
+/// room for its sentence to run a line longer: a page's empty state is laid
+/// out in a block this tall, so its glyph does not move when the words do.
+const double kJamEmptyBlockHeight = 320;
+
+/// A page with nothing else on it: [child] — a [JamEmptyState] — anchored
+/// a third of the way down the space under the title rather than centred on
+/// its own height, so its glyph lands at the same height whatever the state
+/// (one action, two or none) and on every page (Nearby, Past Jams), and
+/// above any medium sheet that rises over it.
+///
+/// The page's last sliver; `JamScaffold` gives it the bottom clearance, so
+/// an empty page never scrolls.
+SliverFillRemaining jamAnchoredEmptyState(Widget child) => SliverFillRemaining(
+  hasScrollBody: false,
+  child: Padding(
+    padding: const EdgeInsets.symmetric(vertical: JamSpace.xxxl),
+    child: Column(
+      children: [
+        const Spacer(),
+        ConstrainedBox(
+          constraints: const BoxConstraints(minHeight: kJamEmptyBlockHeight),
+          child: Align(alignment: Alignment.topCenter, child: child),
+        ),
+        const Spacer(flex: 2),
+      ],
+    ),
+  ),
+);
+
 /// The centred empty-state block, capped at 320 wide.
 class JamEmptyState extends StatelessWidget {
   const JamEmptyState({

@@ -504,7 +504,7 @@ class _HomeScreenState extends State<HomeScreen> {
           // Nothing else on the page: say whose jam this is, as a jam —
           // and offer the host the thing they most likely came back for.
           return [
-            _anchored(
+            jamAnchoredEmptyState(
               JamEmptyState(
                 mark: JamMark(
                   name: room,
@@ -542,7 +542,7 @@ class _HomeScreenState extends State<HomeScreen> {
         ];
       }
       return [
-        _anchored(
+        jamAnchoredEmptyState(
           _EmptyNearby(
             network: _network,
             onScan: _scanOrLink,
@@ -577,33 +577,7 @@ class _HomeScreenState extends State<HomeScreen> {
       if (recents != null) SliverToBoxAdapter(child: recents),
     ];
   }
-
-  /// A page with nothing else on it: the empty state *anchored* a third of
-  /// the way down rather than centred on its own height, so its glyph lands
-  /// at the same height whichever state it is (with one action, two or
-  /// none) — and above any medium sheet that rises over it.
-  Widget _anchored(Widget child) => SliverFillRemaining(
-    hasScrollBody: false,
-    child: Padding(
-      padding: const EdgeInsets.symmetric(vertical: JamSpace.xxxl),
-      child: Column(
-        children: [
-          const Spacer(),
-          ConstrainedBox(
-            constraints: const BoxConstraints(minHeight: _emptyBlockHeight),
-            child: Align(alignment: Alignment.topCenter, child: child),
-          ),
-          const Spacer(flex: 2),
-        ],
-      ),
-    ),
-  );
 }
-
-/// The tallest empty state (glyph, title, a sentence and two actions), with
-/// room for its sentence to run a line longer: every state is laid out in a
-/// block this tall, so the glyph does not move when the words do.
-const double _emptyBlockHeight = 320;
 
 /// A one-line state's action: its label and what it does.
 typedef _LineAction = (String, VoidCallback);
