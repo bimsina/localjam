@@ -8,3 +8,8 @@ test-media/
 **/android/key.properties
 *.jks
 *.keystore
+
+# Generated review galleries: regenerate with apps/localjam_app/tool/capture_design.dart
+# (identity-v4) or by a native device pass (native-*). Not committed — too large.
+docs/screenshots/identity-v4/
+docs/screenshots/native-*/
