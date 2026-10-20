@@ -40,6 +40,9 @@ dependencies:
   package_info_plus: ^10.2.1
   url_launcher: ^6.3.2
 
+  # Where picked songs are kept once the picker's temporary copy is gone.
+  path_provider: ^2.1.6
+
 # `bonsoir_darwin` 7.1.1's `broadcast.start` waits for the Bonjour daemon with a
 # synchronous `DNSServiceProcessResult` on the platform main thread, which on
 # Flutter's merged UI thread takes the whole app down when the daemon never

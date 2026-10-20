@@ -22,6 +22,7 @@ import '../widgets/section.dart';
 import '../widgets/sheet.dart';
 import 'format.dart';
 import 'permissions.dart';
+import 'picked_files.dart';
 
 /// Everything these flows say out loud.
 abstract final class JamPickerStrings {
@@ -231,12 +232,16 @@ Future<JamAddSource?> showJamAddSourceSheet(BuildContext context) =>
 /// Opens the system file picker. Returns the chosen paths, empty when the
 /// user cancelled or the picker could not open (which is reported as a
 /// notice, not swallowed).
+///
+/// The paths are ones the jam can keep: a picker that handed back a
+/// temporary copy (iOS's Files Inbox, Android's cache) has had it copied
+/// into the app's container ([keepPickedFiles]) before it is purged.
 Future<List<String>> pickAudioFiles(BuildContext context) async {
   final session = JamSession.read(context);
   _dismissKeyboard();
   try {
     final files = await openFiles(acceptedTypeGroups: [jamAudioTypeGroup()]);
-    return [for (final file in files) file.path];
+    return await keepPickedFiles([for (final file in files) file.path]);
   } catch (e) {
     debugPrint('localjam: file picker failed: $e');
     session.notify(JamPickerStrings.pickerFailed, tone: JamNoticeTone.error);
@@ -308,7 +313,11 @@ Future<List<JamPickedTrack>> pickLibraryTrackDetails(
   for (final track in chosen) {
     try {
       final path = await JamMediaLibrary.resolve(track);
-      if (path != null) picked.add(JamPickedTrack.fromLibrary(track, path));
+      if (path == null) continue;
+      // A song with no direct path comes back as a cached copy, which the
+      // OS may clear like any other cache.
+      final [kept] = await keepPickedFiles([path]);
+      picked.add(JamPickedTrack.fromLibrary(track, kept));
     } catch (e) {
       debugPrint('localjam: could not resolve ${track.title}: $e');
     }
