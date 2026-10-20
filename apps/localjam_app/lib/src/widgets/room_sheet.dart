@@ -1249,11 +1249,13 @@ class _InviteIdentityState extends State<_InviteIdentity> {
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisSize: MainAxisSize.min,
             children: [
-              Text(
-                engine.sessionName,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: context.jamTitle3,
+              JamWholeWords(
+                child: Text(
+                  engine.sessionName,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: context.jamTitle3,
+                ),
               ),
               // Names cut before the count is (R9).
               JamPeopleLine(

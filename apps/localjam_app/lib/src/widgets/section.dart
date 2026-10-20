@@ -18,6 +18,9 @@
 /// [JamSection.plain] drops the block for Apple-Music-style plain lists.
 library;
 
+import 'dart:math' as math;
+
+import 'package:flutter/rendering.dart';
 import 'package:flutter/widgets.dart';
 
 import '../design/tokens.dart';
@@ -208,26 +211,28 @@ class JamSection extends StatelessWidget {
                 trailingInset,
                 prominentHeader ? JamSpace.xs : JamSpace.sectionHeader,
               ),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.center,
-                children: [
-                  Expanded(
-                    child: header == null
-                        ? const SizedBox.shrink()
-                        : Semantics(
-                            header: true,
-                            child: Text(
-                              header,
-                              style: prominentHeader
-                                  ? context.jamTitle3
-                                  : context.jamFootnote.copyWith(
-                                      color: colors.secondaryLabel,
-                                    ),
-                            ),
+              child: _HeaderBar(
+                // A plain button's text, not its padding, lines up with the
+                // header's when it wraps under it.
+                wrapIndent: trailingInset == textInset
+                    ? 0
+                    : textInset - trailingInset,
+                header: header == null
+                    ? const SizedBox.shrink()
+                    : Semantics(
+                        header: true,
+                        child: JamWholeWords(
+                          child: Text(
+                            header,
+                            style: prominentHeader
+                                ? context.jamTitle3
+                                : context.jamFootnote.copyWith(
+                                    color: colors.secondaryLabel,
+                                  ),
                           ),
-                  ),
-                  ?headerTrailing,
-                ],
+                        ),
+                      ),
+                trailing: headerTrailing,
               ),
             ),
           body!,
@@ -319,4 +324,164 @@ class JamSectionList extends StatelessWidget {
       ],
     ],
   );
+}
+
+/// A section header and its trailing action ("Recent" and See all): side by
+/// side when both fit on one line, else the action wraps under the header
+/// (N3) — at the largest text sizes "Recent" beside See all left the header
+/// too narrow for its own word, and it broke as "Recen / t".
+class _HeaderBar extends MultiChildRenderObjectWidget {
+  _HeaderBar({
+    required Widget header,
+    required Widget? trailing,
+    required this.wrapIndent,
+  }) : super(children: [header, ?trailing]);
+
+  /// How far the trailing action moves toward the start once it wraps, so
+  /// its text — not its tap padding — sits on the header's edge.
+  final double wrapIndent;
+
+  @override
+  _RenderHeaderBar createRenderObject(BuildContext context) =>
+      _RenderHeaderBar(wrapIndent, Directionality.of(context));
+
+  @override
+  void updateRenderObject(BuildContext context, _RenderHeaderBar renderObject) {
+    renderObject
+      ..wrapIndent = wrapIndent
+      ..textDirection = Directionality.of(context);
+  }
+}
+
+class _HeaderBarParentData extends ContainerBoxParentData<RenderBox> {}
+
+class _RenderHeaderBar extends RenderBox
+    with
+        ContainerRenderObjectMixin<RenderBox, _HeaderBarParentData>,
+        RenderBoxContainerDefaultsMixin<RenderBox, _HeaderBarParentData> {
+  _RenderHeaderBar(this._wrapIndent, this._textDirection);
+
+  double _wrapIndent;
+  set wrapIndent(double value) {
+    if (value == _wrapIndent) return;
+    _wrapIndent = value;
+    markNeedsLayout();
+  }
+
+  TextDirection _textDirection;
+  set textDirection(TextDirection value) {
+    if (value == _textDirection) return;
+    _textDirection = value;
+    markNeedsLayout();
+  }
+
+  @override
+  void setupParentData(RenderBox child) {
+    if (child.parentData is! _HeaderBarParentData) {
+      child.parentData = _HeaderBarParentData();
+    }
+  }
+
+  /// Lays out (or, [dry], measures) both and places them: the header's and
+  /// the action's sizes, and whether the action wrapped.
+  Size _layout(BoxConstraints constraints, {required bool dry}) {
+    final header = firstChild!;
+    final trailing = childAfter(header);
+    final loose = constraints.loosen();
+    Size sizeOf(RenderBox child) {
+      if (dry) return child.getDryLayout(loose);
+      child.layout(loose, parentUsesSize: true);
+      return child.size;
+    }
+
+    final headerSize = sizeOf(header);
+    if (trailing == null) {
+      return constraints.constrain(
+        Size(constraints.maxWidth, headerSize.height),
+      );
+    }
+    final trailingSize = sizeOf(trailing);
+    final width = constraints.maxWidth;
+    final rtl = _textDirection == TextDirection.rtl;
+    double startX(double childWidth, double x) =>
+        rtl ? width - childWidth - x : x;
+    final beside = headerSize.width + trailingSize.width <= width;
+    final Size size;
+    if (beside) {
+      final height = math.max(headerSize.height, trailingSize.height);
+      size = constraints.constrain(Size(width, height));
+      if (!dry) {
+        (header.parentData! as _HeaderBarParentData).offset = Offset(
+          startX(headerSize.width, 0),
+          (height - headerSize.height) / 2,
+        );
+        (trailing.parentData! as _HeaderBarParentData).offset = Offset(
+          startX(trailingSize.width, width - trailingSize.width),
+          (height - trailingSize.height) / 2,
+        );
+      }
+    } else {
+      size = constraints.constrain(
+        Size(width, headerSize.height + trailingSize.height),
+      );
+      if (!dry) {
+        (header.parentData! as _HeaderBarParentData).offset = Offset(
+          startX(headerSize.width, 0),
+          0,
+        );
+        (trailing.parentData! as _HeaderBarParentData).offset = Offset(
+          startX(trailingSize.width, -_wrapIndent),
+          headerSize.height,
+        );
+      }
+    }
+    return size;
+  }
+
+  @override
+  void performLayout() {
+    size = _layout(constraints, dry: false);
+  }
+
+  @override
+  Size computeDryLayout(covariant BoxConstraints constraints) =>
+      _layout(constraints, dry: true);
+
+  @override
+  double computeMinIntrinsicWidth(double height) {
+    var widest = 0.0;
+    for (var c = firstChild; c != null; c = childAfter(c)) {
+      widest = math.max(widest, c.getMinIntrinsicWidth(height));
+    }
+    return widest;
+  }
+
+  @override
+  double computeMaxIntrinsicWidth(double height) {
+    var sum = 0.0;
+    for (var c = firstChild; c != null; c = childAfter(c)) {
+      sum += c.getMaxIntrinsicWidth(height);
+    }
+    return sum;
+  }
+
+  @override
+  double computeMinIntrinsicHeight(double width) =>
+      _layout(BoxConstraints(maxWidth: width), dry: true).height;
+
+  @override
+  double computeMaxIntrinsicHeight(double width) =>
+      computeMinIntrinsicHeight(width);
+
+  @override
+  double? computeDistanceToActualBaseline(TextBaseline baseline) =>
+      defaultComputeDistanceToFirstActualBaseline(baseline);
+
+  @override
+  bool hitTestChildren(BoxHitTestResult result, {required Offset position}) =>
+      defaultHitTestChildren(result, position: position);
+
+  @override
+  void paint(PaintingContext context, Offset offset) =>
+      defaultPaint(context, offset);
 }

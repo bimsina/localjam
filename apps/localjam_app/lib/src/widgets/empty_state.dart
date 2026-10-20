@@ -138,10 +138,12 @@ class JamEmptyState extends StatelessWidget {
                 const SizedBox(height: JamSpace.lg),
               Semantics(
                 header: true,
-                child: Text(
-                  title,
-                  textAlign: TextAlign.center,
-                  style: context.jamTitle2.copyWith(color: foregroundColor),
+                child: JamWholeWords(
+                  child: Text(
+                    title,
+                    textAlign: TextAlign.center,
+                    style: context.jamTitle2.copyWith(color: foregroundColor),
+                  ),
                 ),
               ),
               const SizedBox(height: JamSpace.sm),

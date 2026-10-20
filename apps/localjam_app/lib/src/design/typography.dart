@@ -512,3 +512,312 @@ class _RenderJamBalanced extends RenderShiftedBox {
     (child.parentData! as BoxParentData).offset = Offset(free * factor, 0);
   }
 }
+
+/// A heading or title that never breaks inside a word (N3).
+///
+/// At the largest accessibility sizes a Manrope title can be wider per word
+/// than its column — "Golden" at AX5 on a phone — and Flutter then breaks
+/// the word itself: "Golde / n Hour / Drive", "Recen / t". Wrapped in this,
+/// the [Text] steps its text scale down, never below its design size, until
+/// its widest word fits the width it is given. Words still wrap between
+/// themselves as usual; only the scale is capped.
+///
+/// The child stays an ordinary [Text] (found by `find.text`, heard by screen
+/// readers as before), built at the scale that fits once the width is known.
+/// Unlike a bare `LayoutBuilder`, it answers intrinsic and dry sizes, so it
+/// is safe inside rows and other layouts that measure first.
+class JamWholeWords extends StatelessWidget {
+  const JamWholeWords({super.key, required this.child});
+
+  final Text child;
+
+  @override
+  Widget build(BuildContext context) {
+    final text = child;
+    final defaults = DefaultTextStyle.of(context);
+    var style = defaults.style.merge(text.style);
+    if (MediaQuery.boldTextOf(context)) {
+      style = style.merge(const TextStyle(fontWeight: FontWeight.bold));
+    }
+    final measure = _WordFitSpec(
+      text: text.data ?? text.textSpan?.toPlainText() ?? '',
+      style: style,
+      base: text.textScaler ?? MediaQuery.textScalerOf(context),
+      textAlign: text.textAlign ?? defaults.textAlign ?? TextAlign.start,
+      textDirection: text.textDirection ?? Directionality.of(context),
+      maxLines: text.maxLines ?? defaults.maxLines,
+      ellipsis:
+          (text.overflow ?? style.overflow ?? defaults.overflow) ==
+          TextOverflow.ellipsis,
+      locale: text.locale,
+      strutStyle: text.strutStyle,
+      textWidthBasis: text.textWidthBasis ?? defaults.textWidthBasis,
+      textHeightBehavior:
+          text.textHeightBehavior ??
+          defaults.textHeightBehavior ??
+          DefaultTextHeightBehavior.maybeOf(context),
+    );
+    return _WholeWordsBuilder(
+      spec: measure,
+      builder: (context, constraints) {
+        final fitted = measure.scalerFor(constraints.maxWidth);
+        if (text.textScaler != null || fitted == measure.base) return text;
+        return MediaQuery(
+          data: MediaQuery.of(context).copyWith(textScaler: fitted),
+          child: text,
+        );
+      },
+    );
+  }
+}
+
+/// The scale at which [text]'s widest word fits [maxWidth]: [base] when it
+/// already does, else a linear scale stepped down from [base] — but never
+/// below 1, so a word too long even at its design size wraps as before
+/// rather than shrinking past the type scale.
+@visibleForTesting
+TextScaler jamWholeWordScaler({
+  required String text,
+  required TextStyle style,
+  required TextScaler base,
+  required double maxWidth,
+  TextDirection textDirection = TextDirection.ltr,
+  Locale? locale,
+  StrutStyle? strutStyle,
+  TextHeightBehavior? textHeightBehavior,
+}) {
+  if (!maxWidth.isFinite || maxWidth <= 0) return base;
+  final words = text.split(RegExp(r'\s+')).where((w) => w.isNotEmpty);
+  if (words.isEmpty) return base;
+  // One word per line: the painter's width is then the widest word.
+  final painter = TextPainter(
+    text: TextSpan(text: words.join('\n'), style: style),
+    textDirection: textDirection,
+    locale: locale,
+    strutStyle: strutStyle,
+    textHeightBehavior: textHeightBehavior,
+  );
+  double widestAt(TextScaler scaler) {
+    painter
+      ..textScaler = scaler
+      ..layout();
+    return painter.width;
+  }
+
+  try {
+    var widest = widestAt(base);
+    if (widest <= maxWidth) return base;
+    final fontSize = style.fontSize ?? kDefaultFontSize;
+    var factor = base.scale(fontSize) / fontSize;
+    if (factor <= 1) return base;
+    // Letter spacing does not scale with the text, so the first estimate
+    // can be a hair off; a couple of refinements settle it.
+    for (var i = 0; i < 4; i++) {
+      factor = math.max(
+        1.0,
+        ((factor * maxWidth / widest) * 100).floorToDouble() / 100,
+      );
+      final scaler = TextScaler.linear(factor);
+      widest = widestAt(scaler);
+      if (widest <= maxWidth || factor == 1) return scaler;
+    }
+    return TextScaler.linear(factor);
+  } finally {
+    painter.dispose();
+  }
+}
+
+/// Everything [JamWholeWords] needs to size its text without building it.
+@immutable
+class _WordFitSpec {
+  const _WordFitSpec({
+    required this.text,
+    required this.style,
+    required this.base,
+    required this.textAlign,
+    required this.textDirection,
+    required this.maxLines,
+    required this.ellipsis,
+    required this.locale,
+    required this.strutStyle,
+    required this.textWidthBasis,
+    required this.textHeightBehavior,
+  });
+
+  final String text;
+  final TextStyle style;
+  final TextScaler base;
+  final TextAlign textAlign;
+  final TextDirection textDirection;
+  final int? maxLines;
+  final bool ellipsis;
+  final Locale? locale;
+  final StrutStyle? strutStyle;
+  final TextWidthBasis textWidthBasis;
+  final TextHeightBehavior? textHeightBehavior;
+
+  TextScaler scalerFor(double maxWidth) => jamWholeWordScaler(
+    text: text,
+    style: style,
+    base: base,
+    maxWidth: maxWidth,
+    textDirection: textDirection,
+    locale: locale,
+    strutStyle: strutStyle,
+    textHeightBehavior: textHeightBehavior,
+  );
+
+  /// A painter laid out as the [Text] will be at [maxWidth]; dispose it.
+  TextPainter paint(double maxWidth, {TextScaler? scaler}) => TextPainter(
+    text: TextSpan(text: text, style: style),
+    textAlign: textAlign,
+    textDirection: textDirection,
+    textScaler: scaler ?? scalerFor(maxWidth),
+    maxLines: maxLines,
+    ellipsis: ellipsis ? '\u2026' : null,
+    locale: locale,
+    strutStyle: strutStyle,
+    textWidthBasis: textWidthBasis,
+    textHeightBehavior: textHeightBehavior,
+  )..layout(maxWidth: maxWidth);
+
+  @override
+  bool operator ==(Object other) =>
+      other is _WordFitSpec &&
+      other.text == text &&
+      other.style == style &&
+      other.base == base &&
+      other.textAlign == textAlign &&
+      other.textDirection == textDirection &&
+      other.maxLines == maxLines &&
+      other.ellipsis == ellipsis &&
+      other.locale == locale &&
+      other.strutStyle == strutStyle &&
+      other.textWidthBasis == textWidthBasis &&
+      other.textHeightBehavior == textHeightBehavior;
+
+  @override
+  int get hashCode => Object.hash(
+    text,
+    style,
+    base,
+    textAlign,
+    textDirection,
+    maxLines,
+    ellipsis,
+    locale,
+    strutStyle,
+    textWidthBasis,
+    textHeightBehavior,
+  );
+}
+
+class _WholeWordsBuilder extends ConstrainedLayoutBuilder<BoxConstraints> {
+  const _WholeWordsBuilder({required this.spec, required super.builder});
+
+  final _WordFitSpec spec;
+
+  @override
+  _RenderWholeWords createRenderObject(BuildContext context) =>
+      _RenderWholeWords(spec);
+
+  @override
+  void updateRenderObject(
+    BuildContext context,
+    _RenderWholeWords renderObject,
+  ) => renderObject.spec = spec;
+}
+
+/// A layout builder that can answer intrinsic and dry sizes: it measures
+/// the text itself rather than building it speculatively.
+class _RenderWholeWords extends RenderBox
+    with
+        RenderObjectWithChildMixin<RenderBox>,
+        RenderObjectWithLayoutCallbackMixin,
+        RenderAbstractLayoutBuilderMixin<BoxConstraints, RenderBox> {
+  _RenderWholeWords(this._spec);
+
+  _WordFitSpec _spec;
+  set spec(_WordFitSpec value) {
+    if (value == _spec) return;
+    _spec = value;
+    markNeedsLayout();
+  }
+
+  T _measured<T>(
+    double maxWidth,
+    T Function(TextPainter) read, {
+    TextScaler? scaler,
+  }) {
+    final painter = _spec.paint(maxWidth, scaler: scaler);
+    try {
+      return read(painter);
+    } finally {
+      painter.dispose();
+    }
+  }
+
+  @override
+  double computeMinIntrinsicWidth(double height) {
+    // The text can step down to its design size, so its narrowest is its
+    // widest word there (or at the person's scale, if that is smaller).
+    final base = _spec.base;
+    final size = _spec.style.fontSize ?? kDefaultFontSize;
+    final floor = base.scale(size) / size > 1 ? TextScaler.noScaling : base;
+    return _measured(
+      double.infinity,
+      (p) => p.minIntrinsicWidth,
+      scaler: floor,
+    ).ceilToDouble();
+  }
+
+  @override
+  double computeMaxIntrinsicWidth(double height) => _measured(
+    double.infinity,
+    (p) => p.maxIntrinsicWidth,
+    scaler: _spec.base,
+  ).ceilToDouble();
+
+  @override
+  double computeMinIntrinsicHeight(double width) =>
+      _measured(width, (p) => p.height);
+
+  @override
+  double computeMaxIntrinsicHeight(double width) =>
+      computeMinIntrinsicHeight(width);
+
+  @override
+  Size computeDryLayout(covariant BoxConstraints constraints) {
+    final size = _measured(constraints.maxWidth, (p) => p.size);
+    return constraints.constrain(
+      Size(size.width.ceilToDouble(), size.height.ceilToDouble()),
+    );
+  }
+
+  @override
+  void performLayout() {
+    final constraints = this.constraints;
+    runLayoutCallback();
+    final child = this.child;
+    if (child != null) {
+      child.layout(constraints, parentUsesSize: true);
+      size = constraints.constrain(child.size);
+    } else {
+      size = constraints.smallest;
+    }
+  }
+
+  @override
+  double? computeDistanceToActualBaseline(TextBaseline baseline) =>
+      child?.getDistanceToActualBaseline(baseline);
+
+  @override
+  bool hitTestChildren(BoxHitTestResult result, {required Offset position}) =>
+      child?.hitTest(result, position: position) ?? false;
+
+  @override
+  void paint(PaintingContext context, Offset offset) {
+    final child = this.child;
+    if (child != null) context.paintChild(child, offset);
+  }
+}

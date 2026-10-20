@@ -742,12 +742,14 @@ class _RoomRow extends StatelessWidget {
               minLeadWidth: MediaQuery.textScalerOf(
                 context,
               ).scale(_minNameWidth),
-              lead: Text(
-                name,
-                maxLines: largeText ? _maxNameLinesLargeText : 2,
-                overflow: TextOverflow.ellipsis,
-                // A jam's name is a named thing: Manrope, at row scale.
-                style: context.jamNameRow,
+              lead: JamWholeWords(
+                child: Text(
+                  name,
+                  maxLines: largeText ? _maxNameLinesLargeText : 2,
+                  overflow: TextOverflow.ellipsis,
+                  // A jam's name is a named thing: Manrope, at row scale.
+                  style: context.jamNameRow,
+                ),
               ),
               trailing: JamButton.tinted(
                 label: HomeStrings.join,

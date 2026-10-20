@@ -2379,7 +2379,8 @@ class _TitleBlock extends StatelessWidget {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     if (accessible)
-                      Text(title, style: titleStyle)
+                      // Wrapped at AX5, but never inside a word (N3).
+                      JamWholeWords(child: Text(title, style: titleStyle))
                     else
                       JamMarquee(title, style: titleStyle),
                     ?subtitle,

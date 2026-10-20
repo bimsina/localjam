@@ -141,7 +141,9 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
         const SizedBox(height: JamSpace.xxl),
         Semantics(
           header: true,
-          child: Text(OnboardingStrings.title, style: context.jamLargeTitle),
+          child: JamWholeWords(
+            child: Text(OnboardingStrings.title, style: context.jamLargeTitle),
+          ),
         ),
         const SizedBox(height: JamSpace.huge),
         const _Feature(
@@ -241,7 +243,7 @@ class _Feature extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(title, style: context.jamTitle3),
+            JamWholeWords(child: Text(title, style: context.jamTitle3)),
             const SizedBox(height: JamSpace.xxs),
             Text(
               body,

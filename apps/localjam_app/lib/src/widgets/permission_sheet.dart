@@ -251,10 +251,12 @@ class JamPermissionSheet extends StatelessWidget {
                       const SizedBox(height: JamSpace.lg),
                       Semantics(
                         header: true,
-                        child: Text(
-                          rationale.title,
-                          textAlign: TextAlign.center,
-                          style: context.jamTitle2,
+                        child: JamWholeWords(
+                          child: Text(
+                            rationale.title,
+                            textAlign: TextAlign.center,
+                            style: context.jamTitle2,
+                          ),
                         ),
                       ),
                       const SizedBox(height: JamSpace.sm),

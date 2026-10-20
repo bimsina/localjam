@@ -650,11 +650,13 @@ class JamHistoryRow extends StatelessWidget implements JamSelfSeparatingRow {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  record.sessionName,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: context.jamNameRow,
+                JamWholeWords(
+                  child: Text(
+                    record.sessionName,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: context.jamNameRow,
+                  ),
                 ),
                 if (peers.isNotEmpty) ...[
                   const SizedBox(height: JamSpace.xs),
@@ -938,11 +940,13 @@ class _HistoryDetailScreenState extends State<HistoryDetailScreen> {
                   children: [
                     Semantics(
                       header: true,
-                      child: Text(
-                        record.sessionName,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: context.jamTitle2,
+                      child: JamWholeWords(
+                        child: Text(
+                          record.sessionName,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: context.jamTitle2,
+                        ),
                       ),
                     ),
                     const SizedBox(height: JamSpace.xxs),
@@ -1014,9 +1018,11 @@ class _HistoryDetailScreenState extends State<HistoryDetailScreen> {
                 Expanded(
                   child: Semantics(
                     header: true,
-                    child: Text(
-                      HistoryStrings.songsHeader,
-                      style: context.jamTitle3,
+                    child: JamWholeWords(
+                      child: Text(
+                        HistoryStrings.songsHeader,
+                        style: context.jamTitle3,
+                      ),
                     ),
                   ),
                 ),

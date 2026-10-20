@@ -102,10 +102,12 @@ class JamAlert extends StatelessWidget {
     final text = <Widget>[
       Semantics(
         header: true,
-        child: Text(
-          title,
-          textAlign: TextAlign.start,
-          style: context.jamTitle3.copyWith(color: colors.label),
+        child: JamWholeWords(
+          child: Text(
+            title,
+            textAlign: TextAlign.start,
+            style: context.jamTitle3.copyWith(color: colors.label),
+          ),
         ),
       ),
       if (message != null) ...[

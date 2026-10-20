@@ -336,10 +336,12 @@ class _QueuePanelState extends State<QueuePanel> {
                   header: true,
                   // A list's heading, in the heading face — the same as
                   // every prominent section header in the app (SY-8).
-                  child: Text(
-                    QueueSheetStrings.title,
-                    style: context.jamTitle3.copyWith(
-                      color: JamNowPlayingColors.text,
+                  child: JamWholeWords(
+                    child: Text(
+                      QueueSheetStrings.title,
+                      style: context.jamTitle3.copyWith(
+                        color: JamNowPlayingColors.text,
+                      ),
                     ),
                   ),
                 ),
