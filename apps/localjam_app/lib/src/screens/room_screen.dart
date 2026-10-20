@@ -56,6 +56,7 @@ import '../widgets/buttons.dart';
 import '../widgets/diagnostics_sheet.dart';
 import '../widgets/dialogs.dart';
 import '../widgets/drag_to_dismiss.dart';
+import '../widgets/jam_mark.dart';
 import '../widgets/list.dart' show JamDisclosureChevron;
 import '../widgets/menu.dart';
 import '../widgets/nudge_slider.dart';
@@ -1659,13 +1660,18 @@ class _ArtState extends State<_Art> {
           borderRadius: BorderRadius.circular(radius),
           boxShadow: shadow,
         ),
-        child: JamArtworkTile(
-          bytes: bytes,
-          imageKey: _artworkId,
-          size: size,
-          radius: radius,
-          onBackdrop: true,
-        ),
+        // Nothing playing: not a song without art (a music note) but the
+        // jam itself — its mark, the same object as on Nearby and in Past
+        // Jams, at the cover's size.
+        child: widget.item == null
+            ? JamMark(name: widget.engine.sessionName, size: size)
+            : JamArtworkTile(
+                bytes: bytes,
+                imageKey: _artworkId,
+                size: size,
+                radius: radius,
+                onBackdrop: true,
+              ),
       ),
     );
 
@@ -1783,6 +1789,9 @@ class _TitleBlock extends StatelessWidget {
         final String title;
         Widget? subtitle;
         Widget? creditLine;
+        // The empty room's big button is not part of the title's line: the
+        // ••• stays on the title, not centred between the two.
+        var menuOnTitle = false;
         if (current == null) {
           title = importing
               ? JamRoomStrings.importing
@@ -1804,6 +1813,7 @@ class _TitleBlock extends StatelessWidget {
                 children: [_AddSongsButton(onPressed: add)],
               ),
             );
+            menuOnTitle = true;
           } else {
             subtitle = Text(
               JamRoomStrings.nothingQueuedBody,
@@ -1835,7 +1845,12 @@ class _TitleBlock extends StatelessWidget {
           }
         }
 
+        final titleLine =
+            (titleStyle.height ?? 1) * scaler.scale(titleStyle.fontSize ?? 17);
         return Row(
+          crossAxisAlignment: menuOnTitle
+              ? CrossAxisAlignment.start
+              : CrossAxisAlignment.center,
           children: [
             Expanded(
               child: Semantics(
@@ -1861,7 +1876,13 @@ class _TitleBlock extends StatelessWidget {
             // The menu's 30 circle sits at the end of its 44 target
             // (`triggerAlignment`), so the circle's edge lines up with the
             // cover's.
-            menu,
+            if (menuOnTitle)
+              Transform.translate(
+                offset: Offset(0, (titleLine - JamMetrics.hitTarget) / 2),
+                child: menu,
+              )
+            else
+              menu,
           ],
         );
       },
