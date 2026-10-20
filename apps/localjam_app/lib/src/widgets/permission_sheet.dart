@@ -5,10 +5,12 @@
 /// that is a notice's job, not this sheet's. Contextual only, never chained
 /// after onboarding.
 ///
-/// The look is Apple's privacy primer: a 48 tint glyph, a title2 title, a
-/// one-line body, two short rows — what LocalJam does with the permission and
-/// what it never does, each with its own heading — then **Continue** (filled)
-/// and **Not Now** (plain), as wide as every other sheet's buttons.
+/// The look is a privacy primer: a [JamIconSize.hero] glyph in
+/// `secondaryLabel` (raspberry is for what can be tapped, and the glyph
+/// cannot — the same rule as every empty state), a title2 title, a body in
+/// balanced lines, two short rows — what LocalJam does with the permission
+/// and what it never does, each with its own heading — then **Continue**
+/// (filled) and **Not Now** (plain), as wide as every other sheet's buttons.
 ///
 /// All of the sheet's words live here: each says one thing once.
 library;
@@ -39,7 +41,7 @@ class JamPermissionRationale {
     this.neverHeading = JamPermissionSheetStrings.neverHeading,
   });
 
-  /// The 48 tint glyph.
+  /// The hero glyph, in `secondaryLabel`.
   final IconData icon;
 
   /// Title Case, title2.
@@ -234,8 +236,8 @@ class JamPermissionSheet extends StatelessWidget {
                       ExcludeSemantics(
                         child: Icon(
                           rationale.icon,
-                          size: 48,
-                          color: colors.tint,
+                          size: JamIconSize.hero,
+                          color: colors.secondaryLabel,
                         ),
                       ),
                       const SizedBox(height: JamSpace.lg),
@@ -248,9 +250,9 @@ class JamPermissionSheet extends StatelessWidget {
                         ),
                       ),
                       const SizedBox(height: JamSpace.sm),
-                      Text(
+                      // Balanced: no line ends on one word ("code.").
+                      JamBalancedText(
                         rationale.body,
-                        textAlign: TextAlign.center,
                         style: context.jamSubheadline.copyWith(
                           color: colors.secondaryLabel,
                         ),
@@ -296,9 +298,10 @@ class JamPermissionSheet extends StatelessWidget {
   }
 }
 
-/// The promise glyph: 28 in a 30 box, the onboarding feature rows' size.
-const double _promiseIcon = 28;
-const double _promiseIconBox = 30;
+/// The promise glyph: a row icon (22) in its 30 box, so it marks the row
+/// rather than competing with the 17 pt heading beside it.
+const double _promiseIcon = JamMetrics.rowIcon;
+const double _promiseIconBox = JamMetrics.rowIconBox;
 
 /// One promise: a glyph, a headline, a sentence. The glyph is
 /// `secondaryLabel`, not tint — nothing here can be tapped.
@@ -333,8 +336,9 @@ class _Promise extends StatelessWidget {
               children: [
                 Text(heading, style: context.jamHeadline),
                 const SizedBox(height: JamSpace.xxs),
-                Text(
+                JamBalancedText(
                   detail,
+                  textAlign: TextAlign.start,
                   style: context.jamSubheadline.copyWith(
                     color: colors.secondaryLabel,
                   ),
