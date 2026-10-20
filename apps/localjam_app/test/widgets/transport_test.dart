@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:localjam_app/src/design/theme.dart';
 import 'package:localjam_app/src/design/tokens.dart';
+import 'package:localjam_app/src/widgets/progress.dart';
 import 'package:localjam_app/src/widgets/transport.dart';
 
 const int _minute = 60000000;
@@ -79,7 +80,7 @@ void main() {
       expect(find.byIcon(CupertinoIcons.pause_fill), findsNothing);
     });
 
-    testWidgets('loading shows an activity indicator and swallows the tap', (
+    testWidgets('loading shows a turning ring and swallows the tap', (
       tester,
     ) async {
       var play = 0;
@@ -91,11 +92,9 @@ void main() {
           ),
         ),
       );
-      expect(find.byType(CupertinoActivityIndicator), findsOneWidget);
-      await tester.tap(
-        find.byType(CupertinoActivityIndicator),
-        warnIfMissed: false,
-      );
+      expect(find.byType(JamProgressRing), findsOneWidget);
+      expect(find.byType(CupertinoActivityIndicator), findsNothing);
+      await tester.tap(find.byType(JamProgressRing), warnIfMissed: false);
       expect(play, 0);
     });
 

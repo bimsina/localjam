@@ -29,6 +29,7 @@ import 'artwork.dart';
 import 'glass.dart';
 import 'list.dart' show JamDisclosureChevron;
 import 'pressable.dart';
+import 'progress.dart';
 import 'room_banner.dart';
 import 'scaffold.dart' show jamBottomBarInset;
 import 'sync_indicator.dart' show jamFadeThroughCurve;
@@ -559,7 +560,7 @@ class _EndedBar extends StatelessWidget {
                       const SizedBox(width: JamSpace.xs),
                       const JamDisclosureChevron(),
                     ] else
-                      const CupertinoActivityIndicator(radius: 8),
+                      const JamProgressRing(size: JamProgressRing.controlSize),
                   ],
                 ),
               ),

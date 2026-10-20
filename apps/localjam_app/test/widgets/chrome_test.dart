@@ -963,8 +963,8 @@ void main() {
           const Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              JamSpinner(),
-              JamSpinner(progress: 0.5),
+              JamProgressRing(size: JamProgressRing.controlSize),
+              JamProgressRing(value: 0.5),
               SizedBox(width: 100, child: JamProgressBar(value: 0.5)),
             ],
           ),
@@ -975,7 +975,7 @@ void main() {
       expect(find.byType(CircularProgressIndicator), findsNothing);
       expect(
         tester.getSize(find.byType(JamProgressRing).first),
-        const Size.square(20),
+        const Size.square(JamProgressRing.controlSize),
       );
       expect(tester.getSize(find.byType(JamProgressBar)).height, 4);
     });

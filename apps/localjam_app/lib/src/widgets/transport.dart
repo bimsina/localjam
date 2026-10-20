@@ -25,6 +25,7 @@ import 'package:flutter/cupertino.dart';
 import '../design/tokens.dart';
 import '../design/typography.dart';
 import 'pressable.dart';
+import 'progress.dart';
 
 /// What the transport should be showing. Map `PlaybackStatus` onto this at
 /// the call site — this file knows nothing about the engine.
@@ -79,6 +80,11 @@ const double _kPlayOpticalShift = 1.5;
 /// How far the ivory deepens toward its glyph's ink while held, under
 /// reduced motion (where it does not squeeze).
 const double _kPressedDeepen = 0.12;
+
+/// The ring a loading transport button turns in place of its glyph: the
+/// play glyph's footprint, with a stroke to match its weight.
+const double _kLoadingRing = 26;
+const double _kLoadingRingStroke = 2.5;
 
 /// Previous · play/pause · next, evenly spaced across the width it is given.
 class JamTransport extends StatelessWidget {
@@ -247,9 +253,10 @@ class _TransportButtonState extends State<_TransportButton> {
         ? JamNowPlayingColors.playGlyph
         : JamNowPlayingColors.text;
     final Widget face = loading
-        ? CupertinoActivityIndicator(
+        ? JamProgressRing(
             key: const ValueKey<String>('loading'),
-            radius: 14,
+            size: _kLoadingRing,
+            strokeWidth: _kLoadingRingStroke,
             color: glyphColor,
           )
         : Transform.translate(

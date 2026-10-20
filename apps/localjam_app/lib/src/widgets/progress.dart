@@ -185,26 +185,6 @@ class _RingPainter extends CustomPainter {
       old.sweep != sweep;
 }
 
-/// Something is being waited on — or, with [progress], how far along it is:
-/// a [JamProgressRing] [radius] × 2 across. Kept for its call sites; new
-/// code can use the ring directly.
-class JamSpinner extends StatelessWidget {
-  const JamSpinner({super.key, this.radius = 10, this.color, this.progress});
-
-  /// Half the ring's diameter: 10 standing alone, 8 inside a small control.
-  final double radius;
-
-  /// Defaults to `secondaryLabel`.
-  final Color? color;
-
-  /// Determinate progress, 0–1.
-  final double? progress;
-
-  @override
-  Widget build(BuildContext context) =>
-      JamProgressRing(value: progress, size: radius * 2, color: color);
-}
-
 /// A determinate bar: [value] of [color] (default `secondaryLabel`) on a
 /// `fill` track, [height] tall, with ends rounded to half its height.
 class JamProgressBar extends StatelessWidget {

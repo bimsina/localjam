@@ -21,6 +21,7 @@ import '../design/tokens.dart';
 import '../design/typography.dart';
 import 'notice.dart' show JamNoticeSurface;
 import 'pressable.dart';
+import 'progress.dart';
 
 /// Everything these states say out loud.
 abstract final class JamRoomBannerStrings {
@@ -141,10 +142,7 @@ class JamRoomBanner extends StatelessWidget {
     );
 
     final Widget? glyph = busy
-        ? const CupertinoActivityIndicator(
-            radius: 7,
-            color: JamNowPlayingColors.text,
-          )
+        ? const JamProgressRing(color: JamNowPlayingColors.text)
         : icon == null
         ? null
         : Icon(icon, size: JamIconSize.inline, color: JamNowPlayingColors.text);

@@ -185,7 +185,9 @@ class _JamLicensesScreenState extends State<JamLicensesScreen> {
               if (packages == null)
                 const Padding(
                   padding: EdgeInsets.all(JamSpace.xxxl),
-                  child: Center(child: JamSpinner()),
+                  child: Center(
+                    child: JamProgressRing(size: JamProgressRing.controlSize),
+                  ),
                 )
               else
                 JamSection(

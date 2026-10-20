@@ -28,6 +28,7 @@ import '../util/media_picking.dart';
 import '../util/network.dart';
 import '../widgets/guests_can.dart';
 import '../widgets/list.dart';
+import '../widgets/progress.dart';
 import '../widgets/section.dart';
 import '../widgets/session_gate.dart';
 import '../widgets/sheet.dart';
@@ -532,7 +533,7 @@ class _NameField extends StatelessWidget {
 }
 
 /// "Looking for music on this device…" while the Documents sweep runs — a
-/// system spinner in a cover's slot, on the songs' grid, where they will
+/// waiting ring in a cover's slot, on the songs' grid, where they will
 /// land.
 class _LookingRow extends StatelessWidget implements JamSelfSeparatingRow {
   const _LookingRow();
@@ -547,7 +548,9 @@ class _LookingRow extends StatelessWidget implements JamSelfSeparatingRow {
         title: HostSetupStrings.looking,
         leading: const SizedBox.square(
           dimension: JamArtworkSize.row,
-          child: CupertinoActivityIndicator(),
+          child: Center(
+            child: JamProgressRing(size: JamProgressRing.controlSize),
+          ),
         ),
         leadingWidth: JamArtworkSize.row,
         enabled: false,

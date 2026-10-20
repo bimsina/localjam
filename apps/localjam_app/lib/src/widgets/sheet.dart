@@ -52,6 +52,7 @@ import '../design/tokens.dart';
 import '../design/typography.dart';
 import 'buttons.dart';
 import 'list.dart';
+import 'progress.dart';
 import 'section.dart';
 
 /// Strings the sheet chrome says.
@@ -399,7 +400,9 @@ class JamSheetActions {
               child: const SizedBox(
                 width: JamMetrics.hitTarget,
                 height: JamMetrics.hitTarget,
-                child: CupertinoActivityIndicator(),
+                child: Center(
+                  child: JamProgressRing(size: JamProgressRing.controlSize),
+                ),
               ),
             )
           : JamTextButton(label: label, bold: true, onPressed: onConfirm),
