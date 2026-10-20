@@ -17,6 +17,9 @@ import 'engine_test_utils.dart';
 /// Counts what the engine asks of its advertiser, with nothing on the wire.
 class _Responders {
   int starts = 0;
+
+  /// The host name each start was asked to advertise (`hname`, §1).
+  final List<String?> hostNames = [];
   int stops = 0;
   int get live => starts - stops;
 
@@ -33,12 +36,14 @@ class _Responders {
     required String sessionName,
     required int port,
     required String token,
+    String? hostName,
     List<InternetAddress> addresses = const [],
     Duration timeout = JamRoomAdvertiser.defaultTimeout,
   }) async {
     final hold = holdStart;
     if (hold != null) await hold.future;
     starts++;
+    hostNames.add(hostName);
     return JamRoomAdvertiser.fake(
       transport: transport,
       onStop: () async {
@@ -73,10 +78,13 @@ void main() {
     JamHostEngine.roomAdvertiserStarter = JamRoomAdvertiser.start;
   });
 
-  Future<JamHostEngine> startEngine({bool discoverable = true}) async {
+  Future<JamHostEngine> startEngine({
+    bool discoverable = true,
+    String hostName = 'Silky Puffin',
+  }) async {
     final engine = await JamHostEngine.start(
       sessionName: 'Van Jam',
-      hostName: 'Silky Puffin',
+      hostName: hostName,
       discoverable: discoverable,
     );
     addTearDown(engine.close);
@@ -122,6 +130,30 @@ void main() {
     await engine.setDiscoverable(true);
     expect(responders.starts, 2);
     expect(heard, [false, true]);
+  });
+
+  test('every advertisement names the host as guests see them, and the '
+      'room shown again mid-jam still does', () async {
+    final engine = await startEngine();
+    await engine.setDiscoverable(false);
+    await engine.setDiscoverable(true);
+    await moveNetwork(engine, '10.0.0.5');
+    expect(responders.starts, greaterThanOrEqualTo(2));
+    expect(responders.hostNames, everyElement('Silky Puffin'));
+  });
+
+  test('an anonymous host is advertised without a name', () async {
+    await startEngine(hostName: '');
+    expect(responders.hostNames, ['']);
+    // What goes on the wire for it: no `hname` key at all.
+    expect(
+      JamRoomAdvertiser.attributesFor(
+        sessionName: 'Van Jam',
+        token: 'cafe',
+        hostName: responders.hostNames.single,
+      ),
+      isNot(contains(jamHostNameTxtKey)),
+    );
   });
 
   test('a room started invite-only can be shown mid-jam', () async {

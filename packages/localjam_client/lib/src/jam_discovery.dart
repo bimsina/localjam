@@ -12,6 +12,8 @@ import 'dart:io';
 
 import 'package:bonsoir/bonsoir.dart';
 import 'package:flutter/foundation.dart';
+// Only for `characters`: a name is cut between graphemes, never inside one.
+import 'package:flutter/widgets.dart' show StringCharacters;
 import 'package:localjam_net/localjam_net.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -20,6 +22,44 @@ import 'mdns_announcer.dart';
 /// The advertised service type (PROTOCOL.md §1).
 const String jamServiceType = '_localjam._tcp';
 
+/// The TXT key carrying the host's display name (PROTOCOL.md §1, added in
+/// 1.1). Optional and display-only: a 1.0 joiner ignores it like any key it
+/// does not know, and nothing here keys or trusts anything by it (§9).
+const String jamHostNameTxtKey = 'hname';
+
+/// The most UTF-8 bytes `hname` carries — a DNS label's worth, which keeps
+/// the pair far inside a TXT string's 255 and a room's announcement well
+/// inside [maxAnnouncementBytes].
+const int jamHostNameTxtMaxBytes = 63;
+
+/// Control characters, and runs of whitespace, in a name off the wire.
+final RegExp _nameBreaks = RegExp(r'[\p{Cc}\s]+', unicode: true);
+
+/// [name] as the `hname` TXT key carries it (PROTOCOL.md §1), or null when
+/// nothing is left to carry.
+///
+/// Control characters and runs of whitespace become one space, the ends are
+/// trimmed, and a name longer than [jamHostNameTxtMaxBytes] of UTF-8 is cut
+/// after the last whole character (grapheme cluster) that fits, then trimmed
+/// again. The host applies it before advertising and a joiner again to what
+/// it reads: the record is unauthenticated (§9), so what arrives is held to
+/// the same shape whoever sent it.
+String? jamTxtHostName(String? name) {
+  if (name == null) return null;
+  var text = name.replaceAll(_nameBreaks, ' ').trim();
+  if (utf8.encode(text).length > jamHostNameTxtMaxBytes) {
+    final kept = StringBuffer();
+    var bytes = 0;
+    for (final character in text.characters) {
+      bytes += utf8.encode(character).length;
+      if (bytes > jamHostNameTxtMaxBytes) break;
+      kept.write(character);
+    }
+    text = kept.toString().trimRight();
+  }
+  return text.isEmpty ? null : text;
+}
+
 /// One discoverable room on the local network, resolved to a joinable URI.
 @immutable
 class JamNearbyRoom {
@@ -27,6 +67,7 @@ class JamNearbyRoom {
     required this.key,
     required this.sessionName,
     required this.joinUri,
+    this.hostName,
     DateTime? lastSeen,
   }) : lastSeen = lastSeen ?? DateTime.now();
 
@@ -42,6 +83,15 @@ class JamNearbyRoom {
 
   /// Human-readable room name.
   final String sessionName;
+
+  /// The host's display name, from the record's `hname` (§1, 1.1) — null
+  /// when the record has none (a 1.0 host, one hosting anonymously) or only
+  /// blanks. Already in [jamTxtHostName]'s shape.
+  ///
+  /// Unauthenticated, like everything in an mDNS record (§9): anyone on the
+  /// network can advertise any name. Text to show, never something to trust
+  /// or to key anything by — and it is not part of [joinUri].
+  final String? hostName;
 
   /// Ready-to-join `localjam://join?...` URI built from the resolved
   /// addresses and TXT attributes.
@@ -75,11 +125,14 @@ class JamNearbyRoom {
     key: key,
     sessionName: sessionName,
     joinUri: joinUri,
+    hostName: hostName,
     lastSeen: at,
   );
 
   @override
-  String toString() => 'JamNearbyRoom($sessionName, $joinUri)';
+  String toString() =>
+      'JamNearbyRoom($sessionName, $joinUri'
+      '${hostName == null ? '' : ', hosted by $hostName'})';
 }
 
 /// Advertises one hosted room on the LAN. Created by [start]; stopped with
@@ -245,18 +298,24 @@ class JamRoomAdvertiser {
   /// cosmetic here: DNS-SD resolves it by probing and renaming, which delays
   /// the register confirmation that the Apple plugin is blocking the main
   /// thread to wait for.
+  ///
+  /// [hostName] is the host's display name, advertised as `hname`
+  /// ([attributesFor]); null or blank leaves it out.
   static Future<JamRoomAdvertiser?> start({
     required String sessionName,
     required int port,
     required String token,
+    String? hostName,
     List<InternetAddress> addresses = const [],
     Duration timeout = defaultTimeout,
   }) async {
-    final attributes = {
-      'v': '${MessageCodec.protocolVersion}',
-      'name': sessionName,
-      'token': token,
-    };
+    // One map for both responders, so the daemon and the fallback always
+    // carry the same record.
+    final attributes = attributesFor(
+      sessionName: sessionName,
+      token: token,
+      hostName: hostName,
+    );
     final instanceName = instanceNameFor(sessionName, token);
     final broadcast = await _startDaemonBroadcast(
       instanceName: instanceName,
@@ -286,6 +345,23 @@ class JamRoomAdvertiser {
                 'registration there' : 'the OS daemon did not take it'}).',
     );
     return JamRoomAdvertiser._(null, announcer);
+  }
+
+  /// A room's TXT record (PROTOCOL.md §1): `v`, `name` and `token`, plus
+  /// `hname` — [hostName] in [jamTxtHostName]'s shape — when there is a
+  /// name to carry. Whatever advertises a room builds its record here.
+  static Map<String, String> attributesFor({
+    required String sessionName,
+    required String token,
+    String? hostName,
+  }) {
+    final host = jamTxtHostName(hostName);
+    return {
+      'v': '${MessageCodec.protocolVersion}',
+      'name': sessionName,
+      'token': token,
+      jamHostNameTxtKey: ?host,
+    };
   }
 
   /// The mDNS instance name for a room: the session name, trimmed to leave
@@ -960,6 +1036,9 @@ class JamRoomBrowser {
     return JamNearbyRoom(
       key: service.name,
       sessionName: sessionName,
+      // Display only (§9), held to the shape a host sends whatever arrived;
+      // every other key this browser does not know is ignored.
+      hostName: jamTxtHostName(service.attributes[jamHostNameTxtKey]),
       lastSeen: seenAt,
       joinUri: Uri(
         scheme: 'localjam',

@@ -1,4 +1,4 @@
-# LocalJam Protocol 1.0
+# LocalJam Protocol 1.1
 
 Synchronized local-network media playback. One **host** owns the files and the
 authoritative session state; N **guests** join over LAN, fetch media, and play
@@ -6,7 +6,8 @@ in sync on their own output devices.
 
 This document is **protocol 1** (wire `v: 1`). Later 1.x revisions only add
 things a 1.0 peer can safely ignore (§2.1); anything a 1.0 peer would have to
-understand is protocol 2.
+understand is protocol 2. 1.1 adds one optional discovery key, `hname` (§1);
+nothing else differs from 1.0.
 
 Design goals, in priority order:
 
@@ -62,7 +63,20 @@ records:
 
 ```
 v=<major protocol version>  name=<sessionName>  token=<sessionToken>
+hname=<host's display name>                       (1.1, optional)
 ```
+
+`hname` is the host's display name — the name `welcome.host` carries
+(§3.1) — so a nearby-room list can say whose jam it is before anyone joins.
+It is additive (§2.1): a host with no name to share (hosting anonymously)
+leaves the key out, and a joiner that does not know it ignores it like any
+other TXT key it does not know, so a 1.0 joiner lists and joins the room
+exactly as before. The value is UTF-8, trimmed, and at most 63 bytes; a
+longer name is cut on a character boundary (between grapheme clusters where
+the implementation can, never inside a code point) and trimmed again. A
+joiner treats an empty or blank value as absent, holds what it reads to the
+same trim and cap, and never carries it into the join URI. It is display
+text and nothing more (§9).
 
 Joiners resolve the service (addresses + port come from mDNS itself) and
 build the same `localjam://join` URI. Including the token makes a
@@ -124,7 +138,8 @@ A protocol version is `major.minor`. Only the major travels on the wire
 decodes tolerantly**, so a 1.x peer never breaks a 1.0 peer:
 
 - An unknown message `type` is ignored.
-- Unknown payload fields (and unknown envelope fields) are ignored.
+- Unknown payload fields (and unknown envelope fields) are ignored. So are
+  unknown keys in a discovery TXT record (§1).
 - An entry of a list that does not fit its schema — a roster peer without a
   `peerId`, a playlist item — is dropped; the rest of the message stands.
 - An unknown enum value never invalidates the message. Each field says what
@@ -1019,6 +1034,13 @@ still says whether the connection is ending (§2.1).
   knowable from the link. (`*.local` is the reasonable exception: multicast
   DNS answers only from the local link, and the resolved addresses can then
   be checked like any other.)
+- **A host name off the network is a claim, not an identity.** `hname`
+  (§1) is as unauthenticated as the rest of the record: any device can
+  advertise a room under any name, including yours or a friend's. A joiner
+  shows it as untrusted text, never uses it for trust, identity, permissions
+  or deduplication (a room is its token), and never derives anything from it
+  that would outlive the listing — inside the room, the host is whoever
+  `welcome.host` says (§3.1).
 - An mDNS responder SHOULD answer only queries that arrive from port 5353,
   rate-limit its responses to at most one per second (coalescing the rest),
   and cap a response's size — an unauthenticated packet that costs a few

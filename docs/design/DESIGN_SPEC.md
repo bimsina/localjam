@@ -172,7 +172,12 @@ no status dots or connection badges, no emoji and no filler copy.
   someone else's song. Nothing fills the gap: no "Unknown artist", no
   "Added by Mia".
 - **Nearby.** Each jam is a quiet bordered card holding the mark, the name at
-  row scale, and a small tinted Join. Join moves under the name when the
+  row scale, and a small tinted Join. When the jam's record names its host
+  (protocol 1.1), a footnote line under the name shows their 16 pt face and
+  name in `secondaryLabel`, and a screen reader hears "Sunday at home,
+  hosted by Theo". There is no such line when the jam's name already says
+  who ("Mia's jam"), when the host is you, or when the record doesn't say,
+  and it is never a badge on the mark. Join moves under the name when the
   name would otherwise get too narrow. Scan code and Join with link sit under
   the list, and Start a jam is pinned at the bottom. While you're in a jam,
   Home shows that jam (its mark with the jam's cover) rather than "No

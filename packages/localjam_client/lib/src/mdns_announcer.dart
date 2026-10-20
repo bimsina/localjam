@@ -374,17 +374,7 @@ class MdnsAnnouncer {
     return out;
   }
 
-  Uint8List _txtData() {
-    final builder = BytesBuilder();
-    for (final entry in _txt.entries) {
-      final pair = utf8.encode('${entry.key}=${entry.value}');
-      if (pair.isEmpty || pair.length > 255) continue;
-      builder.addByte(pair.length);
-      builder.add(pair);
-    }
-    if (builder.length == 0) builder.addByte(0);
-    return builder.toBytes();
-  }
+  Uint8List _txtData() => encodeTxtRecord(_txt);
 
   /// Stops advertising: goodbye records (TTL 0, §10.1) then the socket.
   Future<void> stop() async {
@@ -416,6 +406,23 @@ class _Record {
 /// Wire form of a domain name: length-prefixed labels, a zero terminator, no
 /// compression (legal everywhere, and a room's packet is tiny).
 Uint8List encodeDnsName(List<String> labels) => _encodeName(labels);
+
+/// The TXT record data the built-in responder sends for [attributes]
+/// (RFC 6763 §6): one length-prefixed `key=value` string per entry, UTF-8.
+/// A pair over a TXT string's 255 bytes is left out rather than cut, and an
+/// empty record is the single zero byte the RFC asks for.
+@visibleForTesting
+Uint8List encodeTxtRecord(Map<String, String> attributes) {
+  final builder = BytesBuilder();
+  for (final entry in attributes.entries) {
+    final pair = utf8.encode('${entry.key}=${entry.value}');
+    if (pair.isEmpty || pair.length > 255) continue;
+    builder.addByte(pair.length);
+    builder.add(pair);
+  }
+  if (builder.length == 0) builder.addByte(0);
+  return builder.toBytes();
+}
 
 Uint8List _encodeName(List<String> labels) {
   final builder = BytesBuilder();
