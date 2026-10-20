@@ -26,6 +26,7 @@ import '../util/jam_cover.dart';
 import '../util/network.dart';
 import '../util/permissions.dart';
 import 'position_ticker.dart';
+import 'web_guest_bundle.dart';
 
 /// Which side of the jam this device is on.
 enum JamSide {
@@ -257,7 +258,12 @@ class JamOffNetworkException implements Exception {
 
 /// The app's single live-jam owner.
 class JamSessionController extends ChangeNotifier {
-  JamSessionController() {
+  /// [webGuest] is the browser player every room this device hosts serves to
+  /// web guests (§1.1) — the app's own by default; tests hand in a settled
+  /// one so what a room serves never depends on whether this checkout ran
+  /// `tool/build_web_guest.sh`.
+  JamSessionController({WebGuestBundle? webGuest})
+    : _webGuest = webGuest ?? WebGuestBundle.app {
     // Identity can arrive late. `JamIdentity.displayName()` hands out an
     // ephemeral name when `shared_preferences` does not answer inside its
     // timeout, then adopts the stored one in the background — and everything
@@ -270,6 +276,10 @@ class JamSessionController extends ChangeNotifier {
 
   JamEngine? _engine;
   JamSide? _side;
+  final WebGuestBundle _webGuest;
+
+  /// See [servesWebPlayer].
+  final ValueNotifier<bool> _servesWebPlayer = ValueNotifier<bool>(false);
   JamSessionPhase _phase = JamSessionPhase.idle;
   String? _error;
   JamSessionEndReason? _endReason;
@@ -401,6 +411,13 @@ class JamSessionController extends ChangeNotifier {
   /// The live engine as a host, or null when guesting or idle.
   JamHostEngine? get hostEngine =>
       _engine is JamHostEngine ? _engine! as JamHostEngine : null;
+
+  /// Whether the room this device hosts serves the browser player at its
+  /// http join URL (§1.1) — false while guesting or idle, and false in a
+  /// room whose player has not loaded yet (or never will: a build without
+  /// one), whose join URL opens the built-in "install the app" page. The
+  /// Invite sheet promises a browser player only while this holds.
+  ValueListenable<bool> get servesWebPlayer => _servesWebPlayer;
 
   /// The live engine as a guest, or null when hosting or idle.
   JamGuestEngine? get guestEngine =>
@@ -734,8 +751,12 @@ class JamSessionController extends ChangeNotifier {
         sessionName: sessionName,
         policy: policy,
         discoverable: discoverable,
+        // Already in memory from an earlier room: served from the first
+        // request. Otherwise [_serveWebPlayer] hands it over once it loads.
+        staticSite: _webGuest.site,
       );
       _attach(engine, JamSide.host);
+      _serveWebPlayer(engine);
       // Cued and started by the import itself (cueFirst + autoPlay): "Start
       // the jam" — and "Host it again", which arrives down this same path
       // with the old queue in `paths` — used to land in a room paused at
@@ -1024,6 +1045,29 @@ class JamSessionController extends ChangeNotifier {
     return _addFailures;
   }
 
+  /// Gives [engine]'s room the browser player (§1.1) once
+  /// [WebGuestBundle.load] has it, without the room waiting for it: the first
+  /// room of the process opens on the server's built-in page and gains the
+  /// player a moment later, through [JamHostEngine.staticSite]'s setter.
+  /// A room left (or replaced) before then is not touched.
+  void _serveWebPlayer(JamHostEngine engine) {
+    if (engine.staticSite?.index != null) {
+      // Started with it ([startHost]): served from the first request.
+      _servesWebPlayer.value = true;
+      return;
+    }
+    unawaited(
+      _webGuest.load().then((site) {
+        if (site == null || site.index == null) return;
+        if (!identical(_engine, engine) || engine.sessionEnded.value != null) {
+          return;
+        }
+        engine.staticSite = site;
+        _servesWebPlayer.value = true;
+      }),
+    );
+  }
+
   /// Starts the host's background import of [paths] — see [startHost].
   void _startImport(JamHostEngine engine, List<String> paths) {
     final job = engine.importFiles(paths.map(File.new), autoPlay: true);
@@ -1255,6 +1299,7 @@ class JamSessionController extends ChangeNotifier {
     _position = null;
     _engine = null;
     _side = null;
+    _servesWebPlayer.value = false;
     _connection = JamConnectionState.connected;
   }
 
@@ -1520,6 +1565,7 @@ class JamSessionController extends ChangeNotifier {
     unawaited(_stopBrowsing());
     unawaited(_notices.close());
     _nearby.dispose();
+    _servesWebPlayer.dispose();
     super.dispose();
   }
 }

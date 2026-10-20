@@ -8,12 +8,14 @@
 library;
 
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:localjam_app/src/state/session_controller.dart';
+import 'package:localjam_app/src/state/web_guest_bundle.dart';
 import 'package:localjam_client/localjam_client.dart';
 
 import 'fixtures.dart';
@@ -1050,5 +1052,119 @@ void main() {
       jamRestartPaths(queue: ['/a', '/up'], picked: ['/a'], everQueued: []),
       ['/a', '/up'],
     );
+  });
+
+  group('the browser player (§1.1)', () {
+    /// The body a browser opening the room's http join URL is handed. Over a
+    /// bare socket: flutter_test answers every `HttpClient` request with a
+    /// 400 of its own.
+    Future<String> page(JamSessionController host) async {
+      final socket = await Socket.connect(
+        InternetAddress.loopbackIPv4,
+        host.hostEngine!.port,
+      );
+      socket.write('GET /join HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n');
+      await socket.flush();
+      // The host closes every connection after one response (§9.1).
+      final response = await utf8.decoder.bind(socket).join();
+      socket.destroy();
+      return response.substring(response.indexOf('\r\n\r\n') + 4);
+    }
+
+    testWidgets('a room serves the app\'s player at its join URL', (
+      tester,
+    ) async {
+      final bundle = WebGuestBundle(assets: FakeAssetBundle(webPlayerAssets()));
+      final host = testSession(webGuest: bundle);
+      await tester.runAsync(() async {
+        expect(host.servesWebPlayer.value, isFalse);
+        await host.startHost(sessionName: 'Web Room', discoverable: false);
+        expect(await waitFor(() => host.servesWebPlayer.value), isTrue);
+        expect(host.hostEngine!.staticSite, same(bundle.site));
+        expect(await page(host), '<!doctype html>player');
+
+        await host.leave();
+        expect(host.servesWebPlayer.value, isFalse);
+
+        // The next room of the process starts with it: nothing to wait for.
+        await host.startHost(sessionName: 'Web Room 2', discoverable: false);
+        expect(host.hostEngine!.staticSite, same(bundle.site));
+        expect(host.servesWebPlayer.value, isTrue);
+        await host.leave();
+      });
+    });
+
+    testWidgets('the room opens without waiting for the player', (
+      tester,
+    ) async {
+      // Made on the real clock: a completer from the test's fake-async zone
+      // would deliver its completion only when the test pumps.
+      late final Completer<void> gate;
+      late final JamSessionController host;
+      await tester.runAsync(() async {
+        gate = Completer<void>();
+        host = testSession(
+          webGuest: WebGuestBundle(
+            assets: FakeAssetBundle(webPlayerAssets(), gate: gate),
+          ),
+        );
+        expect(
+          await host.startHost(sessionName: 'Early Room', discoverable: false),
+          isTrue,
+        );
+        expect(host.isLive, isTrue);
+        expect(host.hostEngine!.staticSite, isNull);
+        expect(host.servesWebPlayer.value, isFalse);
+        expect(await page(host), contains('Install the app'));
+
+        gate.complete();
+        expect(await waitFor(() => host.servesWebPlayer.value), isTrue);
+        expect(host.hostEngine!.staticSite?.index, isNotNull);
+        expect(await page(host), '<!doctype html>player');
+        await host.leave();
+      });
+    });
+
+    testWidgets('a room left before the player loads is not handed it', (
+      tester,
+    ) async {
+      // Made on the real clock: a completer from the test's fake-async zone
+      // would deliver its completion only when the test pumps.
+      late final Completer<void> gate;
+      late final JamSessionController host;
+      await tester.runAsync(() async {
+        gate = Completer<void>();
+        host = testSession(
+          webGuest: WebGuestBundle(
+            assets: FakeAssetBundle(webPlayerAssets(), gate: gate),
+          ),
+        );
+        await host.startHost(sessionName: 'Brief Room', discoverable: false);
+        final engine = host.hostEngine!;
+        await host.leave();
+        gate.complete();
+        await pumpEventQueue();
+        expect(engine.staticSite, isNull);
+        expect(host.servesWebPlayer.value, isFalse);
+      });
+    });
+
+    testWidgets('a build with no player promises none', (tester) async {
+      final host = testSession(
+        webGuest: WebGuestBundle(
+          assets: FakeAssetBundle(
+            webPlayerAssets()..remove('assets/web/index.html'),
+          ),
+        ),
+      );
+      await tester.runAsync(() async {
+        await host.startHost(sessionName: 'Plain Room', discoverable: false);
+        await pumpEventQueue();
+        expect(host.hostEngine!.staticSite, isNull);
+        expect(host.servesWebPlayer.value, isFalse);
+        expect(await page(host), contains('Install the app'));
+        await host.leave();
+      });
+    });
   });
 }
