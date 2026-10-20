@@ -836,12 +836,10 @@ class _NearbyLine extends StatelessWidget {
     return ConstrainedBox(
       constraints: const BoxConstraints(minHeight: JamMetrics.rowHeight),
       child: Padding(
-        // The small plain button pads its label by 4: 12 here puts the
-        // last label on the 16 margin.
-        padding: EdgeInsetsDirectional.fromSTEB(
+        padding: const EdgeInsetsDirectional.fromSTEB(
           kJamRowInset,
           JamSpace.xs,
-          actions.isEmpty ? kJamRowInset : kJamRowInset - JamSpace.xs,
+          kJamRowInset,
           JamSpace.xs,
         ),
         child: Row(
@@ -856,10 +854,12 @@ class _NearbyLine extends StatelessWidget {
                 ),
               ),
             ),
+            // Small neutral buttons, not bare words: beside a sentence, two
+            // tinted words read as its last phrase ("…Wi‑Fi. Scan Code Enter
+            // Link"). Neutral, so they never pose as a room's Join.
             for (final (i, (label, onPressed)) in actions.indexed) ...[
-              // Air between two actions, so they never read as one phrase.
-              if (i > 0) const SizedBox(width: JamSpace.sm),
-              JamButton.plain(
+              SizedBox(width: i == 0 ? JamSpace.md : JamSpace.sm),
+              JamButton.gray(
                 label: label,
                 size: JamButtonSize.small,
                 onPressed: onPressed,
