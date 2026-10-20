@@ -232,9 +232,8 @@ class _JamMenuRowState extends State<JamMenuRow> {
 }
 
 /// The rows for [groups] — a hairline between items, a [kJamMenuGroupGap]
-/// band between groups — for a host that draws its own surface. Prefer
-/// [JamMenuPanel], which draws the surface too.
-List<Widget> jamMenuChildren(
+/// band between groups — inside [JamMenuPanel].
+List<Widget> _menuChildren(
   List<List<JamMenuItem>> groups, {
   ValueChanged<JamMenuItem>? onSelected,
 }) {
@@ -336,7 +335,7 @@ class JamMenuPanel extends StatelessWidget {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: jamMenuChildren(groups, onSelected: onSelected),
+              children: _menuChildren(groups, onSelected: onSelected),
             ),
           ),
         ),

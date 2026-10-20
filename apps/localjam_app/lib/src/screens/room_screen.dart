@@ -137,33 +137,6 @@ abstract final class JamRoomStrings {
       ? 'Waiting for 1 person to get this song'
       : 'Waiting for $n people to get this song';
 
-  // Terminal states: the copy lives with the view that shows it
-  // (session_ended_view.dart); these keep the room's one strings block.
-  static const String hostGoneTitle = JamSessionEndedStrings.hostGoneTitle;
-  static const String hostGoneBody = JamSessionEndedStrings.hostGoneBody;
-  static const String kickedTitle = JamSessionEndedStrings.kickedTitle;
-  static const String kickedBody = JamSessionEndedStrings.kickedBody;
-  static const String rejectedTitle = JamSessionEndedStrings.rejectedTitle;
-  static const String rejectedBody = JamSessionEndedStrings.rejectedBody;
-  static const String restartedTitle = JamSessionEndedStrings.restartedTitle;
-  static const String restartedBody = JamSessionEndedStrings.restartedBody;
-  static const String versionTitle = JamSessionEndedStrings.versionTitle;
-  static const String versionBody = JamSessionEndedStrings.versionBody;
-  static const String fullTitle = JamSessionEndedStrings.fullTitle;
-  static const String fullBody = JamSessionEndedStrings.fullBody;
-  static const String listenerFailedTitle =
-      JamSessionEndedStrings.listenerFailedTitle;
-  static const String listenerFailedBody =
-      JamSessionEndedStrings.listenerFailedBody;
-  static const String startNew = JamSessionEndedStrings.startNew;
-  static const String hostEndedTitle = JamSessionEndedStrings.hostEndedTitle;
-  static const String hostEndedBody = JamSessionEndedStrings.hostEndedBody;
-  static const String endedTitle = JamSessionEndedStrings.endedTitle;
-  static const String endedBody = JamSessionEndedStrings.endedBody;
-  static const String tryAgain = JamSessionEndedStrings.tryAgain;
-  static const String back = JamSessionEndedStrings.back;
-  static const String rejoinFailed = JamSessionEndedStrings.rejoinFailed;
-
   /// The docked panel's two views (wide windows).
   static const String panelQueue = 'Up Next';
   static const String panelRoom = 'People';

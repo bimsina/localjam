@@ -1123,13 +1123,13 @@ void main() {
       // Addendum §2: the host probably went to sleep, and the sha-keyed
       // cache means getting back in re-fetches nothing.
       await pumpEnded(tester, JamSessionEndReason.hostGone);
-      expect(find.text(JamRoomStrings.hostGoneTitle), findsOneWidget);
-      expect(find.text(JamRoomStrings.tryAgain), findsOneWidget);
-      expect(find.text(JamRoomStrings.back), findsOneWidget);
+      expect(find.text(JamSessionEndedStrings.hostGoneTitle), findsOneWidget);
+      expect(find.text(JamSessionEndedStrings.tryAgain), findsOneWidget);
+      expect(find.text(JamSessionEndedStrings.back), findsOneWidget);
 
       final primary = tester.widget<JamButton>(
         find.ancestor(
-          of: find.text(JamRoomStrings.tryAgain),
+          of: find.text(JamSessionEndedStrings.tryAgain),
           matching: find.byType(JamButton),
         ),
       );
@@ -1137,7 +1137,7 @@ void main() {
       // §6.3: the way home is the plain one beside it.
       final back = tester.widget<JamButton>(
         find.ancestor(
-          of: find.text(JamRoomStrings.back),
+          of: find.text(JamSessionEndedStrings.back),
           matching: find.byType(JamButton),
         ),
       );
@@ -1146,8 +1146,8 @@ void main() {
 
     testWidgets('a rejected rejoin offers a rejoin too', (tester) async {
       await pumpEnded(tester, JamSessionEndReason.rejected);
-      expect(find.text(JamRoomStrings.rejectedTitle), findsOneWidget);
-      expect(find.text(JamRoomStrings.tryAgain), findsOneWidget);
+      expect(find.text(JamSessionEndedStrings.rejectedTitle), findsOneWidget);
+      expect(find.text(JamSessionEndedStrings.tryAgain), findsOneWidget);
     });
 
     testWidgets('a refusal says which, and only offers a retry that could '
@@ -1156,11 +1156,11 @@ void main() {
       // a version mismatch alike, and offered "Try again" to both — a
       // button that could never work for a restarted room or an update.
       final cases = <RejectReason?, (String, bool)>{
-        RejectReason.badToken: (JamRoomStrings.restartedTitle, false),
-        RejectReason.version: (JamRoomStrings.versionTitle, false),
-        RejectReason.full: (JamRoomStrings.fullTitle, true),
-        RejectReason.unknown: (JamRoomStrings.rejectedTitle, true),
-        null: (JamRoomStrings.rejectedTitle, true),
+        RejectReason.badToken: (JamSessionEndedStrings.restartedTitle, false),
+        RejectReason.version: (JamSessionEndedStrings.versionTitle, false),
+        RejectReason.full: (JamSessionEndedStrings.fullTitle, true),
+        RejectReason.unknown: (JamSessionEndedStrings.rejectedTitle, true),
+        null: (JamSessionEndedStrings.rejectedTitle, true),
       };
       for (final MapEntry(key: why, value: (title, retry)) in cases.entries) {
         await pumpEnded(
@@ -1170,33 +1170,33 @@ void main() {
         );
         expect(find.text(title), findsOneWidget, reason: '$why');
         expect(
-          find.text(JamRoomStrings.tryAgain),
+          find.text(JamSessionEndedStrings.tryAgain),
           retry ? findsOneWidget : findsNothing,
           reason: '$why',
         );
         // Whatever the reason, there is always a way out.
-        expect(find.text(JamRoomStrings.back), findsOneWidget);
+        expect(find.text(JamSessionEndedStrings.back), findsOneWidget);
       }
-      expect(find.text(JamRoomStrings.versionBody), findsNothing);
+      expect(find.text(JamSessionEndedStrings.versionBody), findsNothing);
       await pumpEnded(
         tester,
         JamSessionEndReason.rejected,
         rejectReason: RejectReason.version,
       );
-      expect(find.text(JamRoomStrings.versionBody), findsOneWidget);
+      expect(find.text(JamSessionEndedStrings.versionBody), findsOneWidget);
     });
 
     testWidgets('a kick never invites you back', (tester) async {
       await pumpEnded(tester, JamSessionEndReason.kicked);
-      expect(find.text(JamRoomStrings.kickedTitle), findsOneWidget);
-      expect(find.text(JamRoomStrings.tryAgain), findsNothing);
-      expect(find.text(JamRoomStrings.back), findsOneWidget);
+      expect(find.text(JamSessionEndedStrings.kickedTitle), findsOneWidget);
+      expect(find.text(JamSessionEndedStrings.tryAgain), findsNothing);
+      expect(find.text(JamSessionEndedStrings.back), findsOneWidget);
       // The one shared empty/ended state (§10.6), and leaving is the quiet
       // grey button, not a loud full-width bar.
       expect(find.byType(JamEmptyState), findsOneWidget);
       final back = tester.widget<JamButton>(
         find.ancestor(
-          of: find.text(JamRoomStrings.back),
+          of: find.text(JamSessionEndedStrings.back),
           matching: find.byType(JamButton),
         ),
       );
@@ -1214,9 +1214,9 @@ void main() {
         JamSessionEndReason.hostEnded,
         theme: jamDarkTheme(),
       );
-      expect(find.text(JamRoomStrings.hostEndedTitle), findsOneWidget);
-      expect(find.text(JamRoomStrings.tryAgain), findsNothing);
-      expect(find.text(JamRoomStrings.back), findsOneWidget);
+      expect(find.text(JamSessionEndedStrings.hostEndedTitle), findsOneWidget);
+      expect(find.text(JamSessionEndedStrings.tryAgain), findsNothing);
+      expect(find.text(JamSessionEndedStrings.back), findsOneWidget);
       expect(tester.takeException(), isNull);
     });
 
@@ -1224,8 +1224,8 @@ void main() {
       tester,
     ) async {
       await pumpEnded(tester, null, onRetry: null);
-      expect(find.text(JamRoomStrings.endedTitle), findsOneWidget);
-      expect(find.text(JamRoomStrings.back), findsOneWidget);
+      expect(find.text(JamSessionEndedStrings.endedTitle), findsOneWidget);
+      expect(find.text(JamSessionEndedStrings.back), findsOneWidget);
     });
   });
 }

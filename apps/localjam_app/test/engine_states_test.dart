@@ -661,16 +661,19 @@ void main() {
             ),
           ),
         );
-        expect(find.text(JamRoomStrings.listenerFailedTitle), findsOneWidget);
-        expect(find.text(JamRoomStrings.tryAgain), findsNothing);
+        expect(
+          find.text(JamSessionEndedStrings.listenerFailedTitle),
+          findsOneWidget,
+        );
+        expect(find.text(JamSessionEndedStrings.tryAgain), findsNothing);
         final primary = tester.widget<JamButton>(
           find.ancestor(
-            of: find.text(JamRoomStrings.startNew),
+            of: find.text(JamSessionEndedStrings.startNew),
             matching: find.byType(JamButton),
           ),
         );
         expect(primary.variant, JamButtonVariant.filled);
-        expect(find.text(JamRoomStrings.back), findsOneWidget);
+        expect(find.text(JamSessionEndedStrings.back), findsOneWidget);
 
         await tester.runAsync(host.acknowledgeEnd);
         expect(host.phase, JamSessionPhase.idle);
@@ -727,7 +730,7 @@ void main() {
       // its mark in one place — until it times out.
       await tester.pump(kJamNoticeDuration);
       await tester.pump(const Duration(seconds: 1));
-      await tester.tap(find.text(JamRoomStrings.startNew));
+      await tester.tap(find.text(JamSessionEndedStrings.startNew));
       for (var i = 0; i < 10; i++) {
         await _settleReal(tester, 30);
       }
@@ -783,7 +786,7 @@ void main() {
         );
       });
       await tester.pump();
-      expect(find.text(JamRoomStrings.hostEndedTitle), findsOneWidget);
+      expect(find.text(JamSessionEndedStrings.hostEndedTitle), findsOneWidget);
 
       // The rejoin passes through `starting`. The room used to vanish for
       // that moment — the router's redirect unmounted it and the user landed
@@ -809,7 +812,7 @@ void main() {
         findsOneWidget,
         reason: 'the ended room stays on screen',
       );
-      expect(find.text(JamRoomStrings.hostEndedTitle), findsOneWidget);
+      expect(find.text(JamSessionEndedStrings.hostEndedTitle), findsOneWidget);
       // ...saying why the retry failed, in place.
       expect(find.text(guest.error!), findsOneWidget);
 
@@ -832,13 +835,13 @@ void main() {
       );
       final retry = tester.widget<JamButton>(
         find.ancestor(
-          of: find.text(JamRoomStrings.tryAgain),
+          of: find.text(JamSessionEndedStrings.tryAgain),
           matching: find.byType(JamButton),
         ),
       );
       expect(retry.loading, isTrue);
       // No way out while the rejoin runs: the way home is not offered.
-      expect(find.text(JamRoomStrings.back), findsNothing);
+      expect(find.text(JamSessionEndedStrings.back), findsNothing);
     });
   });
 

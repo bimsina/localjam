@@ -432,9 +432,6 @@ abstract final class JamNowPlayingColors {
   /// What a queue row's long-press menu dims the rest of the screen with.
   static const Color contextScrim = Color(0x59000000);
 
-  /// Grouped rows on the backdrop: translucent white, never an opaque card.
-  static const Color groupedRow = Color(0x17FFFFFF);
-
   /// Destructive *text* on the backdrop ("End Jam" in the docked panel, the
   /// status line's failures). Holds 4.5:1 over the backdrop's brightest
   /// allowed ground and still reads as red.
@@ -604,10 +601,6 @@ abstract final class JamMetrics {
   /// Nav bar icon glyph size ([JamIconSize.nav]).
   static const double navIcon = JamIconSize.nav;
 
-  /// A row's small trailing glyphs: the pop-up chevrons, a disclosure
-  /// ([JamIconSize.disclosure]).
-  static const double disclosureIcon = JamIconSize.disclosure;
-
   /// The inline nav bar height (without the status bar).
   static const double navBarHeight = 44;
 
@@ -675,9 +668,6 @@ abstract final class JamRadius {
 
   /// A large cover: Now Playing's, the History detail's.
   static const double largeCover = 18;
-
-  /// The Now Playing hero cover ([largeCover]).
-  static const double nowPlaying = largeCover;
 
   /// The edge from which artwork takes [largeCover].
   static const double largeCoverFrom = 160;
