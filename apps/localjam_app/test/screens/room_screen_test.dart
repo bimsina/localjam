@@ -10,6 +10,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:localjam_app/src/design/theme.dart';
 import 'package:localjam_app/src/design/tokens.dart';
 import 'package:localjam_app/src/screens/room_screen.dart';
+import 'package:localjam_app/src/screens/session_ended_view.dart';
 import 'package:localjam_app/src/state/session_controller.dart';
 import 'package:localjam_app/src/widgets/artwork.dart';
 import 'package:localjam_app/src/widgets/avatar.dart';

@@ -25,6 +25,7 @@ import 'package:localjam_app/src/screens/home_screen.dart';
 import 'package:localjam_app/src/screens/host_setup_screen.dart';
 import 'package:localjam_app/src/screens/onboarding_screen.dart';
 import 'package:localjam_app/src/screens/room_screen.dart';
+import 'package:localjam_app/src/screens/session_ended_view.dart';
 import 'package:localjam_app/src/screens/scan_screen.dart';
 import 'package:localjam_app/src/screens/settings_screen.dart';
 import 'package:localjam_app/src/screens/licenses_screen.dart';
