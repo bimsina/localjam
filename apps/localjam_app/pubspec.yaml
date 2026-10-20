@@ -65,6 +65,12 @@ flutter:
 
   assets:
     - assets/brand/
+    - assets/fonts/OFL.txt
+
+  fonts:
+    - family: Manrope
+      fonts:
+        - asset: assets/fonts/Manrope.ttf
 
 # App icon: the white headphones-and-mic mark on the raspberry gradient.
 #   dart run flutter_launcher_icons

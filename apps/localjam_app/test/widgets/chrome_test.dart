@@ -557,7 +557,7 @@ void main() {
   });
 
   group('controls', () {
-    testWidgets('JamSwitch is a green Cupertino switch', (tester) async {
+    testWidgets('JamSwitch uses the accessible brand fill', (tester) async {
       var value = false;
       await tester.pumpWidget(
         _host(
@@ -570,7 +570,7 @@ void main() {
         ),
       );
       final sw = tester.widget<CupertinoSwitch>(find.byType(CupertinoSwitch));
-      expect(sw.activeTrackColor, JamColors.light.success);
+      expect(sw.activeTrackColor, JamColors.light.tintFilled);
       await tester.tap(find.byType(CupertinoSwitch));
       await tester.pumpAndSettle();
       expect(value, isTrue);

@@ -134,6 +134,7 @@ class JamTransport extends StatelessWidget {
           glyph: _kPlayGlyph,
           hit: _kPlayHit,
           loading: loading,
+          primary: true,
           label: loading
               ? JamTransportStrings.loading
               : playing
@@ -199,6 +200,7 @@ class _TransportButton extends StatelessWidget {
     required this.label,
     required this.onPressed,
     this.loading = false,
+    this.primary = false,
   });
 
   final IconData icon;
@@ -207,22 +209,27 @@ class _TransportButton extends StatelessWidget {
   final String label;
   final VoidCallback? onPressed;
   final bool loading;
+  final bool primary;
 
   @override
   Widget build(BuildContext context) {
     final reduced = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
     final enabled = onPressed != null;
     final Widget face = loading
-        ? const CupertinoActivityIndicator(
+        ? CupertinoActivityIndicator(
             key: ValueKey<String>('loading'),
             radius: 14,
-            color: JamNowPlayingColors.text,
+            color: primary
+                ? JamNowPlayingColors.selectedGlyph
+                : JamNowPlayingColors.text,
           )
         : Icon(
             icon,
             key: ValueKey<IconData>(icon),
-            size: glyph,
-            color: JamNowPlayingColors.text,
+            size: primary ? 32 : glyph,
+            color: primary
+                ? JamNowPlayingColors.selectedGlyph
+                : JamNowPlayingColors.text,
           );
 
     return Semantics(
@@ -238,9 +245,15 @@ class _TransportButton extends StatelessWidget {
         child: JamPressable(
           onTap: onPressed,
           pressedOpacity: 0.5,
-          child: SizedBox(
+          child: Container(
             width: hit,
             height: hit,
+            decoration: primary
+                ? BoxDecoration(
+                    color: const Color(0xFFF7F2EE),
+                    borderRadius: BorderRadius.circular(26),
+                  )
+                : null,
             child: Center(
               child: AnimatedSwitcher(
                 duration: reduced ? Duration.zero : JamDuration.fast,

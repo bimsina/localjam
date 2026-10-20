@@ -125,7 +125,9 @@ void main() {
   });
 
   group('JamBackdropView', () {
-    testWidgets('the placeholder is a flat #1C1C1E, no image', (tester) async {
+    testWidgets('the placeholder uses matte charcoal without an image', (
+      tester,
+    ) async {
       await pumpTile(
         tester,
         const SizedBox(
@@ -135,15 +137,20 @@ void main() {
         ),
       );
       expect(find.byType(Image), findsNothing);
+      final decoration = tester
+          .widgetList<DecoratedBox>(find.byType(DecoratedBox))
+          .map((w) => w.decoration)
+          .whereType<BoxDecoration>()
+          .firstWhere((d) => d.gradient != null);
       expect(
-        tester
-            .widgetList<ColoredBox>(find.byType(ColoredBox))
-            .any((b) => b.color == const Color(0xFF1C1C1E)),
-        isTrue,
+        decoration.gradient!.colors.last,
+        JamNowPlayingColors.backdropPlaceholder,
       );
     });
 
-    testWidgets('a cover is blurred under its overlay', (tester) async {
+    testWidgets('cover color settles into charcoal behind controls', (
+      tester,
+    ) async {
       final backdrop = JamBackdrop(
         id: 'a',
         image: MemoryImage(_pixel),
@@ -158,14 +165,17 @@ void main() {
           child: JamBackdropView(backdrop: backdrop),
         ),
       );
-      expect(find.byType(ImageFiltered), findsOneWidget);
-      expect(find.byType(Image), findsOneWidget);
+      final decoration = tester
+          .widgetList<DecoratedBox>(find.byType(DecoratedBox))
+          .map((w) => w.decoration)
+          .whereType<BoxDecoration>()
+          .firstWhere((d) => d.gradient != null);
+      expect(decoration.gradient!.colors.first, backdrop.base);
       expect(
-        tester
-            .widgetList<ColoredBox>(find.byType(ColoredBox))
-            .any((b) => b.color.a > 0.29 && b.color.a < 0.31),
-        isTrue,
+        decoration.gradient!.colors.last,
+        JamNowPlayingColors.backdropPlaceholder,
       );
+      expect(find.byType(ImageFiltered), findsNothing);
     });
   });
 }

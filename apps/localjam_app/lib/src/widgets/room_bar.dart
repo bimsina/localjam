@@ -187,7 +187,7 @@ class JamRoomBar extends StatelessWidget {
       },
       child: JamBlurSurface(
         shape: radius == null
-            ? const StadiumBorder()
+            ? RoundedRectangleBorder(borderRadius: BorderRadius.circular(20))
             : RoundedRectangleBorder(borderRadius: radius),
         border: BorderSide(color: colors.separator, width: 0.5),
         child: SizedBox(
@@ -513,7 +513,7 @@ class _EndedBar extends StatelessWidget {
         pressedOpacity: 0.7,
         child: JamBlurSurface(
           shape: radius == null
-              ? const StadiumBorder()
+              ? RoundedRectangleBorder(borderRadius: BorderRadius.circular(20))
               : RoundedRectangleBorder(borderRadius: radius),
           border: BorderSide(color: colors.separator, width: 0.5),
           child: SizedBox(

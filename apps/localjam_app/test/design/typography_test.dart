@@ -23,7 +23,7 @@ double contrast(Color fg, Color bg) {
 }
 
 void main() {
-  test('no bundled family: the platform system face, named per platform', () {
+  test('Manrope headings and platform-native body text', () {
     final ios = buildJamTypeScale(
       platform: TargetPlatform.iOS,
       color: JamColors.light.label,
@@ -31,8 +31,8 @@ void main() {
     expect(ios.body.fontFamily, 'CupertinoSystemText');
     expect(ios.footnote.fontFamily, 'CupertinoSystemText');
     // SF switches to its Display cut at 20 pt and up.
-    expect(ios.title3.fontFamily, 'CupertinoSystemDisplay');
-    expect(ios.largeTitle.fontFamily, 'CupertinoSystemDisplay');
+    expect(ios.title3.fontFamily, 'Manrope');
+    expect(ios.largeTitle.fontFamily, 'Manrope');
 
     final android = buildJamTypeScale(
       platform: TargetPlatform.android,
@@ -67,10 +67,10 @@ void main() {
       expect(style.letterSpacing, t);
     }
 
-    check(s.largeTitle, 34, 41, FontWeight.w700, 0.4);
-    check(s.title1, 28, 34, FontWeight.w700, 0.38);
-    check(s.title2, 22, 28, FontWeight.w700, -0.26);
-    check(s.title3, 20, 25, FontWeight.w600, -0.45);
+    check(s.largeTitle, 34, 41, FontWeight.w700, -1.2);
+    check(s.title1, 28, 36, FontWeight.w700, -0.8);
+    check(s.title2, 22, 29, FontWeight.w700, -0.5);
+    check(s.title3, 20, 27, FontWeight.w600, -0.4);
     check(s.headline, 17, 22, FontWeight.w600, -0.43);
     check(s.body, 17, 22, FontWeight.w400, -0.43);
     check(s.callout, 16, 21, FontWeight.w400, -0.31);
@@ -92,7 +92,7 @@ void main() {
     ]) {
       final s = buildJamTypeScale(platform: p, color: JamColors.light.label);
       expect(s.body.letterSpacing, 0);
-      expect(s.largeTitle.letterSpacing, 0);
+      expect(s.largeTitle.letterSpacing, -1.2);
     }
   });
 
@@ -156,12 +156,12 @@ void main() {
       ]) {
         expect(contrast(c.label, ground), greaterThanOrEqualTo(4.5));
         // Apple's secondaryLabel: 3:1 is its design floor on light grounds.
-        expect(contrast(c.secondaryLabel, ground), greaterThanOrEqualTo(3));
+        expect(contrast(c.secondaryLabel, ground), greaterThanOrEqualTo(4.5));
       }
       expect(contrast(c.tint, c.background), greaterThanOrEqualTo(4.5));
       expect(contrast(c.warning, c.background), greaterThanOrEqualTo(4.5));
       // Filled-button labels (17 semibold): at least the large-text floor.
-      expect(contrast(c.onTint, c.tint), greaterThanOrEqualTo(3));
+      expect(contrast(c.onTint, c.tintFilled), greaterThanOrEqualTo(4.5));
     }
   });
 }

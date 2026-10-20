@@ -100,6 +100,23 @@ class QueuePanel extends StatefulWidget {
 
 class _QueuePanelState extends State<QueuePanel> {
   final List<StreamSubscription<Object?>> _subs = [];
+  final Map<String, Future<Uint8List?>> _covers = {};
+
+  Future<Uint8List?>? _coverFor(MediaItem item) {
+    final id = item.artworkId;
+    if (id == null) return null;
+    return _covers.putIfAbsent(id, () {
+      late final Future<Uint8List?> request;
+      request = _engine.artworkFor(item).then((bytes) {
+        // A temporary miss must be retryable after a reconnect or queue update.
+        if (bytes == null && identical(_covers[id], request)) {
+          _covers.remove(id);
+        }
+        return bytes;
+      });
+      return request;
+    });
+  }
 
   /// mediaIds the list has already drawn, so only genuinely new rows play the
   /// insert animation.
@@ -152,6 +169,7 @@ class _QueuePanelState extends State<QueuePanel> {
   void didUpdateWidget(QueuePanel oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (!identical(oldWidget.engine, widget.engine)) {
+      _covers.clear();
       _unbind(oldWidget.engine);
       _bind();
     }
@@ -207,6 +225,8 @@ class _QueuePanelState extends State<QueuePanel> {
   Widget build(BuildContext context) {
     final session = JamSession.of(context);
     _pruneRemoved(_engine.playlist);
+    final artworkIds = {for (final item in _engine.playlist) item.artworkId};
+    _covers.removeWhere((id, _) => !artworkIds.contains(id));
     final playlist = [
       for (final item in _engine.playlist)
         if (!_removing.containsKey(item.mediaId)) item,
@@ -235,6 +255,7 @@ class _QueuePanelState extends State<QueuePanel> {
       // looks for it there, and the insert animation wraps the row.
       key: ValueKey(item.mediaId),
       child: _QueueRow(
+        artwork: _coverFor(item),
         engine: _engine,
         item: item,
         horizontalPadding: pad,
@@ -270,6 +291,7 @@ class _QueuePanelState extends State<QueuePanel> {
                 // False when there is nothing to retry any more — it
                 // landed, or is already on its way. Say so rather than
                 // leaving a tap that did nothing.
+                if (item.artworkId != null) _covers.remove(item.artworkId);
                 if (!guest.retryFetch(item.mediaId)) {
                   session.notify(kJamIntentFailed, tone: JamNoticeTone.warning);
                 }
@@ -629,6 +651,7 @@ class _QueueRow extends StatelessWidget {
   const _QueueRow({
     required this.engine,
     required this.item,
+    required this.artwork,
     required this.horizontalPadding,
     required this.animateIn,
     required this.canRemove,
@@ -641,6 +664,7 @@ class _QueueRow extends StatelessWidget {
 
   final JamEngine engine;
   final MediaItem item;
+  final Future<Uint8List?>? artwork;
   final double horizontalPadding;
   final bool animateIn;
   final bool canRemove;
@@ -714,7 +738,6 @@ class _QueueRow extends StatelessWidget {
 
     // The row's artwork, fetched once and shared by the row and its lifted
     // copy (the long-press preview).
-    final artwork = item.artworkId == null ? null : engine.artworkFor(item);
 
     /// The row. [preview] is the copy that lifts out of the list under the
     /// long-press menu: the same content at the same place, with nothing to

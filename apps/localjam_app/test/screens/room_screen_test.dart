@@ -84,9 +84,9 @@ void main() {
     );
     expect(find.text('1'), findsNothing);
     // Sound Offset is a slider, not a speaker (a speaker reads as volume).
-    expect(find.byIcon(CupertinoIcons.slider_horizontal_3), findsOneWidget);
+    expect(find.byIcon(CupertinoIcons.slider_horizontal_3), findsNothing);
     expect(find.byIcon(CupertinoIcons.speaker_2), findsNothing);
-    expect(find.bySemanticsLabel(JamRoomStrings.soundOffset), findsOneWidget);
+    expect(find.bySemanticsLabel(JamRoomStrings.soundOffset), findsNothing);
     expect(find.bySemanticsLabel(JamRoomStrings.queue), findsOneWidget);
     // An iOS pull-down, not a Material popup.
     expect(find.byType(PopupMenuButton<Object?>), findsNothing);
@@ -675,14 +675,14 @@ void main() {
     await tester.pumpAndSettle();
     // Every action appears once (§10.1): the ••• holds only what has no
     // control of its own on the screen.
-    for (final item in [JamRoomStrings.diagnostics, JamRoomStrings.endJam]) {
+    for (final item in [
+      JamRoomStrings.soundOffset,
+      JamRoomStrings.diagnostics,
+      JamRoomStrings.endJam,
+    ]) {
       expect(find.text(item), findsOneWidget, reason: item);
     }
-    for (final item in [
-      JamRoomStrings.invite,
-      JamRoomStrings.people,
-      JamRoomStrings.soundOffset,
-    ]) {
+    for (final item in [JamRoomStrings.invite, JamRoomStrings.people]) {
       expect(find.text(item), findsNothing, reason: item);
     }
 
@@ -777,7 +777,7 @@ void main() {
     await leaveTestSession(tester, session);
   });
 
-  testWidgets('a paused cover springs back to 0.86', (tester) async {
+  testWidgets('a paused cover springs back to 0.96', (tester) async {
     final session = testSession();
     await tester.runAsync(() async {
       await session.startHost(
@@ -801,7 +801,7 @@ void main() {
         )
         .map((t) => t.transform.entry(0, 0))
         .toList();
-    expect(scale, contains(closeTo(0.86, 0.001)));
+    expect(scale, contains(closeTo(0.96, 0.001)));
 
     await leaveTestSession(tester, session);
   });

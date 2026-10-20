@@ -203,5 +203,5 @@ patches are all welcome. Start with [`CONTRIBUTING.md`](CONTRIBUTING.md) and
 [MIT](LICENSE) © Bibek Timsina. Vendored third-party code keeps its own
 licenses — `packages/third_party/bonsoir_darwin/LICENSE` (MIT, Skyost),
 `packages/localjam_audio/src/third_party/LICENSES.md` (miniaudio, dr_libs,
-stb_vorbis), and Plus Jakarta Sans under the OFL 1.1
+stb_vorbis), and Manrope under the OFL 1.1
 (`apps/localjam_app/assets/fonts/OFL.txt`).

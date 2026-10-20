@@ -63,6 +63,30 @@ void main() {
       expect(find.text(JamTrackRowStrings.addedByYou), findsOneWidget);
     });
 
+    testWidgets('artist and contributor remain visible at large text sizes', (
+      tester,
+    ) async {
+      for (final scale in [1.0, 2.0, 3.0]) {
+        await pumpRow(
+          tester,
+          MediaQuery(
+            data: MediaQueryData(textScaler: TextScaler.linear(scale)),
+            child: const Center(
+              child: JamTrackRow(
+                title: 'Blue Moon',
+                byline: 'Billie',
+                addedByName: 'Mia',
+                duration: Duration(minutes: 3, seconds: 42),
+              ),
+            ),
+          ),
+        );
+        expect(find.text('Billie'), findsOneWidget);
+        expect(find.text('Added by Mia · 3:42'), findsOneWidget);
+        expect(tester.takeException(), isNull);
+      }
+    });
+
     testWidgets('marks the current song in tint and announces it', (
       tester,
     ) async {

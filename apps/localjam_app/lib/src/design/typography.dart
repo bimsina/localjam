@@ -1,7 +1,7 @@
 /// The LocalJam type scale (DESIGN_SPEC v3 §3).
 ///
-/// The platform's own face — SF Pro on iOS/macOS, Roboto on Android, Segoe UI
-/// on Windows, the platform default on Linux — at iOS's text-style sizes. SF's
+/// Manrope gives headings their identity. Body copy uses SF Pro on iOS/macOS,
+/// Roboto on Android, Segoe UI on Windows, and the platform default on Linux. SF's
 /// tracking table is applied on Apple platforms only; other faces track at 0.
 ///
 /// Screens never hand-roll a size: they read a named getter
@@ -42,13 +42,13 @@ class JamTypeScale extends ThemeExtension<JamTypeScale> {
   /// 34/41 bold. Large nav titles, onboarding.
   final TextStyle largeTitle;
 
-  /// 28/34 bold.
+  /// 28/36 bold.
   final TextStyle title1;
 
-  /// 22/28 bold. Empty-state and terminal-state titles, detail headers.
+  /// 22/29 bold. Empty-state and terminal-state titles, detail headers.
   final TextStyle title2;
 
-  /// 20/25 semibold. Section titles ("Recent"), the Now Playing title.
+  /// 20/27 semibold. Section titles ("Recent").
   final TextStyle title3;
 
   /// 17/22 semibold. Inline nav titles, sheet titles, alert titles.
@@ -183,10 +183,30 @@ JamTypeScale buildJamTypeScale({
   }
 
   return JamTypeScale(
-    largeTitle: style(34, 41, FontWeight.w700, 0.4),
-    title1: style(28, 34, FontWeight.w700, 0.38),
-    title2: style(22, 28, FontWeight.w700, -0.26),
-    title3: style(20, 25, FontWeight.w600, -0.45),
+    largeTitle: style(
+      34,
+      41,
+      FontWeight.w700,
+      0,
+    ).copyWith(fontFamily: 'Manrope', letterSpacing: -1.2),
+    title1: style(
+      28,
+      36,
+      FontWeight.w700,
+      0,
+    ).copyWith(fontFamily: 'Manrope', letterSpacing: -0.8),
+    title2: style(
+      22,
+      29,
+      FontWeight.w700,
+      0,
+    ).copyWith(fontFamily: 'Manrope', letterSpacing: -0.5),
+    title3: style(
+      20,
+      27,
+      FontWeight.w600,
+      0,
+    ).copyWith(fontFamily: 'Manrope', letterSpacing: -0.4),
     headline: style(17, 22, FontWeight.w600, -0.43),
     body: style(17, 22, FontWeight.w400, -0.43),
     callout: style(16, 21, FontWeight.w400, -0.31),
@@ -243,10 +263,10 @@ extension JamTypography on BuildContext {
   /// 34/41 bold.
   TextStyle get jamLargeTitle => jamType.largeTitle;
 
-  /// 28/34 bold.
+  /// 28/36 bold.
   TextStyle get jamTitle1 => jamType.title1;
 
-  /// 22/28 bold.
+  /// 22/29 bold.
   TextStyle get jamTitle2 => jamType.title2;
 
   /// 20/25 semibold.

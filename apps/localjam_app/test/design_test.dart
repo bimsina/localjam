@@ -31,29 +31,29 @@ void main() {
     }
   });
 
-  test('tokens are the Apple system values from the spec', () {
+  test('tokens express the warm LocalJam palette', () {
     const l = JamColors.light;
     const d = JamColors.dark;
-    expect(l.background, const Color(0xFFFFFFFF));
-    expect(d.background, const Color(0xFF000000));
-    expect(l.groupedBackground, const Color(0xFFF2F2F7));
-    expect(d.groupedSurface, const Color(0xFF1C1C1E));
-    expect(d.elevatedGroupedSurface, const Color(0xFF2C2C2E));
-    expect(l.tint, const Color(0xFFD92C64));
-    expect(d.tint, const Color(0xFFFF4F82));
-    expect(l.success, const Color(0xFF34C759));
-    expect(l.danger, const Color(0xFFFF3B30));
-    expect(d.danger, const Color(0xFFFF453A));
-    expect(l.separator.a, closeTo(0.29, 0.01));
-    expect(l.secondaryLabel.a, closeTo(0.6, 0.01));
-    expect(l.material.a, closeTo(0.72, 0.01));
+    expect(l.background, const Color(0xFFFAF8F5));
+    expect(d.background, const Color(0xFF191719));
+    expect(l.groupedBackground, const Color(0xFFF2EFEB));
+    expect(d.groupedSurface, const Color(0xFF252225));
+    expect(d.elevatedGroupedSurface, const Color(0xFF302B2F));
+    expect(l.tint, const Color(0xFFB82F59));
+    expect(d.tint, const Color(0xFFF28AA7));
+    expect(l.success, const Color(0xFF3E8068));
+    expect(l.danger, const Color(0xFFC0393E));
+    expect(d.danger, const Color(0xFFFF9190));
+    expect(l.separator.a, closeTo(0.14, 0.01));
+    expect(l.secondaryLabel.a, closeTo(1, 0.01));
+    expect(l.material.a, closeTo(0.96, 0.01));
     expect(JamShadow.artwork.single.blurRadius, 30);
     expect(JamShadow.artwork.single.offset, const Offset(0, 12));
     // One iOS era (spec §10.3): iOS 26's rounder alerts, menus and sheets.
     expect(JamRadius.alert, 34);
     expect(JamRadius.menu, 22);
     expect(JamRadius.sheetFloating, 38);
-    expect(JamRadius.section, 26);
+    expect(JamRadius.section, 20);
     // A lone 44 row is not a pill; a taller block keeps the full 26.
     expect(JamRadius.sectionFor(44), lessThan(22));
     expect(JamRadius.sectionFor(120), JamRadius.section);

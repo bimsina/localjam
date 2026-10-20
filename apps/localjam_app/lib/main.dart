@@ -10,6 +10,11 @@ import 'src/state/error_log.dart';
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
   _installErrorHandlers();
+  LicenseRegistry.addLicense(() async* {
+    yield LicenseEntryWithLineBreaks([
+      'Manrope',
+    ], await rootBundle.loadString('assets/fonts/OFL.txt'));
+  });
   // The app paints its own ground behind both system bars, so Android's
   // navigation bar is left transparent rather than being a grey strip the
   // palette never asked for. The glyph tinting comes from the theme's

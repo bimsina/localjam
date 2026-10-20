@@ -1,4 +1,4 @@
-/// The button family (DESIGN_SPEC v3 §5): capsules, no shadows, no ripples.
+/// The button family: softly squared corners, no shadows, no ripples.
 ///
 /// ```dart
 /// JamButton.filled(label: 'Start a Jam', expand: true, onPressed: _start)
@@ -270,7 +270,12 @@ class JamButton extends StatelessWidget {
       padding: padding,
       decoration: ground == null
           ? null
-          : ShapeDecoration(color: ground, shape: const StadiumBorder()),
+          : ShapeDecoration(
+              color: ground,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(large ? 16 : 10),
+              ),
+            ),
       // Centred vertically, but hugging its label across unless [expand]:
       // a Container's own alignment would stretch it to any width it is
       // offered.

@@ -1,5 +1,21 @@
 # Physical-device test checklist
 
+## Latest design verification — 2026-10-19
+
+The current UI built and ran on two iOS 27 simulators and an Android API 36.1
+emulator. Nearby discovery, joining, the shared queue, iOS guest upload,
+host pause, live guest-policy updates and deliberate session ending were
+exercised. See the [native capture report](docs/screenshots/native-2026-10-19/README.md)
+and [26 screenshots](docs/screenshots/native-2026-10-19/index.html).
+
+**This run does not confirm audio synchronization:** Android showed Out of sync,
+with −862.6 ms drift and Resync recorded. GPU acceleration was disabled in the
+AVD, which also showed System UI unresponsiveness. An accelerated-emulator and
+physical-device timing rerun remains required. Earlier drift figures below are
+historical results, not results for this design pass.
+
+## Hardware coverage
+
 What simulators could not verify — run these on real hardware. Everything
 else (sync math, transport, lifecycle, end-of-media, reconnect) is covered by
 the 600-test suite and live simulator runs (drift ≤ 10 ms across three
@@ -96,9 +112,9 @@ devices, iOS + Android).
     and Android, in bright light and on a dimmed host screen. The join confirm
     must appear and the guest land in the room. Simulators have no camera; the
     2026-10-17 run only decoded the QR from a screenshot.
-19. **Nearby on Android over real Wi-Fi** — the Android emulator sits behind
-    NAT and never sees a room; on a real phone the host must appear under
-    Nearby and join in one tap (and the host must not see its own room).
+19. **Nearby on Android over real Wi-Fi** — the 2026-10-19 emulator run
+    discovered and joined an iOS host through Nearby. Repeat on a real phone:
+    the host must appear and join in one tap (and must not see its own room).
 20. **Host asleep (§3.5) on a real iPhone** — host pauses, locks for 1–2 min,
     unlocks. Guests must say "The host's phone is asleep" (controls dimmed,
     "You can add music when it wakes" in the queue), not "Reconnecting…", and

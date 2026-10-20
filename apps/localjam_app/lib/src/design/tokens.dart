@@ -118,62 +118,60 @@ class JamColors extends ThemeExtension<JamColors> {
   Color get tintFilled => _tintFilled ?? tint;
   final Color? _tintFilled;
 
-  /// The light palette.
+  /// Warm paper and ink, with raspberry reserved for interaction.
   static const JamColors light = JamColors(
-    background: Color(0xFFFFFFFF),
-    groupedBackground: Color(0xFFF2F2F7),
-    groupedSurface: Color(0xFFFFFFFF),
-    elevated: Color(0xFFFFFFFF),
-    elevatedGroupedBackground: Color(0xFFF2F2F7),
-    elevatedGroupedSurface: Color(0xFFFFFFFF),
-    fill: Color(0x33787880),
-    fillSecondary: Color(0x1F787880),
-    fillPressed: Color(0x0F000000),
-    separator: Color(0x4A3C3C43),
-    label: Color(0xFF000000),
-    secondaryLabel: Color(0x993C3C43),
-    tertiaryLabel: Color(0x4D3C3C43),
-    tint: Color(0xFFD92C64),
-    tintPressed: Color(0xFFB31F51),
-    tintFill: Color(0x1FD92C64),
+    background: Color(0xFFFAF8F5),
+    groupedBackground: Color(0xFFF2EFEB),
+    groupedSurface: Color(0xFFFFFEFC),
+    elevated: Color(0xFFFAF8F5),
+    elevatedGroupedBackground: Color(0xFFFAF8F5),
+    elevatedGroupedSurface: Color(0xFFFFFEFC),
+    fill: Color(0xFFE8E3DE),
+    fillSecondary: Color(0xFFF0EBE6),
+    fillPressed: Color(0x102C2529),
+    separator: Color(0x242C2529),
+    label: Color(0xFF292428),
+    secondaryLabel: Color(0xFF71686D),
+    tertiaryLabel: Color(0xFF9B9196),
+    tint: Color(0xFFB82F59),
+    tintPressed: Color(0xFF922343),
+    tintFill: Color(0xFFF6E3E8),
     onTint: Color(0xFFFFFFFF),
-    success: Color(0xFF34C759),
-    warning: Color(0xFFC93400),
-    danger: Color(0xFFFF3B30),
-    scrim: Color(0x66000000),
-    material: Color(0xB8FFFFFF),
-    glass: Color(0x2EFFFFFF),
-    tintFilled: Color(0xFFD92C64),
+    success: Color(0xFF3E8068),
+    warning: Color(0xFFA54C20),
+    danger: Color(0xFFC0393E),
+    scrim: Color(0x66211C20),
+    material: Color(0xF5FAF8F5),
+    glass: Color(0x14FFFFFF),
+    tintFilled: Color(0xFFB82F59),
   );
 
-  /// The dark palette: true black, Apple's elevated greys.
+  /// Warm charcoal keeps dark mode intimate without a purple cast.
   static const JamColors dark = JamColors(
-    background: Color(0xFF000000),
-    groupedBackground: Color(0xFF000000),
-    groupedSurface: Color(0xFF1C1C1E),
-    elevated: Color(0xFF1C1C1E),
-    elevatedGroupedBackground: Color(0xFF1C1C1E),
-    elevatedGroupedSurface: Color(0xFF2C2C2E),
-    fill: Color(0x5C787880),
-    fillSecondary: Color(0x3D787880),
-    fillPressed: Color(0x1AFFFFFF),
-    separator: Color(0x99545458),
-    label: Color(0xFFFFFFFF),
-    secondaryLabel: Color(0x99EBEBF5),
-    tertiaryLabel: Color(0x4DEBEBF5),
-    tint: Color(0xFFFF4F82),
-    tintPressed: Color(0xFFE63B6F),
-    tintFill: Color(0x33FF4F82),
+    background: Color(0xFF191719),
+    groupedBackground: Color(0xFF191719),
+    groupedSurface: Color(0xFF252225),
+    elevated: Color(0xFF211E21),
+    elevatedGroupedBackground: Color(0xFF211E21),
+    elevatedGroupedSurface: Color(0xFF302B2F),
+    fill: Color(0xFF3B3439),
+    fillSecondary: Color(0xFF2E292D),
+    fillPressed: Color(0x14FFFFFF),
+    separator: Color(0x29EFE4E8),
+    label: Color(0xFFF7F2EE),
+    secondaryLabel: Color(0xFFBEB3B8),
+    tertiaryLabel: Color(0xFF8F828A),
+    tint: Color(0xFFF28AA7),
+    tintPressed: Color(0xFFD96F8F),
+    tintFill: Color(0xFF432A34),
     onTint: Color(0xFFFFFFFF),
-    success: Color(0xFF30D158),
-    warning: Color(0xFFFF9F0A),
-    danger: Color(0xFFFF453A),
-    scrim: Color(0x99000000),
-    material: Color(0xB81C1C1E),
-    glass: Color(0x2EFFFFFF),
-    // #FF4F82 under white is 3.1:1; the light tint is 4.7:1 and still reads
-    // as the same raspberry on black.
-    tintFilled: Color(0xFFD92C64),
+    success: Color(0xFF79B79C),
+    warning: Color(0xFFEAAF79),
+    danger: Color(0xFFFF9190),
+    scrim: Color(0x99211C20),
+    material: Color(0xF5252225),
+    glass: Color(0x14FFFFFF),
+    tintFilled: Color(0xFFB82F59),
   );
 
   /// The light palette under the system's Increase Contrast: secondary text
@@ -362,7 +360,7 @@ abstract final class JamNowPlayingColors {
   static const Color placeholderGlyph = Color(0x80FFFFFF);
 
   /// The backdrop when the cover is a placeholder: a deep neutral…
-  static const Color backdropPlaceholder = Color(0xFF1C1C1E);
+  static const Color backdropPlaceholder = Color(0xFF211E21);
 
   /// …with a faint radial lift behind the cover, so a song without art
   /// still reads as Now Playing rather than a loading screen (§10.7).
@@ -441,10 +439,10 @@ abstract final class JamAvatarPalette {
 /// [JamColors.glass].
 abstract final class JamBlur {
   /// Chrome: nav bars, mini player, menus, toasts.
-  static const double material = 30;
+  static const double material = 12;
 
   /// Glass buttons over artwork.
-  static const double glass = 20;
+  static const double glass = 0;
 
   /// The Now Playing backdrop's cover blur (σ).
   static const double backdrop = 70;
@@ -573,11 +571,11 @@ abstract final class JamRadius {
   static const double artworkM = 12;
 
   /// The Now Playing hero cover.
-  static const double nowPlaying = 12;
+  static const double nowPlaying = 18;
 
   /// An inset-grouped section (iOS 26's rounder grouped look). One value
   /// app-wide.
-  static const double section = 26;
+  static const double section = 20;
 
   /// The section radius for a block [height] tall: [section], but never
   /// so round that a single 44 row turns into a pill.

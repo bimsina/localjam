@@ -109,9 +109,9 @@ void main() {
       );
     });
 
-    test('the placeholder is flat #1C1C1E with no overlay', () {
+    test('the placeholder is flat #211E21 with no overlay', () {
       expect(JamBackdrop.placeholder.isPlaceholder, isTrue);
-      expect(JamBackdrop.placeholder.base, const Color(0xFF1C1C1E));
+      expect(JamBackdrop.placeholder.base, const Color(0xFF211E21));
       expect(JamBackdrop.placeholder.overlayOpacity, 0);
     });
   });

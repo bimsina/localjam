@@ -30,7 +30,7 @@ class JamSwitch extends StatelessWidget {
     final onChanged = this.onChanged;
     Widget control = CupertinoSwitch(
       value: value,
-      activeTrackColor: colors.success,
+      activeTrackColor: colors.tintFilled,
       inactiveTrackColor: colors.fill,
       thumbColor: JamFixedColors.white,
       onChanged: onChanged == null

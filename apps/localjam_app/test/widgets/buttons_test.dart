@@ -39,7 +39,7 @@ double _opacityOf(WidgetTester tester) => tester
     .opacity;
 
 void main() {
-  testWidgets('filled: tint capsule, white 17 semibold, 50 tall', (
+  testWidgets('filled: tint rounded rectangle, white 17 semibold, 50 tall', (
     tester,
   ) async {
     await tester.pumpWidget(
@@ -47,7 +47,7 @@ void main() {
     );
     final ground = _groundOf(tester)!;
     expect(ground.color, JamColors.light.tint);
-    expect(ground.shape, isA<StadiumBorder>());
+    expect(ground.shape, isA<RoundedRectangleBorder>());
     final style = _labelStyle(tester, 'Start a Jam');
     expect(style.color, JamColors.light.onTint);
     expect(style.fontSize, 17);

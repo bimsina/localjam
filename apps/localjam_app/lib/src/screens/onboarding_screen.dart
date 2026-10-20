@@ -20,10 +20,11 @@ import '../design/tokens.dart';
 import '../design/typography.dart';
 import '../state/onboarding_prefs.dart';
 import '../widgets/buttons.dart';
+import '../widgets/brand.dart';
 
 /// Every user-facing string on this screen, in one place.
 abstract final class OnboardingStrings {
-  static const String title = 'Welcome to LocalJam';
+  static const String title = 'Your music.\nBetter together.';
 
   static const String continueLabel = 'Continue';
 
@@ -51,7 +52,7 @@ const double _contentWidth = 480;
 
 /// The title's distance from the safe area's top: a little lower than §6.9's
 /// 60, as Apple's own welcome screens sit.
-const double _titleTop = 80;
+const double _titleTop = 48;
 
 class OnboardingScreen extends StatefulWidget {
   const OnboardingScreen({super.key, this.prefs, this.onDone});
@@ -105,6 +106,8 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
+                          const JamWordmark(),
+                          const SizedBox(height: JamSpace.huge),
                           Semantics(
                             header: true,
                             // Title 1, not Large Title: at 34 pt "Welcome to
@@ -112,7 +115,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                             // Android, so the two looked different.
                             child: Text(
                               OnboardingStrings.title,
-                              style: context.jamTitle1,
+                              style: context.jamLargeTitle,
                             ),
                           ),
                           const SizedBox(height: JamSpace.huge),

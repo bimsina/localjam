@@ -1,9 +1,8 @@
 /// A song row: queue, history detail, Start a Jam's song list, the library
 /// picker (DESIGN_SPEC v3 §6.2/§6.3/§6.7).
 ///
-/// Apple Music's list row: cover 44, title (body), a subheadline line —
-/// "Added by Mia · 3:42", or the artist — and an optional drag handle. The
-/// jam's social contract is in the words ("Added by you"), not in a face.
+/// Cover, song title and artist lead. Contributor and duration sit on a
+/// quieter third line when both artist and contributor are available.
 /// [JamTrackRow.onBackdrop] renders it white for the queue that opens in
 /// place on Now Playing.
 ///
@@ -11,6 +10,7 @@
 library;
 
 import 'dart:typed_data';
+import 'dart:math' as math;
 
 import 'package:flutter/cupertino.dart';
 
@@ -71,7 +71,7 @@ class JamTrackRow extends StatelessWidget implements JamSelfSeparatingRow {
   /// The song title, already stripped of its file extension.
   final String title;
 
-  /// Artist / album. Shown when there is no [addedByName].
+  /// Artist / album, kept visible above the contributor credit.
   final String? byline;
 
   /// Cover bytes, when in hand.
@@ -148,7 +148,8 @@ class JamTrackRow extends StatelessWidget implements JamSelfSeparatingRow {
       parts.add(JamTrackRowStrings.addedByYou);
     } else if (adder != null && adder.isNotEmpty) {
       parts.add('${JamTrackRowStrings.addedBy} $adder');
-    } else if (byline != null && byline!.isNotEmpty) {
+    }
+    if (parts.isEmpty && byline != null && byline!.isNotEmpty) {
       parts.add(byline!);
     }
     final d = duration;
@@ -169,6 +170,11 @@ class JamTrackRow extends StatelessWidget implements JamSelfSeparatingRow {
     final tertiary = onBackdrop
         ? JamNowPlayingColors.tertiary
         : colors.tertiaryLabel;
+    final hasArtistAndCredit =
+        !hasError &&
+        byline != null &&
+        byline!.isNotEmpty &&
+        (addedByYou || (addedByName?.isNotEmpty ?? false));
     final subtitle = hasError
         ? (errorText ?? JamTrackRowStrings.failed)
         : _subtitle();
@@ -180,8 +186,20 @@ class JamTrackRow extends StatelessWidget implements JamSelfSeparatingRow {
 
     final status = trailing ?? _status(tertiary);
 
+    final scaler = MediaQuery.textScalerOf(context);
+    final textHeight =
+        scaler.scale(17) * (22 / 17) +
+        (hasArtistAndCredit ? scaler.scale(15) * (20 / 15) : 0) +
+        (subtitle == null
+            ? 0
+            : hasArtistAndCredit
+            ? scaler.scale(12) * (16 / 12)
+            : scaler.scale(15) * (20 / 15));
     Widget row = SizedBox(
-      height: kJamTrackRowHeight,
+      height: math.max(
+        hasArtistAndCredit ? 80 : kJamTrackRowHeight,
+        textHeight + 16,
+      ),
       child: Padding(
         padding: contentPadding,
         child: Row(
@@ -208,20 +226,32 @@ class JamTrackRow extends StatelessWidget implements JamSelfSeparatingRow {
                     overflow: TextOverflow.ellipsis,
                     style: titleStyle,
                   ),
+                  if (hasArtistAndCredit)
+                    Text(
+                      byline!,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: context.jamSubheadline.copyWith(color: secondary),
+                    ),
                   if (subtitle != null)
                     Text(
                       subtitle,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: jamTabular(context.jamSubheadline).copyWith(
-                        color: !hasError
-                            ? secondary
-                            // On the backdrop, the pale red tuned for the
-                            // art (system red on a dark cover is ~3:1).
-                            : onBackdrop
-                            ? JamNowPlayingColors.destructive
-                            : colors.danger,
-                      ),
+                      style:
+                          jamTabular(
+                            hasArtistAndCredit
+                                ? context.jamCaption1
+                                : context.jamSubheadline,
+                          ).copyWith(
+                            color: !hasError
+                                ? secondary
+                                // On the backdrop, the pale red tuned for the
+                                // art (system red on a dark cover is ~3:1).
+                                : onBackdrop
+                                ? JamNowPlayingColors.destructive
+                                : colors.danger,
+                          ),
                     ),
                 ],
               ),

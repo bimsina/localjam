@@ -185,8 +185,8 @@ void main() {
     // No rule above the first song: the one hairline left is the separator
     // between the two rows.
     expect(find.byType(JamHairline), findsOneWidget);
-    expect(find.byType(JamTrackRow), findsNWidgets(2));
     expect(find.text('Added by Neon Walrus · 3:42'), findsOneWidget);
+    await tester.scrollUntilVisible(find.text('Added by you · 3:00'), 80);
     expect(find.text('Added by you · 3:00'), findsOneWidget);
     final footer = find.text(
       HistoryStrings.songsAndLength(2, const Duration(seconds: 402)),

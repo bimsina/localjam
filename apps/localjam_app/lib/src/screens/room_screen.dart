@@ -53,7 +53,6 @@ import '../widgets/diagnostics_sheet.dart';
 import '../widgets/dialogs.dart';
 import '../widgets/drag_to_dismiss.dart';
 import '../widgets/empty_state.dart';
-import '../widgets/glass.dart';
 import '../widgets/menu.dart';
 import '../widgets/nudge_slider.dart';
 import '../widgets/pressable.dart';
@@ -201,7 +200,7 @@ const double _kThumb = JamArtworkSize.list;
 const double _kThumbGap = 12;
 
 /// How far the paused cover springs back (§6.3).
-const double _kPausedScale = 0.86;
+const double _kPausedScale = 0.96;
 
 /// The paused spring's length — long enough for its settle to read.
 const Duration _kPauseSpring = Duration(milliseconds: 550);
@@ -518,6 +517,11 @@ class _RoomScreenState extends State<RoomScreen>
       groups: [
         [
           JamMenuItem(
+            title: JamRoomStrings.soundOffset,
+            icon: CupertinoIcons.slider_horizontal_3,
+            onPressed: () => _openSoundOffset(engine),
+          ),
+          JamMenuItem(
             title: JamRoomStrings.diagnostics,
             icon: CupertinoIcons.waveform_path_ecg,
             onPressed: () => _openDiagnostics(engine),
@@ -555,7 +559,6 @@ class _RoomScreenState extends State<RoomScreen>
       onInvite: () => _openInvite(engine),
       onQueue: _toggleQueue,
       onPeople: () => _openPeople(engine),
-      onSoundOffset: () => _openSoundOffset(engine),
       onDiagnostics: () => _openDiagnostics(engine),
       onAdd: canAdd ? () => unawaited(jamAddToQueue(context, engine)) : null,
     );
@@ -643,7 +646,6 @@ class _Player extends StatelessWidget {
     required this.onInvite,
     required this.onQueue,
     required this.onPeople,
-    required this.onSoundOffset,
     required this.onDiagnostics,
     required this.onAdd,
   });
@@ -673,7 +675,6 @@ class _Player extends StatelessWidget {
   final VoidCallback? onInvite;
   final VoidCallback onQueue;
   final VoidCallback onPeople;
-  final VoidCallback onSoundOffset;
   final VoidCallback onDiagnostics;
   final VoidCallback? onAdd;
 
@@ -728,7 +729,6 @@ class _Player extends StatelessWidget {
       peopleSelected: peopleSelected,
       queue: wide ? null : queue,
       onPeople: onPeople,
-      onSoundOffset: onSoundOffset,
       onQueue: onQueue,
     );
 
@@ -862,7 +862,7 @@ class _StageLayout extends MultiChildLayoutDelegate {
 
     final footerH = layoutChild(
       _Slot.footer,
-      BoxConstraints.tightFor(width: math.min(w, cw + margin * 2)),
+      BoxConstraints.tightFor(width: cw),
     ).height;
     final transportH = layoutChild(
       _Slot.transport,
@@ -975,7 +975,7 @@ class _StageLayout extends MultiChildLayoutDelegate {
     );
     positionChild(
       _Slot.footer,
-      Offset(math.max(0, left - margin), lerpDouble(bigFooterY, qFooterY, t)!),
+      Offset(left, lerpDouble(bigFooterY, qFooterY, t)!),
     );
   }
 
@@ -1185,10 +1185,10 @@ class _Header extends StatelessWidget {
                 SizedBox(
                   height: _rowHeight,
                   child: Center(
-                    child: JamGlassButton(
+                    child: JamIconButton(
                       icon: CupertinoIcons.chevron_down,
                       semanticLabel: JamRoomStrings.close,
-                      onArtwork: true,
+                      color: JamNowPlayingColors.text,
                       onPressed: onClose,
                     ),
                   ),
@@ -1226,10 +1226,10 @@ class _Header extends StatelessWidget {
                   height: _rowHeight,
                   child: Center(
                     child: invite != null
-                        ? JamGlassButton(
+                        ? JamIconButton(
                             icon: CupertinoIcons.person_badge_plus,
                             semanticLabel: JamRoomStrings.invite,
-                            onArtwork: true,
+                            color: JamNowPlayingColors.text,
                             onPressed: invite,
                           )
                         // Keeps the room's name centred on the window.
@@ -1538,12 +1538,12 @@ class _TitleBlock extends StatelessWidget {
       builder: (context, _) {
         final t = JamCurve.standard.transform(queue.value);
         final titleStyle = TextStyle.lerp(
-          context.jamTitle3,
+          context.jamTitle1,
           context.jamHeadline,
           t,
         )!.copyWith(color: JamNowPlayingColors.text);
         final subtitleStyle = TextStyle.lerp(
-          context.jamTitle3.copyWith(fontWeight: FontWeight.w400),
+          context.jamBody,
           context.jamSubheadline,
           t,
         )!.copyWith(color: JamNowPlayingColors.secondary);
@@ -1595,22 +1595,21 @@ class _TitleBlock extends StatelessWidget {
           }
         } else {
           title = jamDisplayTitle(current);
-          // The credit is always shown, yours included: who put this on is
-          // the room's own news, and a solo-hosted room with no people on it
-          // at all read as a music player.
-          final addedBy = jamAddedByLabel(engine, current);
-          final credit = addedBy == null
-              ? artworkByline(current)
-              : addedBy == 'You'
-              ? JamRoomStrings.addedByYou
-              : JamRoomStrings.addedBy(addedBy);
-          subtitle = credit == null
+          // Artist is the song's identity. Contributions live in the queue.
+          final artist = current.artist?.trim();
+          final byline = artist != null && artist.isNotEmpty
+              ? artist
+              : artworkByline(current);
+          subtitle = byline == null
               ? null
-              : Text(
-                  credit,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: subtitleStyle,
+              : Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: Text(
+                    byline,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: subtitleStyle,
+                  ),
                 );
         }
 
@@ -1804,7 +1803,6 @@ class _Footer extends StatelessWidget {
     required this.peopleSelected,
     required this.queue,
     required this.onPeople,
-    required this.onSoundOffset,
     required this.onQueue,
   });
 
@@ -1821,7 +1819,6 @@ class _Footer extends StatelessWidget {
   final Animation<double>? queue;
 
   final VoidCallback onPeople;
-  final VoidCallback onSoundOffset;
   final VoidCallback onQueue;
 
   @override
@@ -1857,12 +1854,30 @@ class _Footer extends StatelessWidget {
                     : JamNowPlayingColors.clear,
                 shape: const StadiumBorder(),
               ),
-              child: JamAvatarStack(
-                names: roster,
-                colorKeys: rosterKeys,
-                size: JamAvatarSize.strip,
-                maxVisible: 3,
-                overflowColor: JamNowPlayingColors.secondary,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  JamAvatarStack(
+                    names: roster,
+                    colorKeys: rosterKeys,
+                    size: JamAvatarSize.strip,
+                    maxVisible: 3,
+                    overflowColor: JamNowPlayingColors.secondary,
+                  ),
+                  const SizedBox(width: 10),
+                  Text(
+                    'Your jam',
+                    style: context.jamFootnote.copyWith(
+                      color: JamNowPlayingColors.secondary,
+                    ),
+                  ),
+                  const SizedBox(width: 4),
+                  const Icon(
+                    CupertinoIcons.chevron_right,
+                    size: 12,
+                    color: JamNowPlayingColors.secondary,
+                  ),
+                ],
               ),
             ),
           ),
@@ -1882,29 +1897,15 @@ class _Footer extends StatelessWidget {
       height: JamMetrics.hitTarget,
       child: Row(
         children: [
-          Expanded(child: Center(child: people)),
-          Expanded(
-            child: Center(
-              // Not a speaker: in that slot a speaker reads as volume
-              // (§10.1).
-              child: _FooterIcon(
-                icon: CupertinoIcons.slider_horizontal_3,
-                semanticLabel: JamRoomStrings.soundOffset,
-                onPressed: onSoundOffset,
-              ),
+          people,
+          const Spacer(),
+          if (animation == null)
+            queueButton(queueSelected)
+          else
+            AnimatedBuilder(
+              animation: animation,
+              builder: (context, _) => queueButton(animation.value >= 0.5),
             ),
-          ),
-          Expanded(
-            child: Center(
-              child: animation == null
-                  ? queueButton(queueSelected)
-                  : AnimatedBuilder(
-                      animation: animation,
-                      builder: (context, _) =>
-                          queueButton(animation.value >= 0.5),
-                    ),
-            ),
-          ),
         ],
       ),
     );

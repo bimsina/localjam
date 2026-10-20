@@ -8,7 +8,6 @@ library;
 
 import 'dart:async';
 import 'dart:typed_data';
-import 'dart:ui' show ImageFilter;
 
 import 'package:flutter/cupertino.dart';
 import 'package:localjam_client/localjam_client.dart';
@@ -327,54 +326,26 @@ class JamBackdropView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final reduceMotion = MediaQuery.disableAnimationsOf(context);
-    final image = backdrop.image;
     final layer = KeyedSubtree(
       key: ValueKey<Object>(backdrop.id ?? 'placeholder'),
-      child: ColoredBox(
-        color: backdrop.base,
-        child: image == null
-            // The one gradient the spec allows lives on this surface.
-            // A deep neutral with a faint lift behind where the cover sits,
-            // so a song without art still reads as Now Playing.
-            ? const DecoratedBox(
-                decoration: BoxDecoration(
-                  gradient: RadialGradient(
-                    center: Alignment(0, -0.3),
-                    radius: 0.85,
-                    colors: [
-                      JamNowPlayingColors.backdropPlaceholderLift,
-                      JamNowPlayingColors.clear,
-                    ],
-                  ),
-                ),
-                child: SizedBox.expand(),
-              )
-            : Stack(
-                fit: StackFit.expand,
-                children: [
-                  ClipRect(
-                    child: ImageFiltered(
-                      imageFilter: ImageFilter.blur(
-                        sigmaX: JamBlur.backdrop,
-                        sigmaY: JamBlur.backdrop,
-                        tileMode: TileMode.mirror,
-                      ),
-                      child: Image(
-                        image: image,
-                        fit: BoxFit.cover,
-                        gaplessPlayback: true,
-                        // Downsampled: a blurred cover needs no detail.
-                        filterQuality: FilterQuality.low,
-                      ),
-                    ),
-                  ),
-                  ColoredBox(
-                    color: const Color(
-                      0xFF000000,
-                    ).withValues(alpha: backdrop.overlayOpacity),
-                  ),
-                ],
-              ),
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            stops: const [0, 0.52, 1],
+            colors: [
+              backdrop.base,
+              Color.lerp(
+                backdrop.base,
+                JamNowPlayingColors.backdropPlaceholder,
+                0.45,
+              )!,
+              JamNowPlayingColors.backdropPlaceholder,
+            ],
+          ),
+        ),
+        child: const SizedBox.expand(),
       ),
     );
 

@@ -155,7 +155,7 @@ void main() {
     // Title 1, the same row pattern as the permission primers.
     expect(
       tester.widget<Text>(find.text(OnboardingStrings.title)).style?.fontSize,
-      28,
+      34,
     );
     expect(
       tester.widget<Icon>(find.byIcon(CupertinoIcons.headphones)).size,

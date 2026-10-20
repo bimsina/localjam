@@ -30,6 +30,7 @@ import '../util/capabilities.dart';
 import '../util/network.dart';
 import '../widgets/avatar.dart';
 import '../widgets/buttons.dart';
+import '../widgets/brand.dart';
 import '../widgets/empty_state.dart';
 import '../widgets/join_link_dialog.dart';
 import '../widgets/list.dart';
@@ -116,7 +117,11 @@ String jamHostNameFromRoom(String room) =>
 bool jamRoomNamesHost(String room) => _possessiveJam.hasMatch(room.trim());
 
 class HomeScreen extends StatefulWidget {
-  const HomeScreen({super.key});
+  const HomeScreen({super.key, this.networkReader, this.loadRecords});
+
+  /// Optional data sources for deterministic previews and widget tests.
+  final Future<JamNetworkStatus> Function()? networkReader;
+  final Future<List<JamHistoryRecord>> Function()? loadRecords;
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
@@ -188,8 +193,11 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _loadRecents() async {
-    final store = await JamHistoryStore.open();
-    final records = store == null
+    final loader = widget.loadRecords;
+    final store = loader == null ? await JamHistoryStore.open() : null;
+    final records = loader != null
+        ? await loader()
+        : store == null
         ? const <JamHistoryRecord>[]
         : await store.list();
     if (!mounted) return;
@@ -213,7 +221,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _refreshNetwork() async {
-    final status = await currentNetwork();
+    final status = await (widget.networkReader ?? currentNetwork)();
     if (mounted && status.addresses.join() != _network.addresses.join()) {
       setState(() => _network = status);
     }
@@ -344,6 +352,7 @@ class _HomeScreenState extends State<HomeScreen> {
       builder: (context, rooms, _) => JamScaffold(
         title: HomeStrings.title,
         automaticallyImplyLeading: false,
+        leading: wide ? null : const JamWordmark(),
         trailing: [
           JamIconButton(
             icon: canScanQrCodes
@@ -560,7 +569,7 @@ class _RoomRow extends StatelessWidget {
               )
             : const _RoomMark(),
         leadingWidth: JamAvatarSize.list,
-        separator: separator,
+        separator: false,
         onTap: tap,
         trailing: JamButton.tinted(
           label: HomeStrings.join,
@@ -571,7 +580,22 @@ class _RoomRow extends StatelessWidget {
       ),
     );
 
-    if (!animateIn || still) return row;
+    final card = Container(
+      margin: EdgeInsets.fromLTRB(
+        JamSpace.pageFor(MediaQuery.sizeOf(context).width),
+        6,
+        JamSpace.pageFor(MediaQuery.sizeOf(context).width),
+        6,
+      ),
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      decoration: BoxDecoration(
+        color: context.jamColors.groupedSurface,
+        border: Border.all(color: context.jamColors.separator, width: 0.5),
+        borderRadius: BorderRadius.circular(JamRadius.section),
+      ),
+      child: row,
+    );
+    if (!animateIn || still) return card;
     // A one-shot rise, with no controller of its own to keep alive: the
     // tween runs once on first build and the builder is never rebuilt again.
     return TweenAnimationBuilder<double>(
@@ -585,7 +609,7 @@ class _RoomRow extends StatelessWidget {
           child: child,
         ),
       ),
-      child: row,
+      child: card,
     );
   }
 }
