@@ -112,4 +112,17 @@ void main() {
     ).receive(Uri.parse('https://example.com/join'));
     expect(handled, isEmpty);
   });
+
+  test('an http join link (§1, 1.2) is a jam link; other http is not', () {
+    final handled = <Uri>[];
+    final inbox = JamLinkInbox(onLink: handled.add, ready: () => true);
+    final http = Uri.parse(
+      'http://192.168.1.5:44100/join#v=1&token=t&name=Van',
+    );
+    inbox
+      ..receive(Uri.parse('http://192.168.1.5:44100/'))
+      ..receive(Uri.parse('http://192.168.1.5:44100/join'))
+      ..receive(http);
+    expect(handled, [http]);
+  });
 }

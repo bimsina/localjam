@@ -13,6 +13,7 @@ library;
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
+import 'package:localjam_client/localjam_client.dart' show JoinLink;
 
 /// A usable IPv4 attachment, or the absence of one.
 @immutable
@@ -163,17 +164,14 @@ bool _isIpLiteral(String value) {
   }
 }
 
-/// The `host` candidates a `localjam://join?...` URI carries, in order.
-List<String> joinUriHosts(Uri uri) => [
-  for (final host in (uri.queryParameters['host'] ?? '').split(','))
-    if (host.trim().isNotEmpty) host.trim(),
-];
+/// The `host` candidates a join URI carries, in order — either form
+/// (§1): `localjam://join?…` or the 1.2 `http://…/join#…`, whose own host is
+/// the sole candidate when its fragment lists none. Empty when [uri] is not
+/// a join link at all.
+List<String> joinUriHosts(Uri uri) => JoinLink.fromUri(uri)?.hosts ?? const [];
 
 /// The room name a join URI advertises, if any.
-String? joinUriName(Uri uri) {
-  final name = uri.queryParameters['name']?.trim();
-  return (name == null || name.isEmpty) ? null : name;
-}
+String? joinUriName(Uri uri) => JoinLink.fromUri(uri)?.displayName;
 
 /// Whether every candidate in [uri] is a local-network address — the check a
 /// link-sourced join must pass before it is offered to the user.
@@ -204,26 +202,23 @@ Future<bool> joinUriIsLocalOnlyResolved(
   return true;
 }
 
-/// Parses text a user pasted into a `localjam://join?...` URI, or null when it
-/// is not one. Tolerates surrounding whitespace and the wrapping some chat
-/// apps add ("<localjam://…>").
+/// Parses text a user pasted, scanned or was deep-linked into a join URI —
+/// either form (§1): `localjam://join?…` or the 1.2 `http://…/join#…` the
+/// host's QR carries — or null when it is neither. Tolerates surrounding
+/// whitespace and the wrapping some chat apps add ("<localjam://…>").
+///
+/// The one parser is [JoinLink]; this keeps the URI in the form it came in
+/// (a guest's own invite shows what it was given). Whatever the form, the
+/// on-LAN gate ([joinUriIsLocalOnlyResolved]) judges every candidate.
 Uri? parseJoinUri(String text) {
+  final link = JoinLink.parse(text);
+  if (link == null) return null;
+  return _schemeOf(text) == 'http' ? link.toHttpUri() : link.toLocaljamUri();
+}
+
+String _schemeOf(String text) {
   var raw = text.trim();
-  if (raw.startsWith('<') && raw.endsWith('>')) {
-    raw = raw.substring(1, raw.length - 1).trim();
-  }
-  if (raw.isEmpty) return null;
-  final Uri uri;
-  try {
-    uri = Uri.parse(raw);
-  } catch (_) {
-    return null;
-  }
-  if (uri.scheme != 'localjam') return null;
-  // The three parameters JamGuestClient.connect requires; without them the
-  // join throws a FormatException deep in the transport instead of here.
-  final params = uri.queryParameters;
-  if (joinUriHosts(uri).isEmpty) return null;
-  if (params['port'] == null || params['token'] == null) return null;
-  return uri;
+  if (raw.startsWith('<')) raw = raw.substring(1).trimLeft();
+  final colon = raw.indexOf(':');
+  return colon < 0 ? '' : raw.substring(0, colon).toLowerCase();
 }

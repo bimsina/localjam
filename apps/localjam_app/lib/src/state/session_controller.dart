@@ -584,7 +584,8 @@ class JamSessionController extends ChangeNotifier {
   /// Frame-synced playback position for the live session, or null when idle.
   JamPositionTicker? get position => _position;
 
-  /// The `localjam://join?...` URI for the room this device hosts.
+  /// The join URL for the room this device hosts — the http form (§1, 1.2)
+  /// its QR and share text carry.
   Uri? get joinUri => hostEngine?.joinUri;
 
   /// Live nearby rooms; empty while not browsing or where mDNS is blocked.
@@ -649,7 +650,8 @@ class JamSessionController extends ChangeNotifier {
     _browser?.excludedToken = next;
   }
 
-  static String? _tokenOf(Uri? uri) => uri?.queryParameters['token'];
+  static String? _tokenOf(Uri? uri) =>
+      uri == null ? null : JoinLink.fromUri(uri)?.token;
 
   /// Stops the nearby browse, and stops wanting one.
   Future<void> stopBrowsing() async {
@@ -777,7 +779,7 @@ class JamSessionController extends ChangeNotifier {
     }
 
     _joiningUri = joinUri;
-    _joiningName = roomName ?? joinUri.queryParameters['name'];
+    _joiningName = roomName ?? JoinLink.fromUri(joinUri)?.name;
     notifyListeners();
     try {
       // §9, and the reason this lives here rather than at each door: a
@@ -911,7 +913,10 @@ class JamSessionController extends ChangeNotifier {
     await leave();
   }
 
-  String? get _lastJoinName => _lastJoinUri?.queryParameters['name'];
+  String? get _lastJoinName {
+    final uri = _lastJoinUri;
+    return uri == null ? null : JoinLink.fromUri(uri)?.name;
+  }
 
   /// Claims the `starting` phase for a new session, or refuses.
   ///

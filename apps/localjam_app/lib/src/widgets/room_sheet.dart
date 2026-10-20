@@ -14,8 +14,11 @@
 /// Header rule (§10.2): People closes with **Done**; Invite, which edits
 /// nothing, with a trailing glass xmark only.
 ///
-/// The join URI never appears as text: `localjam://join?token=…` is machine
-/// text on a page about people.
+/// The join URI never appears as text: `http://…/join#token=…` is machine
+/// text on a page about people. The QR, Share Link and Copy Link all carry
+/// the http form (PROTOCOL.md §1, 1.2) — a phone camera opens it with no app
+/// installed, and the room serves its browser player there — even when this
+/// device joined from a `localjam://` link.
 library;
 
 import 'dart:async';
@@ -965,7 +968,10 @@ class InvitePanel extends StatelessWidget {
       return _Invite(
         engine: engine,
         selfName: selfName,
-        joinUri: engine.joinUri,
+        // Passed on in the form a camera can open, whichever this device
+        // joined with.
+        joinUri:
+            JoinLink.fromUri(engine.joinUri)?.toHttpUri() ?? engine.joinUri,
         caption: RoomSheetStrings.inviteOnNetwork,
         roomName: roomName,
       );

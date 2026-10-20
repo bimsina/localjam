@@ -1,4 +1,5 @@
-/// Where `localjam://` deep links wait their turn.
+/// Where `localjam://` deep links (and http join links, §1) wait their
+/// turn.
 ///
 /// Two bugs lived in the app root's link handling. On a cold start the same
 /// link was delivered twice — `getInitialLink()` and, since app_links 6, a
@@ -20,6 +21,7 @@ library;
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
+import 'package:localjam_client/localjam_client.dart' show JoinLink;
 
 class JamLinkInbox {
   JamLinkInbox({
@@ -55,7 +57,9 @@ class JamLinkInbox {
 
   /// One delivery, from whichever source.
   void receive(Uri uri) {
-    if (uri.scheme != 'localjam') return;
+    // The app's own scheme, whatever it says (the handler explains a bad
+    // one); or an http join link (§1, 1.2) that an embedder routed here.
+    if (uri.scheme != 'localjam' && JoinLink.fromUri(uri) == null) return;
     final now = _clock();
     final lastAt = _lastAt;
     if (uri == _last &&

@@ -535,7 +535,9 @@ void main() {
       expect(host.excludedToken, isNull);
 
       await host.startHost(sessionName: 'Own Room', discoverable: false);
-      final token = host.joinUri!.queryParameters['token'];
+      // The http form (§1, 1.2): the token rides the fragment.
+      expect(host.joinUri!.scheme, 'http');
+      final token = JoinLink.fromUri(host.joinUri!)?.token;
       expect(token, isNotNull);
       expect(host.excludedToken, token, reason: 'a host cannot join itself');
 

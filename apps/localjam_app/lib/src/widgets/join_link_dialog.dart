@@ -33,7 +33,7 @@ abstract final class JamJoinLinkStrings {
   static const String title = 'Join with link';
   static const String message = 'Paste a link someone shared.';
 
-  /// Not the URI scheme: `localjam://join?…` is machine text and tells the
+  /// Not the URI: `http://…/join#…` is machine text and tells the
   /// user nothing about what to put in the box. Sentence case: it's a
   /// placeholder, not a title.
   static const String hint = 'Jam link';
@@ -52,8 +52,8 @@ abstract final class JamJoinLinkStrings {
   static String confirmTitle(String name) => 'Join $name?';
 }
 
-/// Asks for a `localjam://join?...` link. Returns the parsed URI, or null if
-/// the user backed out.
+/// Asks for a join link, either form (PROTOCOL.md §1). Returns the parsed
+/// URI, or null if the user backed out.
 ///
 /// [brightness] draws the alert in that appearance whatever the app's — the
 /// scanner passes [Brightness.dark] so the alert matches its black camera
