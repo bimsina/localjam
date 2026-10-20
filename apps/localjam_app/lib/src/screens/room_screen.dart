@@ -2259,10 +2259,10 @@ class _Footer extends StatelessWidget {
           );
 
           return Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Flexible(child: people),
               if (animation != null) ...[
-                const Spacer(),
                 AnimatedBuilder(
                   animation: animation,
                   builder: (context, _) => _FooterIcon(

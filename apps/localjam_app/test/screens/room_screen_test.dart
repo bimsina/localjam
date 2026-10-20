@@ -910,6 +910,18 @@ void main() {
     expect(cover.width, greaterThan(300));
     final scrubber = tester.getRect(find.byType(JamScrubber));
     final transport = tester.getRect(find.byType(JamTransport));
+    // One margin: the footer's faces and the Up Next glyph sit on the
+    // column's edges, the cover's and the timeline's.
+    expect(
+      tester.getRect(find.byKey(kJamRoomFacesKey)).left,
+      closeTo(scrubber.left, 0.5),
+    );
+    expect(
+      tester.getCenter(find.byIcon(CupertinoIcons.list_bullet)).dx +
+          JamIconSize.row / 2,
+      closeTo(scrubber.right, 0.5),
+      reason: "the glyph's edge, not its selected ground's",
+    );
 
     await tester.tap(find.bySemanticsLabel(JamRoomStrings.queue));
     await tester.pumpAndSettle();
