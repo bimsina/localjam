@@ -60,15 +60,12 @@ declared_dirs() {
 }
 
 echo "build_web_guest: building apps/localjam_web"
-# --base-href /web/: the index.html served at /join resolves its files under
-# /web/ (§1.1). --no-web-resources-cdn: CanvasKit and fonts come from the
-# room, which has no internet (D8). --pwa-strategy none: no service worker
-# (and it needs a secure context the room does not have anyway).
-(
-  cd "$web_app"
-  flutter build web --release --base-href /web/ --no-web-resources-cdn \
-    --pwa-strategy none
-)
+# The page's own build script owns the flags (--base-href /web/,
+# --no-web-resources-cdn, --pwa-strategy none), scrubs Flutter's unused CDN
+# defaults to same-origin paths, prunes what a dart2js build never loads
+# (skwasm/wimp, webparagraph, *.symbols, the service worker) and fails if
+# anything still names an internet host (D8).
+"$web_app/tool/build.sh"
 [[ -f "$build_out/index.html" ]] ||
   die "the build finished without $build_out/index.html"
 
@@ -76,12 +73,20 @@ rm -rf "$dest"
 mkdir -p "$dest"
 cp -R "$build_out/." "$dest/"
 
-# Not part of the page: the service worker is never registered (no secure
-# context, --pwa-strategy none), .last_build_id is the tool's own, and the
-# *.symbols files only symbolise renderer crash traces in a debugger — about
-# a quarter of the build that no guest ever fetches.
-rm -f "$dest/flutter_service_worker.js" "$dest/.last_build_id"
-find "$dest" -type f -name '*.symbols' -delete
+# The tool's own bookkeeping, not part of the page (build.sh already pruned
+# everything else no guest fetches).
+rm -f "$dest/.last_build_id"
+
+# Declared directories this build gave no files of their own (apart from
+# assets/web/ itself, which always has index.html): a stale entry, and a
+# placeholder that keeps an empty directory in the app for nothing.
+built_dirs="$(find "$dest" -type f -exec dirname {} \; | sort -u)"
+stale=()
+while IFS= read -r dir; do
+  if ! grep -qxF -- "$dest${dir:+/$dir}" <<<"$built_dirs"; then
+    stale+=("$dir")
+  fi
+done < <(declared_dirs)
 
 # The committed placeholders, back in every declared directory.
 while IFS= read -r dir; do
@@ -112,6 +117,19 @@ if ((${#undeclared[@]} > 0)); then
     echo "and the page will 404 on them. Add them under flutter.assets, and a"
     echo ".gitkeep in each, then run this again:"
     for rel in "${undeclared[@]}"; do
+      echo "    - assets/web/${rel:+$rel/}"
+    done
+    echo
+  } >&2
+fi
+
+if ((${#stale[@]} > 0)); then
+  {
+    echo
+    echo "build_web_guest: WARNING: the build no longer produces these directories"
+    echo "that apps/localjam_app/pubspec.yaml declares. Remove them from"
+    echo "flutter.assets, and their .gitkeep:"
+    for rel in "${stale[@]}"; do
       echo "    - assets/web/${rel:+$rel/}"
     done
     echo

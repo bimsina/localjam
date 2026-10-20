@@ -149,13 +149,13 @@ void main() {
     for (final dir in [
       '',
       'assets/',
+      'assets/assets/fonts/',
       'assets/fonts/',
       'assets/fonts/fallback/',
       'assets/packages/cupertino_icons/assets/',
       'assets/shaders/',
       'canvaskit/',
       'canvaskit/chromium/',
-      'canvaskit/webparagraph/',
       'icons/',
     ]) {
       expect(keys, contains('assets/web/$dir.gitkeep'));

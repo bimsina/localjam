@@ -76,17 +76,18 @@ flutter:
     # until the script runs, and the app builds (and its rooms serve the
     # built-in "install the app" page) without it. A directory entry takes
     # its own files and none of its subdirectories', so every directory of a
-    # Flutter web build that has files is listed; the script warns about any
-    # it copies that is not.
+    # build that has files is listed (assets/assets/fonts/ is the page's own
+    # Manrope); the script warns about any it copies that is not, and about
+    # any listed here that the build no longer produces.
     - assets/web/
     - assets/web/assets/
+    - assets/web/assets/assets/fonts/
     - assets/web/assets/fonts/
     - assets/web/assets/fonts/fallback/
     - assets/web/assets/packages/cupertino_icons/assets/
     - assets/web/assets/shaders/
     - assets/web/canvaskit/
     - assets/web/canvaskit/chromium/
-    - assets/web/canvaskit/webparagraph/
     - assets/web/icons/
 
   fonts:
