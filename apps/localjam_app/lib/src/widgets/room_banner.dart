@@ -1,6 +1,7 @@
-/// The engine-state capsule on Now Playing (DESIGN_SPEC v3 §6.3): a glass
-/// capsule under the header row with one sentence and at most one inline
-/// action — never a coloured full-width banner.
+/// The engine-state notice on Now Playing (DESIGN_SPEC v3 §6.3): the one
+/// "something happened" shape ([JamNoticeSurface], glass on the backdrop)
+/// above the cover, with one sentence and at most one inline action — never
+/// a coloured full-width banner.
 ///
 /// It is for states that want something *done*: this phone's own sound
 /// stopped while the room plays on (a call, another app, headphones pulled
@@ -18,7 +19,7 @@ import 'package:localjam_client/localjam_client.dart';
 
 import '../design/tokens.dart';
 import '../design/typography.dart';
-import 'glass.dart';
+import 'notice.dart' show JamNoticeSurface;
 import 'pressable.dart';
 
 /// Everything these states say out loud.
@@ -92,10 +93,11 @@ class JamOutputBanner extends StatelessWidget {
       );
 }
 
-/// One capsule: a glyph (or a spinner), a sentence, at most one action.
+/// One notice: a glyph (or a spinner), a sentence, at most one action.
 ///
-/// White on glass, for the Now Playing backdrop. The sentence is never cut
-/// short — it is the whole point — so the capsule wraps to a second line
+/// White on glass, for the Now Playing backdrop; the action is a small
+/// ivory button, the backdrop's "you can press this". The sentence is never
+/// cut short — it is the whole point — so the notice wraps to a second line
 /// rather than ellipsising, and at large text sizes the action moves under
 /// it ([kJamBannerStackAboveScale]).
 class JamRoomBanner extends StatelessWidget {
@@ -142,7 +144,7 @@ class JamRoomBanner extends StatelessWidget {
           )
         : icon == null
         ? null
-        : Icon(icon, size: 15, color: JamNowPlayingColors.text);
+        : Icon(icon, size: JamIconSize.inline, color: JamNowPlayingColors.text);
 
     final Widget? button = label == null || action == null
         ? null
@@ -160,9 +162,30 @@ class JamRoomBanner extends StatelessWidget {
                 ),
                 child: Center(
                   widthFactor: 1,
-                  child: Text(
-                    label,
-                    style: textStyle.copyWith(fontWeight: FontWeight.w600),
+                  child: Container(
+                    constraints: const BoxConstraints(
+                      minHeight: JamMetrics.buttonHeightSmall,
+                    ),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: JamSpace.md,
+                      vertical: JamSpace.xs,
+                    ),
+                    alignment: Alignment.center,
+                    decoration: const ShapeDecoration(
+                      color: JamNowPlayingColors.fill,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.all(
+                          Radius.circular(JamRadius.buttonSmall),
+                        ),
+                      ),
+                    ),
+                    child: Text(
+                      label,
+                      style: textStyle.copyWith(
+                        fontWeight: FontWeight.w600,
+                        color: JamNowPlayingColors.selectedGlyph,
+                      ),
+                    ),
                   ),
                 ),
               ),
@@ -212,18 +235,25 @@ class JamRoomBanner extends StatelessWidget {
     return Semantics(
       container: true,
       liveRegion: true,
-      child: JamBlurSurface(
-        kind: JamMaterialKind.glass,
-        shape: stacked
-            ? RoundedRectangleBorder(borderRadius: BorderRadius.circular(20))
-            : const StadiumBorder(),
+      child: JamNoticeSurface(
+        onBackdrop: true,
         child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: JamSpace.lg),
+          // Beside the sentence, the button sits as far from the notice's
+          // end as from its top and bottom.
+          padding: EdgeInsetsDirectional.only(
+            start: JamSpace.lg,
+            end: button != null && !stacked ? _buttonInset : JamSpace.lg,
+          ),
           child: content,
         ),
       ),
     );
   }
+
+  /// The action button's distance from the notice's edges, inside a 44 pt
+  /// row: (44 − 30) / 2.
+  static const double _buttonInset =
+      (JamMetrics.hitTarget - JamMetrics.buttonHeightSmall) / 2;
 }
 
 /// The text scale past which a capsule's action goes under its sentence.

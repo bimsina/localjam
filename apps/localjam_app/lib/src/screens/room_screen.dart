@@ -1254,7 +1254,12 @@ class _StatusLine extends StatelessWidget {
             return line(null);
           }
           final percent = (state!.progress.clamp(0.0, 1.0) * 100).round();
-          return line(JamStatusLine(JamRoomStrings.fetching(percent)));
+          return line(
+            JamStatusLine(
+              JamRoomStrings.fetching(percent),
+              progress: state.progress,
+            ),
+          );
         },
       );
     }
