@@ -63,7 +63,13 @@ void main() {
     // The app's one clear button, not Cupertino's.
     expect(field.clearButtonMode, OverlayVisibilityMode.never);
     expect(field.suffixMode, OverlayVisibilityMode.editing);
-    expect(field.suffix, isA<JamFieldClearButton>());
+    expect(
+      find.descendant(
+        of: find.byType(CupertinoTextField),
+        matching: find.byType(JamFieldClearButton),
+      ),
+      findsOneWidget,
+    );
 
     // Start lives in the nav bar: no big filled button on this sheet.
     final primaries = tester

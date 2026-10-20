@@ -314,16 +314,23 @@ class JamPeopleLine extends StatelessWidget {
       softWrap: false,
       overflow: TextOverflow.ellipsis,
       style: style,
+      // A cut name is as wide as what it draws, ellipsis included — not
+      // the width it was offered — so no gap opens before the words after
+      // it ("Electri…, Mia", not "Electri…  , Mia").
+      textWidthBasis: TextWidthBasis.longestLine,
     );
     if (fit.runs.length == 1) return text(fit.runs.single.text);
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
         for (final run in fit.runs)
-          if (run.width == null)
-            text(run.text)
+          if (run.width case final width?)
+            ConstrainedBox(
+              constraints: BoxConstraints(maxWidth: width),
+              child: text(run.text),
+            )
           else
-            SizedBox(width: run.width, child: text(run.text)),
+            text(run.text),
       ],
     );
   }

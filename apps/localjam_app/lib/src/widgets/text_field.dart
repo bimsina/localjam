@@ -29,6 +29,9 @@ abstract final class JamTextFieldStrings {
 /// The clear button's painted circle.
 const double kJamFieldClearSize = 18;
 
+/// The finger-sized box the circle is centred in.
+const double kJamFieldClearHit = 36;
+
 /// "Clear": an [kJamFieldClearSize] circle in `tertiaryLabel` with a small
 /// xmark knocked out in the field's own paper — the one way a field is
 /// cleared, in every field. Empties [controller] and reports the empty text
@@ -62,8 +65,8 @@ class JamFieldClearButton extends StatelessWidget {
         onTap: _clear,
         // A finger-sized target around a small mark, inside the field.
         child: SizedBox(
-          width: 36,
-          height: 36,
+          width: kJamFieldClearHit,
+          height: kJamFieldClearHit,
           child: Center(
             child: Container(
               width: kJamFieldClearSize,

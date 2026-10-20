@@ -522,8 +522,14 @@ class _NameField extends StatelessWidget {
         cursorColor: colors.tint,
         textCapitalization: TextCapitalization.words,
         textInputAction: TextInputAction.done,
-        // The app's one clear button, as in every other field (CR-16).
-        suffix: JamFieldClearButton(controller: controller),
+        // The app's one clear button, as in every other field (CR-16) —
+        // its circle, not its box, ending on the row's trailing inset.
+        suffix: Padding(
+          padding: const EdgeInsetsDirectional.only(
+            end: kJamRowInset - (kJamFieldClearHit - kJamFieldClearSize) / 2,
+          ),
+          child: JamFieldClearButton(controller: controller),
+        ),
         suffixMode: OverlayVisibilityMode.editing,
         clearButtonMode: OverlayVisibilityMode.never,
         maxLines: 1,

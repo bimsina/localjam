@@ -415,17 +415,15 @@ class JamSessionEndedView extends StatelessWidget {
     );
   }
 
-  /// Where the mark sits: a touch above the middle for a typical block, and
-  /// the same for every state on a window this tall — a longer sentence or
-  /// one more action grows the page downward instead of re-centring it.
+  /// Where the mark sits: a touch above the middle for the app's one empty
+  /// block ([kJamEmptyBlockHeight]: mark, title, two lines, two actions),
+  /// and the same for every state on a window this tall — a longer
+  /// sentence or one more action grows the page downward instead of
+  /// re-centring it.
   static double _topFor(double height) {
-    final top = (height - _kTypicalBlock) / 2 - height * 0.04;
+    final top = (height - kJamEmptyBlockHeight) / 2 - height * 0.04;
     return top < JamSpace.xxl ? JamSpace.xxl : top;
   }
-
-  /// The height of a typical ended block: mark, title, two lines, two
-  /// actions.
-  static const double _kTypicalBlock = 320;
 
   static void _busy() {}
 }

@@ -295,8 +295,11 @@ class JamTrackRow extends StatelessWidget implements JamSelfSeparatingRow {
                 padding: const EdgeInsetsDirectional.only(start: _creditGap),
                 child: SizedBox(
                   width: math.max(_creditSlot, faceSize + JamSpace.sm),
+                  // The face ends on the row's trailing edge, where its
+                  // hairline and the page's other columns end (CR-13).
                   child: _faced && adder != null
-                      ? Center(
+                      ? Align(
+                          alignment: AlignmentDirectional.centerEnd,
                           heightFactor: 1,
                           child: JamAvatar(
                             name: adder,
