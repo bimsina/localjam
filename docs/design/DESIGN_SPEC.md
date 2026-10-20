@@ -98,6 +98,9 @@ no status dots or connection badges, no emoji and no filler copy.
 - **The jam mark (D4, R4, R5).** `JamMark` is a continuous-corner square.
   - It shows **one cover** (the jam's first song with art), or a Manrope
     monogram on `fill`. It is never a mosaic, a person's colour or raspberry.
+    The same cover everywhere a jam is drawn: Home while you're in it,
+    Invite, the page it ends on, Recent and Past jams — never the song that
+    happens to be playing.
   - The host's face appears as a badge, knocked out of the tile, only where
     it adds something: a guest's Invite sheet and the page a jam ends on. It
     never appears on list rows (Nearby, Recent, Past jams), never shows your
@@ -159,7 +162,7 @@ no status dots or connection badges, no emoji and no filler copy.
   row scale, and a small tinted Join. Join moves under the name when the
   name would otherwise get too narrow. Scan code and Join with link sit under
   the list, and Start a jam is pinned at the bottom. While you're in a jam,
-  Home shows that jam (its mark with the playing cover) rather than "No
+  Home shows that jam (its mark with the jam's cover) rather than "No
   jams yet".
 - **Past jams and Recent** use one row: the mark, the name, a face pile with
   the people line, "You hosted · 12 songs · Yesterday", and a chevron. A past

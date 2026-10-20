@@ -31,6 +31,7 @@ import '../design/tokens.dart';
 import '../design/typography.dart';
 import '../state/session_controller.dart';
 import '../util/capabilities.dart';
+import '../util/jam_cover.dart';
 import '../util/network.dart';
 import '../widgets/avatar.dart';
 import '../widgets/buttons.dart';
@@ -496,8 +497,8 @@ class _HomeScreenState extends State<HomeScreen> {
           return [
             jamAnchoredEmptyState(
               JamEmptyState(
-                // The cover the mini player under it shows: one jam, one
-                // object. No face — on your own jam it would be yours.
+                // The jam's one cover (N5). No face — on your own jam it
+                // would be yours.
                 mark: _LiveJamMark(engine: engine),
                 title: room,
                 body: session.isHost
@@ -607,8 +608,9 @@ class _AvatarButton extends StatelessWidget {
 }
 
 /// The jam this phone is in, as Home's page draws it: its mark with the
-/// cover that is playing — the one the mini player under it shows, and the
-/// Invite sheet's — and its monogram until something with a cover plays.
+/// jam's cover — its first song with art, the one Invite, the page it ends
+/// on and Past jams show (N5) — and its monogram until a song with a cover
+/// is queued.
 class _LiveJamMark extends StatefulWidget {
   const _LiveJamMark({required this.engine});
 
@@ -619,10 +621,10 @@ class _LiveJamMark extends StatefulWidget {
 }
 
 class _LiveJamMarkState extends State<_LiveJamMark> {
-  StreamSubscription<PlaybackSnapshot>? _states;
+  StreamSubscription<List<MediaItem>>? _queue;
 
-  /// The cover being shown, and the artwork it was read for.
-  String? _artworkId;
+  /// The cover being shown, and the queue's art it was read for.
+  String? _coverKey;
   Uint8List? _cover;
 
   @override
@@ -639,31 +641,31 @@ class _LiveJamMarkState extends State<_LiveJamMark> {
 
   @override
   void dispose() {
-    unawaited(_states?.cancel());
+    unawaited(_queue?.cancel());
     super.dispose();
   }
 
   void _bind() {
-    unawaited(_states?.cancel());
-    _states = widget.engine.states.listen((_) => _follow());
+    unawaited(_queue?.cancel());
+    _coverKey = null;
+    _queue = widget.engine.playlistUpdates.listen((_) => _follow());
     _follow();
   }
 
-  /// Reads the playing song's cover when the song changes. The engines
-  /// cache what they have read, so a song that comes back costs nothing.
+  /// Reads the jam's cover when the queue's art changes. The engines cache
+  /// what they have read, so a re-read costs nothing.
   void _follow() {
-    final item = widget.engine.currentItem;
-    final id = item?.artworkId;
-    if (id == _artworkId) return;
-    _artworkId = id;
-    if (id == null) {
+    final key = jamCoverKey(widget.engine);
+    if (key == _coverKey) return;
+    _coverKey = key;
+    if (key.isEmpty) {
       if (_cover != null && mounted) setState(() => _cover = null);
       return;
     }
     unawaited(
-      widget.engine.artworkFor(item!).then((bytes) {
-        if (!mounted || _artworkId != id) return;
-        setState(() => _cover = bytes == null || bytes.isEmpty ? null : bytes);
+      jamCoverOf(widget.engine).then((bytes) {
+        if (!mounted || _coverKey != key) return;
+        setState(() => _cover = bytes);
       }),
     );
   }

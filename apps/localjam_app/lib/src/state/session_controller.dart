@@ -22,6 +22,7 @@ import 'package:localjam_client/localjam_client.dart';
 import '../design/artwork_tint.dart';
 import '../design/tokens.dart';
 import '../util/format.dart';
+import '../util/jam_cover.dart';
 import '../util/network.dart';
 import '../util/permissions.dart';
 import 'position_ticker.dart';
@@ -167,7 +168,7 @@ bool jamRejectIsRetryable(RejectReason? reason) => switch (reason) {
 typedef JamRestartArgs = ({String name, List<String> paths});
 
 /// The jam that just ended, as the page it ended on draws it: its name, its
-/// host and the cover that was playing ([JamSessionController.endedJam]).
+/// host and its cover ([JamSessionController.endedJam]).
 @immutable
 class JamEndedJam {
   const JamEndedJam({required this.name, this.hostName, this.cover});
@@ -178,8 +179,8 @@ class JamEndedJam {
   /// The host's display name, when they shared one.
   final String? hostName;
 
-  /// The cover of the song that was playing, once read; null when it had
-  /// none, or none could be read.
+  /// The jam's cover — its first song with art ([jamCoverOf]) — once read;
+  /// null when no song had any, or none could be read.
   final Uint8List? cover;
 }
 
@@ -1432,8 +1433,9 @@ class JamSessionController extends ChangeNotifier {
   }
 
   /// Keeps what the ended page draws the jam with ([endedJam]): its name
-  /// and host now, and the playing song's cover once it has been read —
-  /// started here, while the engine is still there to read it from.
+  /// and host now, and the jam's cover — its first song with art, as Past
+  /// jams will draw it (N5) — once it has been read, started here while the
+  /// engine is still there to read it from.
   void _keepEndedJam(JamEngine engine) {
     // On a host's phone the host is this device, and the page never badges
     // you with your own face (D4): only a guest keeps the host's name.
@@ -1445,10 +1447,9 @@ class JamSessionController extends ChangeNotifier {
       hostName: host.isEmpty ? null : host,
     );
     _endedJam = jam;
-    final item = engine.currentItem;
-    if (item == null || item.artworkId == null) return;
+    if (jamCoverCandidates(engine.playlist).isEmpty) return;
     unawaited(
-      engine.artworkFor(item).then((bytes) {
+      jamCoverOf(engine).then((bytes) {
         // A retry that got back in, or a jam left meanwhile, is not this
         // jam's page any more.
         if (bytes == null || bytes.isEmpty || !identical(_endedJam, jam)) {

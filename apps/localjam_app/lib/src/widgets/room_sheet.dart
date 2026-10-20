@@ -33,6 +33,7 @@ import '../design/tokens.dart';
 import '../design/typography.dart';
 import '../state/session_controller.dart';
 import '../util/format.dart';
+import '../util/jam_cover.dart';
 import '../util/network.dart';
 import 'buttons.dart';
 import 'dialogs.dart';
@@ -1156,8 +1157,8 @@ class _Invite extends StatelessWidget {
   }
 }
 
-/// The jam on the Invite sheet: its mark (the cover that is playing, the
-/// host's face on its corner), its name in Manrope, and who is in it — the
+/// The jam on the Invite sheet: its mark (the jam's cover, the host's face
+/// on its corner), its name in Manrope, and who is in it — the
 /// same object a guest saw on Nearby and will see in Past Jams.
 ///
 /// Follows the room while it lives — a new song, someone who just scanned
@@ -1187,6 +1188,7 @@ class _InviteIdentityState extends State<_InviteIdentity> {
     }
 
     _subs.add(engine.states.listen(refresh));
+    _subs.add(engine.playlistUpdates.listen(refresh));
     if (engine is JamGuestEngine) {
       _subs.add(engine.peerEvents.listen(refresh));
     } else if (engine is JamHostEngine) {
@@ -1202,11 +1204,13 @@ class _InviteIdentityState extends State<_InviteIdentity> {
     super.dispose();
   }
 
-  Future<Uint8List?>? _coverFor(MediaItem? item) {
-    final id = item?.artworkId;
-    if (id != _coverId) {
-      _coverId = id;
-      _cover = id == null ? null : widget.engine.artworkFor(item!);
+  /// The jam's cover — its first song with art (N5) — read again only when
+  /// the queue's art changes.
+  Future<Uint8List?>? _coverOf(JamEngine engine) {
+    final key = jamCoverKey(engine);
+    if (key != _coverId) {
+      _coverId = key;
+      _cover = key.isEmpty ? null : jamCoverOf(engine);
     }
     return _cover;
   }
@@ -1232,7 +1236,7 @@ class _InviteIdentityState extends State<_InviteIdentity> {
       hostName: guest ? names[1] : null,
       hostColor: guest ? faces[hostId] : null,
     );
-    final future = _coverFor(engine.currentItem);
+    final future = _coverOf(engine);
 
     return Row(
       children: [
