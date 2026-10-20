@@ -375,11 +375,3 @@ class JamBackdropView extends StatelessWidget {
     );
   }
 }
-
-/// The one-line artist/album byline for [item], or null when untagged.
-String? artworkByline(MediaItem item) {
-  final artist = item.artist;
-  final album = item.album;
-  if (artist != null && album != null) return '$artist · $album';
-  return artist ?? album;
-}

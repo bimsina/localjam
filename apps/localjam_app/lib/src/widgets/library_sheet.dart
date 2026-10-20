@@ -37,7 +37,6 @@ abstract final class LibrarySheetStrings {
   static const String search = 'Search';
   static const String selectAll = 'Select all';
   static const String deselectAll = 'Deselect all';
-  static const String unknownArtist = 'Unknown artist';
   static const String selected = 'Selected';
   static const String noResults = 'No results';
 
@@ -330,7 +329,8 @@ class _LibraryRowState extends State<_LibraryRow> {
       selected: selected,
       child: JamTrackRow(
         title: stripAudioExtension(track.title),
-        byline: track.artist ?? LibrarySheetStrings.unknownArtist,
+        // The one second line (N8): no "Unknown artist" filler.
+        byline: jamSongByline(artist: track.artist, album: track.album),
         duration: ms == null ? null : Duration(milliseconds: ms),
         // Decoded at the size it is drawn, not at the file's 1400 px.
         artworkImage: cover == null

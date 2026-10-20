@@ -56,6 +56,7 @@ class JamPickedTrack {
     required this.path,
     this.title,
     this.artist,
+    this.album,
     this.duration,
     this.artworkBytes,
     this.tagsRead = false,
@@ -69,6 +70,7 @@ class JamPickedTrack {
       path: path,
       title: title.isEmpty ? null : stripAudioExtension(title),
       artist: track.artist,
+      album: track.album,
       duration: ms == null || ms <= 0 ? null : Duration(milliseconds: ms),
     );
   }
@@ -79,6 +81,9 @@ class JamPickedTrack {
   /// Tag (or library) title; null when the file has none.
   final String? title;
   final String? artist;
+
+  /// Stands in on the row for a song with no artist (N8).
+  final String? album;
   final Duration? duration;
 
   /// The embedded cover, once the tags have been read.
@@ -102,6 +107,7 @@ class JamPickedTrack {
       path: path,
       title: title ?? tags.title,
       artist: artist ?? tags.artist,
+      album: album ?? tags.album,
       duration: duration ?? (us == null ? null : Duration(microseconds: us)),
       artworkBytes:
           artworkBytes ?? (tags.hasArtwork ? tags.artworkBytes : null),

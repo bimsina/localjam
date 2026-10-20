@@ -1117,16 +1117,15 @@ class _HistoryTrackRowState extends State<_HistoryTrackRow> {
     final durationUs = track.item.durationUs;
     return JamTrackRow(
       title: jamDisplayTitle(track.item),
-      byline: track.item.artist,
+      byline: jamItemByline(track.item),
       artworkImage: cover == null
           ? null
           : _coverImage(context, cover, JamArtworkSize.row),
       artworkId: track.item.artworkId,
       addedByName: adder,
       addedByYou: you,
-      // Someone else's song wears their face where the jam gave one out,
-      // and says their name where it did not; your own carries no credit
-      // (R3).
+      // Someone else's song wears their face where the jam gave one out;
+      // your own carries no credit (R3).
       addedByColor: you || adder == null ? null : widget.faces[adder],
       duration: durationUs == null ? null : Duration(microseconds: durationUs),
       // Faded is the whole signal that a track has left the device.

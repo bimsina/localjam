@@ -25,6 +25,7 @@ import '../design/theme.dart';
 import '../design/tokens.dart';
 import '../design/typography.dart';
 import '../state/session_controller.dart';
+import '../util/format.dart';
 import '../util/media_picking.dart';
 import '../util/network.dart';
 import '../widgets/guests_can.dart';
@@ -464,7 +465,7 @@ class _HostSetupScreenState extends State<HostSetupScreen> {
             onRemoved: () => _remove(track.path),
             child: JamTrackRow(
               title: track.displayTitle,
-              byline: track.artist,
+              byline: jamSongByline(artist: track.artist, album: track.album),
               duration: track.duration,
               // Decoded at the size it is drawn, not at the file's 1400 px.
               artworkImage: track.artworkBytes == null

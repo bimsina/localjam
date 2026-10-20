@@ -6,9 +6,10 @@
 /// else, so a face always means a friend's song and your own queue is not
 /// your own face seven times over. Rows in a list that credits anyone keep
 /// that face's column even when it is empty, so titles end at one x and the
-/// faces line up. A song with no artist says "Added by Mia" in words on its
-/// second line, so a name never sits where an artist would. A long artist
-/// or name is cut before the length ever is. [JamTrackRow.onBackdrop]
+/// faces line up. The second line follows one rule on every screen (N8,
+/// `jamSongByline`): the artist, else the album, else just the length —
+/// never "Unknown artist", and never a name where an artist would be. A
+/// long artist is cut before the length ever is. [JamTrackRow.onBackdrop]
 /// renders it white for the queue that opens in place on Now Playing.
 ///
 /// Engine-free: hand it strings, bytes, fractions and callbacks.
@@ -178,15 +179,11 @@ class JamTrackRow extends StatelessWidget implements JamSelfSeparatingRow {
       _faced || (reserveCredit ?? (addedByYou || addedByName != null));
 
   /// The second line's two halves: what may be cut short (the artist, or
-  /// "Added by Mia" for a song without one) and what never is (the length,
-  /// with its separator when it follows something).
+  /// the album for a song without one) and what never is (the length, with
+  /// its separator when it follows something). Who added it is the face,
+  /// never words here (N8, R3).
   ({String? lead, String? tail}) _subtitleParts() {
-    String? lead = byline != null && byline!.isNotEmpty ? byline : null;
-    // No artist: the adder in words, so their name is never read as the
-    // artist's (RB-24). Your own songs carry no credit at all (R3).
-    if (lead == null && _bySomeoneElse) {
-      lead = '${JamTrackRowStrings.addedBy} $addedByName';
-    }
+    final lead = byline != null && byline!.isNotEmpty ? byline : null;
     final d = duration;
     final length = d != null && prefetchProgress == null
         ? formatTrackDuration(d)

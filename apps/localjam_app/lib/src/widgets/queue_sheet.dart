@@ -711,10 +711,9 @@ class _QueueRow extends StatelessWidget {
       builder: (context, snapshot) => JamTrackRow(
         onBackdrop: true,
         title: jamDisplayTitle(item),
-        // The artist is the song's identity; the album is catalogue
-        // detail nobody acts on here (it stands in only when there is no
-        // artist).
-        byline: _queueByline(item),
+        // The artist is the song's identity; the album stands in only
+        // when there is none (N8).
+        byline: jamItemByline(item),
         artworkBytes: snapshot.data,
         artworkId: item.artworkId,
         artworkLoading:
@@ -819,15 +818,6 @@ class _QueueRow extends StatelessWidget {
 
     return animateIn ? _InsertReveal(child: row) : row;
   }
-}
-
-/// A queue row's second line: the artist, or the album when the file
-/// names no artist.
-String? _queueByline(MediaItem item) {
-  final artist = item.artist?.trim();
-  if (artist != null && artist.isNotEmpty) return artist;
-  final album = item.album?.trim();
-  return album == null || album.isEmpty ? null : album;
 }
 
 /// Swipe-to-remove that rebuilds its row with whether it is open, so the

@@ -2340,11 +2340,9 @@ class _TitleBlock extends StatelessWidget {
           }
         } else {
           title = jamDisplayTitle(current);
-          // Artist is the song's identity.
-          final artist = current.artist?.trim();
-          final byline = artist != null && artist.isNotEmpty
-              ? artist
-              : artworkByline(current);
+          // Artist is the song's identity; the album stands in when there
+          // is none (N8), as on every row.
+          final byline = jamItemByline(current);
           // Its line is kept even for a song without one (RB-16): a
           // recording called "AUD-20261019-WA0003" must not move the
           // transport 7 pt from where the last song had it.

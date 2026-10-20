@@ -125,7 +125,8 @@ no status dots or connection badges, no emoji and no filler copy.
   - Song rows show a 20 pt face at the trailing edge only for songs someone
     else added, and every face in a list shares one column. Your own songs
     carry no credit.
-  - When a song has no artist, the row says "Added by Mia" in words.
+  - A credit is only ever the face. "Added by Mia" is never put on a row's
+    second line, where an artist would be.
   - Now Playing shows one quiet "Added by Mia" line with an 18 pt face. It
     appears only when the adder isn't you and the jam has at least two other
     people.
@@ -164,6 +165,12 @@ no status dots or connection badges, no emoji and no filler copy.
 - **Song rows** have two lines: the title, then "Artist · 4:10" in tabular
   figures. The artist is cut before the length is. At large text sizes the
   rows grow and wrap.
+- **A song with no artist** follows one rule on every screen (the queue,
+  Now Playing, Start a jam, a past jam's page, the Music library): the
+  second line shows the album if there is one ("Native QA · 3:00"), and
+  otherwise just the length ("3:00"). Credits follow R3: a face, only for
+  someone else's song. Nothing fills the gap: no "Unknown artist", no
+  "Added by Mia".
 - **Nearby.** Each jam is a quiet bordered card holding the mark, the name at
   row scale, and a small tinted Join. Join moves under the name when the
   name would otherwise get too narrow. Scan code and Join with link sit under

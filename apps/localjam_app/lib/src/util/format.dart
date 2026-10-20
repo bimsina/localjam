@@ -84,6 +84,21 @@ String stripAudioExtension(String name) {
   return _audioExtensions.contains(ext) ? name.substring(0, dot) : name;
 }
 
+/// A song's second line, by the one rule every screen uses (N8): the
+/// artist; with no artist, the album; with neither, nothing — the row then
+/// shows only the length. Never filler ("Unknown artist") and never who
+/// added it: a credit is a face (R3), not words where an artist would be.
+String? jamSongByline({String? artist, String? album}) {
+  final a = artist?.trim();
+  if (a != null && a.isNotEmpty) return a;
+  final b = album?.trim();
+  return b == null || b.isEmpty ? null : b;
+}
+
+/// [jamSongByline] for a queued song.
+String? jamItemByline(MediaItem item) =>
+    jamSongByline(artist: item.artist, album: item.album);
+
 /// What to call [item] on screen: its tag title, else its filename without
 /// the extension.
 String jamDisplayTitle(MediaItem item) =>

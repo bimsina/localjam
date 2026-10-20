@@ -167,12 +167,15 @@ void main() {
             JamAudioTags(
               title: 'Tag Title',
               artist: 'Tag Artist',
+              album: 'Tag Album',
               durationUs: 3000000,
               artworkBytes: cover,
             ),
           );
       expect(read.title, 'Library Title');
       expect(read.artist, 'Tag Artist');
+      // Start a jam's row needs it for a song with no artist (N8).
+      expect(read.album, 'Tag Album');
       expect(read.duration, const Duration(seconds: 3));
       expect(read.artworkBytes, cover);
       expect(read.tagsRead, isTrue);

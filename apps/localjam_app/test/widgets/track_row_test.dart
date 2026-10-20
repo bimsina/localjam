@@ -4,6 +4,7 @@ import 'package:flutter/rendering.dart' show RenderParagraph;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:localjam_app/src/design/theme.dart';
 import 'package:localjam_app/src/design/tokens.dart';
+import 'package:localjam_app/src/util/format.dart';
 import 'package:localjam_app/src/widgets/avatar.dart';
 import 'package:localjam_app/src/widgets/list.dart';
 import 'package:localjam_app/src/widgets/progress.dart';
@@ -42,18 +43,80 @@ void main() {
       }
     });
 
-    testWidgets('a song without an artist names its adder in words, so the '
-        'name is never read as the artist', (tester) async {
-      await pumpRow(
-        tester,
-        const JamTrackRow(
-          title: 'Blue Moon',
-          addedByName: 'Mia',
-          duration: Duration(minutes: 3, seconds: 42),
+    group('a song with no artist: one rule on every row (N8)', () {
+      // Each row type as its screen builds it: the queue and a past jam
+      // credit people; Start a jam and the library do not.
+      const length = Duration(minutes: 3);
+      final rows = <String, JamTrackRow Function(String? byline)>{
+        'queue': (byline) => JamTrackRow(
+          title: 'Kitchen Session',
+          byline: byline,
+          addedByName: 'Sparkly Kiwi',
+          addedByColor: const Color(0xFF2F815B),
+          reserveCredit: true,
+          duration: length,
+          onBackdrop: true,
         ),
-      );
-      expect(find.text('Added by Mia · 3:42'), findsOneWidget);
-      expect(find.byType(JamAvatar), findsNothing);
+        'past jam': (byline) => JamTrackRow(
+          title: 'Kitchen Session',
+          byline: byline,
+          addedByName: 'Sparkly Kiwi',
+          addedByColor: const Color(0xFF2F815B),
+          duration: length,
+        ),
+        'past jam, no face': (byline) => JamTrackRow(
+          title: 'Kitchen Session',
+          byline: byline,
+          addedByName: 'Sparkly Kiwi',
+          duration: length,
+        ),
+        'start a jam': (byline) => JamTrackRow(
+          title: 'Kitchen Session',
+          byline: byline,
+          duration: length,
+        ),
+        'library': (byline) => JamTrackRow(
+          title: 'Kitchen Session',
+          byline: byline,
+          duration: length,
+          trailing: const SizedBox(width: 22),
+        ),
+      };
+
+      for (final MapEntry(key: name, value: row) in rows.entries) {
+        testWidgets('$name: the album and the length', (tester) async {
+          await pumpRow(
+            tester,
+            row(jamSongByline(artist: null, album: 'Native QA')),
+          );
+          expect(find.text('Native QA · 3:00'), findsOneWidget);
+          expect(find.textContaining('Added by'), findsNothing);
+          expect(find.textContaining('Unknown'), findsNothing);
+        });
+
+        testWidgets('$name: with no album, the length alone', (tester) async {
+          await pumpRow(tester, row(jamSongByline(artist: ' ', album: null)));
+          expect(find.text('3:00'), findsOneWidget);
+          expect(find.textContaining('Added by'), findsNothing);
+          expect(find.textContaining('Unknown'), findsNothing);
+        });
+      }
+
+      testWidgets('the credit is a face, only for someone else', (
+        tester,
+      ) async {
+        await pumpRow(tester, rows['past jam']!(null));
+        expect(find.byType(JamAvatar), findsOneWidget);
+        await pumpRow(tester, rows['start a jam']!(null));
+        expect(find.byType(JamAvatar), findsNothing);
+      });
+
+      test('the artist when there is one, else the album, else nothing', () {
+        expect(jamSongByline(artist: 'Mira Sol', album: 'Drives'), 'Mira Sol');
+        expect(jamSongByline(artist: '', album: 'Drives'), 'Drives');
+        expect(jamSongByline(artist: null, album: '  '), isNull);
+        expect(jamSongByline(), isNull);
+      });
     });
 
     testWidgets('your own song carries no credit: the length stays', (
@@ -225,6 +288,7 @@ void main() {
         tester,
         const JamTrackRow(
           title: 'Blue Moon',
+          byline: 'Billie',
           addedByName: 'Mia',
           onBackdrop: true,
         ),
@@ -234,7 +298,7 @@ void main() {
         JamNowPlayingColors.text,
       );
       expect(
-        tester.widget<Text>(find.text('Added by Mia')).style!.color,
+        tester.widget<Text>(find.text('Billie')).style!.color,
         JamNowPlayingColors.secondary,
       );
     });
