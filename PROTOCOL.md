@@ -1,4 +1,4 @@
-# LocalJam Protocol 1.1
+# LocalJam Protocol 1.2
 
 Synchronized local-network media playback. One **host** owns the files and the
 authoritative session state; N **guests** join over LAN, fetch media, and play
@@ -6,8 +6,16 @@ in sync on their own output devices.
 
 This document is **protocol 1** (wire `v: 1`). Later 1.x revisions only add
 things a 1.0 peer can safely ignore (§2.1); anything a 1.0 peer would have to
-understand is protocol 2. 1.1 adds one optional discovery key, `hname` (§1);
-nothing else differs from 1.0.
+understand is protocol 2. 1.1 adds one optional discovery key, `hname` (§1).
+1.2 adds a second spelling of the join URL — `http://host:port/join#…`, the
+same keys in its fragment (§1) — and the unauthenticated routes that serve a
+browser guest its page (§1.1). Neither changes a frame: a 1.0 host never
+serves the page and never prints the http form, and a 1.2 host still speaks
+to a 1.0 guest exactly as before. The one place the two meet is a person
+with a phone: a 1.0 or 1.1 joiner shown an http QR code cannot read it as an
+invitation, because the only form it parses is `localjam://`. A 1.2 host can
+still hand such a joiner that form (an "Open in app" link, the CLI's second
+line), but the code on the screen is for cameras and browsers first.
 
 Design goals, in priority order:
 
@@ -17,9 +25,9 @@ Design goals, in priority order:
 3. Sync target: ±40 ms across devices after calibration (per-person headphones,
    not shared-speaker grade).
 4. Boring and debuggable over clever: JSON control plane, plain HTTP media plane.
-5. Browser clients are a possible future guest (never a host); the protocol
-   avoids gratuitously breaking them but protocol 1 targets native mobile +
-   desktop only.
+5. Browsers join as guests — never hosts — from a page the host itself
+   serves (§1.1), with no install and no internet. A browser guest speaks
+   this same protocol; nothing in it is web-specific.
 
 ---
 
@@ -31,6 +39,7 @@ Two channels, both served by the host on a single TCP port:
 |---------|----------------------------|------------------------------------------|
 | Control | WebSocket `ws://host:port/ws` | Session state, clock sync, playback commands |
 | Media   | HTTP `http://host:port/media/{mediaId}` | File transfer. MUST support `Range` requests. Guest uploads via `POST /media` (§6.4) |
+| Page    | HTTP `http://host:port/`, `/join`, `/web/…` | The browser guest's player (§1.1, 1.2). No token |
 
 - Control messages are JSON text frames. The `hello` handshake reserves an
   `encodings` field (§3.1) so clients and host can negotiate a binary
@@ -43,8 +52,9 @@ Two channels, both served by the host on a single TCP port:
   negotiate it and guests SHOULD NOT offer it (§9.1).
 - UDP is deliberately **not** used: LAN TCP jitter is low enough that min-RTT
   filtering (§4) gets clock sync well under our target, and one transport
-  keeps every client simple. With web off the roster, a UDP clock-sync fast
-  path is a possible later optimization — measure first.
+  keeps every client simple. A browser cannot send UDP at all, so a UDP
+  clock-sync fast path could only ever be an optional extra for native
+  guests — measure first.
 
 ### Discovery / join
 
@@ -56,6 +66,36 @@ localjam://join?v=1&host=192.168.1.7&port=44100&token=<sessionToken>&name=RoadTr
 
 (The host may listen on multiple interfaces and encode several `host` candidates,
 comma-separated; guests try them in order.)
+
+**The http form (1.2).** The same parameters, spelled as a URL a phone
+camera opens with no app installed — and at which the host serves its
+browser player (§1.1):
+
+```
+http://192.168.1.7:44100/join#v=1&token=<sessionToken>&name=RoadTrip&host=192.168.1.7,192.168.43.1
+```
+
+- The path is `/join`. The **fragment is a query string with the keys of the
+  `localjam://join` query** — `v`, `token`, `name`, `host` — in the same
+  encoding (percent-escapes, `+` for a space). The URL's own query is not
+  part of the link.
+- The port is the URL's port, for every candidate. A `port` key in the
+  fragment means nothing and is ignored.
+- `host` in the fragment is optional. Absent, the URL's own host is the sole
+  candidate; present, it lists every candidate (comma-separated, as above),
+  and the URL's own host SHOULD be the first of them. An IPv6 literal is
+  bracketed in the URL's authority, as in any URL (`[fe80::1%25en0]`), and
+  bare in the `host` list.
+- The token rides the fragment because a fragment never leaves the device:
+  it is not in the request line, not in a `Referer`, not in a log.
+- A joiner accepts both forms and builds the same join parameters from
+  either; whatever door a link came in by, the on-LAN rule (§9) applies to
+  every candidate. A browser guest reads its own fragment, and its origin is
+  its host.
+- A 1.2 host's QR code and share text carry the http form. It picks the
+  URL's host the way it picks the first `host` candidate. The `localjam://`
+  form stays valid — "Open in app" deep links use it — and is what a
+  pre-1.2 joiner understands (see the caveat at the top).
 
 Secondary: mDNS/Bonjour advertisement for in-app "nearby rooms" listing.
 Hosts that opt in ("discoverable") advertise `_localjam._tcp` with TXT
@@ -79,7 +119,7 @@ same trim and cap, and never carries it into the join URI. It is display
 text and nothing more (§9).
 
 Joiners resolve the service (addresses + port come from mDNS itself) and
-build the same `localjam://join` URI. Including the token makes a
+build the same join parameters (either form). Including the token makes a
 discoverable room one-tap joinable by ANYONE on the network — presence on
 the LAN is the invitation (§9), which is why it is host-opt-in per session.
 The host MAY change its mind while the room runs: withdrawing the
@@ -105,6 +145,48 @@ guest-isolated Wi-Fi, and unlisted Bonjour types on Apple platforms
 The `v` in a join URI or TXT record is the host's major protocol version. A
 joiner MAY use it to flag rooms it cannot join, but the handshake (§2.1) is
 authoritative.
+
+### 1.1 The browser guest's page (1.2)
+
+A host MAY serve a web build of a small listener app from the port it
+already serves the protocol on, so that one person with the app installed
+can host and everyone else joins from a browser — no install, no internet.
+The page is just another guest (§3.1 `clientKind: "web"`); everything it does
+after loading goes through `/ws`, `/media` and `/artwork` like any guest's.
+
+| Route | Serves |
+|---|---|
+| `GET /` and `GET /join` | the page's `index.html` — `Content-Type: text/html; charset=utf-8`, `Cache-Control: no-store` |
+| `GET /web/<path>` | the bundle file whose path is exactly `<path>` (percent-decoded) — its own `Content-Type`, `Cache-Control: no-cache`, a strong `ETag` (the quoted first 16 hex characters of the file's sha256), and `304 Not Modified` with no body when `If-None-Match` names that `ETag` (or `*`) |
+| `HEAD` on either | the same status and headers, no body |
+| any other method on either | `405`, `Allow: GET, HEAD` |
+| `GET /web/<anything else>` | `404` |
+| everything else | unchanged: `/ws`, `/media`, `/media/{id}`, `/artwork/{id}`; unknown paths `404` |
+
+- **No token.** The page is not a secret: it carries no room name, no
+  token and nothing about the session, and the same bundle ships in every
+  copy of the host app. The token the page needs is in the URL fragment
+  (§1), which the request for it never carries; the page then presents it in
+  `hello` and as the bearer on the media plane like everyone else.
+- **Everything else still applies.** The routes sit behind the same LAN-only
+  rule (§9) and the same per-connection limits, header budget and
+  `Connection: close` (§9.1) as every other request; a host never parses
+  more of a page request than of any other.
+- **Served from memory, from a fixed set.** The host holds the bundle as an
+  immutable map of path → bytes and MIME type, loaded once (the reference
+  app from its asset bundle, the reference CLI from `--web-dir`), and serves
+  exactly its keys: there is no filesystem behind `/web/`, so no path —
+  `..`, an encoded `%2e%2e`, a doubled slash — can reach anything else.
+- **No player, no problem.** A host without a bundle (or without its
+  `index.html`) answers `/` and `/join` with a small built-in page instead —
+  "This LocalJam room has no browser player. Install the app." — that loads
+  nothing else. A browser that opens the http join URL of such a room is
+  told what to do rather than shown an error.
+- The bundle is built to live under `/web/` (Flutter: `--base-href /web/`),
+  so the `index.html` served at `/join` resolves its assets there. Nothing in
+  it may need a path outside `/web/`, and none of its paths may collide with
+  `/ws`, `/media` or `/artwork`. It makes no off-origin request of any kind
+  — fonts and the renderer are bundled — because the room has no internet.
 
 ---
 
@@ -232,6 +314,18 @@ can never resume (§3.3), its role and tracks live and die with its peerId,
 and a kick cannot keep it out (§5.6). Clients SHOULD send one. (The
 reference CLI, where one machine often runs several guests, mints a fresh
 one per run rather than persisting it, since one id is one device.)
+
+`hello.clientKind` says what sort of client this is — `"flutter"` for the
+app, `"dart"`/`"cli"` for tools, `"web"` for the browser guest of §1.1 —
+for display and diagnostics only. A host MUST NOT grant, refuse or shape
+anything by it: it is a claim like `clientName`, and a browser guest is a
+guest like any other, under the same permissions (§5.6). What differs is on
+the browser's side and is client-local: its monotonic clock for §4 is
+`performance.now()`, it keeps its `clientId` in the page's storage, it
+prefetches whole files over `fetch` like any guest (§6.2) and reports
+`ready` only once an item has *decoded* — a format the browser cannot play
+(Ogg in Safari) is reported `none` and never blocks the room (§6.3 waits
+only for `fetching`). Phase 1 of the reference page does not upload.
 
 ### 3.2 Presence
 
@@ -382,7 +476,7 @@ microseconds, from an arbitrary epoch — NOT wall clock; wall clocks jump).
 NTP-style exchange, initiated by each guest:
 
 ```
-G→H  clock_ping { t0 }                 // guest monotonic µs at send
+G→H  clock_ping { t0 }                 // guest monotonic µs at send (a browser: performance.now())
 H→G  clock_pong { t0, t1, t2 }         // t1 = host receive, t2 = host send
                                         // guest records t3 = receive time
 offset = ((t1 - t0) + (t2 - t3)) / 2
@@ -972,6 +1066,18 @@ scheduling earlier by its known output latency), but the protocol supports it:
   output device.
 - `G→H media_status` MAY include `reportedLatencyUs` for host-side diagnostics.
 
+**Browser guests** (§1.1) have the least to go on. Web Audio reports
+`AudioContext.outputLatency` plus `baseLatency` in Chromium and Firefox, and
+a page should schedule by their sum; Safari reports neither (or zero), so on
+an iPhone the platform default is no correction at all, and Bluetooth
+headphones are a few hundred milliseconds late until the listener nudges.
+A browser guest SHOULD therefore make the manual nudge prominent and keep
+it per page (a page cannot identify the output device). A page also maps
+`anchor.hostTime` into its audio clock through
+`AudioContext.getOutputTimestamp()` where it can, which is coarser than a
+native engine's scheduler; browser listening is best-effort within the §5.4
+correction bands rather than held to the native target.
+
 ---
 
 ## 8. Errors
@@ -999,11 +1105,28 @@ still says whether the connection is ending (§2.1).
   where it gates something: uploads are attributed and permission-checked by
   a host-issued per-peer key (§6.4), never by a claim. Holding the token does
   not make a device a member — joining does.
-- Traffic is plaintext in protocol 1 (it's your living room / car). TLS with a
-  self-signed cert pinned via the QR is the upgrade path — required before any
-  future web guest client (browser secure-context rules), optional until then.
+- **Traffic is plaintext, browser guests included** (it's your living room
+  / car). This is a decision, not a gap waiting for TLS. Everything a
+  listener needs works on a plain `http://` LAN origin — WebSocket, `fetch`,
+  Web Audio, `performance.now()`; only service workers, PWA install and the
+  wake lock require a secure context, and listening needs none of them. TLS
+  would buy a LAN room little: a self-signed certificate on a LAN IP puts a
+  full-page warning in front of every browser guest, a browser offers a page
+  no way to pin a certificate it was handed in a QR code, and an `https` page
+  could not open `ws://` or fetch `http://` from the host anyway (mixed
+  content). What plaintext costs is that anyone on the same network segment
+  can read the traffic, the token included — which, for a room that is
+  already "everyone on this Wi-Fi" when discoverable, is the threat model of
+  this whole section, not a new one. TLS with a self-signed certificate
+  pinned via the `localjam://` QR remains possible later as a
+  **hostile-network hardening option for native clients**; it is not a
+  prerequisite for anything, the web guest included.
+- The page routes (§1.1) are unauthenticated by design and reveal nothing
+  about the room: the bundle is the same in every host, the token rides only
+  the URL fragment, and a request for the page carries neither.
 - Hosts serve the LAN only. A host MUST refuse off-LAN remotes on both
-  planes before it processes anything they send (answering `403`), and that
+  planes — and on the page routes (§1.1) — before it processes anything they
+  send (answering `403`), and that
   filter — not the bind address — is the rule: a host MAY bind the wildcard
   address when one port has to span several networks (a phone on Wi-Fi
   *and* its own hotspot) or a network whose interface does not exist yet
@@ -1029,7 +1152,9 @@ still says whether the connection is ending (§2.1).
   anyone on the segment can answer, including with an address that is not on
   it. A joiner MUST apply the same on-LAN rule to every `host` candidate it
   is about to dial, whatever door the join URI came in by — QR, pasted link,
-  deep link, or a nearby-room row — and SHOULD refuse candidates that are
+  deep link, or a nearby-room row — and in whichever form (§1: for the http
+  form, its own host when the fragment lists none, every listed one when it
+  does), and SHOULD refuse candidates that are
   names rather than IP literals, since what a name resolves to is not
   knowable from the link. (`*.local` is the reasonable exception: multicast
   DNS answers only from the local link, and the resolved addresses can then
@@ -1149,8 +1274,11 @@ held against the client.
 
 ## 10. Decided
 
-- **Targets**: native mobile + desktop. Web is a possible later guest-only
-  client; never a host.
+- **Targets**: native mobile + desktop, hosts and guests. Browsers are guests
+  only — never hosts — and load their player from the host itself (§1.1),
+  so a room needs one installed app.
+- **Transport security**: plaintext, browsers included (§9). TLS is a
+  possible hardening option for hostile networks, not a prerequisite.
 - **Media priority**: audio-first. Video ships later as "best effort ±100 ms"
   on the same anchor model; images are trivial (`state.mediaId` + display).
 - **Session lifetime**: one host; host death ends the room. No migration.
@@ -1170,6 +1298,9 @@ held against the client.
 1. **Video sync quality bar** — same anchor model, but players
    (AVPlayer/ExoPlayer) have coarser scheduling than audio engines. Define the
    acceptable drift for "cherry on top" video when it lands.
-2. **TLS** — plaintext is fine for native clients; a self-signed cert
-   pinned via the QR becomes relevant if/when a web guest client appears
-   (secure-context requirements) or if hostile-network hardening matters.
+2. **TLS as hardening** — decided against as a requirement (§9, §10):
+   plaintext is the protocol for every client, the browser guest included,
+   which needs no secure context to listen. What stays open is whether
+   native clients get an opt-in hardening mode for hostile networks — a
+   self-signed certificate pinned via the `localjam://` QR — and whether
+   that is worth a second code path nobody on a home or car network needs.
