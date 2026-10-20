@@ -509,7 +509,7 @@ packages:
       path: "../../packages/localjam_audio"
       relative: true
     source: path
-    version: "0.3.0"
+    version: "0.4.0"
   localjam_client:
     dependency: "direct main"
     description:
