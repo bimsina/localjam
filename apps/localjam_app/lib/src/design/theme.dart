@@ -1,10 +1,16 @@
 /// Builds the app's [ThemeData] from the [JamColors] tokens and the
 /// [JamTypeScale].
 ///
-/// The app looks like iOS on every platform (D2): no Material ink ripples
-/// (presses are highlights and opacity), Cupertino page transitions, a
-/// Cupertino theme derived from the same tokens so `Cupertino*` widgets —
-/// nav bars, alerts, switches, menus — pick up the tint and the type scale.
+/// One design system on every platform (DESIGN_SPEC v4): no Material ink
+/// ripples (presses are highlights and opacity), Cupertino page transitions,
+/// and a Cupertino theme derived from the same tokens so the few `Cupertino*`
+/// widgets still in use (nav bars, text fields, the switch, the sliding
+/// control) pick up the tint and the type scale.
+///
+/// No Material component is instantiated in `lib/`; the component themes
+/// below exist so one that slips in still comes out in LocalJam's shapes and
+/// colours — soft rectangles, the brand fill on switches, `dangerFilled`
+/// under white — rather than Material's or v3's.
 library;
 
 import 'package:flutter/cupertino.dart';
@@ -74,7 +80,9 @@ ThemeData _build(JamColors c, Brightness brightness, TargetPlatform platform) {
 
   final scheme = ColorScheme(
     brightness: brightness,
-    primary: c.tint,
+    // Fills under white: the filled tones, not the bright dark-mode text
+    // colours (white on dark `tint` is 2.3:1, on dark `danger` 2.2:1).
+    primary: c.tintFilled,
     onPrimary: c.onTint,
     primaryContainer: c.tintFill,
     onPrimaryContainer: c.tint,
@@ -86,7 +94,7 @@ ThemeData _build(JamColors c, Brightness brightness, TargetPlatform platform) {
     onTertiary: c.onTint,
     tertiaryContainer: c.fillSecondary,
     onTertiaryContainer: c.warning,
-    error: c.danger,
+    error: c.dangerFilled,
     onError: c.onTint,
     errorContainer: c.danger.withValues(alpha: 0.12),
     onErrorContainer: c.danger,
@@ -130,8 +138,8 @@ ThemeData _build(JamColors c, Brightness brightness, TargetPlatform platform) {
     ),
   );
 
-  /// Every Material button that slips through gets a capsule, no ripple and
-  /// no elevation.
+  /// Every Material button that slips through gets `JamButton`'s soft
+  /// rectangle, no ripple and no elevation.
   ButtonStyle buttonBase({Color? foreground, Color? background}) => ButtonStyle(
     foregroundColor: WidgetStateProperty.resolveWith(
       (s) => s.contains(WidgetState.disabled) ? c.tertiaryLabel : foreground,
@@ -153,7 +161,11 @@ ThemeData _build(JamColors c, Brightness brightness, TargetPlatform platform) {
     ),
     elevation: const WidgetStatePropertyAll(0),
     shadowColor: const WidgetStatePropertyAll(Colors.transparent),
-    shape: const WidgetStatePropertyAll(StadiumBorder()),
+    shape: WidgetStatePropertyAll(
+      RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(JamRadius.button),
+      ),
+    ),
     splashFactory: NoSplash.splashFactory,
   );
 
@@ -267,10 +279,11 @@ ThemeData _build(JamColors c, Brightness brightness, TargetPlatform platform) {
       linearMinHeight: 4,
     ),
 
+    // The brand fill, as `JamSwitch` draws it — never green.
     switchTheme: SwitchThemeData(
       thumbColor: const WidgetStatePropertyAll(Colors.white),
       trackColor: WidgetStateProperty.resolveWith(
-        (s) => s.contains(WidgetState.selected) ? c.success : c.fill,
+        (s) => s.contains(WidgetState.selected) ? c.tintFilled : c.fill,
       ),
       trackOutlineColor: const WidgetStatePropertyAll(Colors.transparent),
       overlayColor: const WidgetStatePropertyAll(Colors.transparent),
@@ -301,7 +314,9 @@ ThemeData _build(JamColors c, Brightness brightness, TargetPlatform platform) {
       side: BorderSide.none,
       labelStyle: type.footnote,
       secondaryLabelStyle: type.footnote.copyWith(color: c.tint),
-      shape: const StadiumBorder(),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(JamRadius.buttonSmall),
+      ),
     ),
 
     inputDecorationTheme: jamFilledInput(c, text),
@@ -336,8 +351,8 @@ ThemeData _build(JamColors c, Brightness brightness, TargetPlatform platform) {
       surfaceTintColor: Colors.transparent,
       barrierColor: c.scrim,
       elevation: 0,
-      titleTextStyle: type.headline,
-      contentTextStyle: type.footnote,
+      titleTextStyle: type.title3,
+      contentTextStyle: type.subheadline,
       insetPadding: const EdgeInsets.symmetric(
         horizontal: JamSpace.huge,
         vertical: JamSpace.xxl,
@@ -353,11 +368,13 @@ ThemeData _build(JamColors c, Brightness brightness, TargetPlatform platform) {
       actionTextColor: c.tint,
       behavior: SnackBarBehavior.floating,
       elevation: 0,
-      shape: const StadiumBorder(),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(JamRadius.notice),
+      ),
     ),
 
     popupMenuTheme: PopupMenuThemeData(
-      color: c.elevated,
+      color: c.elevatedGroupedSurface,
       surfaceTintColor: Colors.transparent,
       elevation: 0,
       textStyle: type.body,
@@ -380,8 +397,11 @@ ThemeData _build(JamColors c, Brightness brightness, TargetPlatform platform) {
       elevation: 0,
       selectedLabelTextStyle: type.footnote.copyWith(color: c.tint),
       unselectedLabelTextStyle: type.footnote,
-      selectedIconTheme: IconThemeData(color: c.tint, size: 22),
-      unselectedIconTheme: IconThemeData(color: c.secondaryLabel, size: 22),
+      selectedIconTheme: IconThemeData(color: c.tint, size: JamIconSize.nav),
+      unselectedIconTheme: IconThemeData(
+        color: c.secondaryLabel,
+        size: JamIconSize.nav,
+      ),
     ),
 
     // iOS's push everywhere (D2); the room's own slide-up is its own route
@@ -398,8 +418,10 @@ ThemeData _build(JamColors c, Brightness brightness, TargetPlatform platform) {
   );
 }
 
-/// The default field: iOS's filled rounded rect — `fillSecondary`, radius 10,
-/// no border; a danger hairline when in error.
+/// The default field: a filled rounded rect — `fillSecondary`, radius 10,
+/// no border; a danger hairline when in error. Placeholders are
+/// `secondaryLabel`, like every placeholder in the app: a hint has to be
+/// readable in sunlight.
 InputDecorationTheme jamFilledInput(JamColors c, TextTheme text) {
   OutlineInputBorder border([BorderSide side = BorderSide.none]) =>
       OutlineInputBorder(
@@ -410,7 +432,7 @@ InputDecorationTheme jamFilledInput(JamColors c, TextTheme text) {
   return InputDecorationTheme(
     filled: true,
     fillColor: c.fillSecondary,
-    hintStyle: text.bodyLarge!.copyWith(color: c.tertiaryLabel),
+    hintStyle: text.bodyLarge!.copyWith(color: c.secondaryLabel),
     labelStyle: text.bodyMedium!.copyWith(color: c.secondaryLabel),
     helperStyle: text.bodySmall!.copyWith(color: c.secondaryLabel),
     errorStyle: text.bodySmall!.copyWith(color: c.danger),
@@ -428,12 +450,12 @@ InputDecorationTheme jamFilledInput(JamColors c, TextTheme text) {
 }
 
 /// The editable-heading field: no box at all, so a room's name reads as the
-/// title it is. Hint in `tertiaryLabel` at the field's own style.
+/// title it is. Hint in `secondaryLabel` at the field's own style.
 InputDecorationTheme jamBorderlessInput(JamColors c, TextTheme text) =>
     InputDecorationTheme(
       filled: false,
       isDense: true,
-      hintStyle: text.displaySmall!.copyWith(color: c.tertiaryLabel),
+      hintStyle: text.displaySmall!.copyWith(color: c.secondaryLabel),
       contentPadding: EdgeInsets.zero,
       border: InputBorder.none,
       enabledBorder: InputBorder.none,
@@ -462,16 +484,19 @@ class JamForcedAppearance extends StatelessWidget {
   final Brightness brightness;
   final Widget child;
 
-  static final Map<(TargetPlatform, Brightness), ThemeData> _themes = {};
+  static final Map<(TargetPlatform, Brightness, bool), ThemeData> _themes = {};
 
   @override
   Widget build(BuildContext context) {
     final platform = Theme.of(context).platform;
+    // Increase Contrast survives the switch: a forced-dark menu over the
+    // player gets the dark *high-contrast* palette when it is on.
+    final highContrast = MediaQuery.maybeHighContrastOf(context) ?? false;
     final theme = _themes.putIfAbsent(
-      (platform, brightness),
+      (platform, brightness, highContrast),
       () => brightness == Brightness.dark
-          ? jamDarkTheme(platform: platform)
-          : jamLightTheme(platform: platform),
+          ? jamDarkTheme(platform: platform, highContrast: highContrast)
+          : jamLightTheme(platform: platform, highContrast: highContrast),
     );
     return MediaQuery(
       data: MediaQuery.of(context).copyWith(platformBrightness: brightness),
@@ -482,6 +507,37 @@ class JamForcedAppearance extends StatelessWidget {
           child: child,
         ),
       ),
+    );
+  }
+}
+
+/// Re-themes [child] for the Now Playing backdrop: its [JamColors] become
+/// [jamBackdropColors] of the ambient ones — white text, white for what can
+/// be tapped, see-through grounds, the backdrop's own red and amber.
+///
+/// The one wrapper for shared components drawn on the backdrop (the docked
+/// People panel, anything in the player that reads `context.jamColors`).
+/// Nest it freely: applying it twice gives the same colours.
+class JamOnBackdrop extends StatelessWidget {
+  const JamOnBackdrop({super.key, required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colors = jamBackdropColors(
+      theme.extension<JamColors>() ?? JamColors.dark,
+    );
+    return Theme(
+      data: theme.copyWith(
+        extensions: [
+          for (final extension in theme.extensions.values)
+            if (extension is! JamColors) extension,
+          colors,
+        ],
+      ),
+      child: child,
     );
   }
 }

@@ -1,12 +1,17 @@
-/// Faces for the room (D6): a flat colour per person, white initials, no ring.
+/// Faces (D3): a flat colour per person, white Manrope initials, no ring.
 ///
-/// The protocol carries only a `clientName` — no avatar, no colour — so a
-/// face derives from that name, or better from a stable id
-/// ([JamAvatar.colorKey]), or best from the jam's own assignment
-/// ([jamAvatarColors]) so nobody in one jam shares a colour (spec §10.10).
+/// **One person, one colour, everywhere.** The protocol carries only a
+/// `clientName` — no avatar, no colour, and no id that every screen knows —
+/// so a face is keyed by the person's *display name*: Settings, the Nearby
+/// header, the sidebar, Past Jams and the jam itself all derive the same
+/// colour from the same name ([identityColor]). Inside a jam, colours are
+/// assigned over the roster's names ([jamAvatarColors]) so nobody in one jam
+/// shares a colour (spec §10.10); each person still starts at their own
+/// name's slot, so most people keep their everyday colour in the jam too.
+///
 /// The derivation must be stable *across devices*, which is why it hashes
 /// with FNV-1a rather than [Object.hashCode] (not stable between runs or
-/// platforms).
+/// platforms). A rename repaints a person — a rename *is* how they appear.
 library;
 
 import 'package:flutter/widgets.dart';
@@ -32,21 +37,25 @@ int _stableHash(String value) {
 Color identityColor(String name, [Brightness? brightness]) =>
     kJamAvatarPalette[_stableHash(name) % kJamAvatarPalette.length];
 
-/// The colour for a stable id (a peer's client id): what [JamAvatar.colorKey]
-/// paints when nothing has assigned the jam's colours.
+/// The colour for an arbitrary [key]: what [JamAvatar.colorKey] paints when
+/// nothing has assigned the jam's colours. For a person, the key is their
+/// display name — this is then [identityColor].
 Color jamAvatarColorForKey(String key) =>
     kJamAvatarPalette[_stableHash(key) % kJamAvatarPalette.length];
 
-/// Colours for everyone in one jam, in room order (spec §10.10).
+/// Colours for everyone in one jam, in room order (spec §10.10, D3).
 ///
-/// Each id starts at its own stable slot ([jamAvatarColorForKey]) and moves
-/// on to the next free palette colour when someone earlier in [keys] already
-/// has it, so no two people share a colour while the palette lasts. Past
-/// eight people the palette starts over. The same id always gets the same
-/// colour within one call.
+/// [keys] are the roster's **display names** (this device first, then the
+/// host, then everyone else). Each name starts at its own slot — the colour
+/// [identityColor] gives it everywhere else — and moves on to the next free
+/// palette colour only when someone earlier in [keys] already has it, so no
+/// two people share a colour while the palette lasts. Past eight people the
+/// palette starts over. The same name always gets the same colour within
+/// one call.
 ///
 /// Pass the same ordered list everywhere the jam's faces appear (the People
-/// sheet, the face pile) so a person keeps one colour across them.
+/// sheet, the face pile, an "Added by" face) so a person keeps one colour
+/// across them.
 List<Color> jamAvatarColors(List<String> keys) {
   const palette = kJamAvatarPalette;
   final n = palette.length;
@@ -86,7 +95,10 @@ const double kJamAvatarSingleInitialMax = 24;
 
 /// The avatar diameters the design uses.
 abstract final class JamAvatarSize {
-  /// Inline credits.
+  /// The face beside "Added by Mia" on Now Playing (D6).
+  static const double credit = 16;
+
+  /// Small piles inside rows (Past Jams), a jam mark's host badge on Nearby.
   static const double attribution = 20;
 
   /// The face pile on Now Playing's footer and the mini player.
@@ -129,16 +141,16 @@ class JamAvatar extends StatelessWidget {
        initials = null,
        colorKey = null;
 
-  /// The display name the initials (and, without [colorKey] or [color], the
-  /// colour) derive from.
+  /// The display name the initials and (without [color]) the colour derive
+  /// from.
   final String name;
 
-  /// A stable id (the peer's client id) to pick the colour from instead of
-  /// [name], so a rename does not repaint someone.
+  /// A key to colour by instead of [name]. Leave it null for people: D3
+  /// keys every face by its name so it matches across screens.
   final String? colorKey;
 
-  /// An assigned colour — from [jamAvatarColors], so nobody in the jam
-  /// shares one. Wins over [colorKey] and [name].
+  /// An assigned colour — from [jamAvatarColors] over the roster's names, so
+  /// nobody in the jam shares one. Wins over [colorKey] and [name].
   final Color? color;
 
   /// Diameter — see [JamAvatarSize].
@@ -180,9 +192,11 @@ class JamAvatar extends StatelessWidget {
       letters,
       maxLines: 1,
       textScaler: TextScaler.noScaling,
+      // The brand face (D3): Manrope, like every named thing.
       style: context.jamBody.copyWith(
+        fontFamily: 'Manrope',
         fontSize: size * (single ? 0.45 : 0.4),
-        fontWeight: FontWeight.w600,
+        fontWeight: FontWeight.w700,
         color: JamAvatarPalette.initials,
         height: 1,
         letterSpacing: 0,
@@ -228,12 +242,13 @@ class JamAvatarStack extends StatelessWidget {
     this.colors,
   });
 
-  /// Display names, in room order.
+  /// Display names, in room order. Without [colors] or [colorKeys] the pile
+  /// colours itself with [jamAvatarColors] over these names — distinct
+  /// within the pile and the same as the People sheet's.
   final List<String> names;
 
-  /// Stable ids parallel to [names]. When given, the pile's colours come
-  /// from [jamAvatarColors] over the whole list — distinct within the jam,
-  /// and the same as anywhere else that assigns over the same list.
+  /// Keys parallel to [names] to assign the colours over instead. Leave it
+  /// null for people (D3 keys faces by name).
   final List<String>? colorKeys;
 
   /// Colours parallel to [names], already assigned (wins over [colorKeys]).
@@ -269,9 +284,9 @@ class JamAvatarStack extends StatelessWidget {
     final assigned = colors;
     final palette = assigned != null && assigned.length >= visible.length
         ? assigned
-        : (keys != null && keys.length == names.length
-              ? jamAvatarColors(keys)
-              : null);
+        : jamAvatarColors(
+            keys != null && keys.length == names.length ? keys : names,
+          );
     // A covered face's letters move to the middle of the part still showing.
     final shift = (step - cutout) / 2 - size / 2;
 
@@ -289,14 +304,14 @@ class JamAvatarStack extends StatelessWidget {
                   ? JamAvatar._inPile(
                       name: visible[i],
                       size: size,
-                      color: palette?[i],
+                      color: palette[i],
                     )
                   : ClipPath(
                       clipper: _KnockoutClipper(offset: step, gap: cutout),
                       child: JamAvatar._inPile(
                         name: visible[i],
                         size: size,
-                        color: palette?[i],
+                        color: palette[i],
                         initialsShift: shift,
                       ),
                     ),

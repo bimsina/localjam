@@ -307,14 +307,12 @@ class _JamBackdropBuilderState extends State<JamBackdropBuilder> {
   }
 }
 
-/// Paints a [JamBackdrop]: the base colour, the cover scaled to fill and
-/// blurred (σ [JamBlur.backdrop]), and the black overlay — cross-fading over
-/// [JamDuration.crossfade] when the cover changes. With no cover: the base
-/// with a faint radial lift (spec §10.7).
+/// Paints a [JamBackdrop]: a matte wash from its base colour into charcoal,
+/// cross-fading over [JamDuration.crossfade] when the cover changes.
 ///
-/// Paints only. Every colour decision — the saturation boost, the darkening
-/// solved for secondary text, the vibrance — is made once, in
-/// `design/artwork_tint.dart`, and is already in [JamBackdrop.image].
+/// Paints only. Every colour decision — the representative hue, the
+/// saturation band, the lightness solved for secondary text — is made once,
+/// in `design/artwork_tint.dart`, and is already in [JamBackdrop.base].
 class JamBackdropView extends StatelessWidget {
   const JamBackdropView({super.key, required this.backdrop, this.child});
 

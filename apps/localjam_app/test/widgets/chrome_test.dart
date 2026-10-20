@@ -88,7 +88,11 @@ void main() {
         ),
       );
       expect(find.byType(BackdropFilter), findsNothing);
-      expect(tester.widget<Icon>(find.byType(Icon)).color, Colors.black);
+      // Warm ink, never pure black.
+      expect(
+        tester.widget<Icon>(find.byType(Icon)).color,
+        JamNowPlayingColors.selectedGlyph,
+      );
     });
   });
 

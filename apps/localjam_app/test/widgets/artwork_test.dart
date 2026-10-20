@@ -77,9 +77,14 @@ void main() {
       expect(JamRadius.artwork(44), 6);
       expect(JamRadius.artwork(56), 8);
       expect(JamRadius.artwork(64), 8);
-      expect(JamRadius.artwork(200), 12);
+      expect(JamRadius.artwork(120), 12);
+      // A large cover (History detail, 200) matches Now Playing's 18.
+      expect(JamRadius.artwork(200), JamRadius.largeCover);
       await pumpTile(tester, const JamArtworkTile(size: 340));
-      expect(tileDecoration(tester).borderRadius, BorderRadius.circular(12));
+      expect(
+        tileDecoration(tester).borderRadius,
+        BorderRadius.circular(JamRadius.largeCover),
+      );
     });
 
     testWidgets('renders bytes gaplessly once they arrive', (tester) async {
@@ -151,12 +156,7 @@ void main() {
     testWidgets('cover color settles into charcoal behind controls', (
       tester,
     ) async {
-      final backdrop = JamBackdrop(
-        id: 'a',
-        image: MemoryImage(_pixel),
-        overlayOpacity: 0.3,
-        base: const Color(0xFF223344),
-      );
+      const backdrop = JamBackdrop(id: 'a', base: Color(0xFF223344));
       await pumpTile(
         tester,
         SizedBox(

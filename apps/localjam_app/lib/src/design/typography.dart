@@ -1,8 +1,16 @@
-/// The LocalJam type scale (DESIGN_SPEC v3 §3).
+/// The LocalJam type scale (DESIGN_SPEC v4 "Identity"; v3 §3 for metrics).
 ///
-/// Manrope gives headings their identity. Body copy uses SF Pro on iOS/macOS,
-/// Roboto on Android, Segoe UI on Windows, and the platform default on Linux. SF's
-/// tracking table is applied on Apple platforms only; other faces track at 0.
+/// **Which face.** Manrope is for things with a name and for headings:
+/// largeTitle, title1–3, a song's title, a jam's name, the wordmark, a jam's
+/// monogram and a person's initials. The system face is for everything that
+/// labels chrome or runs as text: headline and below — nav and sheet titles,
+/// rows, buttons, footnotes. Pick by role, not by size, and never animate
+/// between the two families (a `TextStyle.lerp` across families snaps
+/// halfway); scale one style instead.
+///
+/// Body copy uses SF Pro on iOS/macOS, Roboto on Android, Segoe UI on
+/// Windows, and the platform default on Linux. SF's tracking table is
+/// applied on Apple platforms only; other faces track at 0.
 ///
 /// Screens never hand-roll a size: they read a named getter
 /// (`context.jamBody`, `context.jamFootnote`, …) and `copyWith` a colour.
@@ -39,19 +47,21 @@ class JamTypeScale extends ThemeExtension<JamTypeScale> {
     required this.caption2,
   });
 
-  /// 34/41 bold. Large nav titles, onboarding.
+  /// Manrope 34/41 bold. Large nav titles, onboarding.
   final TextStyle largeTitle;
 
-  /// 28/36 bold.
+  /// Manrope 28/36 bold. The Now Playing song title.
   final TextStyle title1;
 
-  /// 22/29 bold. Empty-state and terminal-state titles, detail headers.
+  /// Manrope 22/29 bold. Empty-state and terminal-state titles, detail
+  /// headers, a jam's name at its largest.
   final TextStyle title2;
 
-  /// 20/27 semibold. Section titles ("Recent").
+  /// Manrope 20/27 semibold. Section titles ("Recent", "Up Next"), alert
+  /// titles, a jam's name in a row.
   final TextStyle title3;
 
-  /// 17/22 semibold. Inline nav titles, sheet titles, alert titles.
+  /// 17/22 semibold. Inline nav titles, sheet titles.
   final TextStyle headline;
 
   /// 17/22 regular. Row titles, running text.
@@ -260,16 +270,16 @@ extension JamTypography on BuildContext {
         color: JamColors.light.label,
       );
 
-  /// 34/41 bold.
+  /// Manrope 34/41 bold.
   TextStyle get jamLargeTitle => jamType.largeTitle;
 
-  /// 28/36 bold.
+  /// Manrope 28/36 bold.
   TextStyle get jamTitle1 => jamType.title1;
 
-  /// 22/29 bold.
+  /// Manrope 22/29 bold.
   TextStyle get jamTitle2 => jamType.title2;
 
-  /// 20/25 semibold.
+  /// Manrope 20/27 semibold.
   TextStyle get jamTitle3 => jamType.title3;
 
   /// 17/22 semibold.

@@ -26,7 +26,7 @@ BoxDecoration decorationOf(WidgetTester tester, Finder finder) =>
 
 void main() {
   group('JamAvatar', () {
-    testWidgets('draws white initials in both themes', (tester) async {
+    testWidgets('draws white Manrope initials in both themes', (tester) async {
       for (final dark in [false, true]) {
         await pumpAvatar(
           tester,
@@ -36,7 +36,8 @@ void main() {
         expect(find.text('SP'), findsOneWidget);
         final text = tester.widget<Text>(find.text('SP'));
         expect(text.style!.color, Colors.white);
-        expect(text.style!.fontWeight, FontWeight.w600);
+        expect(text.style!.fontWeight, FontWeight.w700);
+        expect(text.style!.fontFamily, 'Manrope');
       }
     });
 
@@ -61,10 +62,39 @@ void main() {
       expect(decorationOf(tester, finder).color, light.color);
     });
 
-    test('every palette colour holds white initials at 3:1', () {
+    test('every palette colour holds white initials at 4.5:1', () {
       for (final c in kJamAvatarPalette) {
         final ratio = 1.05 / (c.computeLuminance() + 0.05);
-        expect(ratio, greaterThanOrEqualTo(3));
+        expect(ratio, greaterThanOrEqualTo(4.5), reason: '$c');
+      }
+    });
+
+    test('eight warm hues at one lightness, none near raspberry', () {
+      expect(kJamAvatarPalette.toSet(), hasLength(8));
+      final lums = [for (final c in kJamAvatarPalette) c.computeLuminance()];
+      final spread =
+          lums.reduce((a, b) => a > b ? a : b) -
+          lums.reduce((a, b) => a < b ? a : b);
+      expect(spread, lessThan(0.01));
+      final tint = HSLColor.fromColor(JamColors.light.tint).hue;
+      for (final c in kJamAvatarPalette) {
+        final d = (HSLColor.fromColor(c).hue - tint).abs() % 360;
+        expect(d < 180 ? d : 360 - d, greaterThan(25), reason: '$c');
+      }
+    });
+
+    test('one person, one colour: the jam starts from the name\'s own', () {
+      const roster = ['Bibek', 'Mia', 'Theo'];
+      final colors = jamAvatarColors(roster);
+      expect(colors.first, identityColor('Bibek'));
+      expect(colors.toSet(), hasLength(3));
+      for (var i = 0; i < roster.length; i++) {
+        // Nobody earlier took their slot, so everyone keeps their own.
+        if (!roster
+            .take(i)
+            .any((n) => identityColor(n) == identityColor(roster[i]))) {
+          expect(colors[i], identityColor(roster[i]));
+        }
       }
     });
 
@@ -174,6 +204,19 @@ void main() {
           .toList();
       expect(colors, jamAvatarColors(ids));
       expect(colors.toSet().length, 3);
+    });
+
+    testWidgets('by name, nobody in the pile shares a colour either', (
+      tester,
+    ) async {
+      const names = ['Bibek', 'Mia', 'Theo'];
+      await pumpAvatar(tester, const JamAvatarStack(names: names));
+      final colors = tester
+          .widgetList<JamAvatar>(find.byType(JamAvatar))
+          .map((a) => a.resolvedColor)
+          .toList();
+      expect(colors, jamAvatarColors(names));
+      expect(colors.toSet(), hasLength(3));
     });
 
     testWidgets('announces everyone', (tester) async {

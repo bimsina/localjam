@@ -1,33 +1,30 @@
-/// The Now Playing backdrop (D4): the current cover, scaled to fill and
-/// blurred, under a black overlay strong enough for white text.
+/// The Now Playing backdrop (D1): a matte wash of the cover's colour that
+/// fades into charcoal behind the controls. No image is painted — the cover
+/// itself is right there in the middle of the page.
 ///
-/// This file produces the *inputs* — which image, how strong the overlay,
-/// what flat colour stands in — and caches them per cover. Painting is
-/// `JamBackdropView` in `widgets/artwork.dart`.
+/// This file picks the wash's colour and caches it per cover. Painting is
+/// `JamBackdropView` in `widgets/artwork.dart` (a gradient from
+/// [JamBackdrop.base] to [JamNowPlayingColors.backdropPlaceholder]).
 ///
-/// Two things happen to a cover before it is painted (spec §10.7):
+/// Three steps turn a cover into its colour (spec §10.7):
 ///
-/// 1. **Saturation first.** The cover is decoded small (it is about to be
-///    blurred by σ 70 anyway) and its saturation boosted by
-///    [kJamBackdropSaturation], so a pale or bright sleeve keeps its hue
-///    once darkened instead of turning to grey-brown mud.
-/// 2. **Then the darkening, solved for the secondary text.** The black is
-///    the weakest that puts *secondary* white
-///    ([JamNowPlayingColors.secondary], white 70%) at
-///    [kJamBackdropContrastTarget] (AA 4.5:1 plus a margin) over the
-///    cover's brightest blurred patch — not its mean, since the blur leaves
-///    local bright spots under the text. Floored at
-///    [kJamBackdropMinOverlay], capped at [kJamBackdropMaxOverlay] (a white
-///    cover still clears at the cap).
-/// 3. **Vibrance.** Darkening scales a colour's chroma down with it, and a
-///    pastel has little to start with (a near-white sleeve cannot be
-///    saturated much before it clips). So once darkened, the quiet colours
-///    get a further, inverse-to-chroma boost ([kJamBackdropVibrance]): a
-///    pale pink cover lands on a dusty rose, not grey, while an already
-///    vivid one is left alone, and a truly grey cover stays grey.
-///
-/// The darkening is baked into the pixels the view blurs (its own overlay
-/// is then 0), so the vibrance can work on the darkened colours.
+/// 1. **A representative hue, not the mean.** The cover is decoded small
+///    and every pixel votes for its hue family, weighted by its chroma, so
+///    greys do not vote and the strongest colour family wins. An orange
+///    sleeve with a teal sky stays orange — averaging the two would give
+///    olive. A cover with almost no colour falls back to its mean, so a
+///    grey cover stays grey.
+/// 2. **Saturation held to a band.** Quiet colours are lifted to
+///    [kJamBackdropMinSaturation] so a pastel keeps its hue (a pale pink
+///    sleeve lands on dusty rose, not grey); loud ones are capped at
+///    [kJamBackdropMaxSaturation], and hues near raspberry at
+///    [kJamBackdropMaxSaturationNearTint], so a pink cover never turns the
+///    room into a wall of the action colour.
+/// 3. **Lightness solved for the secondary text.** The wash starts no
+///    lighter than [kJamBackdropMaxLightness] and darkens until *secondary*
+///    white ([JamNowPlayingColors.secondary], white 70%) reaches
+///    [kJamBackdropContrastTarget] (AA 4.5:1 plus a margin) on it. The
+///    gradient only gets darker below, so that is the worst case.
 library;
 
 import 'dart:async';
@@ -39,83 +36,78 @@ import 'package:flutter/painting.dart';
 
 import 'tokens.dart';
 
-/// The weakest overlay any cover gets.
-const double kJamBackdropMinOverlay = 0.25;
-
-/// The strongest overlay any cover gets (a white cover). Enough that white
-/// 70% on pure white darkened by it still clears [kJamBackdropContrastTarget].
-const double kJamBackdropMaxOverlay = 0.7;
-
-/// How much the cover's saturation is boosted before it is darkened.
-const double kJamBackdropSaturation = 1.5;
-
-/// The most extra saturation a quiet colour gets once darkened (a near-grey
-/// one gets 1 + this; one already at [_kVibranceKnee] chroma gets none).
-const double kJamBackdropVibrance = 2.2;
-
-/// The chroma (max − min channel, 0–1) at which vibrance stops adding.
-const double _kVibranceKnee = 0.3;
-
 /// The contrast secondary text must reach on the backdrop: AA's 4.5:1 with
-/// a margin for what the sampling misses.
+/// a margin.
 const double kJamBackdropContrastTarget = 4.6;
 
-/// The edge the cover is decoded at for sampling and painting. The view
-/// blurs it by σ 70, so detail beyond this is never seen.
+/// The lightest a wash starts from (HSL), before the contrast solve: the
+/// room stays dim even where a darker colour would be "allowed".
+const double kJamBackdropMaxLightness = 0.38;
+
+/// The least saturation (HSL) a coloured cover's wash keeps, so a pastel
+/// still names its hue once darkened.
+const double kJamBackdropMinSaturation = 0.24;
+
+/// The most saturation (HSL) a wash may have: colour, not neon.
+const double kJamBackdropMaxSaturation = 0.55;
+
+/// The most saturation (HSL) for a wash whose hue is within
+/// [kJamBackdropTintClearance] of raspberry: pinks and magentas come out
+/// dusty, never as a raspberry wall competing with the action colour.
+const double kJamBackdropMaxSaturationNearTint = 0.3;
+
+/// Degrees of hue either side of raspberry that count as "near" it.
+const double kJamBackdropTintClearance = 28;
+
+/// Raspberry's hue (HSL degrees) — the light theme's tint, #B82F59.
+const double _kTintHue = 342;
+
+/// The most saturation a grey cover's wash may pick up.
+const double _kGreySaturation = 0.12;
+
+/// Mean chroma (max − min channel, 0–1) under which a cover counts as grey
+/// and the mean stands in for the dominant hue.
+const double kJamBackdropMinChroma = 0.08;
+
+/// A pixel with less chroma than this does not vote for a hue.
+const double _kVoteChroma = 0.04;
+
+/// Hue families the votes are counted in (30° each).
+const int _kHueBins = 12;
+
+/// The edge the cover is decoded at for sampling.
 const int _kSampleEdge = 24;
 
 /// What the Now Playing backdrop should paint.
 @immutable
 class JamBackdrop {
-  const JamBackdrop({
-    required this.image,
-    required this.overlayOpacity,
-    required this.base,
-    this.id,
-  });
+  const JamBackdrop({required this.base, this.id});
 
-  /// The placeholder: a deep neutral, no image, no overlay. The room paints
-  /// its faint lift over it (spec §10.7).
+  /// The placeholder: the deep warm neutral every backdrop fades into.
   static const JamBackdrop placeholder = JamBackdrop(
-    image: null,
-    overlayOpacity: 0,
     base: JamNowPlayingColors.backdropPlaceholder,
   );
 
-  /// The cover to blur (already saturated), or null for [placeholder].
-  final ImageProvider? image;
-
-  /// Alpha of the black overlay over the blurred cover — 0 when
-  /// [backdropFor] has baked the darkening into [image] already.
-  final double overlayOpacity;
-
-  /// A flat stand-in: the cover's (saturated) mean colour with the overlay
-  /// applied, or the deep neutral for the placeholder. Paint it under the
-  /// blur so the edges never show the page, and use it anywhere a solid
-  /// backdrop colour is needed.
+  /// The wash's colour at the top of the page: the cover's representative
+  /// colour, contrast-solved ([backdropColorFor]), or the deep neutral for
+  /// the placeholder. Use it anywhere a solid backdrop colour is needed.
   final Color base;
 
   /// Identity of the cover, for cross-fades. Null for the placeholder.
   final String? id;
 
   /// Whether this is the placeholder.
-  bool get isPlaceholder => image == null;
+  bool get isPlaceholder => id == null;
 
   @override
   bool operator ==(Object other) =>
-      other is JamBackdrop &&
-      other.id == id &&
-      other.image == image &&
-      other.overlayOpacity == overlayOpacity &&
-      other.base == base;
+      other is JamBackdrop && other.id == id && other.base == base;
 
   @override
-  int get hashCode => Object.hash(id, image, overlayOpacity, base);
+  int get hashCode => Object.hash(id, base);
 
   @override
-  String toString() =>
-      'JamBackdrop(${id ?? 'placeholder'}, overlay: '
-      '${overlayOpacity.toStringAsFixed(2)})';
+  String toString() => 'JamBackdrop(${id ?? 'placeholder'}, $base)';
 }
 
 /// The WCAG contrast ratio between two opaque colours.
@@ -127,85 +119,56 @@ double jamContrastRatio(Color a, Color b) {
   return (hi + 0.05) / (lo + 0.05);
 }
 
-/// [cover] under a black overlay of [opacity].
-Color jamDarken(Color cover, double opacity) => Color.alphaBlend(
-  const Color(0xFF000000).withValues(alpha: opacity),
-  cover.withValues(alpha: 1),
-);
-
 /// The contrast of secondary text (white 70%) on [ground].
 double jamSecondaryContrastOn(Color ground) => jamContrastRatio(
   Color.alphaBlend(JamNowPlayingColors.secondary, ground),
   ground,
 );
 
-/// The weakest overlay that puts secondary text at
-/// [kJamBackdropContrastTarget] on [cover] — floored and capped.
-double backdropOverlayForColor(Color cover) {
-  // A fixed-step scan rather than a bisection, so the answer is monotonic in
-  // the cover's brightness by construction.
-  for (var a = kJamBackdropMinOverlay; a < kJamBackdropMaxOverlay; a += 0.005) {
-    if (jamSecondaryContrastOn(jamDarken(cover, a)) >=
-        kJamBackdropContrastTarget) {
-      return a;
-    }
+/// Whether [hue] (degrees) is within [kJamBackdropTintClearance] of
+/// raspberry.
+bool jamHueNearTint(double hue) {
+  final d = (hue - _kTintHue).abs() % 360;
+  return math.min(d, 360 - d) <= kJamBackdropTintClearance;
+}
+
+/// The wash for a cover whose representative colour is [representative]
+/// (step 1 already done). [grey] keeps a colourless cover colourless.
+///
+/// Steps 2 and 3: saturation into its band, then the lightest lightness at
+/// or under [kJamBackdropMaxLightness] that holds secondary text at
+/// [kJamBackdropContrastTarget].
+Color backdropColorFor(Color representative, {bool grey = false}) {
+  final hsl = HSLColor.fromColor(representative.withValues(alpha: 1));
+  final hue = hsl.hue;
+  final double saturation;
+  if (grey) {
+    saturation = math.min(hsl.saturation, _kGreySaturation);
+  } else {
+    final cap = jamHueNearTint(hue)
+        ? kJamBackdropMaxSaturationNearTint
+        : kJamBackdropMaxSaturation;
+    saturation = hsl.saturation.clamp(kJamBackdropMinSaturation, cap);
   }
-  return kJamBackdropMaxOverlay;
+  var lightness = math.min(hsl.lightness, kJamBackdropMaxLightness);
+  Color at(double l) => HSLColor.fromAHSL(1, hue, saturation, l).toColor();
+  // A fixed-step scan rather than a bisection, so the answer is monotonic in
+  // the cover's lightness by construction.
+  while (lightness > 0 &&
+      jamSecondaryContrastOn(at(lightness)) < kJamBackdropContrastTarget) {
+    lightness = math.max(0, lightness - 0.005);
+  }
+  return at(lightness);
 }
 
-/// The overlay for a grey cover of relative [luminance] (0–1).
-double backdropOverlayFor(double luminance) {
-  final l = luminance.clamp(0.0, 1.0);
-  final v = l <= 0.0031308 ? 12.92 * l : 1.055 * math.pow(l, 1 / 2.4) - 0.055;
-  final c = (v.clamp(0.0, 1.0) * 255).round();
-  return backdropOverlayForColor(Color.fromARGB(255, c, c, c));
-}
-
-/// [color] with its saturation scaled by [amount] around its own luminance
-/// (Rec. 709 weights), clamped to gamut.
-Color jamSaturate(Color color, double amount) {
-  final (r, g, b) = _saturate(color.r, color.g, color.b, amount);
-  return Color.from(alpha: color.a, red: r, green: g, blue: b);
-}
-
-(double, double, double) _saturate(double r, double g, double b, double s) {
-  const lr = 0.2126, lg = 0.7152, lb = 0.0722;
-  final l = lr * r + lg * g + lb * b;
-  double c(double v) => (l + (v - l) * s).clamp(0.0, 1.0);
-  return (c(r), c(g), c(b));
-}
-
-/// Builds the backdrop for a cover whose (already saturated) mean colour is
-/// [mean]. The overlay is solved against [bright] — the brightest patch the
-/// blur leaves — when known, else against [mean].
-JamBackdrop backdropFromMean({
-  required String id,
-  required ImageProvider image,
-  required Color mean,
-  Color? bright,
-}) {
-  final overlay = backdropOverlayForColor(bright ?? mean);
-  return JamBackdrop(
-    id: id,
-    image: image,
-    overlayOpacity: overlay,
-    base: jamDarken(mean, overlay),
-  );
-}
-
-/// Decodes [bytes] at a thumbnail size and returns its mean colour, or null
-/// when the bytes do not decode.
-Future<Color?> meanColorOf(Uint8List bytes) async =>
-    (await _sample(bytes, 16))?.mean;
-
-/// A cover decoded small: its pixels, mean colour and brightest patch.
+/// A cover decoded small: its pixels, its mean, and its dominant colour.
 class _Sample {
-  _Sample(this.pixels, this.edge);
+  _Sample(this.pixels);
 
-  /// RGBA, [edge] × [edge].
+  /// RGBA.
   final Uint8List pixels;
-  final int edge;
 
+  /// The alpha-weighted mean colour.
   Color get mean {
     var r = 0.0, g = 0.0, b = 0.0, n = 0.0;
     for (var i = 0; i + 3 < pixels.length; i += 4) {
@@ -221,108 +184,66 @@ class _Sample {
     return Color.fromARGB(255, c(r), c(g), c(b));
   }
 
-  /// The brightest mean of a box about a fifth of the cover wide — roughly
-  /// what σ 70 leaves of a bright spot on a phone-sized backdrop — within
-  /// the cover's middle columns, which is what a portrait window shows of
-  /// it, and away from the top and bottom rows (status bar, home bar).
-  Color get bright {
-    final box = math.max(2, (edge / 5).round());
-    final fromX = (edge * 0.2).floor();
-    final toX = math.max(fromX, (edge * 0.8).ceil() - box);
-    final fromY = (edge * 0.05).ceil();
-    final toY = math.max(fromY, edge - box - fromY);
-    var best = mean;
-    var bestL = best.computeLuminance();
-    for (var y = fromY; y <= toY; y++) {
-      for (var x = fromX; x <= toX; x++) {
-        var r = 0, g = 0, b = 0, n = 0;
-        for (var dy = 0; dy < box; dy++) {
-          for (var dx = 0; dx < box; dx++) {
-            final i = ((y + dy) * edge + (x + dx)) * 4;
-            if (i + 3 >= pixels.length || pixels[i + 3] == 0) continue;
-            r += pixels[i];
-            g += pixels[i + 1];
-            b += pixels[i + 2];
-            n++;
-          }
-        }
-        if (n == 0) continue;
-        final c = Color.fromARGB(255, r ~/ n, g ~/ n, b ~/ n);
-        final l = c.computeLuminance();
-        if (l > bestL) {
-          best = c;
-          bestL = l;
-        }
+  /// The colour of the heaviest hue family, by chroma-weighted votes —
+  /// or null when the cover has too little colour to have one.
+  ///
+  /// A family's score counts half of each neighbour's votes too, so a hue
+  /// sitting on a 30° boundary is not split in two; the colour is the
+  /// chroma-weighted average of the winning family and its neighbours.
+  Color? get dominant {
+    final weight = List<double>.filled(_kHueBins, 0);
+    final rs = List<double>.filled(_kHueBins, 0);
+    final gs = List<double>.filled(_kHueBins, 0);
+    final bs = List<double>.filled(_kHueBins, 0);
+    var chroma = 0.0, n = 0.0;
+    for (var i = 0; i + 3 < pixels.length; i += 4) {
+      final a = pixels[i + 3] / 255;
+      if (a == 0) continue;
+      final r = pixels[i] / 255, g = pixels[i + 1] / 255;
+      final b = pixels[i + 2] / 255;
+      final hi = math.max(r, math.max(g, b));
+      final lo = math.min(r, math.min(g, b));
+      final c = hi - lo;
+      n += a;
+      chroma += c * a;
+      if (c < _kVoteChroma) continue;
+      final double hue;
+      if (hi == r) {
+        hue = 60 * (((g - b) / c) % 6);
+      } else if (hi == g) {
+        hue = 60 * ((b - r) / c + 2);
+      } else {
+        hue = 60 * ((r - g) / c + 4);
+      }
+      final bin = ((hue % 360) / (360 / _kHueBins)).floor() % _kHueBins;
+      final w = c * a;
+      weight[bin] += w;
+      rs[bin] += r * w;
+      gs[bin] += g * w;
+      bs[bin] += b * w;
+    }
+    if (n == 0 || chroma / n < kJamBackdropMinChroma) return null;
+    int wrap(int i) => (i + _kHueBins) % _kHueBins;
+    var best = 0;
+    var bestScore = -1.0;
+    for (var i = 0; i < _kHueBins; i++) {
+      final score =
+          weight[i] + 0.5 * (weight[wrap(i - 1)] + weight[wrap(i + 1)]);
+      if (score > bestScore) {
+        bestScore = score;
+        best = i;
       }
     }
-    return best;
-  }
-
-  /// Boosts every pixel's saturation in place.
-  void saturate(double amount) {
-    for (var i = 0; i + 3 < pixels.length; i += 4) {
-      final (r, g, b) = _saturate(
-        pixels[i] / 255,
-        pixels[i + 1] / 255,
-        pixels[i + 2] / 255,
-        amount,
-      );
-      pixels[i] = (r * 255).round();
-      pixels[i + 1] = (g * 255).round();
-      pixels[i + 2] = (b * 255).round();
+    var r = 0.0, g = 0.0, b = 0.0, w = 0.0;
+    for (final i in [wrap(best - 1), best, wrap(best + 1)]) {
+      r += rs[i];
+      g += gs[i];
+      b += bs[i];
+      w += weight[i];
     }
-  }
-
-  /// A copy to work on.
-  _Sample copy() => _Sample(Uint8List.fromList(pixels), edge);
-
-  /// Blends black at [opacity] into every pixel, as the overlay would.
-  void darken(double opacity) {
-    final keep = 1 - opacity;
-    for (var i = 0; i + 3 < pixels.length; i += 4) {
-      pixels[i] = (pixels[i] * keep).round();
-      pixels[i + 1] = (pixels[i + 1] * keep).round();
-      pixels[i + 2] = (pixels[i + 2] * keep).round();
-    }
-  }
-
-  /// Saturates each pixel inversely to its chroma (see
-  /// [kJamBackdropVibrance]).
-  void vibrance() {
-    for (var i = 0; i + 3 < pixels.length; i += 4) {
-      final r = pixels[i] / 255,
-          g = pixels[i + 1] / 255,
-          b = pixels[i + 2] / 255;
-      final chroma = math.max(r, math.max(g, b)) - math.min(r, math.min(g, b));
-      final quiet = 1 - math.min(1.0, chroma / _kVibranceKnee);
-      final (nr, ng, nb) = _saturate(r, g, b, 1 + kJamBackdropVibrance * quiet);
-      pixels[i] = (nr * 255).round();
-      pixels[i + 1] = (ng * 255).round();
-      pixels[i + 2] = (nb * 255).round();
-    }
-  }
-
-  /// The pixels as a PNG, for an [ImageProvider]; null if encoding fails.
-  Future<Uint8List?> encode() async {
-    try {
-      final buffer = await ui.ImmutableBuffer.fromUint8List(pixels);
-      final descriptor = ui.ImageDescriptor.raw(
-        buffer,
-        width: edge,
-        height: edge,
-        pixelFormat: ui.PixelFormat.rgba8888,
-      );
-      final codec = await descriptor.instantiateCodec();
-      final frame = await codec.getNextFrame();
-      final data = await frame.image.toByteData(format: ui.ImageByteFormat.png);
-      frame.image.dispose();
-      codec.dispose();
-      descriptor.dispose();
-      buffer.dispose();
-      return data?.buffer.asUint8List();
-    } on Object {
-      return null;
-    }
+    if (w == 0) return null;
+    int c(double v) => (v / w * 255).round().clamp(0, 255);
+    return Color.fromARGB(255, c(r), c(g), c(b));
   }
 }
 
@@ -344,7 +265,7 @@ Future<_Sample?> _sample(Uint8List bytes, int edge) async {
       data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes),
     );
     for (var i = 3; i < pixels.length; i += 4) {
-      if (pixels[i] != 0) return _Sample(pixels, edge);
+      if (pixels[i] != 0) return _Sample(pixels);
     }
     return null;
   } on Object {
@@ -356,38 +277,12 @@ Future<_Sample?> _sample(Uint8List bytes, int edge) async {
 Future<JamBackdrop> backdropFor(String id, Uint8List bytes) async {
   final sample = await _sample(bytes, _kSampleEdge);
   if (sample == null) return JamBackdrop.placeholder;
-  sample.saturate(kJamBackdropSaturation);
-  // Darken, give the quiet colours their vibrance back, and check the
-  // result: vibrance moves luminance a little, so the darkening steps up
-  // until the brightest patch still holds secondary text.
-  var overlay = backdropOverlayForColor(sample.bright);
-  _Sample finished;
-  while (true) {
-    finished = sample.copy()
-      ..darken(overlay)
-      ..vibrance();
-    if (overlay >= kJamBackdropMaxOverlay ||
-        jamSecondaryContrastOn(finished.bright) >= kJamBackdropContrastTarget) {
-      break;
-    }
-    overlay = math.min(kJamBackdropMaxOverlay, overlay + 0.01);
-  }
-  final png = await finished.encode();
-  if (png == null) {
-    // Nothing to bake into: the view's own overlay does the darkening.
-    return backdropFromMean(
-      id: id,
-      image: MemoryImage(bytes),
-      mean: sample.mean,
-      bright: sample.bright,
-    );
-  }
+  final dominant = sample.dominant;
   return JamBackdrop(
     id: id,
-    image: MemoryImage(png),
-    // Already in the pixels.
-    overlayOpacity: 0,
-    base: finished.mean,
+    base: dominant == null
+        ? backdropColorFor(sample.mean, grey: true)
+        : backdropColorFor(dominant),
   );
 }
 
