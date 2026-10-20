@@ -31,6 +31,24 @@ and the unused files.
   so the engine never downloads a default font. `web/flutter_bootstrap.js`
   points the engine's glyph fallback at the page's own origin as well.
 
+`tool/build.sh` relies on two exact strings in Flutter's output (the CDN URLs it
+scrubs) and on `preferWebParagraph` staying opt-in (it deletes
+`canvaskit/webparagraph/`); its header says what, and it fails loudly if
+either assumption breaks.
+
+### Fonts
+
+Manrope has Latin only. Song titles and guest names are often Nepali, so the
+page bundles **Noto Sans Devanagari** (regular and bold, ~270 KB, SIL OFL 1.1,
+`assets/fonts/NotoSansDevanagari-OFL.txt`) as the theme's
+`fontFamilyFallback`: Devanagari draws from the bundle, with no request.
+Other scripts Manrope lacks (CJK, Arabic, Thai, …) are **not** bundled — a CJK
+face alone is several MB. For those the engine asks the page's own origin for
+its Noto fallback fonts (`assets/font-fallback/…`), which the host does not
+serve: each font is tried once, the 404 is permanent for the session (the
+engine gives up on a script after a few fonts, and on fallback altogether
+after 10 failures), and the glyphs draw as boxes. Never an off-origin request.
+
 What a browser loads: `index.html`, `flutter_bootstrap.js`, `main.dart.js`,
 `canvaskit/canvaskit.{js,wasm}` (or `canvaskit/chromium/…` in Chrome on a
 secure origin such as localhost), the fonts under `assets/` (Flutter's own
