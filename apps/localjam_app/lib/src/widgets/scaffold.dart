@@ -123,13 +123,18 @@ class _JamScaffoldState extends State<JamScaffold> {
         (widget.grouped ? colors.groupedBackground : colors.background);
     final hasBottom = widget.bottomBar != null;
     final maxWidth = widget.maxContentWidth;
+    // Read here, above the Scaffold: inside its body (where a reading
+    // column's LayoutBuilder builds) the top padding already counts the
+    // inline bar, and would push the content down by its height again.
+    final topInset = MediaQuery.paddingOf(context).top;
 
     Widget body = maxWidth == null
-        ? _scrollView(context, 0)
+        ? _scrollView(context, 0, topInset)
         : LayoutBuilder(
             builder: (context, constraints) => _scrollView(
               context,
               math.max(0, (constraints.maxWidth - maxWidth) / 2),
+              topInset,
             ),
           );
 
@@ -183,8 +188,9 @@ class _JamScaffoldState extends State<JamScaffold> {
     return CupertinoPageScaffoldBackgroundColor(color: bg, child: page);
   }
 
-  /// The scroll view, its content held [side] in from each edge.
-  Widget _scrollView(BuildContext context, double side) {
+  /// The scroll view, its content held [side] in from each edge and, under
+  /// an inline bar, started [topInset] (the status bar) plus the bar down.
+  Widget _scrollView(BuildContext context, double side, double topInset) {
     final colors = context.jamColors;
     final bottomInset = MediaQuery.paddingOf(context).bottom;
     final hasBottom = widget.bottomBar != null;
@@ -270,12 +276,10 @@ class _JamScaffoldState extends State<JamScaffold> {
       slivers: [
         // Content starts under the inline bar, not under the status bar:
         // the bar floats over the body (`extendBodyBehindAppBar`), and
-        // this context sits above the Scaffold, so its padding does not
-        // include the bar's height.
+        // [topInset] was read above the Scaffold, so it does not include
+        // the bar's height.
         SliverToBoxAdapter(
-          child: SizedBox(
-            height: MediaQuery.paddingOf(context).top + JamMetrics.navBarHeight,
-          ),
+          child: SizedBox(height: topInset + JamMetrics.navBarHeight),
         ),
         ...content,
       ],

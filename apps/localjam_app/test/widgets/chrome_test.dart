@@ -9,6 +9,7 @@ import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:localjam_app/src/design/breakpoints.dart';
 import 'package:localjam_app/src/design/theme.dart';
 import 'package:localjam_app/src/design/tokens.dart';
 import 'package:localjam_app/src/widgets/buttons.dart';
@@ -341,6 +342,29 @@ void main() {
       expect(
         tester.getTopLeft(find.text('First line')).dy,
         greaterThanOrEqualTo(top + JamMetrics.navBarHeight),
+      );
+    });
+
+    testWidgets('in a reading column, content starts right under the bar — '
+        'the bar is not counted twice', (tester) async {
+      tester.view.padding = const FakeViewPadding(top: 72);
+      addTearDown(tester.view.resetPadding);
+      await tester.pumpWidget(
+        _app(
+          const JamScaffold(
+            title: 'Detail',
+            largeTitle: false,
+            maxContentWidth: JamContentWidth.reading,
+            children: [Text('First line')],
+          ),
+        ),
+      );
+      final top = MediaQuery.paddingOf(
+        tester.element(find.byType(JamScaffold)),
+      ).top;
+      expect(
+        tester.getTopLeft(find.text('First line')).dy,
+        moreOrLessEquals(top + JamMetrics.navBarHeight),
       );
     });
 
