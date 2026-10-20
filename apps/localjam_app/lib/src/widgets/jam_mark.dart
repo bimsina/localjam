@@ -60,6 +60,7 @@ class JamMark extends StatelessWidget {
     this.hostColor,
     this.semanticLabel,
     this.shadow = false,
+    this.ground,
   });
 
   /// The jam's name: where the monogram comes from.
@@ -86,6 +87,10 @@ class JamMark extends StatelessWidget {
 
   /// `JamShadow.artwork` under the tile — large marks only.
   final bool shadow;
+
+  /// The monogram's ground; null is `fillSecondary`. A mark on a grouped
+  /// card passes `fill`, which still reads against the card.
+  final Color? ground;
 
   /// The host badge's diameter for a mark [size] across.
   static double badgeSizeFor(double size) =>
@@ -148,7 +153,10 @@ class JamMark extends StatelessWidget {
     }
 
     Widget tile = DecoratedBox(
-      decoration: ShapeDecoration(color: colors.fillSecondary, shape: shape),
+      decoration: ShapeDecoration(
+        color: ground ?? colors.fillSecondary,
+        shape: shape,
+      ),
       child: SizedBox.square(
         dimension: size,
         child: AnimatedSwitcher(

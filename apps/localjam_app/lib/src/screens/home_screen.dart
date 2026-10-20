@@ -17,8 +17,11 @@
 library;
 
 import 'dart:async';
+import 'dart:math' as math;
+import 'dart:typed_data';
 
 import 'package:flutter/cupertino.dart';
+import 'package:flutter/rendering.dart';
 import 'package:go_router/go_router.dart';
 import 'package:localjam_client/localjam_client.dart';
 
@@ -40,7 +43,9 @@ import '../widgets/room_sheet.dart' show showInviteSheet;
 import '../widgets/scaffold.dart';
 import '../widgets/section.dart';
 import '../widgets/session_gate.dart';
-import 'history_screen.dart' show JamHistoryRow, showJamHistoryDetail;
+import '../widgets/wifi_glyph.dart';
+import 'history_screen.dart'
+    show JamHistoryRow, jamRowNameStyle, showJamHistoryDetail;
 
 /// Every user-facing string on this screen, in one place.
 abstract final class HomeStrings {
@@ -122,21 +127,13 @@ const int kJamHomeRecents = 3;
 /// How far a newly discovered room rises into place.
 const double _roomEntryOffset = 8;
 
+/// The narrowest a nearby jam's name gets beside its Join, at 1× text:
+/// narrower, and Join moves under the name.
+const double _minNameWidth = 140;
+
 /// The widest Start a Jam grows once the column is wider than a phone: a
 /// full-width capsule across a desktop pane would be a banner.
 const double _maxButtonWidth = 400;
-
-/// The room name's possessive suffix ("Mia’s Jam"), used to give a nearby
-/// room's mark its host's face rather than "MJ" for every jam.
-final RegExp _possessiveJam = RegExp(r'^(.+?)[’\x27]s Jam$');
-
-/// The host's name, when the room name is the default "Mia’s Jam".
-String jamHostNameFromRoom(String room) =>
-    _possessiveJam.firstMatch(room.trim())?.group(1) ?? room;
-
-/// Whether [room] names its host ("Mia’s Jam"). Only then does its mark
-/// wear a face: initials made from "Van Jam" pose as a person called VJ.
-bool jamRoomNamesHost(String room) => _possessiveJam.hasMatch(room.trim());
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key, this.networkReader, this.loadRecords});
@@ -506,11 +503,9 @@ class _HomeScreenState extends State<HomeScreen> {
           return [
             jamAnchoredEmptyState(
               JamEmptyState(
-                mark: JamMark(
-                  name: room,
-                  size: JamMarkSize.row,
-                  hostName: session.isHost ? _identity : null,
-                ),
+                // The cover the mini player under it shows: one jam, one
+                // object. No face — on your own jam it would be yours.
+                mark: _LiveJamMark(engine: engine),
                 title: room,
                 body: session.isHost
                     ? HomeStrings.hostingEnds
@@ -618,13 +613,91 @@ class _AvatarButton extends StatelessWidget {
   }
 }
 
+/// The jam this phone is in, as Home's page draws it: its mark with the
+/// cover that is playing — the one the mini player under it shows, and the
+/// Invite sheet's — and its monogram until something with a cover plays.
+class _LiveJamMark extends StatefulWidget {
+  const _LiveJamMark({required this.engine});
+
+  final JamEngine engine;
+
+  @override
+  State<_LiveJamMark> createState() => _LiveJamMarkState();
+}
+
+class _LiveJamMarkState extends State<_LiveJamMark> {
+  StreamSubscription<PlaybackSnapshot>? _states;
+
+  /// The cover being shown, and the artwork it was read for.
+  String? _artworkId;
+  Uint8List? _cover;
+
+  @override
+  void initState() {
+    super.initState();
+    _bind();
+  }
+
+  @override
+  void didUpdateWidget(_LiveJamMark old) {
+    super.didUpdateWidget(old);
+    if (!identical(old.engine, widget.engine)) _bind();
+  }
+
+  @override
+  void dispose() {
+    unawaited(_states?.cancel());
+    super.dispose();
+  }
+
+  void _bind() {
+    unawaited(_states?.cancel());
+    _states = widget.engine.states.listen((_) => _follow());
+    _follow();
+  }
+
+  /// Reads the playing song's cover when the song changes. The engines
+  /// cache what they have read, so a song that comes back costs nothing.
+  void _follow() {
+    final item = widget.engine.currentItem;
+    final id = item?.artworkId;
+    if (id == _artworkId) return;
+    _artworkId = id;
+    if (id == null) {
+      if (_cover != null && mounted) setState(() => _cover = null);
+      return;
+    }
+    unawaited(
+      widget.engine.artworkFor(item!).then((bytes) {
+        if (!mounted || _artworkId != id) return;
+        setState(() => _cover = bytes == null || bytes.isEmpty ? null : bytes);
+      }),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cover = _cover;
+    const size = JamMarkSize.row;
+    final px = (size * MediaQuery.devicePixelRatioOf(context)).round();
+    return JamMark(
+      name: widget.engine.sessionName,
+      size: size,
+      covers: [
+        if (cover != null)
+          ResizeImage(MemoryImage(cover), width: px, height: px),
+      ],
+    );
+  }
+}
+
 /// One discoverable room, as a jam: its mark, its name in Manrope, and a
 /// tinted Join — on a card of its own, the whole card the target.
 ///
 /// `JamNearbyRoom` carries only a key, a name and a join URI over mDNS, so
 /// the row says nothing it cannot know — no listener count, no preset, no
-/// cover. The mark is the name's monogram, and wears the host's face only
-/// when the name says whose jam it is ("Mia’s Jam").
+/// cover, no face. The mark is the name's monogram: a jam called "Mia’s
+/// Jam" may well not be Mia's, so no face is guessed from it.
 class _RoomRow extends StatelessWidget {
   const _RoomRow({
     super.key,
@@ -661,28 +734,32 @@ class _RoomRow extends StatelessWidget {
       padding: const EdgeInsets.all(JamSpace.md),
       child: Row(
         children: [
-          JamMark(
-            name: name,
-            size: JamMarkSize.nearby,
-            hostName: jamRoomNamesHost(name) ? jamHostNameFromRoom(name) : null,
-          ),
+          // `fill`, not the mark's usual ground: on the card's surface
+          // `fillSecondary` all but disappears in dark.
+          JamMark(name: name, size: JamMarkSize.nearby, ground: colors.fill),
           const SizedBox(width: kJamRowLeadingGap),
           Expanded(
-            child: Text(
-              name,
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-              // A jam's name is a named thing: Manrope, as where it is
-              // born (Start a Jam's field) and on the Invite.
-              style: context.jamTitle3,
+            // Join beside the name while the name keeps a readable
+            // width; under it at large text or on a narrow phone, so a
+            // name is never squeezed to a sliver.
+            child: _BesideOrBelow(
+              minLeadWidth: MediaQuery.textScalerOf(
+                context,
+              ).scale(_minNameWidth),
+              lead: Text(
+                name,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                // A jam's name is a named thing: Manrope, at row scale.
+                style: jamRowNameStyle(context),
+              ),
+              trailing: JamButton.tinted(
+                label: HomeStrings.join,
+                size: JamButtonSize.small,
+                loading: joining,
+                onPressed: tap ?? (joining ? () {} : null),
+              ),
             ),
-          ),
-          const SizedBox(width: JamSpace.sm),
-          JamButton.tinted(
-            label: HomeStrings.join,
-            size: JamButtonSize.small,
-            loading: joining,
-            onPressed: tap ?? (joining ? () {} : null),
           ),
         ],
       ),
@@ -803,6 +880,10 @@ class _NearbyLine extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = context.jamColors;
+    final sentence = Text(
+      text,
+      style: context.jamSubheadline.copyWith(color: colors.secondaryLabel),
+    );
     return ConstrainedBox(
       constraints: const BoxConstraints(minHeight: JamMetrics.rowHeight),
       child: Padding(
@@ -812,34 +893,212 @@ class _NearbyLine extends StatelessWidget {
           kJamRowInset,
           JamSpace.xs,
         ),
-        child: Row(
-          children: [
-            Expanded(
-              // Balanced, so a wrapped line never leaves one word alone.
-              child: JamBalancedText(
-                text,
-                textAlign: TextAlign.start,
-                style: context.jamSubheadline.copyWith(
-                  color: colors.secondaryLabel,
+        child: Align(
+          alignment: AlignmentDirectional.centerStart,
+          child: actions.isEmpty
+              ? sentence
+              // The sentence on one line with the buttons beside it; when
+              // that does not fit (a narrow phone, large text) the sentence
+              // has the line to itself and the buttons go under it — never
+              // a sentence squeezed into a column beside them.
+              : _BesideOrBelow(
+                  gap: JamSpace.md,
+                  leadOnOneLine: true,
+                  lead: sentence,
+                  // Small neutral buttons, not bare words: beside a
+                  // sentence, two tinted words read as its last phrase
+                  // ("…Wi‑Fi. Scan Code Enter Link"). Neutral, so they never
+                  // pose as a room's Join.
+                  trailing: Wrap(
+                    spacing: JamSpace.sm,
+                    children: [
+                      for (final (label, onPressed) in actions)
+                        JamButton.gray(
+                          label: label,
+                          size: JamButtonSize.small,
+                          onPressed: onPressed,
+                        ),
+                    ],
+                  ),
                 ),
-              ),
-            ),
-            // Small neutral buttons, not bare words: beside a sentence, two
-            // tinted words read as its last phrase ("…Wi‑Fi. Scan Code Enter
-            // Link"). Neutral, so they never pose as a room's Join.
-            for (final (i, (label, onPressed)) in actions.indexed) ...[
-              SizedBox(width: i == 0 ? JamSpace.md : JamSpace.sm),
-              JamButton.gray(
-                label: label,
-                size: JamButtonSize.small,
-                onPressed: onPressed,
-              ),
-            ],
-          ],
         ),
       ),
     );
   }
+}
+
+/// [lead] with [trailing] beside it while there is room, and under it when
+/// there is not.
+///
+/// Beside: [lead] gets the width [trailing] leaves (less [gap]) — as long as
+/// that is at least [minLeadWidth], or, with [leadOnOneLine], as long as it
+/// holds [lead] on one line — and the two are centred on each other.
+/// Otherwise [lead] takes the full width and [trailing] sits under it, at
+/// its start, [runGap] below.
+///
+/// Neither a `Row` (which squeezes [lead] to a sliver, then overflows) nor a
+/// `Wrap` (which moves [trailing] down as soon as [lead] would wrap at all)
+/// makes that choice.
+class _BesideOrBelow extends MultiChildRenderObjectWidget {
+  _BesideOrBelow({
+    required Widget lead,
+    required Widget trailing,
+    this.gap = JamSpace.sm,
+    this.minLeadWidth = 0,
+    this.leadOnOneLine = false,
+  }) : super(children: [lead, trailing]);
+
+  final double gap;
+  final double minLeadWidth;
+  final bool leadOnOneLine;
+
+  /// Between [lead] and [trailing] when stacked. A small button's 44 pt hit
+  /// area already pads it.
+  static const double runGap = JamSpace.xs;
+
+  @override
+  _RenderBesideOrBelow createRenderObject(BuildContext context) =>
+      _RenderBesideOrBelow(
+        gap,
+        minLeadWidth,
+        leadOnOneLine,
+        Directionality.of(context),
+      );
+
+  @override
+  void updateRenderObject(
+    BuildContext context,
+    _RenderBesideOrBelow renderObject,
+  ) {
+    renderObject
+      ..gap = gap
+      ..minLeadWidth = minLeadWidth
+      ..leadOnOneLine = leadOnOneLine
+      ..textDirection = Directionality.of(context);
+  }
+}
+
+class _BesideOrBelowParentData extends ContainerBoxParentData<RenderBox> {}
+
+class _RenderBesideOrBelow extends RenderBox
+    with
+        ContainerRenderObjectMixin<RenderBox, _BesideOrBelowParentData>,
+        RenderBoxContainerDefaultsMixin<RenderBox, _BesideOrBelowParentData> {
+  _RenderBesideOrBelow(
+    this._gap,
+    this._minLeadWidth,
+    this._leadOnOneLine,
+    this._textDirection,
+  );
+
+  double _gap;
+  set gap(double value) {
+    if (value == _gap) return;
+    _gap = value;
+    markNeedsLayout();
+  }
+
+  double _minLeadWidth;
+  set minLeadWidth(double value) {
+    if (value == _minLeadWidth) return;
+    _minLeadWidth = value;
+    markNeedsLayout();
+  }
+
+  bool _leadOnOneLine;
+  set leadOnOneLine(bool value) {
+    if (value == _leadOnOneLine) return;
+    _leadOnOneLine = value;
+    markNeedsLayout();
+  }
+
+  TextDirection _textDirection;
+  set textDirection(TextDirection value) {
+    if (value == _textDirection) return;
+    _textDirection = value;
+    markNeedsLayout();
+  }
+
+  RenderBox get _lead => firstChild!;
+  RenderBox get _trailing => lastChild!;
+
+  @override
+  void setupParentData(RenderBox child) {
+    if (child.parentData is! _BesideOrBelowParentData) {
+      child.parentData = _BesideOrBelowParentData();
+    }
+  }
+
+  /// Lays both out (or measures them, [dry]) and returns the size.
+  Size _layout(BoxConstraints constraints, {required bool dry}) {
+    assert(constraints.hasBoundedWidth);
+    final width = constraints.maxWidth;
+    Size measure(RenderBox child, double maxWidth) {
+      final c = BoxConstraints(maxWidth: math.max(0, maxWidth));
+      if (dry) return child.getDryLayout(c);
+      child.layout(c, parentUsesSize: true);
+      return child.size;
+    }
+
+    final trailing = measure(_trailing, width);
+    final room = width - trailing.width - _gap;
+    final need = _leadOnOneLine
+        ? _lead.getMaxIntrinsicWidth(double.infinity)
+        : _minLeadWidth;
+    final beside = room >= need;
+    final lead = measure(_lead, beside ? room : width);
+    final height = beside
+        ? math.max(lead.height, trailing.height)
+        : lead.height + _BesideOrBelow.runGap + trailing.height;
+    if (!dry) {
+      final rtl = _textDirection == TextDirection.rtl;
+      double start(double childWidth) => rtl ? width - childWidth : 0;
+      double end(double childWidth) => rtl ? 0 : width - childWidth;
+      (_lead.parentData! as _BesideOrBelowParentData).offset = Offset(
+        start(lead.width),
+        beside ? (height - lead.height) / 2 : 0,
+      );
+      (_trailing.parentData! as _BesideOrBelowParentData).offset = beside
+          ? Offset(end(trailing.width), (height - trailing.height) / 2)
+          : Offset(start(trailing.width), lead.height + _BesideOrBelow.runGap);
+    }
+    return constraints.constrain(Size(width, height));
+  }
+
+  @override
+  Size computeDryLayout(BoxConstraints constraints) =>
+      _layout(constraints, dry: true);
+
+  @override
+  void performLayout() => size = _layout(constraints, dry: false);
+
+  @override
+  double computeMinIntrinsicWidth(double height) => math.max(
+    _lead.getMinIntrinsicWidth(height),
+    _trailing.getMinIntrinsicWidth(height),
+  );
+
+  @override
+  double computeMaxIntrinsicWidth(double height) =>
+      _lead.getMaxIntrinsicWidth(height) +
+      _gap +
+      _trailing.getMaxIntrinsicWidth(height);
+
+  @override
+  double computeMinIntrinsicHeight(double width) =>
+      _layout(BoxConstraints(maxWidth: width), dry: true).height;
+
+  @override
+  double computeMaxIntrinsicHeight(double width) =>
+      computeMinIntrinsicHeight(width);
+
+  @override
+  void paint(PaintingContext context, Offset offset) =>
+      defaultPaint(context, offset);
+
+  @override
+  bool hitTestChildren(BoxHitTestResult result, {required Offset position}) =>
+      defaultHitTestChildren(result, position: position);
 }
 
 /// The "nothing nearby" situations, which need different actions — on a
@@ -863,8 +1122,10 @@ class _EmptyNearby extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final (icon, title, body, showScan) = switch (network) {
+      // Drawn rather than CupertinoIcons' solid wedge, so it is the same
+      // outline family as the other states' glyphs.
       JamNetworkStatus(connected: false) => (
-        CupertinoIcons.wifi_slash,
+        null,
         HomeStrings.offlineTitle,
         HomeStrings.offlineBody,
         false,
@@ -886,6 +1147,7 @@ class _EmptyNearby extends StatelessWidget {
 
     return JamEmptyState(
       icon: icon,
+      mark: icon == null ? const JamWifiGlyph(slashed: true) : null,
       title: title,
       body: body,
       // Neutral — quieter than Start a Jam, which owns the bottom of the
