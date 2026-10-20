@@ -139,10 +139,13 @@ const String kJamRejoinFailed = 'Couldn’t get back into that jam.';
 String jamRemovedNotice(String name) => 'Removed $name';
 
 /// This app and the host cannot talk: a different major protocol version
-/// (§2) — refused at the door, or reported by the host later.
+/// (§2) — refused at the door, or reported by the host later. The same
+/// sentence as the "Update Needed" page, which says it when a jam ends over
+/// it: an update needs the internet this group does not have, so it says
+/// when.
 const String kJamVersionMismatch =
-    'This app and the host are on different versions of LocalJam. '
-    'One of you needs an update.';
+    'This phone and the host’s have different versions of LocalJam. '
+    'Update both when you’re back online.';
 
 /// Whether asking the same room again could ever let this device back in
 /// after the host turned it away with [reason] (§3.1) — what decides whether

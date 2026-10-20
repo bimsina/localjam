@@ -80,9 +80,7 @@ abstract final class JamSessionEndedStrings {
   /// `version`: no retry fixes this; an update does — and an update needs
   /// the internet this group does not have, so it says when.
   static const String versionTitle = 'Update Needed';
-  static const String versionBody =
-      'This phone and the host’s have different versions of LocalJam. '
-      'Update both when you’re back online.';
+  static const String versionBody = kJamVersionMismatch;
 
   /// `full`: the one refusal that can turn into a yes on its own.
   static const String fullTitle = 'This Jam Is Full';
