@@ -1435,7 +1435,11 @@ class JamSessionController extends ChangeNotifier {
   /// and host now, and the playing song's cover once it has been read —
   /// started here, while the engine is still there to read it from.
   void _keepEndedJam(JamEngine engine) {
-    final host = engine.hostPeer?.clientName.trim() ?? '';
+    // On a host's phone the host is this device, and the page never badges
+    // you with your own face (D4): only a guest keeps the host's name.
+    final host = engine is JamHostEngine
+        ? ''
+        : engine.hostPeer?.clientName.trim() ?? '';
     final jam = JamEndedJam(
       name: engine.sessionName,
       hostName: host.isEmpty ? null : host,

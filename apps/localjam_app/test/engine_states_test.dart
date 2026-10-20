@@ -650,6 +650,10 @@ void main() {
         });
         expect(host.endReason, JamSessionEndReason.listenerFailed);
         expect(host.hasRoom, isTrue);
+        // The page is the host's own: it keeps the jam's name but never
+        // badges the host with their own face.
+        expect(host.endedJam?.name, 'Pocket Jam');
+        expect(host.endedJam?.hostName, isNull);
         // "Start a new jam" reopens setup on the same room, queue and all.
         expect(host.restartArgs?.name, 'Pocket Jam');
         expect(host.restartArgs?.paths, unorderedEquals(tracks));

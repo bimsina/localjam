@@ -969,7 +969,11 @@ void main() {
             reason: reason,
             rejectReason: reject,
             jamName: jamName,
-            hostName: 'Mia',
+            // Only a host's phone loses its listener, and a host's own page
+            // never badges the host with their own face.
+            hostName: reason == JamSessionEndReason.listenerFailed
+                ? null
+                : 'Mia',
             onDone: () {},
             onRetry:
                 reason == JamSessionEndReason.hostGone ||
