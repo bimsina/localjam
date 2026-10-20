@@ -81,10 +81,14 @@ abstract final class JamRoomStrings {
 
   /// The footer names who you are listening with, from your side.
   static const String justYou = 'Just you';
-  static String withOne(String name) => 'With $name';
-  static String withTwo(String a, String b) => 'With $a and $b';
-  static String withMany(String name, int others) =>
-      'With $name and $others ${others == 1 ? 'other' : 'others'}';
+
+  /// "With Mia and Theo" — the people besides you, as every screen says
+  /// them ([jamPeopleList]).
+  static String withPeople(
+    List<String> others, {
+    int named = 2,
+    bool countOne = false,
+  }) => 'With ${jamPeopleList(others, named: named, countOne: countOne)}';
 
   // The ••• menu (spec §10.1): only what has no control of its own.
   static const String diagnostics = 'Diagnostics';
@@ -2190,11 +2194,9 @@ class _Footer extends StatelessWidget {
   List<String> _labels() {
     final others = roster.skip(1).toList();
     if (others.isEmpty) return const [JamRoomStrings.justYou];
-    final first = others.first;
-    if (others.length == 1) return [JamRoomStrings.withOne(first)];
     return [
-      if (others.length == 2) JamRoomStrings.withTwo(first, others[1]),
-      JamRoomStrings.withMany(first, others.length - 1),
+      if (others.length == 2) JamRoomStrings.withPeople(others),
+      JamRoomStrings.withPeople(others, named: 1, countOne: true),
     ];
   }
 

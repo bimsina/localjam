@@ -140,14 +140,7 @@ abstract final class RoomSheetStrings {
   /// Who is in the jam, under its name on the Invite sheet — the host
   /// first: "Bibek", "Bibek and Mia", "Bibek, Mia and Theo", "Bibek, Mia
   /// and 3 others".
-  static String everyone(List<String> names) {
-    if (names.isEmpty) return '';
-    if (names.length == 1) return names.single;
-    if (names.length == 2) return '${names[0]} and ${names[1]}';
-    if (names.length == 3) return '${names[0]}, ${names[1]} and ${names[2]}';
-    final others = names.length - 2;
-    return '${names[0]}, ${names[1]} and $others others';
-  }
+  static String everyone(List<String> names) => jamPeopleList(names);
 
   static const String shareLink = 'Share Link';
   static const String copyLink = 'Copy Link';

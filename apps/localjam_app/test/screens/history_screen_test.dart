@@ -482,6 +482,11 @@ void main() {
       HistoryStrings.withPeople(['Mia', 'Neon Walrus', 'Amber Fox', 'Jo']),
       'With Mia, Neon Walrus and 2 others',
     );
+    // One person left over is named, not counted — as on the Invite sheet.
+    expect(
+      HistoryStrings.withPeople(['Mia', 'Theo', 'Ana']),
+      'With Mia, Theo and Ana',
+    );
   });
 
   // Keeps the Cupertino import honest: the detail page is pushed with a

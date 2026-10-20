@@ -764,7 +764,7 @@ void main() {
     expect(growing, findsNothing);
 
     // Named, from your side: the others, never yourself.
-    expect(find.text(JamRoomStrings.withOne('Ana')), findsOneWidget);
+    expect(find.text(JamRoomStrings.withPeople(['Ana'])), findsOneWidget);
     expect(
       find.bySemanticsLabel('${JamRoomStrings.people}, 2'),
       findsOneWidget,
@@ -848,9 +848,15 @@ void main() {
   });
 
   test('the footer label shortens before it cuts a name', () {
-    expect(JamRoomStrings.withTwo('Mia', 'Theo'), 'With Mia and Theo');
-    expect(JamRoomStrings.withMany('Mia', 1), 'With Mia and 1 other');
-    expect(JamRoomStrings.withMany('Mia', 3), 'With Mia and 3 others');
+    expect(JamRoomStrings.withPeople(['Mia', 'Theo']), 'With Mia and Theo');
+    expect(
+      JamRoomStrings.withPeople(['Mia', 'Theo'], named: 1, countOne: true),
+      'With Mia and 1 other',
+    );
+    expect(
+      JamRoomStrings.withPeople(['Mia', 'Theo', 'Ana', 'Jo'], named: 1),
+      'With Mia and 3 others',
+    );
   });
 
   testWidgets('a guest invites too: the header button opens the Invite '

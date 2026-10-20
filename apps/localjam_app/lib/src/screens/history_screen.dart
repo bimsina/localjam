@@ -75,15 +75,9 @@ abstract final class HistoryStrings {
   }
 
   /// "With Mia", "With Mia and Neon Walrus", "With Mia, Neon Walrus and 2
-  /// others".
-  static String withPeople(List<String> names) {
-    if (names.isEmpty) return '';
-    if (names.length == 1) return 'With ${names[0]}';
-    if (names.length == 2) return 'With ${names[0]} and ${names[1]}';
-    final others = names.length - 2;
-    return 'With ${names[0]}, ${names[1]} and $others '
-        '${others == 1 ? 'other' : 'others'}';
-  }
+  /// others" — people said as everywhere else ([jamPeopleList]).
+  static String withPeople(List<String> names) =>
+      names.isEmpty ? '' : 'With ${jamPeopleList(names)}';
 
   /// The detail page's list of what played.
   static const String songsHeader = 'Songs';

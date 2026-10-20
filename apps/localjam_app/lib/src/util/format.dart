@@ -101,12 +101,38 @@ String jamPeerName(PeerInfo peer) {
   return name.isEmpty ? kJamUnnamedPeer : name;
 }
 
+/// People in a line, said the same way on every screen — the Now Playing
+/// footer, the Invite sheet, Past Jams: "Mia", "Mia and Theo", "Mia, Theo
+/// and Ana", "Mia, Theo and 2 others".
+///
+/// At most [named] names before the rest are counted — except that one
+/// person left over is named rather than counted ("Mia, Theo and Ana", not
+/// "Mia, Theo and 1 other"), unless [countOne] asks for the short form a
+/// narrow line falls back to.
+String jamPeopleList(
+  List<String> names, {
+  int named = 2,
+  bool countOne = false,
+}) {
+  if (names.isEmpty) return '';
+  final shown = names.length == named + 1 && !countOne
+      ? names.length
+      : (names.length < named ? names.length : named);
+  final listed = names.take(shown).toList();
+  final rest = names.length - shown;
+  if (rest > 0) {
+    return '${listed.join(', ')} and $rest ${rest == 1 ? 'other' : 'others'}';
+  }
+  if (listed.length == 1) return listed.single;
+  return '${listed.take(listed.length - 1).join(', ')} and ${listed.last}';
+}
+
 /// Everyone in [engine]'s jam by peer id, in roster order: this device,
 /// then (from a guest) the host, then everyone in `peers`.
 ///
-/// The one order every face in the jam is coloured over
-/// (`jamAvatarColors`), so a person has the same colour in the face pile,
-/// the People sheet and the docked panel. Peer ids, because they are the
+/// The roster every face in the jam is coloured over (`jamRosterColors`),
+/// so a person has the same colour in the face pile, the People sheet and
+/// the docked panel. Peer ids, because they are the
 /// one id every phone in the jam knows a person by (client ids never leave
 /// the host).
 List<String> jamRosterPeerIds(JamEngine engine) => <String>[
