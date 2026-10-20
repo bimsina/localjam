@@ -688,7 +688,7 @@ class _LiveJamMarkState extends State<_LiveJamMark> {
 /// `JamNearbyRoom` carries only a key, a name and a join URI over mDNS, so
 /// the row says nothing it cannot know — no listener count, no preset, no
 /// cover, no face. The mark is the name's monogram: a jam called "Mia’s
-/// Jam" may well not be Mia's, so no face is guessed from it.
+/// jam" may well not be Mia's, so no face is guessed from it.
 class _RoomRow extends StatelessWidget {
   const _RoomRow({
     super.key,

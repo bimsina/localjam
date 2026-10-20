@@ -467,7 +467,7 @@ void main() {
       );
       await cap.snap('04-nearby-hotspot');
       (session.nearbyRooms as ValueNotifier<List<JamNearbyRoom>>).value = [
-        for (final name in ['Sunday at home', 'Mia’s Jam', 'The late shift'])
+        for (final name in ['Sunday at home', 'Mia’s jam', 'The late shift'])
           JamNearbyRoom(
             key: name,
             sessionName: name,
@@ -920,7 +920,7 @@ void main() {
       // Nearby with the jams this phone has been in: Recent draws each one
       // as Past Jams does — mark, name, people, when.
       (session.nearbyRooms as ValueNotifier<List<JamNearbyRoom>>).value = [
-        for (final name in ['Mia’s Jam'])
+        for (final name in ['Mia’s jam'])
           JamNearbyRoom(
             key: name,
             sessionName: name,
@@ -1286,7 +1286,7 @@ Future<void> captureStress(
   (session.nearbyRooms as ValueNotifier<List<JamNearbyRoom>>).value = [
     for (final name in [
       stressJam,
-      'Electric Mongoose Supreme’s Jam',
+      'Electric Mongoose Supreme’s jam',
       'Kitchen',
     ])
       JamNearbyRoom(

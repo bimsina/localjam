@@ -46,9 +46,9 @@ abstract final class HostSetupStrings {
   static const String nameField = 'Jam name';
 
   /// The default name, the field's starting text and its placeholder once
-  /// cleared: "Mia’s Jam".
+  /// cleared: "Mia’s jam" — "jam" is a common noun (sentence case).
   static String defaultName(String identity) =>
-      identity.isEmpty ? fallbackName : '$identity’s Jam';
+      identity.isEmpty ? fallbackName : '$identity’s jam';
   static const String fallbackName = 'Jam';
 
   static const String songs = 'Songs';

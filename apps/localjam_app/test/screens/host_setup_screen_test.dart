@@ -56,8 +56,8 @@ void main() {
     final field = tester.widget<CupertinoTextField>(
       find.byType(CupertinoTextField),
     );
-    expect(field.controller!.text, 'Silky Puffin’s Jam');
-    expect(field.placeholder, 'Silky Puffin’s Jam');
+    expect(field.controller!.text, 'Silky Puffin’s jam');
+    expect(field.placeholder, 'Silky Puffin’s jam');
     expect(field.placeholderStyle!.color, JamColors.light.secondaryLabel);
     expect(field.style!.fontSize, 22);
     // The app's one clear button, not Cupertino's.
