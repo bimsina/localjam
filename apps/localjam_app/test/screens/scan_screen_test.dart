@@ -50,7 +50,7 @@ void main() {
     // One primary — Settings is the thing that fixes it — and the link
     // field stays reachable underneath rather than competing with it.
     expect(find.text(JamScanStrings.openSettings), findsOneWidget);
-    expect(find.text(JamScanStrings.enterLink), findsOneWidget);
+    expect(find.text(JamScanStrings.joinWithLink), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
@@ -71,7 +71,7 @@ void main() {
     expect(find.text(JamScanStrings.openSettings), findsNothing);
     // Asking again is what actually works here, and the link is still there.
     expect(find.text(JamScanStrings.retry), findsOneWidget);
-    expect(find.text(JamScanStrings.enterLink), findsOneWidget);
+    expect(find.text(JamScanStrings.joinWithLink), findsOneWidget);
 
     await tester.tap(find.text(JamScanStrings.retry));
     await tester.pumpAndSettle();
@@ -84,7 +84,7 @@ void main() {
     expect(find.text(JamScanStrings.unsupportedTitle), findsOneWidget);
     // Nothing in Settings can grow this phone a QR decoder.
     expect(find.text(JamScanStrings.openSettings), findsNothing);
-    expect(find.text(JamScanStrings.enterLink), findsOneWidget);
+    expect(find.text(JamScanStrings.joinWithLink), findsOneWidget);
   });
 
   testWidgets('a camera that would not start says so, not "denied"', (
@@ -93,7 +93,7 @@ void main() {
     await pumpUnavailable(tester, MobileScannerErrorCode.genericError);
 
     expect(find.text(JamScanStrings.failedTitle), findsOneWidget);
-    expect(find.text(JamScanStrings.enterLink), findsOneWidget);
+    expect(find.text(JamScanStrings.joinWithLink), findsOneWidget);
   });
 
   testWidgets('a camera that would not start can simply be tried again', (
@@ -113,7 +113,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(retried, 1);
     // The link is still there underneath, just no longer the loudest thing.
-    expect(find.text(JamScanStrings.enterLink), findsOneWidget);
+    expect(find.text(JamScanStrings.joinWithLink), findsOneWidget);
   });
 
   testWidgets('nothing offers to retry what a retry cannot fix', (
@@ -166,7 +166,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    await tester.tap(find.text(JamScanStrings.enterLink));
+    await tester.tap(find.text(JamScanStrings.joinWithLink));
     await tester.pumpAndSettle();
     expect(asked, 1);
   });
@@ -184,9 +184,9 @@ void main() {
       (MobileScannerErrorCode.genericError, false),
     ]) {
       await pumpUnavailable(tester, code, declined: declined, onRetry: () {});
-      expect(find.text(JamScanStrings.enterLink), findsOneWidget);
+      expect(find.text(JamScanStrings.joinWithLink), findsOneWidget);
       final state = tester.getRect(find.byType(JamEmptyState));
-      final link = tester.getRect(find.text(JamScanStrings.enterLink));
+      final link = tester.getRect(find.text(JamScanStrings.joinWithLink));
       expect(state.contains(link.center), isTrue, reason: '$code $declined');
     }
   });
@@ -194,7 +194,7 @@ void main() {
   testWidgets('with no fix to offer, Enter Link is the button', (tester) async {
     await pumpUnavailable(tester, MobileScannerErrorCode.unsupported);
     final empty = tester.widget<JamEmptyState>(find.byType(JamEmptyState));
-    expect(empty.actionLabel, JamScanStrings.enterLink);
+    expect(empty.actionLabel, JamScanStrings.joinWithLink);
     expect(empty.actionVariant, JamButtonVariant.gray);
     expect(empty.secondaryActionLabel, isNull);
   });
@@ -205,7 +205,7 @@ void main() {
     await pumpUnavailable(tester, MobileScannerErrorCode.permissionDenied);
     final empty = tester.widget<JamEmptyState>(find.byType(JamEmptyState));
     expect(empty.actionLabel, JamScanStrings.openSettings);
-    expect(empty.secondaryActionLabel, JamScanStrings.enterLink);
+    expect(empty.secondaryActionLabel, JamScanStrings.joinWithLink);
   });
 
   testWidgets('Join with Link from the scanner is on the dark palette, '

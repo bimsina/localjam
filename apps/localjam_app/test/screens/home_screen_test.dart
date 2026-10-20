@@ -283,7 +283,7 @@ void main() {
     await pumpApp(tester, session);
     publishNearby(session, [room('Bar Room')]);
     await tester.pumpAndSettle();
-    await tester.scrollUntilVisible(find.text(HomeStrings.enterLink), 80);
+    await tester.scrollUntilVisible(find.text(HomeStrings.joinWithLink), 80);
 
     expect(tester.takeException(), isNull);
     final sentence = tester.getRect(find.text(HomeStrings.notListed));
@@ -291,7 +291,7 @@ void main() {
     expect(scan.top, greaterThan(sentence.bottom));
     // The buttons themselves wrap rather than run off the edge.
     expect(
-      tester.getRect(find.text(HomeStrings.enterLink)).right,
+      tester.getRect(find.text(HomeStrings.joinWithLink)).right,
       lessThanOrEqualTo(320),
     );
   });
@@ -305,7 +305,7 @@ void main() {
 
     expect(find.text(HomeStrings.notListed), findsOneWidget);
     expect(find.text(HomeStrings.scan), findsOneWidget);
-    await tester.tap(find.text(HomeStrings.enterLink));
+    await tester.tap(find.text(HomeStrings.joinWithLink));
     await tester.pumpAndSettle();
     // Straight to the link alert: no camera primer on the way.
     expect(find.byType(JoinLinkDialog), findsOneWidget);
@@ -320,8 +320,8 @@ void main() {
     final empty = tester.widget<JamEmptyState>(find.byType(JamEmptyState));
     expect(empty.title, HomeStrings.quietTitle);
     expect(empty.actionLabel, HomeStrings.scan);
-    expect(empty.secondaryActionLabel, HomeStrings.enterLink);
-    await tester.tap(find.text(HomeStrings.enterLink));
+    expect(empty.secondaryActionLabel, HomeStrings.joinWithLink);
+    await tester.tap(find.text(HomeStrings.joinWithLink));
     await tester.pumpAndSettle();
     expect(find.byType(JoinLinkDialog), findsOneWidget);
     expect(find.byType(JamPermissionSheet), findsNothing);
@@ -372,7 +372,7 @@ void main() {
     expect(find.byType(JamEmptyState), findsNothing);
     expect(find.text(HomeStrings.quietLine), findsOneWidget);
     expect(find.text(HomeStrings.scan), findsOneWidget);
-    expect(find.text(HomeStrings.enterLink), findsOneWidget);
+    expect(find.text(HomeStrings.joinWithLink), findsOneWidget);
   });
 
   testWidgets('a recent jam is the row Past Jams draws it with: its mark — '

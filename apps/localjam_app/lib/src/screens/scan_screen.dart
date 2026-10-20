@@ -41,7 +41,9 @@ abstract final class JamScanStrings {
   static const String hint = 'Point at a LocalJam code';
   static const String wrongCode = 'That code isn’t a jam invite.';
   static const String found = 'Joining…';
-  static const String enterLink = 'Enter Link';
+
+  /// The Join with Link alert, named as it is everywhere it is offered.
+  static const String joinWithLink = JamJoinLinkStrings.title;
   static const String close = 'Close';
   static const String torchOn = 'Turn On Flashlight';
   static const String torchOff = 'Turn Off Flashlight';
@@ -491,7 +493,7 @@ class _ScanChrome extends StatelessWidget {
             Padding(
               padding: const EdgeInsets.only(bottom: JamSpace.lg),
               child: JamButton.plain(
-                label: JamScanStrings.enterLink,
+                label: JamScanStrings.joinWithLink,
                 color: JamNowPlayingColors.text,
                 onPressed: onLink,
               ),
@@ -615,10 +617,12 @@ class ScannerUnavailableView extends StatelessWidget {
       secondaryColor: JamNowPlayingColors.secondary,
       // Neutral, never tinted: the fix where there is one, else the link
       // itself.
-      actionLabel: fixLabel ?? JamScanStrings.enterLink,
+      actionLabel: fixLabel ?? JamScanStrings.joinWithLink,
       onAction: onFix ?? link,
       actionVariant: JamButtonVariant.gray,
-      secondaryActionLabel: fixLabel == null ? null : JamScanStrings.enterLink,
+      secondaryActionLabel: fixLabel == null
+          ? null
+          : JamScanStrings.joinWithLink,
       onSecondaryAction: fixLabel == null ? null : link,
     );
 

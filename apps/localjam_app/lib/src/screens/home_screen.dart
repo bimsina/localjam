@@ -58,14 +58,11 @@ abstract final class HomeStrings {
   static const String scan = 'Scan Code';
   static const String host = 'Start a Jam';
 
-  /// The paste-a-link way in: the nav-bar action on platforms with no
-  /// camera, and the one way in on those everywhere else on this screen.
-  static const String joinWithLink = 'Join with Link';
-
-  /// The same alert where there *is* a camera — named as the scanner names
-  /// it, and offered beside Scan so a link sent in a chat never has to go
-  /// through the camera's permission sheet first.
-  static const String enterLink = 'Enter Link';
+  /// The paste-a-link way in, named as the alert it opens is: the nav-bar
+  /// action on platforms with no camera, and beside Scan Code where there
+  /// is one — so a link sent in a chat never has to go through the
+  /// camera's permission sheet first.
+  static const String joinWithLink = JamJoinLinkStrings.title;
 
   static const String settings = 'Settings';
   static const String recent = 'Recent';
@@ -116,9 +113,6 @@ abstract final class HomeStrings {
 
   static const String badCode = 'That code isn’t a jam invite.';
 }
-
-/// The paste-a-link label, exported for the scanner's own fallback.
-const String kJoinWithLink = HomeStrings.joinWithLink;
 
 /// How many past jams the Recent section lists before "See All".
 const int kJamHomeRecents = 3;
@@ -352,15 +346,11 @@ class _HomeScreenState extends State<HomeScreen> {
   void _scanOrLink() => unawaited(canScanQrCodes ? _scan() : _joinWithLink());
 
   /// The ways in that are not a nearby row, for the one-line states: Scan
-  /// and Enter Link where there is a camera — the link straight to its
-  /// alert, never through the camera's permission sheet — and Join with
-  /// Link where there is not.
+  /// Code where there is a camera, and Join with Link — straight to its
+  /// alert, never through the camera's permission sheet.
   List<_LineAction> get _waysIn => [
     if (canScanQrCodes) (HomeStrings.scan, () => unawaited(_scan())),
-    (
-      canScanQrCodes ? HomeStrings.enterLink : HomeStrings.joinWithLink,
-      () => unawaited(_joinWithLink()),
-    ),
+    (HomeStrings.joinWithLink, () => unawaited(_joinWithLink())),
   ];
 
   /// The live jam's Invite sheet, for a host who has come back to Home.
@@ -1159,7 +1149,7 @@ class _EmptyNearby extends StatelessWidget {
       onAction: showScan ? onScan : null,
       actionVariant: JamButtonVariant.gray,
       secondaryActionLabel: showScan && onLink != null
-          ? HomeStrings.enterLink
+          ? HomeStrings.joinWithLink
           : null,
       onSecondaryAction: showScan ? onLink : null,
     );
