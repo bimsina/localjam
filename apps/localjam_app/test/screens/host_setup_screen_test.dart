@@ -13,6 +13,7 @@ import 'package:localjam_app/src/screens/host_setup_screen.dart';
 import 'package:localjam_app/src/widgets/buttons.dart';
 import 'package:localjam_app/src/widgets/guests_can.dart';
 import 'package:localjam_app/src/widgets/list.dart';
+import 'package:localjam_app/src/widgets/text_field.dart';
 import 'package:localjam_app/src/widgets/track_row.dart';
 import 'package:localjam_app/src/widgets/menu.dart';
 
@@ -59,7 +60,10 @@ void main() {
     expect(field.placeholder, 'Silky Puffin’s Jam');
     expect(field.placeholderStyle!.color, JamColors.light.secondaryLabel);
     expect(field.style!.fontSize, 22);
-    expect(field.clearButtonMode, OverlayVisibilityMode.editing);
+    // The app's one clear button, not Cupertino's.
+    expect(field.clearButtonMode, OverlayVisibilityMode.never);
+    expect(field.suffixMode, OverlayVisibilityMode.editing);
+    expect(field.suffix, isA<JamFieldClearButton>());
 
     // Start lives in the nav bar: no big filled button on this sheet.
     final primaries = tester

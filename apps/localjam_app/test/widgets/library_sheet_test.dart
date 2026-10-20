@@ -1,12 +1,13 @@
 /// The Android library picker: Apple Music's "Add Songs" sheet.
 library;
 
-import 'package:flutter/cupertino.dart' show CupertinoSearchTextField;
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:localjam_app/src/design/theme.dart';
 import 'package:localjam_app/src/widgets/buttons.dart';
 import 'package:localjam_app/src/widgets/library_sheet.dart';
+import 'package:localjam_app/src/widgets/switch.dart';
+import 'package:localjam_app/src/widgets/text_field.dart';
 import 'package:localjam_app/src/widgets/track_row.dart';
 import 'package:localjam_client/localjam_client.dart';
 
@@ -48,9 +49,22 @@ void main() {
     expect(find.text(LibrarySheetStrings.available(2)), findsOneWidget);
     expect(LibrarySheetStrings.available(2), '2 songs');
 
+    // The app's own selection check, not the stock Cupertino circle.
+    bool picked(JamSelectionCheck c) => c.selected;
+    expect(
+      tester.widgetList<JamSelectionCheck>(find.byType(JamSelectionCheck)),
+      everyElement(isA<JamSelectionCheck>().having(picked, 'selected', false)),
+    );
+
     await tester.tap(find.text('Low Tide'));
     await tester.pump();
     expect(find.text(LibrarySheetStrings.selectedCount(1)), findsOneWidget);
+    expect(
+      tester
+          .widgetList<JamSelectionCheck>(find.byType(JamSelectionCheck))
+          .where(picked),
+      hasLength(1),
+    );
   });
 
   testWidgets('"Select All" ends on the page margin', (tester) async {
@@ -76,7 +90,7 @@ void main() {
   testWidgets('no results: no "0 songs", no dead Select All, and the '
       'query said back', (tester) async {
     await _pump(tester);
-    await tester.enterText(find.byType(CupertinoSearchTextField), 'zzz');
+    await tester.enterText(find.byType(JamTextField), 'zzz');
     await tester.pump();
 
     expect(find.text(LibrarySheetStrings.noResults), findsOneWidget);

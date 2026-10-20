@@ -4,9 +4,9 @@
 /// in MediaStore, not in a folder DocumentsUI will show you.
 ///
 /// Apple Music's "Add Songs" picker: a large sheet with Cancel and **Add**
-/// (the verb the sheet commits — §10.2), a search field, plain song rows
-/// (cover, title, "Artist · 3:42") and a checkmark circle on each chosen
-/// one. The title counts the selection.
+/// (the verb the sheet commits — §10.2), the app's search field, plain song
+/// rows (cover, title, "Artist · 3:42") and the app's selection check on
+/// each chosen one. The title counts the selection.
 library;
 
 import 'dart:async';
@@ -23,6 +23,8 @@ import '../util/media_picking.dart';
 import 'buttons.dart';
 import 'empty_state.dart';
 import 'sheet.dart';
+import 'switch.dart' show JamSelectionCheck;
+import 'text_field.dart';
 import 'track_row.dart';
 
 /// Everything this sheet says out loud.
@@ -197,18 +199,13 @@ class _JamLibraryPickerState extends State<JamLibraryPicker> {
                 JamSpace.page,
                 0,
               ),
-              child: CupertinoSearchTextField(
+              // The app's one field, with its magnifier: the same shape,
+              // placeholder and clear button as every other.
+              child: JamTextField(
                 controller: _query,
                 placeholder: LibrarySheetStrings.search,
-                style: context.jamBody,
-                placeholderStyle: context.jamBody.copyWith(
-                  color: colors.secondaryLabel,
-                ),
-                backgroundColor: colors.fillSecondary,
-                // The same field radius as the alert's text field: one
-                // field shape in the app.
-                borderRadius: BorderRadius.circular(JamRadius.field),
-                itemColor: colors.secondaryLabel,
+                search: true,
+                textCapitalization: TextCapitalization.none,
               ),
             ),
           ),
@@ -281,7 +278,7 @@ class _JamLibraryPickerState extends State<JamLibraryPicker> {
   }
 }
 
-/// One library song: cover, title, "Artist · 3:42" and a checkmark circle.
+/// One library song: cover, title, "Artist · 3:42" and a selection check.
 /// The cover is read the first time the row is built.
 class _LibraryRow extends StatefulWidget {
   const _LibraryRow({
@@ -323,7 +320,6 @@ class _LibraryRowState extends State<_LibraryRow> {
 
   @override
   Widget build(BuildContext context) {
-    final colors = context.jamColors;
     final track = widget.track;
     final selected = widget.selected;
     final ms = track.durationMs;
@@ -344,13 +340,9 @@ class _LibraryRowState extends State<_LibraryRow> {
         artworkLoading: _loading,
         separator: widget.separator,
         onTap: widget.onTap,
-        trailing: Icon(
-          selected
-              ? CupertinoIcons.checkmark_circle_fill
-              : CupertinoIcons.circle,
-          size: 24,
-          semanticLabel: selected ? LibrarySheetStrings.selected : null,
-          color: selected ? colors.tint : colors.tertiaryLabel,
+        trailing: JamSelectionCheck(
+          selected: selected,
+          semanticLabel: LibrarySheetStrings.selected,
         ),
       ),
     );

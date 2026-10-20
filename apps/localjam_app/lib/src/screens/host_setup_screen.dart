@@ -21,6 +21,7 @@ import 'package:go_router/go_router.dart';
 import 'package:localjam_client/localjam_client.dart';
 
 import '../design/breakpoints.dart';
+import '../design/theme.dart';
 import '../design/tokens.dart';
 import '../design/typography.dart';
 import '../state/session_controller.dart';
@@ -33,6 +34,7 @@ import '../widgets/section.dart';
 import '../widgets/session_gate.dart';
 import '../widgets/sheet.dart';
 import '../widgets/swipe_action.dart';
+import '../widgets/text_field.dart';
 import '../widgets/track_row.dart';
 
 /// Everything this screen says out loud.
@@ -42,7 +44,6 @@ abstract final class HostSetupStrings {
   static const String start = 'Start';
   static const String starting = 'Starting the jam';
   static const String nameField = 'Jam name';
-  static const String clear = 'Clear';
 
   /// The default name, the field's starting text and its placeholder once
   /// cleared: "Mia’s Jam".
@@ -485,9 +486,11 @@ class _HostSetupScreenState extends State<HostSetupScreen> {
 }
 
 /// The room name, as a big inline field in its own grouped cell — Apple
-/// Invites' event title. It starts filled with the default name; cleared,
-/// the placeholder says the same name, so leaving it is a choice, not an
-/// error.
+/// Invites' event title: the one field that is its section's cell rather
+/// than a filled [JamTextField], with the same clear button
+/// ([JamFieldClearButton]). It starts filled with the default name;
+/// cleared, the placeholder says the same name, so leaving it is a choice,
+/// not an error.
 class _NameField extends StatelessWidget {
   const _NameField({
     required this.controller,
@@ -512,15 +515,17 @@ class _NameField extends StatelessWidget {
         controller: controller,
         focusNode: focusNode,
         // The in-app appearance, not the device's (§10.8).
-        keyboardAppearance: CupertinoTheme.brightnessOf(context),
+        keyboardAppearance: jamKeyboardAppearance(context),
         placeholder: placeholder,
         placeholderStyle: style.copyWith(color: colors.secondaryLabel),
         style: style,
         cursorColor: colors.tint,
         textCapitalization: TextCapitalization.words,
         textInputAction: TextInputAction.done,
-        clearButtonMode: OverlayVisibilityMode.editing,
-        clearButtonSemanticLabel: HostSetupStrings.clear,
+        // The app's one clear button, as in every other field (CR-16).
+        suffix: JamFieldClearButton(controller: controller),
+        suffixMode: OverlayVisibilityMode.editing,
+        clearButtonMode: OverlayVisibilityMode.never,
         maxLines: 1,
         padding: const EdgeInsets.symmetric(
           horizontal: kJamRowInset,

@@ -4,9 +4,10 @@
 /// ([JamFieldClearButton]) while there is text to clear. A search field is
 /// the same field with a magnifier in front.
 ///
-/// The alert's field (`JamAlertTextField`), the library's search and Start
-/// a Jam's name all clear text the same way: [JamFieldClearButton] — use it
-/// as the `suffix` of any `CupertinoTextField` that is not a [JamTextField].
+/// The alert's field (`JamAlertTextField`) and the library's search are
+/// this field. Start a Jam's name — a section's cell, not a filled field —
+/// clears text the same way: [JamFieldClearButton] is the `suffix` of any
+/// `CupertinoTextField` that is not a [JamTextField].
 ///
 /// ```dart
 /// JamTextField(controller: _query, placeholder: 'Search', search: true)
