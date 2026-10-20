@@ -5,13 +5,15 @@ library;
 
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart';
 import 'package:localjam_core/localjam_core.dart';
 import 'package:meta/meta.dart';
 
+import 'guest_errors.dart';
+import 'guest_transport.dart';
+import 'media_sink.dart';
 import 'monotonic.dart';
 
 /// Thrown when the host answers the join handshake with `reject` (§3.1) —
@@ -31,17 +33,6 @@ class JamRejectedException implements Exception {
 
   @override
   String toString() => 'JamRejectedException(${reason.wire})';
-}
-
-/// A media-plane request the host answered with an unexpected status
-/// (§6.2, §6.4, §6.5). Still an [HttpException] — the message is the same —
-/// but with the [statusCode], so a caller can tell a full room (`507`) from
-/// a busy one (`429`) or a refused add (`403`) without parsing text.
-class JamHttpStatusException extends HttpException {
-  const JamHttpStatusException(this.statusCode, super.message, {super.uri});
-
-  /// The HTTP status the host answered with.
-  final int statusCode;
 }
 
 /// Kind of a [JamPeerEvent].
@@ -75,9 +66,17 @@ class JamPeerEvent {
 ///
 /// Created via [connect]. The guest's local clock is a process-wide monotonic
 /// microsecond clock (§4); [clock] maps it onto the host's session clock.
+///
+/// Runs anywhere Dart has a network: it talks to the host through a
+/// [JamGuestTransport] — `dart:io` natively, the browser's `WebSocket` and
+/// `fetch` on the web — and never touches `dart:io` itself. The file-backed
+/// conveniences (`fetchMediaToFile`, `uploadMedia`) are extension methods
+/// in `package:localjam_net/localjam_net.dart`, native only; the browser
+/// uses [fetchMedia] / [fetchMediaToSink] and [uploadMediaStream].
 class JamGuestClient {
   JamGuestClient._(
     this._ws,
+    this._transport,
     this._host,
     this._port,
     this._token,
@@ -86,9 +85,8 @@ class JamGuestClient {
     this._mediaTimeout,
     this._localClockUs,
   ) {
-    _http.connectionTimeout = _mediaTimeout;
     _lastFrameUs = monotonicNowUs();
-    _sub = _ws.listen(
+    _sub = _ws.frames.listen(
       _onFrame,
       onDone: _onSocketDone,
       onError: (Object _) => _onSocketDone(),
@@ -108,7 +106,7 @@ class JamGuestClient {
   static const int maxArtworkBytes = 8 * 1024 * 1024;
 
   /// How far past a playlist item's declared `sizeBytes` a media response may
-  /// run before [fetchMediaToFile] abandons it. Non-zero only so a host that
+  /// run before [fetchMediaToSink] abandons it. Non-zero only so a host that
   /// pads a response (a trailing newline, a re-encode that grew a few bytes)
   /// still fails on the honest sha256 check rather than on this one.
   static const int sizeSlackBytes = 64 * 1024;
@@ -140,8 +138,9 @@ class JamGuestClient {
   /// devices. Liveness and media timeouts always run on the real clock.
   ///
   /// Throws [JamRejectedException] if the host rejects the join (or speaks
-  /// another major protocol version), or [SocketException] if no candidate
-  /// host is reachable.
+  /// another major protocol version), or [JamTransportException] if no
+  /// candidate host is reachable — natively a `SocketException`, as it
+  /// always was.
   static Future<JamGuestClient> connect(
     Uri joinUri, {
     String clientName = 'guest',
@@ -174,30 +173,24 @@ class JamGuestClient {
     Object? lastError;
     for (final host in hosts) {
       final wsUri = Uri(scheme: 'ws', host: host, port: port, path: '/ws');
-      final WebSocket ws;
-      // No permessage-deflate: control frames are small JSON (§1), and the
-      // host does not offer it either (§9.1).
-      final pending = WebSocket.connect(
-        '$wsUri',
-        compression: CompressionOptions.compressionOff,
+      final transport = JamGuestTransport(
+        timeout: mediaTimeout,
+        maxConnections: maxConnectionsToHost,
       );
+      final JamControlSocket ws;
       try {
-        ws = await pending.timeout(connectTimeout);
+        // A late upgrade is closed by the transport, not left in the host's
+        // pre-hello slots; no permessage-deflate is offered where the
+        // platform lets the guest choose (§1, §9.1).
+        ws = await transport.connectControl(wsUri, timeout: connectTimeout);
       } catch (e) {
-        // A host that was merely asleep may still complete this upgrade
-        // later; a socket nobody listens to would sit in its pre-hello
-        // slots until its hello timeout. Close it if it ever arrives.
-        unawaited(
-          pending.then(
-            (late) => late.close(WebSocketStatus.goingAway),
-            onError: (Object _) {},
-          ),
-        );
+        transport.close();
         lastError = e; // Try the next candidate (§1: guests try in order).
         continue;
       }
       final client = JamGuestClient._(
         ws,
+        transport,
         host,
         port,
         token,
@@ -224,14 +217,21 @@ class JamGuestClient {
         lastError = e;
       }
     }
-    throw SocketException(
+    throw JamTransportException(
       'Could not join via any host candidate $hosts: $lastError',
+      cause: lastError,
     );
   }
 
   static const MessageCodec _codec = MessageCodec();
 
-  final WebSocket _ws;
+  final JamControlSocket _ws;
+
+  /// Media, artwork and uploads share this transport, and with it a bound
+  /// on connections to the host: the host caps connections per address
+  /// (§9.1), and an unbounded client answered a burst of 40 cover fetches
+  /// with seven `503`s. Requests past the bound wait their turn instead.
+  final JamGuestTransport _transport;
   final String _host;
   final int _port;
   final String _token;
@@ -239,13 +239,6 @@ class JamGuestClient {
   final Duration _livenessTimeout;
   final Duration _mediaTimeout;
   final int Function() _localClockUs;
-
-  /// Media, artwork and uploads share this client, and with it a bound on
-  /// connections to the host: the host caps connections per address
-  /// (§9.1), and an unbounded client answered a burst of 40 cover fetches
-  /// with seven `503`s. Requests past the bound wait their turn instead.
-  final HttpClient _http = HttpClient()
-    ..maxConnectionsPerHost = maxConnectionsToHost;
 
   /// How many media-plane connections a guest opens to its host at once
   /// (§9.1): well under the host's per-address cap, with room for the
@@ -636,7 +629,7 @@ class JamGuestClient {
     final handshake = _handshakeCompleter;
     if (handshake != null && !handshake.isCompleted) {
       handshake.completeError(
-        const SocketException('Connection closed during handshake'),
+        const JamTransportException('Connection closed during handshake'),
       );
     }
     if (!_done.isCompleted) _done.complete();
@@ -690,7 +683,7 @@ class JamGuestClient {
 
   /// Sends a §6.3 `media_status` report directly, without an in-flight
   /// fetch — e.g. a cache hit, where the guest already possesses the file
-  /// and never touches the network for it. [fetchMediaToFile]/[fetchMedia]
+  /// and never touches the network for it. [fetchMediaToSink]/[fetchMedia]
   /// send their own reports as a fetch progresses; this is the public door
   /// for callers (the prefetch pipeline) that resolve readiness some other
   /// way.
@@ -713,28 +706,33 @@ class JamGuestClient {
   }
 
   /// Fetches `GET /media/{mediaId}` with Bearer auth (§6.2), streaming the
-  /// body straight to [destination] while hashing incrementally — the file is
-  /// never held in memory. Reports `media_status` upstream (§6.3): `fetching`
-  /// with progress while downloading, `ready` once the sha256 digest matches
-  /// the playlist entry.
+  /// body into [sink] while hashing incrementally — the body is never held
+  /// in memory unless the sink holds it. Reports `media_status` upstream
+  /// (§6.3): `fetching` with progress while downloading, `ready` once the
+  /// sha256 digest matches the playlist entry. The sink sees the order its
+  /// docs promise ([JamMediaSink]): opened only after a `200`, closed always,
+  /// abandoned before `none` is reported.
   ///
   /// The transfer is also bounded by the playlist entry's `sizeBytes`
   /// ([sizeSlackBytes] of slack): a host that keeps sending past the size it
   /// advertised is either broken or hostile, and either way the guest stops
-  /// writing instead of filling the device's disk. The digest check alone is
-  /// too late — it only fires once the whole body has landed.
+  /// taking bytes instead of filling the device's disk (or memory). The
+  /// digest check alone is too late — it only fires once the whole body has
+  /// landed.
   ///
-  /// [onProgress] receives values in [0, 1]. Returns [destination]. Throws
-  /// [ArgumentError] if [mediaId] is not in the current playlist,
-  /// [HttpException] on a non-200 response, [TimeoutException] when the host
-  /// stops answering (no connection, no response, or no body bytes within
-  /// `mediaTimeout` — a host that died mid-transfer must not hang the fetch
-  /// forever), and [StateError] on a digest mismatch or an over-size body.
-  /// Every failure after the response arrives deletes the partial
-  /// [destination] and reports `media_status: none`.
-  Future<File> fetchMediaToFile(
+  /// [onProgress] receives values in [0, 1]. Throws [ArgumentError] if
+  /// [mediaId] is not in the current playlist, [JamHttpStatusException] on a
+  /// non-200 response (natively an `HttpException`), [TimeoutException] when
+  /// the host stops answering (no connection, no response, or no body bytes
+  /// within `mediaTimeout` — a host that died mid-transfer must not hang the
+  /// fetch forever), [StateError] on a digest mismatch or an over-size body,
+  /// and the platform's connection error when the connection breaks
+  /// ([JamTransportException] in a browser; `dart:io`'s `SocketException` or
+  /// `HttpException` natively). A stall, an over-size body and a digest
+  /// mismatch abandon the sink and report `media_status: none`.
+  Future<void> fetchMediaToSink(
     String mediaId,
-    File destination, {
+    JamMediaSink sink, {
     void Function(double progress)? onProgress,
   }) async {
     final item = _playlist.firstWhere(
@@ -752,7 +750,7 @@ class JamGuestClient {
       path: '/media/$mediaId',
     );
     final response = await _get(uri);
-    if (response.statusCode != HttpStatus.ok) {
+    if (response.statusCode != _httpOk) {
       await _discard(response);
       throw JamHttpStatusException(
         response.statusCode,
@@ -771,8 +769,12 @@ class JamGuestClient {
     final total = item.sizeBytes > 0 ? item.sizeBytes : response.contentLength;
     final digestSink = _DigestSink();
     final hasher = sha256.startChunkedConversion(digestSink);
-    await destination.parent.create(recursive: true);
-    final sink = destination.openWrite();
+    try {
+      await sink.open();
+    } catch (_) {
+      response.abort();
+      rethrow;
+    }
     // The declared size plus slack: 0 means "unknown" (a legacy item without
     // sizeBytes and a chunked response), where there is nothing to enforce.
     final limit = item.sizeBytes > 0 ? item.sizeBytes + sizeSlackBytes : 0;
@@ -804,7 +806,6 @@ class JamGuestClient {
           );
         }
       }
-      await sink.flush();
     } on TimeoutException catch (e) {
       stalled = e;
     } finally {
@@ -815,14 +816,14 @@ class JamGuestClient {
     if (stalled != null) {
       // The error ended the `await for`, which cancelled the response and
       // with it the connection.
-      await _abandonFetch(mediaId, destination);
+      await _abandonFetch(mediaId, sink);
       throw stalled;
     }
 
     if (overSize) {
       // Breaking out of the `await for` above already cancelled the response
       // subscription, which tears the connection down: nothing more arrives.
-      await _abandonFetch(mediaId, destination);
+      await _abandonFetch(mediaId, sink);
       throw StateError(
         'media $mediaId exceeded its declared size (${item.sizeBytes} bytes)',
       );
@@ -831,58 +832,45 @@ class JamGuestClient {
     // §6.2: sha256 verifies the transfer (and enables cross-session caching).
     final digest = digestSink.value!.toString();
     if (item.sha256.isNotEmpty && digest != item.sha256) {
-      await _abandonFetch(mediaId, destination);
+      await _abandonFetch(mediaId, sink);
       throw StateError(
         'sha256 mismatch for $mediaId: expected ${item.sha256}, got $digest',
       );
     }
     onProgress?.call(1.0);
     _send(MediaStatusMessage(mediaId: mediaId, state: MediaFetchState.ready));
-    return destination;
   }
 
   /// Fetches `GET /media/{mediaId}` into memory (§6.2), reporting
   /// `media_status` upstream (§6.3): `fetching` with progress while
   /// downloading, `ready` once the sha256 digest matches the playlist entry.
   ///
-  /// Implemented on top of [fetchMediaToFile] via a temp file (one fetch
-  /// path); the returned bytes are read back after verification. Prefer
-  /// [fetchMediaToFile] for anything large.
+  /// [fetchMediaToSink] with a [JamBytesMediaSink]: the whole body is held
+  /// in memory (bounded by the item's declared size), which is what a
+  /// browser wants (§6.2 full prefetch, no file system). Natively, prefer
+  /// `fetchMediaToFile` for anything large.
   ///
-  /// [onProgress] receives values in [0, 1]. Throws [ArgumentError] if
-  /// [mediaId] is not in the current playlist, [HttpException] on a non-200
-  /// response, and [StateError] on a digest mismatch (after reporting
+  /// [onProgress] receives values in [0, 1]. Throws as [fetchMediaToSink]
+  /// does: [ArgumentError] if [mediaId] is not in the current playlist,
+  /// [JamHttpStatusException] on a non-200 response, [TimeoutException] on a
+  /// stall, and [StateError] on a digest mismatch (after reporting
   /// `media_status: none`).
   Future<Uint8List> fetchMedia(
     String mediaId, {
     void Function(double progress)? onProgress,
   }) async {
-    final dir = await Directory.systemTemp.createTemp('localjam_fetch_');
-    try {
-      final file = await fetchMediaToFile(
-        mediaId,
-        // The id is host-supplied and is about to name a file: strip
-        // anything that could walk out of the temp directory.
-        File(
-          '${dir.path}/${mediaId.replaceAll(RegExp(r'[^A-Za-z0-9_-]'), '_')}',
-        ),
-        onProgress: onProgress,
-      );
-      return await file.readAsBytes();
-    } finally {
-      try {
-        await dir.delete(recursive: true);
-      } catch (_) {}
-    }
+    final sink = JamBytesMediaSink();
+    await fetchMediaToSink(mediaId, sink, onProgress: onProgress);
+    return sink.takeBytes();
   }
 
-  /// Deletes the partial [destination] and tells the host this guest no
-  /// longer holds [mediaId] (§6.3) — the shared tail of every failed fetch.
-  Future<void> _abandonFetch(String mediaId, File destination) async {
+  /// Discards what [sink] received and tells the host this guest no longer
+  /// holds [mediaId] (§6.3) — the shared tail of every failed fetch.
+  Future<void> _abandonFetch(String mediaId, JamMediaSink sink) async {
     try {
-      await destination.delete();
+      await sink.abandon();
     } catch (_) {
-      // Never written, or already gone: nothing to undo.
+      // Nothing to undo, or nothing we can: the report matters more.
     }
     _send(MediaStatusMessage(mediaId: mediaId, state: MediaFetchState.none));
   }
@@ -906,7 +894,7 @@ class JamGuestClient {
       path: '/artwork/$artworkId',
     );
     final response = await _get(uri);
-    if (response.statusCode != HttpStatus.ok) {
+    if (response.statusCode != _httpOk) {
       await _discard(response);
       throw JamHttpStatusException(
         response.statusCode,
@@ -927,13 +915,17 @@ class JamGuestClient {
     return builder.takeBytes();
   }
 
-  /// Uploads [file] to the host over the media plane (`POST /media`, §6.4),
-  /// streaming it from disk — the file is never read into memory whole.
-  /// Metadata travels in `X-LocalJam-*` headers; the host computes the sha256
-  /// and mediaId itself, adds the item to the playlist, and broadcasts it.
+  /// Uploads [length] bytes from [body] to the host over the media plane
+  /// (`POST /media`, §6.4) as [name]. Metadata travels in `X-LocalJam-*`
+  /// headers; the host computes the sha256 and mediaId itself, adds the
+  /// item to the playlist, and broadcasts it. Natively `uploadMedia` wraps
+  /// this for a file, streaming it from disk; in a browser, pass the picked
+  /// file's bytes (it is sent as one body there, see
+  /// [JamGuestTransport.post]).
   ///
-  /// [name] defaults to the file's basename (sent percent-encoded, §6.4).
-  /// [onProgress] receives values in [0, 1] as body bytes are flushed.
+  /// [name] is sent percent-encoded (§6.4). [onProgress] receives values in
+  /// [0, 1] as body bytes are handed to the connection (natively, per
+  /// chunk; in a browser, once, when the host answers).
   ///
   /// The request carries this peer's upload key from `welcome` (§6.4) —
   /// it is what tells the host who is uploading, and so whether they may.
@@ -942,102 +934,89 @@ class JamGuestClient {
   /// content the room had but that was removed from the queue, now back in
   /// it and credited to this peer), or the queued item when this content is
   /// already in the queue (200, idempotent). Throws
-  /// [JamHttpStatusException] (an [HttpException]) on any other response —
-  /// 401 bad token, 403 not allowed to add tracks (or no longer in the room
-  /// by the time the body arrived), 429 too many uploads in flight, 507 the
-  /// room's budget is spent, ... (§6.4) — and [TimeoutException] when the
-  /// host stops reading the body or never answers it (a host that died
-  /// mid-upload must not hang it forever).
+  /// [JamHttpStatusException] (natively an `HttpException`) on any other
+  /// response — 401 bad token, 403 not allowed to add tracks (or no longer
+  /// in the room by the time the body arrived), 429 too many uploads in
+  /// flight, 507 the room's budget is spent, ... (§6.4) — and
+  /// [TimeoutException] when the host stops reading the body or never
+  /// answers it (a host that died mid-upload must not hang it forever).
   ///
   /// The status arrives once the body has been sent: the host reads a
   /// refused body to its end so it can say why, but only up to
   /// `JamHostServer.refusedUploadDrainBytes` (64 MB) and for a bounded
   /// time. A refusal of a larger or slower body — a 413 always is one, and
   /// a 408 usually — ends the upload with the connection error the host's
-  /// cut-off causes ([SocketException] or a status-less [HttpException]).
-  Future<MediaItem> uploadMedia(
-    File file, {
+  /// cut-off causes (natively a `SocketException` or a status-less
+  /// `HttpException`; in a browser a [JamTransportException]).
+  Future<MediaItem> uploadMediaStream(
+    Stream<List<int>> body, {
+    required int length,
+    required String name,
     required MediaKind kind,
-    String? name,
     String mime = 'application/octet-stream',
     int? durationUs,
     void Function(double progress)? onProgress,
   }) async {
-    final total = await file.length();
     final uri = Uri(scheme: 'http', host: _host, port: _port, path: '/media');
-    final request = await _http.postUrl(uri).timeout(_mediaTimeout);
-    request.headers.set(HttpHeaders.authorizationHeader, 'Bearer $_token');
     final uploadKey = _uploadKey;
-    if (uploadKey != null) request.headers.set(uploadKeyHeader, uploadKey);
-    request.headers.set('X-LocalJam-Kind', kind.wire);
-    request.headers.set(
-      'X-LocalJam-Name',
-      Uri.encodeComponent(name ?? Uri.file(file.path).pathSegments.last),
-    );
-    request.headers.set('X-LocalJam-Mime', mime);
-    if (durationUs != null) {
-      request.headers.set('X-LocalJam-Duration-Us', '$durationUs');
-    }
-    request.headers.contentType = ContentType.binary;
-    request.contentLength = total;
-
-    final HttpClientResponse response;
-    final String body;
-    try {
-      var sent = 0;
-      await for (final chunk in file.openRead()) {
-        request.add(chunk);
-        // Flush per chunk: backpressure keeps memory flat and makes progress
-        // reflect bytes actually handed to the socket — and a host that
-        // stops reading shows up here, as a flush that never completes.
-        await request.flush().timeout(_mediaTimeout);
-        sent += chunk.length;
-        onProgress?.call(total > 0 ? (sent / total).clamp(0.0, 1.0) : 1.0);
-      }
+    final response = await _transport.post(
+      uri,
+      headers: {
+        'authorization': 'Bearer $_token',
+        uploadKeyHeader: ?uploadKey,
+        'X-LocalJam-Kind': kind.wire,
+        'X-LocalJam-Name': Uri.encodeComponent(name),
+        'X-LocalJam-Mime': mime,
+        if (durationUs != null) 'X-LocalJam-Duration-Us': '$durationUs',
+        'content-type': 'application/octet-stream',
+      },
+      contentLength: length,
+      body: body,
       // The host hashes as it receives, then reads tags and stores the file
       // before it answers (§6.4): allow it a while, not forever.
-      response = await request.close().timeout(_mediaTimeout * 6);
-      body = await utf8.decodeStream(_idleBounded(response));
+      responseTimeout: _mediaTimeout * 6,
+      onSent: onProgress == null
+          ? null
+          : (sent) =>
+                onProgress(length > 0 ? (sent / length).clamp(0.0, 1.0) : 1.0),
+    );
+    final String text;
+    try {
+      text = await utf8.decodeStream(_idleBounded(response));
     } on TimeoutException {
-      request.abort();
+      response.abort();
       rethrow;
     }
-    if (response.statusCode != HttpStatus.created &&
-        response.statusCode != HttpStatus.ok) {
+    if (response.statusCode != _httpCreated && response.statusCode != _httpOk) {
       throw JamHttpStatusException(
         response.statusCode,
         'POST $uri failed with ${response.statusCode}',
         uri: uri,
       );
     }
-    return MediaItem.fromJson(jsonDecode(body) as Map<String, Object?>);
+    return MediaItem.fromJson(jsonDecode(text) as Map<String, Object?>);
   }
 
   /// The request header carrying this peer's upload key (§6.4).
   static const String uploadKeyHeader = 'X-LocalJam-Upload-Key';
 
+  static const int _httpOk = 200;
+  static const int _httpCreated = 201;
+
   /// `GET [uri]` with Bearer auth, bounded by `mediaTimeout` from connect to
-  /// response headers.
-  Future<HttpClientResponse> _get(Uri uri) async {
-    final request = await _http.getUrl(uri).timeout(_mediaTimeout);
-    request.headers.set(HttpHeaders.authorizationHeader, 'Bearer $_token');
-    try {
-      return await request.close().timeout(_mediaTimeout);
-    } on TimeoutException {
-      request.abort();
-      rethrow;
-    }
-  }
+  /// response headers (the transport's own bound).
+  Future<JamMediaResponse> _get(Uri uri) =>
+      _transport.get(uri, headers: {'authorization': 'Bearer $_token'});
 
   /// [response]'s body, failing with a [TimeoutException] when the host
   /// goes quiet for `mediaTimeout` between chunks — a dead host never closes
   /// the stream on its own.
-  Stream<List<int>> _idleBounded(HttpClientResponse response) =>
-      response.timeout(_mediaTimeout);
+  Stream<List<int>> _idleBounded(JamMediaResponse response) =>
+      response.body.timeout(_mediaTimeout);
 
   /// Drains an unwanted response body, without waiting on a host that has
   /// stopped sending it.
-  Future<void> _discard(HttpClientResponse response) async {
+  Future<void> _discard(JamMediaResponse response) async {
     try {
       await _idleBounded(response).drain<void>();
     } catch (_) {}
@@ -1059,11 +1038,11 @@ class JamGuestClient {
       // Bounded: against a host that is not there, the close handshake can
       // only end in the socket's own timeout.
       await _ws
-          .close(WebSocketStatus.normalClosure)
+          .close(JamCloseCode.normalClosure)
           .timeout(const Duration(seconds: 1));
     } catch (_) {}
     if (!_done.isCompleted) _done.complete();
-    _http.close(force: true);
+    _transport.close();
     await _states.close();
     await _playlists.close();
     await _peerEvents.close();
@@ -1075,9 +1054,9 @@ class JamGuestClient {
   // --- Wire helper -----------------------------------------------------------------
 
   void _send(Message message) {
-    if (_closed || _ws.readyState != WebSocket.open) return;
+    if (_closed || !_ws.isOpen) return;
     try {
-      _ws.add(_codec.encode(message, seq: _seq++));
+      _ws.send(_codec.encode(message, seq: _seq++));
     } on StateError {
       // Sink closed underneath us mid-teardown; close() handles the rest.
     }

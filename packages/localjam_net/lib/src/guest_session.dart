@@ -4,13 +4,13 @@
 library;
 
 import 'dart:async';
-import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:localjam_core/localjam_core.dart';
 
 import 'guest_client.dart';
+import 'media_sink.dart';
 
 /// Connection lifecycle of a [JamGuestSession].
 enum JamConnectionState {
@@ -121,7 +121,8 @@ class JamGuestSession {
 
   /// Connects a first [JamGuestClient] to [joinUri] and wraps it in a
   /// session. Errors from this initial connect ([JamRejectedException],
-  /// `SocketException`, ...) propagate to the caller unchanged.
+  /// `JamTransportException` — natively a `SocketException` — ...)
+  /// propagate to the caller unchanged.
   ///
   /// [backoff] shapes the reconnect schedule (defaults: 500 ms, ×2, cap 10 s,
   /// jitter). The remaining parameters (`localClockUs` included) are
@@ -383,20 +384,17 @@ class JamGuestSession {
     return _client.fetchMedia(mediaId, onProgress: onProgress);
   }
 
-  /// Streams media over the HTTP plane straight to [destination] (§6.2) via
-  /// the current client, verifying its sha256 on completion. Throws
-  /// [StateError] unless connected.
-  Future<File> fetchMediaToFile(
+  /// Streams media over the HTTP plane into [sink] (§6.2) via the current
+  /// client, verifying its sha256 on completion (see
+  /// [JamGuestClient.fetchMediaToSink]). Throws [StateError] unless
+  /// connected. Natively, `fetchMediaToFile` wraps this for a file.
+  Future<void> fetchMediaToSink(
     String mediaId,
-    File destination, {
+    JamMediaSink sink, {
     void Function(double progress)? onProgress,
   }) {
     _ensureConnected();
-    return _client.fetchMediaToFile(
-      mediaId,
-      destination,
-      onProgress: onProgress,
-    );
+    return _client.fetchMediaToSink(mediaId, sink, onProgress: onProgress);
   }
 
   /// Fetches artwork bytes (`GET /artwork/{artworkId}`, §6.5) via the
@@ -406,21 +404,25 @@ class JamGuestSession {
     return _client.fetchArtwork(artworkId);
   }
 
-  /// Uploads [file] to the host (`POST /media`, §6.4) via the current
-  /// client, streaming it from disk. Throws [StateError] unless connected.
-  Future<MediaItem> uploadMedia(
-    File file, {
+  /// Uploads [length] bytes from [body] to the host as [name] (`POST
+  /// /media`, §6.4) via the current client (see
+  /// [JamGuestClient.uploadMediaStream]). Throws [StateError] unless
+  /// connected. Natively, `uploadMedia` wraps this for a file.
+  Future<MediaItem> uploadMediaStream(
+    Stream<List<int>> body, {
+    required int length,
+    required String name,
     required MediaKind kind,
-    String? name,
     String mime = 'application/octet-stream',
     int? durationUs,
     void Function(double progress)? onProgress,
   }) {
     _ensureConnected();
-    return _client.uploadMedia(
-      file,
-      kind: kind,
+    return _client.uploadMediaStream(
+      body,
+      length: length,
       name: name,
+      kind: kind,
       mime: mime,
       durationUs: durationUs,
       onProgress: onProgress,
