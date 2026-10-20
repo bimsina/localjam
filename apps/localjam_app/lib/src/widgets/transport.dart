@@ -13,9 +13,11 @@
 /// corners, warm-ink glyph) that squeezes under a finger.
 ///
 /// The controls are *gated, never hidden*: a guest without playback control
-/// sees the same bar drawn quiet — the square as glass, every glyph in the
-/// backdrop's tertiary white — with a line saying whose call it is, so the
-/// room's rules are legible rather than mysterious.
+/// sees the same bar drawn quiet — the square as a hairline outline with no
+/// fill, every glyph in the backdrop's tertiary white — with a line saying
+/// whose call it is, so the room's rules are legible rather than
+/// mysterious, and the heaviest object in the lower half is not a button
+/// that does nothing (CR-25).
 library;
 
 import 'package:flutter/cupertino.dart';
@@ -73,6 +75,10 @@ const double _kSkipHit = 64;
 /// How far the play triangle sits right of the square's centre: its visual
 /// mass is left of its box, so geometric centring reads as off-centre.
 const double _kPlayOpticalShift = 1.5;
+
+/// How far the ivory deepens toward its glyph's ink while held, under
+/// reduced motion (where it does not squeeze).
+const double _kPressedDeepen = 0.12;
 
 /// Previous · play/pause · next, evenly spaced across the width it is given.
 class JamTransport extends StatelessWidget {
@@ -191,13 +197,14 @@ class JamTransport extends StatelessWidget {
 /// One transport control. A skip is a bare white glyph that dims under a
 /// finger; the primary is the play square, ivory with a warm-ink glyph,
 /// that squeezes instead ([JamPressStyle.scale]) — half-transparent ivory
-/// over a cover goes muddy. Disabled, a skip glyph and the square's glyph go
-/// to the backdrop's tertiary white and the square to glass: quiet, never a
-/// dimmed slab.
+/// over a cover goes muddy. Under reduced motion it does not squeeze: the
+/// ivory deepens while held, so the press still shows (RB-18). Disabled, a
+/// skip glyph and the square's glyph go to the backdrop's tertiary white
+/// and the square to an outline: quiet, never a dimmed slab.
 ///
 /// The glyph swap (play ↔ pause) cross-fades with a small scale so a tap
 /// reads as one control changing state.
-class _TransportButton extends StatelessWidget {
+class _TransportButton extends StatefulWidget {
   const _TransportButton({
     required this.icon,
     required this.hit,
@@ -215,7 +222,21 @@ class _TransportButton extends StatelessWidget {
   final bool primary;
 
   @override
+  State<_TransportButton> createState() => _TransportButtonState();
+}
+
+class _TransportButtonState extends State<_TransportButton> {
+  /// Held down, for the reduced-motion press.
+  bool _pressed = false;
+
+  @override
   Widget build(BuildContext context) {
+    final icon = widget.icon;
+    final hit = widget.hit;
+    final label = widget.label;
+    final onPressed = widget.onPressed;
+    final loading = widget.loading;
+    final primary = widget.primary;
     final reduced = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
     final enabled = onPressed != null;
     // A loading button is busy, not forbidden: it keeps its full colours.
@@ -261,18 +282,31 @@ class _TransportButton extends StatelessWidget {
     final Widget control = primary
         ? JamPressable(
             onTap: onPressed,
-            style: JamPressStyle.scale,
+            style: reduced ? JamPressStyle.none : JamPressStyle.scale,
+            onPressedChanged: (pressed) => setState(() => _pressed = pressed),
             child: AnimatedContainer(
               duration: reduced ? Duration.zero : JamDuration.fast,
               curve: JamCurve.standard,
               width: hit,
               height: hit,
               decoration: ShapeDecoration(
-                color: live
-                    ? JamNowPlayingColors.playSurface
-                    : JamNowPlayingColors.glass,
-                shape: const RoundedSuperellipseBorder(
-                  borderRadius: BorderRadius.all(
+                color: !live
+                    ? JamNowPlayingColors.clear
+                    : reduced && _pressed && enabled
+                    ? Color.lerp(
+                        JamNowPlayingColors.playSurface,
+                        JamNowPlayingColors.playGlyph,
+                        _kPressedDeepen,
+                      )
+                    : JamNowPlayingColors.playSurface,
+                shape: RoundedSuperellipseBorder(
+                  // Not yours to press: its shape in a hairline, so the
+                  // controls keep their places and the eye is not drawn to a
+                  // slab that does nothing.
+                  side: live
+                      ? BorderSide.none
+                      : const BorderSide(color: JamNowPlayingColors.separator),
+                  borderRadius: const BorderRadius.all(
                     Radius.circular(JamRadius.playSquare),
                   ),
                 ),
