@@ -1,6 +1,7 @@
 /// The layout must change shape, not just stretch.
 library;
 
+import 'package:flutter/cupertino.dart' show CupertinoIcons;
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:localjam_app/src/design/breakpoints.dart';
@@ -119,6 +120,23 @@ void main() {
     await tester.pumpAndSettle();
     expect(highlighted(), findsOneWidget);
     expect(within(AppSidebarStrings.settings), findsOneWidget);
+
+    // Raspberry only where you are (D8): the other rows' icons are grey.
+    final colors = jamLightTheme().extension<JamColors>()!;
+    Color iconOf(IconData glyph) => tester
+        .widget<Icon>(
+          find.descendant(
+            of: find.byType(AppSidebar),
+            matching: find.byIcon(glyph),
+          ),
+        )
+        .color!;
+    expect(iconOf(CupertinoIcons.gear), colors.tint);
+    expect(iconOf(CupertinoIcons.clock), colors.secondaryLabel);
+    expect(
+      iconOf(CupertinoIcons.antenna_radiowaves_left_right),
+      colors.secondaryLabel,
+    );
   });
 
   testWidgets("the room's panel uses flat tabs, not a segmented button", (
