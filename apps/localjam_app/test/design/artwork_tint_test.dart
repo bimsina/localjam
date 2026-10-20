@@ -55,7 +55,7 @@ void main() {
         Color(0xFFFFE4EC), // pale pink
         Color(0xFFFFB347), // bright orange
         Color(0xFF00FFFF), // cyan
-        Color(0xFFFFFF00), // yellow
+        Color(0xFFB4E628), // lime
         Color(0xFF4A2B7F), // deep purple
         Color(0xFF101830), // navy
       ]) {
@@ -92,9 +92,79 @@ void main() {
       expect(jamHueNearTint(_hue(const Color(0xFFF08A3C))), isFalse);
     });
 
-    test('greys stay grey', () {
-      final ground = backdropColorFor(const Color(0xFF808080), grey: true);
-      expect(HSLColor.fromColor(ground).saturation, lessThan(0.05));
+    test('greys stay grey — the charcoal\'s warm grey, never a cold one', () {
+      for (final cover in const [
+        Color(0xFF000000),
+        Color(0xFF141414),
+        Color(0xFF808080),
+        Color(0xFFFFFFFF),
+      ]) {
+        final ground = backdropColorFor(cover, grey: true);
+        final hsl = HSLColor.fromColor(ground);
+        expect(hsl.saturation, closeTo(kJamBackdropGreySaturation, 0.02));
+        expect(ground.r, greaterThan(ground.g), reason: '$cover');
+        expect(ground.g, greaterThan(ground.b), reason: '$cover');
+        expect(
+          jamSecondaryContrastOn(ground),
+          greaterThanOrEqualTo(4.5),
+          reason: '$cover',
+        );
+      }
+    });
+
+    test(
+      'a dark cover still has a wash, lighter than the charcoal (RB-11)',
+      () {
+        const charcoal = JamNowPlayingColors.backdropPlaceholder;
+        for (final (cover, grey) in const [
+          (Color(0xFF000000), true), // black
+          (Color(0xFF0B0F1A), false), // near-black navy
+          (Color(0xFF281912), false), // dark brown
+          (Color(0xFF1A0A2E), false), // deep violet
+        ]) {
+          final ground = backdropColorFor(cover, grey: grey);
+          expect(
+            ground.computeLuminance(),
+            greaterThan(charcoal.computeLuminance()),
+            reason: '$cover',
+          );
+          expect(
+            jamContrastRatio(ground, charcoal),
+            greaterThanOrEqualTo(kJamBackdropMinLift - 0.005),
+            reason: '$cover',
+          );
+        }
+      },
+    );
+
+    test('reds go brick, not mauve; yellows go amber, not olive (RB-12)', () {
+      for (final red in const [
+        Color(0xFFE6141E), // pure red
+        Color(0xFFFF2400), // scarlet
+        Color(0xFFC0392B), // brick red
+      ]) {
+        final hsl = HSLColor.fromColor(backdropColorFor(red));
+        expect(hsl.hue, inInclusiveRange(5, 12), reason: '$red');
+        expect(hsl.saturation, greaterThan(0.5), reason: '$red');
+      }
+      for (final yellow in const [
+        Color(0xFFFFDD00), // yellow
+        Color(0xFFE1AD01), // mustard
+        Color(0xFFFFFF00), // lemon
+      ]) {
+        final ground = backdropColorFor(yellow);
+        expect(_hue(ground), inInclusiveRange(36, 47), reason: '$yellow');
+        expect(jamSecondaryContrastOn(ground), greaterThanOrEqualTo(4.5));
+      }
+      // The bend fades out: limes and greens keep their hue.
+      expect(jamBackdropHue(80), 80);
+      expect(jamBackdropHue(140), 140);
+      expect(jamBackdropHue(30), 30);
+      // …and the pinks stay pinks, held dusty.
+      expect(jamBackdropHue(342), 342);
+      expect(jamHueNearTint(350), isTrue);
+      expect(jamHueNearTint(357), isFalse);
+      expect(jamHueNearTint(315), isFalse);
     });
 
     test('is monotonic in the cover\'s lightness', () {
@@ -138,7 +208,11 @@ void main() {
       expect(white.isPlaceholder, isFalse);
       expect(navy.isPlaceholder, isFalse);
       expect(white.base.computeLuminance(), lessThan(0.15));
-      expect(HSLColor.fromColor(white.base).saturation, lessThan(0.05));
+      expect(
+        HSLColor.fromColor(white.base).saturation,
+        lessThanOrEqualTo(kJamBackdropGreySaturation + 0.01),
+      );
+      expect(white.base.r, greaterThan(white.base.b));
       expect(_hue(navy.base), closeTo(_hue(const Color(0xFF101830)), 4));
       expect(jamSecondaryContrastOn(white.base), greaterThanOrEqualTo(4.5));
       expect(jamSecondaryContrastOn(navy.base), greaterThanOrEqualTo(4.5));
