@@ -6,7 +6,7 @@ back precise positions, and micro-adjust rate for drift correction (§5.4).
 
 The Dart API is in `lib/localjam_audio.dart`; it is one method channel
 (`localjam_audio`) plus one event channel (`localjam_audio/events`), implemented
-identically on every platform.
+identically on every platform, the web included (see [Web](#web)).
 
 ## API at a glance
 
@@ -95,6 +95,76 @@ as an error, never a crash. The plugin's `PrivacyInfo.xcprivacy` declares
 | Android | AudioTrack + MediaCodec | everything MediaCodec reads (incl. m4a/aac) |
 | Windows | shared C++ core on miniaudio (WASAPI) | **wav, flac, mp3, ogg-vorbis only** |
 | Linux | shared C++ core on miniaudio (PulseAudio/ALSA/JACK) | **wav, flac, mp3, ogg-vorbis only** |
+| Web | Web Audio, `lib/localjam_audio_web.dart` (see [Web](#web)) | whatever the browser's `decodeAudioData` takes (Safari: no Ogg/Opus) |
+
+## Web
+
+An inline web platform (`flutter.plugin.platforms.web`, `LocaljamAudioWeb`)
+answers the same two channels, so `LocaljamAudio` runs unchanged in the
+browser listener page (docs/design/WEB_GUEST.md D6/D7). Web Audio only: one
+decoded `AudioBuffer` at a time, played by an `AudioBufferSourceNode` started
+with `start(when, offset)`; graph source → `GainNode` → destination.
+
+- **Clock**: `nowUs` is `performance.now()` in µs, so `calibrate` measures
+  ~0 offset against a Dart clock on the same base.
+- **`load(path)` / `probeDurationUs(path)`**: `path` is a URL the page can
+  `fetch` — a `blob:` URL (`URL.createObjectURL` of media bytes the page
+  already prefetched) or a same-origin `http(s):` URL. Fetch failure or a
+  non-2xx answer → `load_failed`; bytes the browser cannot decode →
+  `unsupported_format`. `load` replaces the buffer (D7: a 5-min track is
+  ~100 MB of PCM). `probeDuration` has no header-only path in a browser: it
+  fetches and decodes the whole file (CPU and transient memory), touching
+  neither the buffer nor playback, and answers null on any failure. Durations
+  are of the decoded buffer (resampled to the context rate; within a frame).
+- **`playAt`**: performance time is mapped to context time with
+  `getOutputTimestamp()` (the context time heard at a given instant) shifted by
+  the reported latency, so the frame is heard `outputLatencyUs()` after
+  `nativeTimeUs`, as on native; the latency the Dart side subtracts cancels
+  out whenever the timestamp is accurate. Without that API (or before it
+  yields a stable value) `currentTime` is sampled against `performance.now()`
+  instead (one render callback coarse, 23 ms steps in Chrome). A past anchor
+  starts 50 ms ahead of the render clock with the position advanced (late
+  join). Same `bad_args` bounds and `no_file`/`bad_position` as native.
+- **`setRate`** sets the live node's `playbackRate` 50 ms ahead (resample:
+  pitch shifts ~9 cents at ±0.5 %, as on desktop); positions stay continuous.
+  **`pause`** stops the node (`playAt` re-anchors anyway); `positionUs` is
+  null unless playing/scheduled. **`outputLatencyUs`** is `outputLatency +
+  baseLatency` where reported, else 0. **`currentRouteId`** is always null.
+- **Autoplay**: the `AudioContext` is created by the first call that needs it
+  and `resume()`d synchronously at the start of `load`, `playAt`,
+  `outputLatencyUs` and `setMuted`, so the page's "Tap to listen" handler must
+  call one of them (e.g. `outputLatencyUs()`) inside the gesture. If the
+  context cannot run within 1 s, `playAt` completes without playing and emits
+  `interruptionBegan` (native's refused-audio contract); `interruptionEnded`
+  follows once it runs. The plugin never suspends the context afterwards.
+- **iOS / iPadOS** (user agent `iPhone|iPad|iPod`, or `Macintosh` with touch
+  points): the gain feeds a `MediaStreamAudioDestinationNode` played by a
+  hidden `<audio autoplay playsinline>` element, `play()`ed in the same
+  gesture and never paused, meant to keep audio alive through screen lock.
+  `navigator.mediaSession.playbackState` follows playback.
+- **Events**: `playbackFinished`; `interruptionBegan`/`interruptionEnded`
+  when the context goes `suspended`/`interrupted` and back (and, on iOS, when
+  the system pauses the element and it plays again) — output stays stopped
+  until the next `playAt`; `playbackError{code: context_closed}` if the
+  browser closes the context under a schedule. No `routeChanged` or
+  `engineRestarted`.
+- **Web-only `setMuted {muted: bool}`** (channel method, not in the Dart API
+  yet): ramps the gain to 0/1 in ~10 ms. Native sides do not implement it;
+  call it as `MethodChannel('localjam_audio').invokeMethod('setMuted', …)`
+  and catch `MissingPluginException`.
+
+Tests: `test/localjam_audio_web_test.dart` drives real Web Audio in headless
+Chrome. Chrome's autoplay policy keeps a context suspended without a gesture
+and `flutter test` cannot pass browser flags, so the playback tests need a
+wrapper that adds `--autoplay-policy=no-user-gesture-required`:
+
+```sh
+CHROME_EXECUTABLE=tool/chrome_autoplay.sh flutter test --platform chrome
+```
+
+Plain `flutter test --platform chrome` skips them (visibly) and runs the
+no-gesture refusal test instead. Screen lock, the silent switch and the
+`<audio>` element route can only be verified on a real iPhone.
 
 ### Desktop format limitation
 
