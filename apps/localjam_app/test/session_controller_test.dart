@@ -302,6 +302,66 @@ void main() {
     });
   });
 
+  testWidgets('Back to Nearby mid-retry gives the rejoin up: idle at once, '
+      'and the retry that fails afterwards says nothing', (tester) async {
+    final guest = testSession();
+    final cache = tempCache();
+
+    await tester.runAsync(() async {
+      final room = JamHostServer(sessionName: 'Short Room');
+      await room.start(address: InternetAddress.loopbackIPv4);
+      final uri = room.joinUriFor(InternetAddress.loopbackIPv4);
+      expect(await guest.join(uri, mediaCacheDir: cache), isTrue);
+      await room.close(); // Nothing left to rejoin.
+      expect(await waitFor(() => guest.phase == JamSessionPhase.ended), isTrue);
+
+      final pending = guest.rejoin(mediaCacheDir: cache);
+      expect(guest.rejoining, isTrue);
+      await guest.cancelRejoin();
+      expect(guest.rejoining, isFalse);
+      expect(guest.hasRoom, isFalse, reason: 'the room unmounts at once');
+      expect(guest.phase, JamSessionPhase.idle);
+
+      expect(await pending, isFalse);
+      // The failed handshake lands on nothing: no ended page comes back,
+      // no error is left for the next screen.
+      expect(guest.phase, JamSessionPhase.idle);
+      expect(guest.endReason, isNull);
+      expect(guest.error, isNull);
+      expect(guest.canStart, isTrue);
+    });
+  });
+
+  testWidgets('a given-up retry never joins, even a room that would let it '
+      'in', (tester) async {
+    final host = testSession();
+    final guest = testSession();
+    final cache = tempCache();
+
+    await tester.runAsync(() async {
+      await host.startHost(sessionName: 'Rejoin Room', discoverable: false);
+      await guest.join(host.joinUri!, mediaCacheDir: cache);
+      expect(await waitFor(() => host.engine!.peers.isNotEmpty), isTrue);
+      host.hostEngine!.kickPeer(host.engine!.peers.first.peerId);
+      expect(await waitFor(() => guest.phase == JamSessionPhase.ended), isTrue);
+      final hostEngine = host.hostEngine!;
+      hostEngine.unkickPeer(hostEngine.kickedPeers.single.peerId);
+      expect(await waitFor(() => host.engine!.peers.isEmpty), isTrue);
+
+      final pending = guest.rejoin(mediaCacheDir: cache);
+      await guest.cancelRejoin();
+      expect(await pending, isFalse);
+      expect(guest.phase, JamSessionPhase.idle);
+      expect(guest.engine, isNull);
+      // Nobody is left in the room — had the handshake got there first, the
+      // room it reached was closed on arrival.
+      await Future<void>.delayed(const Duration(milliseconds: 300));
+      expect(host.engine!.peers, isEmpty);
+
+      await host.leave();
+    });
+  });
+
   testWidgets('a host hears people arrive and leave', (tester) async {
     final host = testSession();
     final guest = testSession();

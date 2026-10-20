@@ -33,7 +33,7 @@ Future<void> _pump(
       reason: reason,
       rejectReason: rejectReason,
       jamName: jamName,
-      onDone: retrying ? null : (onDone ?? () {}),
+      onDone: onDone ?? () {},
       onRetry: onRetry,
       onScan: onScan,
       retrying: retrying,
@@ -244,12 +244,15 @@ void main() {
       retrying: true,
     );
     expect(find.text(JamSessionEndedStrings.retrying(_jam)), findsOneWidget);
-    // The button says so too, in place.
-    expect(_button(tester, JamSessionEndedStrings.trying).loading, isTrue);
+    // The button says so too, in place: a ring beside "Trying…".
+    final trying = _button(tester, JamSessionEndedStrings.trying);
+    expect(trying.loading, isTrue);
+    expect(trying.loadingLabel, JamSessionEndedStrings.trying);
     // Nothing else starts while it runs — but the other ways out stay on
-    // the page, so it neither shrinks nor loses its way home.
+    // the page, so it neither shrinks nor loses its way home, and home
+    // still works (it gives the retry up).
     expect(_button(tester, JamSessionEndedStrings.newCode).onPressed, isNull);
-    expect(_button(tester, JamSessionEndedStrings.back).onPressed, isNull);
+    expect(_button(tester, JamSessionEndedStrings.back).onPressed, isNotNull);
   });
 
   testWidgets('a retry keeps every action, in its place under the first', (

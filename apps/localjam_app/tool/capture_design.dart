@@ -878,8 +878,8 @@ void main() {
           reason: JamSessionEndReason.hostGone,
           jamName: jamName,
           hostName: 'Mia',
-          // As the room passes it: no way out while the rejoin runs.
-          onDone: null,
+          // As the room passes it: home gives the rejoin up.
+          onDone: () {},
           onRetry: () {},
           onScan: () {},
           retrying: true,

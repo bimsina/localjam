@@ -24,6 +24,7 @@ import 'package:localjam_app/src/widgets/jam_mark.dart';
 import 'package:localjam_app/src/widgets/join_link_dialog.dart';
 import 'package:localjam_app/src/widgets/notice.dart';
 import 'package:localjam_app/src/widgets/nudge_slider.dart';
+import 'package:localjam_app/src/widgets/progress.dart';
 import 'package:localjam_app/src/widgets/room_banner.dart';
 import 'package:localjam_app/src/widgets/session_gate.dart';
 import 'package:localjam_app/src/widgets/sync_indicator.dart';
@@ -897,15 +898,16 @@ void main() {
       }
     });
 
-    testWidgets('a retry in flight says so in place, and its way home stays '
-        'on the page, off', (tester) async {
+    testWidgets('a retry in flight says so in place — a ring beside '
+        '"Trying…" — and its way home stays on the page, live', (tester) async {
+      var home = 0;
       await tester.pumpWidget(
         MaterialApp(
           theme: jamLightTheme(),
           home: JamSessionEndedView(
             reason: JamSessionEndReason.hostGone,
             retrying: true,
-            onDone: null,
+            onDone: () => home++,
             onRetry: () {},
           ),
         ),
@@ -917,15 +919,72 @@ void main() {
         ),
       );
       expect(retry.loading, isTrue);
-      // The room cannot leave while the rejoin runs, so the way home is
-      // off — but still there, so the page neither shrinks nor hides it.
-      final back = tester.widget<JamButton>(
-        find.ancestor(
-          of: find.text(JamSessionEndedStrings.back),
-          matching: find.byType(JamButton),
+      // The words beside the ring, not a ring alone in a blank button.
+      expect(retry.loadingLabel, JamSessionEndedStrings.trying);
+      expect(
+        find.descendant(
+          of: find.byWidget(retry),
+          matching: find.byType(JamProgressRing),
         ),
+        findsOneWidget,
       );
-      expect(back.onPressed, isNull);
+      // Home stays where it was and works: the room gives the retry up
+      // rather than holding the user on the page (CR-11).
+      final back = find.ancestor(
+        of: find.text(JamSessionEndedStrings.back),
+        matching: find.byType(JamButton),
+      );
+      expect(tester.widget<JamButton>(back).onPressed, isNotNull);
+      await tester.tap(back);
+      expect(home, 1);
+    });
+
+    testWidgets('Back to Nearby mid-retry gives the retry up and goes home', (
+      tester,
+    ) async {
+      final host = testSession();
+      final guest = testSession(identity: 'Ana');
+      final cache = _tempCache();
+      await tester.runAsync(() async {
+        await host.startHost(sessionName: 'Short Jam', discoverable: false);
+        expect(await guest.join(host.joinUri!, mediaCacheDir: cache), isTrue);
+      });
+      final router = await pumpApp(tester, guest);
+      router.push('/room');
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 800));
+
+      await tester.runAsync(() async {
+        await host.leave();
+        expect(
+          await _waitFor(() => guest.phase == JamSessionPhase.ended),
+          isTrue,
+        );
+      });
+      await tester.pump();
+
+      late Future<bool> pending;
+      await tester.runAsync(() async {
+        pending = guest.rejoin(mediaCacheDir: cache);
+      });
+      await tester.pump();
+      expect(guest.rejoining, isTrue);
+      expect(inRoom(JamSessionEndedStrings.trying), findsOneWidget);
+
+      await tester.tap(inRoom(JamSessionEndedStrings.back));
+      await tester.runAsync(() async {
+        expect(await pending, isFalse);
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+      });
+      for (var i = 0; i < 20; i++) {
+        await tester.pump(const Duration(milliseconds: 50));
+      }
+      expect(guest.phase, JamSessionPhase.idle);
+      expect(guest.rejoining, isFalse);
+      expect(find.byType(RoomScreen), findsNothing);
+      expect(find.byType(JamSessionEndedView), findsNothing);
+
+      await _endApp(tester, [guest, host]);
     });
   });
 

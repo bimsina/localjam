@@ -176,9 +176,8 @@ class JamSessionEndedView extends StatelessWidget {
   /// picks the copy and whether a retry is offered ([jamRejectIsRetryable]).
   final RejectReason? rejectReason;
 
-  /// Back to Nearby. The button stays on the page while a retry runs, and
-  /// is off while this is null (the room passes null until it can leave
-  /// mid-retry).
+  /// Back to Nearby — at any point, a running retry included (the room
+  /// gives the retry up). Null turns the button off.
   final VoidCallback? onDone;
 
   /// Rejoin the room this device came from, when there is one to rejoin.
@@ -193,8 +192,8 @@ class JamSessionEndedView extends StatelessWidget {
   /// Link where there is no camera). Null: the page says to ask the host.
   final VoidCallback? onScan;
 
-  /// A "Try Again" is running: its button says so in place, and the other
-  /// ways out stay where they were.
+  /// A "Try Again" is running: its button turns a ring beside "Trying…"
+  /// in place, a new code waits, and the way home stays where it was.
   final bool retrying;
 
   /// Why the last "Try Again" failed, said here rather than in a notice
@@ -330,16 +329,16 @@ class JamSessionEndedView extends StatelessWidget {
     // the loud action on a screen that just told you something ended).
     //
     // The plain actions under the primary stay on the page while a retry
-    // runs — off where they cannot work yet — so the page neither shrinks
-    // nor leaves the user without a visible way out.
+    // runs — a new code off until it is done, the way home live, giving
+    // the retry up — so the page neither shrinks nor holds the user on it.
     final String actionLabel;
     final VoidCallback? action;
     final JamButtonVariant variant;
     final plain = <(String, VoidCallback?)>[];
     if (retry != null || retrying) {
-      actionLabel = retrying
-          ? JamSessionEndedStrings.trying
-          : JamSessionEndedStrings.tryAgain;
+      // While it runs: a turning ring beside "Trying…", the words the ring
+      // cannot say (CR-11).
+      actionLabel = JamSessionEndedStrings.tryAgain;
       // Kept non-null while the retry runs, so the button stays in place
       // (loading swallows taps).
       action = retry ?? _busy;
@@ -400,6 +399,7 @@ class JamSessionEndedView extends StatelessWidget {
                       onAction: action,
                       actionVariant: variant,
                       actionLoading: retrying,
+                      actionLoadingLabel: JamSessionEndedStrings.trying,
                     ),
                     for (final (label, onPressed) in plain) ...[
                       const SizedBox(height: JamSpace.xs),

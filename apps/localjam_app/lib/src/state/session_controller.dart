@@ -296,6 +296,16 @@ class JamSessionController extends ChangeNotifier {
   /// bouncing the user to home the moment the phase leaves `ended`.
   JamSessionEndReason? _rejoinReason;
 
+  /// The "Try again" in flight, until it finishes or [cancelRejoin] drops
+  /// it: a rejoin that finds another (or none) here when its join returns
+  /// was abandoned, and leaves the session as the cancel left it.
+  Object? _rejoinAttempt;
+
+  /// Bumped by every claimed start and by [cancelRejoin]. A join that finds
+  /// it moved on when it resumes has been abandoned: it touches nothing on
+  /// its way out, and closes any room it reached.
+  int _startGeneration = 0;
+
   /// The host's background import of the files it started with.
   JamImport? _import;
 
@@ -756,6 +766,15 @@ class JamSessionController extends ChangeNotifier {
     @visibleForTesting int maxFetchRetries = 5,
   }) async {
     if (!_claimStart()) return false;
+    final attempt = _startGeneration;
+    // Given up on while it ran ([cancelRejoin]): the session is someone
+    // else's now, and browsing comes back if nothing else is running.
+    bool abandoned() {
+      if (attempt == _startGeneration) return false;
+      unawaited(_resumeBrowsing());
+      return true;
+    }
+
     _joiningUri = joinUri;
     _joiningName = roomName ?? joinUri.queryParameters['name'];
     notifyListeners();
@@ -770,21 +789,31 @@ class JamSessionController extends ChangeNotifier {
       if (!await joinUriIsLocalOnlyResolved(joinUri)) {
         throw const JamOffNetworkException();
       }
+      if (abandoned()) return false;
       await _teardown();
+      if (abandoned()) return false;
       await _stopBrowsing();
+      if (abandoned()) return false;
       _restartArgs = null; // Not a host's room to restart any more.
       // See [startHost]: the backstop, not the usual path.
       await _requestSessionPermissions();
+      if (abandoned()) return false;
       final engine = await JamGuestEngine.join(
         joinUri,
         clientName: clientName,
         mediaCacheDir: mediaCacheDir,
         maxFetchRetries: maxFetchRetries,
       );
+      if (abandoned()) {
+        // In after all, but nobody is waiting for this room any more.
+        unawaited(engine.close().catchError((Object _) {}));
+        return false;
+      }
       _lastJoinUri = joinUri;
       _attach(engine, JamSide.guest);
       return true;
     } catch (e) {
+      if (abandoned()) return false;
       _lastFailure = e;
       _error = _describe(e);
       // A join from an `ended` screen refused before the teardown above (the
@@ -800,7 +829,7 @@ class JamSessionController extends ChangeNotifier {
       notifyListeners();
       return false;
     } finally {
-      if (_joiningUri != null) {
+      if (attempt == _startGeneration && _joiningUri != null) {
         _joiningUri = null;
         _joiningName = null;
         notifyListeners();
@@ -825,6 +854,7 @@ class JamSessionController extends ChangeNotifier {
     final uri = _lastJoinUri;
     if (uri == null || !canStart) return false;
     final from = _phase == JamSessionPhase.ended ? _endReason : null;
+    final attempt = _rejoinAttempt = Object();
     _rejoinReason = from;
     try {
       final joined = await join(
@@ -833,6 +863,8 @@ class JamSessionController extends ChangeNotifier {
         roomName: _lastJoinName,
         mediaCacheDir: mediaCacheDir,
       );
+      // Given up on from the ended page: the user went home meanwhile.
+      if (!identical(attempt, _rejoinAttempt)) return false;
       if (!joined && from != null && _phase == JamSessionPhase.idle) {
         _phase = JamSessionPhase.ended;
         final failure = _lastFailure;
@@ -855,9 +887,27 @@ class JamSessionController extends ChangeNotifier {
       }
       return joined;
     } finally {
-      _rejoinReason = null;
-      notifyListeners();
+      if (identical(attempt, _rejoinAttempt)) {
+        _rejoinAttempt = null;
+        _rejoinReason = null;
+        notifyListeners();
+      }
     }
+  }
+
+  /// "Back to Nearby" while a "Try again" runs: gives up on the rejoin and
+  /// goes back to idle now, rather than holding the user on the ended page
+  /// until a room that may never answer times out.
+  ///
+  /// The handshake cannot be interrupted from here (it is the engine's), so
+  /// it runs on and whatever it ends in is dropped: a failure says nothing,
+  /// and a room it reached after all is closed on arrival.
+  Future<void> cancelRejoin() async {
+    if (_rejoinAttempt == null) return;
+    _rejoinAttempt = null;
+    _rejoinReason = null;
+    _startGeneration++;
+    await leave();
   }
 
   String? get _lastJoinName => _lastJoinUri?.queryParameters['name'];
@@ -880,6 +930,7 @@ class JamSessionController extends ChangeNotifier {
 
   bool _claimStart() {
     if (!canStart) return false;
+    _startGeneration++;
     _error = null;
     _lastFailure = null;
     _phase = JamSessionPhase.starting;

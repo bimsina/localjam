@@ -509,12 +509,14 @@ class _RoomScreenState extends State<RoomScreen>
         // Only a failed "Try Again" leaves an error behind on this screen;
         // anything older was cleared when the session started.
         error: rejoining ? null : session.error,
-        onDone: rejoining
-            ? null
-            : () async {
-                await session.acknowledgeEnd();
-                if (context.mounted) context.go('/');
-              },
+        // Home at any point — mid-retry too: the rejoin is given up on
+        // rather than waited out (CR-11).
+        onDone: () async {
+          await (session.rejoining
+              ? session.cancelRejoin()
+              : session.acknowledgeEnd());
+          if (context.mounted) context.go('/');
+        },
         // A host that suspended and came back is the documented
         // graceful-death path (DEVICE_TESTING §11), and the engine kept the
         // URI that gets you back in — the sha-keyed cache means the rejoin
