@@ -70,6 +70,25 @@ flutter:
     - assets/brand/
     - assets/fonts/OFL.txt
 
+    # The browser player a host serves to web guests (PROTOCOL.md §1.1):
+    # apps/localjam_web's release build, put here by tool/build_web_guest.sh
+    # and never committed — each directory holds only a committed .gitkeep
+    # until the script runs, and the app builds (and its rooms serve the
+    # built-in "install the app" page) without it. A directory entry takes
+    # its own files and none of its subdirectories', so every directory of a
+    # Flutter web build that has files is listed; the script warns about any
+    # it copies that is not.
+    - assets/web/
+    - assets/web/assets/
+    - assets/web/assets/fonts/
+    - assets/web/assets/fonts/fallback/
+    - assets/web/assets/packages/cupertino_icons/assets/
+    - assets/web/assets/shaders/
+    - assets/web/canvaskit/
+    - assets/web/canvaskit/chromium/
+    - assets/web/canvaskit/webparagraph/
+    - assets/web/icons/
+
   fonts:
     - family: Manrope
       fonts:
