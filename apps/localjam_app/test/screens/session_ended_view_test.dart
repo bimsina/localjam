@@ -161,19 +161,21 @@ void main() {
     expect(find.text(JamSessionEndedStrings.restartedBody), findsOneWidget);
   });
 
-  testWidgets('turned away with a new code on offer: the reason, and no '
-      '"ask the host"', (tester) async {
+  testWidgets('turned away for no known reason: no scanner, and the '
+      'sentence says where a new code comes from', (tester) async {
     await _pump(
       tester,
       JamSessionEndReason.rejected,
       rejectReason: RejectReason.unknown,
       onScan: () {},
     );
-    expect(
-      find.text(JamSessionEndedStrings.rejected(_jam, offersCode: true)),
-      findsOneWidget,
-    );
-    expect(find.textContaining('ask the host'), findsNothing);
+    expect(find.text(JamSessionEndedStrings.rejected(_jam)), findsOneWidget);
+    expect(find.textContaining('ask the host'), findsOneWidget);
+    expect(find.text(JamSessionEndedStrings.newCode), findsNothing);
+  });
+
+  testWidgets('a restarted jam with its new code on offer: the reason, and '
+      'no "ask the host"', (tester) async {
     await _pump(
       tester,
       JamSessionEndReason.rejected,
@@ -188,31 +190,39 @@ void main() {
     expect(find.textContaining('Ask the host'), findsNothing);
   });
 
-  testWidgets('turned away for no known reason: try again, a new code, or '
-      'home', (tester) async {
-    var scanned = 0;
+  testWidgets('turned away for no known reason: Try again, and home as the '
+      'one plain second', (tester) async {
     await _pump(
       tester,
       JamSessionEndReason.rejected,
       rejectReason: RejectReason.unknown,
       onRetry: () {},
-      onScan: () => scanned++,
+      onScan: () {},
     );
     expect(
       _button(tester, JamSessionEndedStrings.tryAgain).variant,
       JamButtonVariant.filled,
-    );
-    expect(
-      _button(tester, JamSessionEndedStrings.newCode).variant,
-      JamButtonVariant.plain,
     );
     // Home never goes missing.
     expect(
       _button(tester, JamSessionEndedStrings.back).variant,
       JamButtonVariant.plain,
     );
-    await tester.tap(find.text(JamSessionEndedStrings.newCode));
-    expect(scanned, 1);
+    // At most one action plus a plain second: no scanner between them.
+    expect(find.text(JamSessionEndedStrings.newCode), findsNothing);
+    expect(find.byType(JamButton), findsNWidgets(2));
+  });
+
+  test('the scanner is called what it is called everywhere', () {
+    expect(JamSessionEndedStrings.scanCode, 'Scan code');
+    expect(JamSessionEndedStrings.joinWithLink, 'Join with link');
+    expect(
+      JamSessionEndedStrings.newCode,
+      anyOf(
+        JamSessionEndedStrings.scanCode,
+        JamSessionEndedStrings.joinWithLink,
+      ),
+    );
   });
 
   testWidgets('a new code is not offered where it cannot help', (tester) async {
@@ -222,6 +232,8 @@ void main() {
       (JamSessionEndReason.kicked, null),
       (JamSessionEndReason.rejected, RejectReason.full),
       (JamSessionEndReason.rejected, RejectReason.version),
+      (JamSessionEndReason.rejected, RejectReason.unknown),
+      (JamSessionEndReason.rejected, null),
     ]) {
       await _pump(
         tester,
@@ -252,10 +264,8 @@ void main() {
     final trying = _button(tester, JamSessionEndedStrings.trying);
     expect(trying.loading, isTrue);
     expect(trying.loadingLabel, JamSessionEndedStrings.trying);
-    // Nothing else starts while it runs — but the other ways out stay on
-    // the page, so it neither shrinks nor loses its way home, and home
-    // still works (it gives the retry up).
-    expect(_button(tester, JamSessionEndedStrings.newCode).onPressed, isNull);
+    // The way home stays on the page, so it neither shrinks nor loses its
+    // way home, and home still works (it gives the retry up).
     expect(_button(tester, JamSessionEndedStrings.back).onPressed, isNotNull);
   });
 
@@ -282,10 +292,7 @@ void main() {
             : JamSessionEndedStrings.tryAgain,
       );
       return {
-        for (final label in [
-          JamSessionEndedStrings.newCode,
-          JamSessionEndedStrings.back,
-        ])
+        for (final label in [JamSessionEndedStrings.back])
           label: at(label).dy - primary.dy,
       };
     }

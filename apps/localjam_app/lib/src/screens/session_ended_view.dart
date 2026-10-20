@@ -17,7 +17,9 @@ import '../util/capabilities.dart';
 import '../widgets/buttons.dart';
 import '../widgets/empty_state.dart';
 import '../widgets/jam_mark.dart';
+import '../widgets/join_link_dialog.dart' show JamJoinLinkStrings;
 import '../widgets/wifi_glyph.dart';
+import 'scan_screen.dart' show JamScanStrings;
 
 /// Every user-facing string the ended page can show. `JamRoomStrings`
 /// forwards the constant names, so either spelling finds the same copy.
@@ -42,7 +44,10 @@ abstract final class JamSessionEndedStrings {
 
   // `rejected`, by the host's reason (JamSessionController.endRejectReason).
   // A reason this version does not know — or none — keeps the generic pair,
-  // which names the likeliest cause without promising it.
+  // which names the likeliest cause without promising it. Its page offers
+  // Try again and the way home, and no scanner: an unexplained refusal is
+  // not known to need a new code, so the sentence says where one would
+  // come from.
   //
   // Where the page offers the new code itself ([newCode], `offersCode`),
   // the sentence stops at the reason: the button under it is the way, and
@@ -51,16 +56,10 @@ abstract final class JamSessionEndedStrings {
   static const String rejectedBody =
       'The jam turned this phone away. It may have restarted, so ask the '
       'host for a new code.';
-  static String rejected(String? jam, {bool offersCode = false}) {
-    if (!offersCode) {
-      return jam == null
-          ? rejectedBody
-          : '$jam turned this phone away. It may have restarted, so ask the '
-                'host for a new code.';
-    }
-    return '${jam ?? 'The jam'} turned this phone away. It may have '
-        'restarted with a new code.';
-  }
+  static String rejected(String? jam) => jam == null
+      ? rejectedBody
+      : '$jam turned this phone away. It may have restarted, so ask the '
+            'host for a new code.';
 
   /// `bad_token`: the room restarted under a new code. The old link can
   /// never work again, so there is no "Try again" — a new code is the way.
@@ -133,10 +132,12 @@ abstract final class JamSessionEndedStrings {
   static const String back = 'Back to Nearby';
 
   /// A new code for a jam that restarted: the scanner where there is a
-  /// camera, the Join with Link alert where there is not.
-  static const String scanNew = 'Scan new code';
-  static const String linkNew = 'Join with new link';
-  static String get newCode => canScanQrCodes ? scanNew : linkNew;
+  /// camera, the Join with link alert where there is not — called what they
+  /// are called everywhere else (one label per action); the sentence above
+  /// says the code is new.
+  static const String scanCode = JamScanStrings.title;
+  static const String joinWithLink = JamJoinLinkStrings.title;
+  static String get newCode => canScanQrCodes ? scanCode : joinWithLink;
 
   static const String rejoinFailed = kJamRejoinFailed;
 }
@@ -149,7 +150,8 @@ abstract final class JamSessionEndedStrings {
 /// the room that closed was probably a host whose phone went to sleep, and
 /// the sha-keyed cache means a rejoin costs nothing. A room that restarted
 /// can only be got back into with its new code, so that is offered instead
-/// when [onScan] is wired.
+/// when [onScan] is wired. Every page has at most that one action and the
+/// way home as a plain second.
 ///
 /// The jam's mark sits at the same height in every state — a failed retry,
 /// a longer reason, a second action all grow the page downward — so nothing
@@ -187,9 +189,9 @@ class JamSessionEndedView extends StatelessWidget {
   final VoidCallback? onStartNew;
 
   /// Join again with a new code — offered when the jam restarted under one
-  /// (`bad_token`) or turned this phone away for a reason this version does
-  /// not know. The room leaves for Home and opens its scanner (Join with
-  /// Link where there is no camera). Null: the page says to ask the host.
+  /// (`bad_token`). The room leaves for Home and opens its scanner (Join
+  /// with link where there is no camera). Null: the page says to ask the
+  /// host.
   final VoidCallback? onScan;
 
   /// A "Try again" is running: its button turns a ring beside "Trying…"
@@ -216,8 +218,13 @@ class JamSessionEndedView extends StatelessWidget {
     final colors = context.jamColors;
     final named = jamName?.trim();
     final jam = (named == null || named.isEmpty) ? null : named;
-    // A page with the new code's button under it says only why.
-    final offersCode = onScan != null;
+    // A new code is the way back into a room that restarted — the one
+    // refusal that is known to need it. A page with its button under it
+    // says only why.
+    final offersCode =
+        onScan != null &&
+        reason == JamSessionEndReason.rejected &&
+        rejectReason == RejectReason.badToken;
     final (icon, title, detail) = switch (reason) {
       JamSessionEndReason.hostGone => (
         null,
@@ -255,7 +262,7 @@ class JamSessionEndedView extends StatelessWidget {
         RejectReason.unknown || null => (
           CupertinoIcons.lock,
           JamSessionEndedStrings.rejectedTitle,
-          JamSessionEndedStrings.rejected(jam, offersCode: offersCode),
+          JamSessionEndedStrings.rejected(jam),
         ),
       },
       // The host said goodbye on purpose (§3.4). Nothing to try again for —
@@ -291,17 +298,9 @@ class JamSessionEndedView extends StatelessWidget {
     final startNew = reason == JamSessionEndReason.listenerFailed
         ? onStartNew
         : null;
-    // A new code is the way back into a room that restarted, and the likely
-    // one into a room that turned this phone away without saying why.
-    final offersScan =
-        onScan != null &&
-        reason == JamSessionEndReason.rejected &&
-        (rejectReason == RejectReason.badToken ||
-            rejectReason == RejectReason.unknown ||
-            rejectReason == null);
-    // Shown but off while a retry runs: nothing else starts meanwhile, and
-    // nothing on the page moves.
-    final VoidCallback? scan = offersScan && !retrying ? onScan : null;
+    // A restarted room is never retried, so its new code is never waiting
+    // on a retry.
+    final VoidCallback? scan = offersCode ? onScan : null;
 
     // What the page says under the title: the reason, unless a retry is
     // running (say so — the spinner cannot) or just failed (the newer news).
@@ -324,17 +323,18 @@ class JamSessionEndedView extends StatelessWidget {
     }
 
     // One primary per screen: getting back in, starting again, or a new
-    // code, when any is possible — with the way home as the plain second;
-    // otherwise the way home alone, as a quiet grey button (leaving is not
-    // the loud action on a screen that just told you something ended).
+    // code, when any is possible — with the way home as the one plain
+    // second; otherwise the way home alone, as a quiet grey button (leaving
+    // is not the loud action on a screen that just told you something
+    // ended).
     //
-    // The plain actions under the primary stay on the page while a retry
-    // runs — a new code off until it is done, the way home live, giving
-    // the retry up — so the page neither shrinks nor holds the user on it.
+    // The way home stays live under the primary while a retry runs (it
+    // gives the retry up), so the page neither shrinks nor holds the user
+    // on it.
     final String actionLabel;
     final VoidCallback? action;
     final JamButtonVariant variant;
-    final plain = <(String, VoidCallback?)>[];
+    var homeSecond = true;
     if (retry != null || retrying) {
       // While it runs: a turning ring beside "Trying…", the words the ring
       // cannot say (CR-11).
@@ -343,24 +343,19 @@ class JamSessionEndedView extends StatelessWidget {
       // (loading swallows taps).
       action = retry ?? _busy;
       variant = JamButtonVariant.filled;
-      // Home is never the one that goes missing: a new code, when it is a
-      // real option too, sits between.
-      if (offersScan) plain.add((JamSessionEndedStrings.newCode, scan));
-      plain.add((JamSessionEndedStrings.back, onDone));
     } else if (startNew != null) {
       actionLabel = JamSessionEndedStrings.startNew;
       action = startNew;
       variant = JamButtonVariant.filled;
-      plain.add((JamSessionEndedStrings.back, onDone));
     } else if (scan != null) {
       actionLabel = JamSessionEndedStrings.newCode;
       action = scan;
       variant = JamButtonVariant.filled;
-      plain.add((JamSessionEndedStrings.back, onDone));
     } else {
       actionLabel = JamSessionEndedStrings.back;
       action = onDone;
       variant = JamButtonVariant.gray;
+      homeSecond = false;
     }
 
     final Widget mark = jam == null
@@ -401,9 +396,12 @@ class JamSessionEndedView extends StatelessWidget {
                       actionLoading: retrying,
                       actionLoadingLabel: JamSessionEndedStrings.trying,
                     ),
-                    for (final (label, onPressed) in plain) ...[
+                    if (homeSecond) ...[
                       const SizedBox(height: JamSpace.xs),
-                      JamButton.plain(label: label, onPressed: onPressed),
+                      JamButton.plain(
+                        label: JamSessionEndedStrings.back,
+                        onPressed: onDone,
+                      ),
                     ],
                   ],
                 ),
