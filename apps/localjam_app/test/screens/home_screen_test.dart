@@ -483,7 +483,7 @@ void main() {
     expect(session.error, isNull);
 
     // Let the notice go on its own rather than leaving its timer pending.
-    await tester.pump(kJamNoticeDuration);
+    await tester.pump(kJamNoticeMaxDuration);
     await tester.pumpAndSettle();
 
     // Not pumped after: home restarts the browse on its next rebuild, and a

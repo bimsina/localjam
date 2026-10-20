@@ -25,6 +25,113 @@ Widget _host(void Function(BuildContext) onTap, {ThemeData? theme}) =>
     );
 
 void main() {
+  group('how long a notice stays (N10)', () {
+    const restarted =
+        'That code no longer works because the jam restarted. Ask for a '
+        'fresh one.';
+
+    test('4 s, plus 60 ms a character', () {
+      expect(
+        jamNoticeDuration(const JamNotice('Ana joined')),
+        const Duration(milliseconds: 4000 + 60 * 10),
+      );
+      // The restarted-jam toast QA missed twice: no longer 4 s.
+      expect(
+        jamNoticeDuration(const JamNotice(restarted)),
+        const Duration(milliseconds: 4000 + 60 * restarted.length),
+      );
+      expect(
+        jamNoticeDuration(const JamNotice(restarted))!,
+        greaterThan(const Duration(seconds: 8)),
+      );
+    });
+
+    test('never more than 10 s on its own', () {
+      expect(jamNoticeDuration(JamNotice('word ' * 60)), kJamNoticeMaxDuration);
+      expect(kJamNoticeMaxDuration, const Duration(seconds: 10));
+    });
+
+    test('an error with a way out waits for it', () {
+      void retry() {}
+      expect(
+        jamNoticeDuration(
+          JamNotice(
+            'Couldn’t get this song',
+            actionLabel: 'Try again',
+            onAction: retry,
+            tone: JamNoticeTone.error,
+          ),
+        ),
+        isNull,
+      );
+      // An error with nothing to do, and a warning with an action, still
+      // go on their own.
+      expect(
+        jamNoticeDuration(
+          const JamNotice('Couldn’t open', tone: JamNoticeTone.error),
+        ),
+        isNotNull,
+      );
+      expect(
+        jamNoticeDuration(
+          JamNotice(
+            'Music access is off',
+            actionLabel: 'Open Settings',
+            onAction: retry,
+            tone: JamNoticeTone.warning,
+          ),
+        ),
+        isNotNull,
+      );
+    });
+
+    testWidgets('a long notice outlasts 4 s, then goes', (tester) async {
+      await tester.pumpWidget(
+        _host((context) => showJamNotice(context, const JamNotice(restarted))),
+      );
+      await tester.tap(find.text('Go'));
+      await tester.pumpAndSettle();
+      await tester.pump(const Duration(seconds: 5));
+      expect(find.byType(JamNoticeCard), findsOneWidget);
+      await tester.pump(const Duration(seconds: 5));
+      await tester.pumpAndSettle();
+      expect(find.byType(JamNoticeCard), findsNothing);
+    });
+
+    testWidgets('an error with an action stays until acted on or dismissed', (
+      tester,
+    ) async {
+      var retried = 0;
+      JamNotice error() => JamNotice(
+        'Couldn’t get this song',
+        actionLabel: 'Try again',
+        onAction: () => retried++,
+        tone: JamNoticeTone.error,
+      );
+      await tester.pumpWidget(
+        _host((context) => showJamNotice(context, error())),
+      );
+      await tester.tap(find.text('Go'));
+      await tester.pumpAndSettle();
+      await tester.pump(const Duration(minutes: 1));
+      expect(find.byType(JamNoticeCard), findsOneWidget);
+
+      // Acted on: it goes.
+      await tester.tap(find.text('Try again'));
+      await tester.pumpAndSettle();
+      expect(retried, 1);
+      expect(find.byType(JamNoticeCard), findsNothing);
+
+      // Dismissed with a tap: it goes, without acting.
+      await tester.tap(find.text('Go'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Couldn’t get this song'));
+      await tester.pumpAndSettle();
+      expect(retried, 1);
+      expect(find.byType(JamNoticeCard), findsNothing);
+    });
+  });
+
   testWidgets('shows the message with a status glyph', (tester) async {
     await tester.pumpWidget(
       _host(
@@ -262,7 +369,7 @@ void main() {
       await tester.pumpAndSettle();
       final settled = tester.getTopLeft(find.byType(JamNoticeCard)).dy;
       // Gone before the next case.
-      await tester.pump(kJamNoticeDuration);
+      await tester.pump(kJamNoticeMaxDuration);
       await tester.pumpAndSettle();
       return midway - settled;
     }

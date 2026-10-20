@@ -42,8 +42,29 @@ enum JamNoticePosition {
   bottom,
 }
 
-/// How long a notice stays up before it goes on its own.
+/// How long the shortest notice stays up before it goes on its own.
 const Duration kJamNoticeDuration = Duration(seconds: 4);
+
+/// The longest any notice stays up on its own.
+const Duration kJamNoticeMaxDuration = Duration(seconds: 10);
+
+/// What each character adds to a notice's time on screen.
+const Duration _kNoticePerCharacter = Duration(milliseconds: 60);
+
+/// How long [notice] stays up (N10): long enough to read — 4 s plus 60 ms
+/// a character, at most 10 s — so "That code no longer works because the
+/// jam restarted. Ask for a fresh one." is not gone before it is read. An
+/// error that offers a way out ("Try again", "Open Settings") has no time
+/// limit: it stays until it is acted on or dismissed. Null means that.
+Duration? jamNoticeDuration(JamNotice notice) {
+  final actionable = notice.actionLabel != null && notice.onAction != null;
+  if (notice.tone == JamNoticeTone.error && actionable) return null;
+  final characters =
+      notice.message.characters.length +
+      (actionable ? notice.actionLabel!.characters.length : 0);
+  final duration = kJamNoticeDuration + _kNoticePerCharacter * characters;
+  return duration > kJamNoticeMaxDuration ? kJamNoticeMaxDuration : duration;
+}
 
 /// The default distance a notice keeps from the edges it floats over.
 const EdgeInsets kJamNoticeMargin = EdgeInsets.all(JamSpace.lg);
@@ -288,7 +309,7 @@ class _JamNoticeHost {
 
   JamNoticeHandle show({
     required JamNotice notice,
-    required Duration duration,
+    required Duration? duration,
     required EdgeInsets margin,
     required JamNoticePosition position,
   }) {
@@ -344,7 +365,9 @@ class _JamNoticeOverlay extends StatefulWidget {
   });
 
   final JamNotice notice;
-  final Duration duration;
+
+  /// Null: up until it is acted on or dismissed.
+  final Duration? duration;
   final EdgeInsets margin;
   final JamNoticePosition position;
   final VoidCallback onDismissed;
@@ -367,7 +390,8 @@ class _JamNoticeOverlayState extends State<_JamNoticeOverlay>
   void initState() {
     super.initState();
     _controller.forward();
-    _timer = Timer(widget.duration, dismiss);
+    final duration = widget.duration;
+    if (duration != null) _timer = Timer(duration, dismiss);
   }
 
   /// Plays the exit, then hands the entry back to the host.
@@ -403,6 +427,21 @@ class _JamNoticeOverlayState extends State<_JamNoticeOverlay>
         dismiss();
       },
     );
+    // Any notice can be put away: a tap on it, a flick toward its edge, or
+    // a screen reader's dismiss — the only way, besides its action, to take
+    // down one that waits (N10).
+    card = Semantics(
+      onDismiss: dismiss,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: dismiss,
+        onVerticalDragEnd: (details) {
+          final v = details.primaryVelocity ?? 0;
+          if (top ? v < -100 : v > 100) dismiss();
+        },
+        child: card,
+      ),
+    );
     // Reduce Motion: the notice fades in and out where it stands — a fade
     // is not movement — instead of rising into place.
     if (!jamReducedMotion(context)) {
@@ -437,10 +476,13 @@ class _JamNoticeOverlayState extends State<_JamNoticeOverlay>
 ///
 /// Returns null only when there is no overlay to draw into — a bare widget
 /// with no `Navigator` above it.
+///
+/// It stays up for [duration], or by default for as long as the notice
+/// takes to read ([jamNoticeDuration]).
 JamNoticeHandle? showJamNotice(
   BuildContext context,
   JamNotice notice, {
-  Duration duration = kJamNoticeDuration,
+  Duration? duration,
   EdgeInsets? margin,
   JamNoticePosition position = JamNoticePosition.bottom,
 }) {
@@ -452,7 +494,7 @@ JamNoticeHandle? showJamNotice(
   if (overlay == null) return null;
   return _JamNoticeHost.of(overlay).show(
     notice: notice,
-    duration: duration,
+    duration: duration ?? jamNoticeDuration(notice),
     margin: margin ?? kJamNoticeMargin,
     position: position,
   );

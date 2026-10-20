@@ -736,7 +736,7 @@ void main() {
       // The notice the failed reopen raised sits over the bottom of this
       // 600-tall window — over the button, now that the ended page keeps
       // its mark in one place — until it times out.
-      await tester.pump(kJamNoticeDuration);
+      await tester.pump(kJamNoticeMaxDuration);
       await tester.pump(const Duration(seconds: 1));
       await tester.tap(find.text(JamSessionEndedStrings.startNew));
       for (var i = 0; i < 10; i++) {
