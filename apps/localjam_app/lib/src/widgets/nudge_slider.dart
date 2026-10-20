@@ -7,8 +7,10 @@
 /// rather than a readout: a two-way slider in the Balance pattern — a tick
 /// at zero, the ends labelled Later and Earlier — with a step button at
 /// each end (fine adjustment without a steady thumb), the value in tabular
-/// figures, and Reset under it while there is something to reset. The
-/// sheet's header holds only Done (§10.2).
+/// figures, and Reset beside the line under it while there is something to
+/// reset — in the line's own slot, so the card holds no empty band for a
+/// button that is usually not there (CR-10). The sheet's header holds only
+/// Done (§10.2).
 library;
 
 import 'package:flutter/cupertino.dart';
@@ -277,25 +279,39 @@ class _NudgeSliderState extends State<NudgeSlider> {
                 style: jamTabular(context.jamLargeTitle),
               ),
             ),
-            const SizedBox(height: JamSpace.xxs),
-            Text(
-              caption,
-              textAlign: TextAlign.center,
-              style: context.jamSubheadline.copyWith(
-                color: colors.secondaryLabel,
+            // The caption and, with an offset to undo, Reset beside it: one
+            // line whose height is Reset's 44 pt target either way, so it
+            // coming and going moves nothing.
+            ConstrainedBox(
+              constraints: const BoxConstraints(
+                minHeight: JamMetrics.hitTarget,
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Flexible(
+                    child: Text(
+                      caption,
+                      textAlign: TextAlign.center,
+                      style: context.jamSubheadline.copyWith(
+                        color: colors.secondaryLabel,
+                      ),
+                    ),
+                  ),
+                  _ResetButton(ms: _ms, onReset: () => _step(-_ms)),
+                ],
               ),
             ),
-            const SizedBox(height: JamSpace.lg),
+            const SizedBox(height: JamSpace.xs),
             slider,
-            _ResetButton(ms: _ms, onReset: () => _step(-_ms)),
           ],
         );
     }
   }
 }
 
-/// Opens the Sound Offset sheet: the value, the slider, Reset under it, one
-/// footnote on when to use it, and Done.
+/// Opens the Sound Offset sheet: the value, the slider, Reset beside the
+/// line under the value, one footnote on when to use it, and Done.
 Future<void> showSoundOffsetSheet(BuildContext context, JamEngine engine) =>
     showJamSheet<void>(
       context,
@@ -330,12 +346,12 @@ class SoundOffsetPanel extends StatelessWidget {
               borderRadius: BorderRadius.circular(JamRadius.section),
             ),
             child: Padding(
-              // Reset's 44 pt slot is the bottom's air; no more under it.
+              // The same air above the value as under the slider's labels.
               padding: const EdgeInsets.fromLTRB(
                 JamSpace.xs,
                 JamSpace.xxl,
                 JamSpace.xs,
-                JamSpace.xs,
+                JamSpace.xxl,
               ),
               child: NudgeSlider(engine: engine, style: NudgeSliderStyle.hero),
             ),
@@ -358,8 +374,8 @@ class SoundOffsetPanel extends StatelessWidget {
   }
 }
 
-/// Reset, under the slider: there only while there is an offset to reset.
-/// Its space stays, so the sheet doesn't jump when it comes and goes.
+/// Reset, beside the caption: there only while there is an offset to reset,
+/// and taking no room at all otherwise, so "No offset" stays centred.
 class _ResetButton extends StatelessWidget {
   const _ResetButton({required this.ms, required this.onReset});
 
@@ -369,24 +385,20 @@ class _ResetButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final shown = ms != 0;
-    return ExcludeSemantics(
-      excluding: !shown,
-      child: IgnorePointer(
-        ignoring: !shown,
-        child: AnimatedOpacity(
-          opacity: shown ? 1 : 0,
-          duration: MediaQuery.disableAnimationsOf(context)
-              ? Duration.zero
-              : JamDuration.fast,
-          child: Center(
-            child: JamButton.plain(
-              label: JamNudgeStrings.reset,
-              size: JamButtonSize.small,
-              onPressed: onReset,
-            ),
-          ),
-        ),
-      ),
+    final reduced = MediaQuery.disableAnimationsOf(context);
+    return AnimatedSize(
+      duration: reduced ? Duration.zero : JamDuration.fast,
+      curve: JamCurve.standard,
+      child: shown
+          ? Padding(
+              padding: const EdgeInsetsDirectional.only(start: JamSpace.xs),
+              child: JamButton.plain(
+                label: JamNudgeStrings.reset,
+                size: JamButtonSize.small,
+                onPressed: onReset,
+              ),
+            )
+          : const SizedBox.shrink(),
     );
   }
 }

@@ -74,7 +74,7 @@ void main() {
         tester.getCenter(find.text(JamNudgeStrings.later)).dx,
         lessThan(tester.getCenter(find.text(JamNudgeStrings.earlier)).dx),
       );
-      // The header holds Done alone: Reset lives under the slider, and
+      // The header holds Done alone: Reset lives beside the caption, and
       // only while there is something to reset.
       final header = find.byType(JamSheetHeader);
       expect(
