@@ -233,5 +233,46 @@ void main() {
       expect(find.bySemanticsLabel(eight.text), findsOneWidget);
       handle.dispose();
     });
+
+    testWidgets('a cut name is as wide as it draws: the words after it '
+        'follow straight on, their spaces kept', (tester) async {
+      await tester.pumpWidget(
+        Directionality(
+          textDirection: TextDirection.ltr,
+          child: Align(
+            alignment: Alignment.topLeft,
+            child: SizedBox(
+              width: 300,
+              child: JamPeopleLine(eight, style: style),
+            ),
+          ),
+        ),
+      );
+      final name = tester.getRect(find.text('Electric Mongoose Supreme'));
+      final comma = tester.getRect(find.text(', '));
+      final lead = tester.getRect(find.text('With '));
+      // No gap between the ellipsis and the comma after it: the name's box
+      // is what it draws, not all the width it was offered.
+      final given = fit(
+        eight,
+        300,
+      ).runs.firstWhere((r) => r.text == 'Electric Mongoose Supreme').width!;
+      expect(name.width, lessThan(given));
+      expect(comma.left, closeTo(name.right, 0.5));
+      // The words between keep their trailing space: "With " is wider
+      // than "With".
+      expect(lead.right, closeTo(name.left, 0.5));
+      expect(lead.width, greaterThan(_width('With', style)));
+    });
   });
+}
+
+double _width(String text, TextStyle style) {
+  final painter = TextPainter(
+    text: TextSpan(text: text, style: style),
+    textDirection: TextDirection.ltr,
+  )..layout();
+  final width = painter.width;
+  painter.dispose();
+  return width;
 }

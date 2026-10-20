@@ -308,7 +308,7 @@ class JamPeopleLine extends StatelessWidget {
   }
 
   Widget _runs(JamPeopleFit fit) {
-    Text text(String value) => Text(
+    Text text(String value, {bool cut = false}) => Text(
       value,
       maxLines: 1,
       softWrap: false,
@@ -316,8 +316,9 @@ class JamPeopleLine extends StatelessWidget {
       style: style,
       // A cut name is as wide as what it draws, ellipsis included — not
       // the width it was offered — so no gap opens before the words after
-      // it ("Electri…, Mia", not "Electri…  , Mia").
-      textWidthBasis: TextWidthBasis.longestLine,
+      // it ("Electri…, Mia", not "Electri…  , Mia"). Only a name: the
+      // words between keep their spaces.
+      textWidthBasis: cut ? TextWidthBasis.longestLine : TextWidthBasis.parent,
     );
     if (fit.runs.length == 1) return text(fit.runs.single.text);
     return Row(
@@ -327,7 +328,7 @@ class JamPeopleLine extends StatelessWidget {
           if (run.width case final width?)
             ConstrainedBox(
               constraints: BoxConstraints(maxWidth: width),
-              child: text(run.text),
+              child: text(run.text, cut: true),
             )
           else
             text(run.text),
