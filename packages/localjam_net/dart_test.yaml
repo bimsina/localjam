@@ -1,0 +1,12 @@
+# Browser runs (`dart test -p chrome test/web_smoke_test.dart`): the smoke
+# test's page is served by the test runner, not by the host it joins, so
+# Chrome runs without the same-origin checks the real listener page never
+# meets (docs/design/WEB_GUEST.md D2: the host serves the page itself).
+override_platforms:
+  chrome:
+    settings:
+      arguments: --disable-web-security
+
+tags:
+  # Browser-only suites (@TestOn("browser")); the VM run skips them.
+  web:
