@@ -802,13 +802,98 @@ void main() {
           ),
         ),
       );
+      // LocalJam's own control, not the stock sliding one (CR-8).
       expect(
         find.byType(CupertinoSlidingSegmentedControl<String>),
-        findsOneWidget,
+        findsNothing,
       );
       await tester.tap(find.text('Dark'));
       await tester.pumpAndSettle();
       expect(mode, 'dark');
+      // 44 tall: every segment a full target (RB-22).
+      expect(
+        tester.getSize(find.byType(JamSegmentedControl<String>)).height,
+        greaterThanOrEqualTo(44),
+      );
+      // The choice reads from the words too: semibold label, quieter rest.
+      final dark = tester.widget<Text>(find.text('Dark'));
+      final light = tester.widget<Text>(find.text('Light'));
+      final darkStyle = DefaultTextStyle.of(
+        tester.element(find.text('Dark')),
+      ).style.merge(dark.style);
+      final lightStyle = DefaultTextStyle.of(
+        tester.element(find.text('Light')),
+      ).style.merge(light.style);
+      expect(darkStyle.fontWeight, FontWeight.w600);
+      expect(darkStyle.color, JamColors.light.label);
+      expect(lightStyle.fontWeight, FontWeight.w500);
+      expect(lightStyle.color, JamColors.light.secondaryLabel);
+      // A drag along the track moves the choice with it.
+      await tester.dragFrom(
+        tester.getCenter(find.text('Dark')),
+        Offset(
+          -tester.getSize(find.byType(JamSegmentedControl<String>)).width / 1.5,
+          0,
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(mode, 'system');
+      // No shadow anywhere on it.
+      for (final box in tester.widgetList<DecoratedBox>(
+        find.descendant(
+          of: find.byType(JamSegmentedControl<String>),
+          matching: find.byType(DecoratedBox),
+        ),
+      )) {
+        final d = box.decoration;
+        if (d is ShapeDecoration) expect(d.shadows, isNull);
+      }
+    });
+
+    testWidgets('the selection check: the brand fill in both themes (CR-5)', (
+      tester,
+    ) async {
+      for (final dark in [false, true]) {
+        final colors = dark ? JamColors.dark : JamColors.light;
+        await tester.pumpWidget(
+          _host(const JamSelectionCheck(selected: true), dark: dark),
+        );
+        await tester.pumpAndSettle();
+        final painter =
+            tester
+                    .widget<CustomPaint>(
+                      find.descendant(
+                        of: find.byType(JamSelectionCheck),
+                        matching: find.byType(CustomPaint),
+                      ),
+                    )
+                    .painter!
+                as dynamic;
+        // The switch's fill, not the bright dark-mode text pink.
+        expect(painter.fill, colors.tintFilled);
+        expect(painter.mark, colors.onTint);
+        expect(
+          tester.getSize(find.byType(JamSelectionCheck)),
+          const Size.square(kJamSelectionCheckSize),
+        );
+      }
+      // Its own mark, not the stock iOS glyph.
+      expect(find.byIcon(CupertinoIcons.checkmark_circle_fill), findsNothing);
+
+      final handle = tester.ensureSemantics();
+      await tester.pumpWidget(
+        _host(
+          const JamSelectionCheck(selected: true, semanticLabel: 'Selected'),
+        ),
+      );
+      expect(find.bySemanticsLabel('Selected'), findsOneWidget);
+      await tester.pumpWidget(
+        _host(
+          const JamSelectionCheck(selected: false, semanticLabel: 'Selected'),
+        ),
+      );
+      expect(find.bySemanticsLabel('Selected'), findsNothing);
+      handle.dispose();
     });
 
     testWidgets('JamPressable dims on press and restores', (tester) async {

@@ -487,9 +487,10 @@ abstract final class JamFixedColors {
   static const Color black = Color(0xFF000000);
   static const Color clear = Color(0x00000000);
 
-  /// The segmented control's thumb in dark mode: a warm grey a step above
-  /// the dark fills (2.2:1 on its track; `label` on it 5.8:1).
-  static const Color segmentThumbDark = Color(0xFF665D57);
+  /// The segmented control's thumb in dark mode: a quiet warm grey a step
+  /// above the dark fills (1.5:1 on its track, with a hairline edge; `label`
+  /// on it 8.7:1) — the chosen word, set semibold, carries the choice.
+  static const Color segmentThumbDark = Color(0xFF4A433E);
 }
 
 /// Faces (D3): eight earthy hues at one luminance (OKLCH chroma ≈ 0.10), so
