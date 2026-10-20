@@ -107,10 +107,22 @@ class JamScaffold extends StatefulWidget {
 class _JamScaffoldState extends State<JamScaffold> {
   bool _contentUnderBottom = false;
 
-  bool _onMetrics(ScrollMetrics metrics) {
+  /// Content has scrolled up under the inline bar: only then does the bar
+  /// blur what is behind it. At rest it is clear, and a blur there would
+  /// smear whatever sits just under its edge (a page's cover and its
+  /// shadow) into a hard band.
+  bool _contentUnderTop = false;
+
+  bool _onMetrics(ScrollMetrics metrics, int depth) {
+    // The page's own scroll view, not a list nested in it.
+    if (depth != 0) return false;
     final under = metrics.extentAfter > 0.5;
-    if (under != _contentUnderBottom) {
-      setState(() => _contentUnderBottom = under);
+    final top = metrics.extentBefore > 0;
+    if (under != _contentUnderBottom || top != _contentUnderTop) {
+      setState(() {
+        _contentUnderBottom = under;
+        _contentUnderTop = top;
+      });
     }
     return false;
   }
@@ -139,9 +151,9 @@ class _JamScaffoldState extends State<JamScaffold> {
           );
 
     body = NotificationListener<ScrollMetricsNotification>(
-      onNotification: (n) => _onMetrics(n.metrics),
+      onNotification: (n) => _onMetrics(n.metrics, n.depth),
       child: NotificationListener<ScrollUpdateNotification>(
-        onNotification: (n) => _onMetrics(n.metrics),
+        onNotification: (n) => _onMetrics(n.metrics, n.depth),
         child: body,
       ),
     );
@@ -167,6 +179,7 @@ class _JamScaffoldState extends State<JamScaffold> {
               leading: widget.leading,
               trailing: widget.trailing,
               automaticallyImplyLeading: widget.automaticallyImplyLeading,
+              blur: _contentUnderTop,
             ),
       body: Stack(
         children: [
@@ -354,6 +367,7 @@ class JamNavBar extends StatelessWidget
     this.previousPageTitle,
     this.automaticallyImplyLeading = true,
     this.alwaysOpaque = false,
+    this.blur = true,
   });
 
   final String title;
@@ -366,6 +380,11 @@ class JamNavBar extends StatelessWidget
 
   /// Shows the material and hairline even before anything scrolls under.
   final bool alwaysOpaque;
+
+  /// Blurs what is behind the bar. [JamScaffold] turns it on only once
+  /// content scrolls under: a clear bar at rest that still blurred would
+  /// smear what sits just under its edge into a band.
+  final bool blur;
 
   @override
   Size get preferredSize => const Size.fromHeight(JamMetrics.navBarHeight);
@@ -389,6 +408,7 @@ class JamNavBar extends StatelessWidget
       // Status bar icons follow the theme, not the (clear) bar at rest.
       brightness: Theme.of(context).brightness,
       automaticBackgroundVisibility: !alwaysOpaque,
+      enableBackgroundFilterBlur: alwaysOpaque || blur,
       transitionBetweenRoutes: false,
       padding: _navPaddingFor(MediaQuery.sizeOf(context).width),
     );

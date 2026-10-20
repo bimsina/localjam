@@ -394,10 +394,24 @@ void main() {
         return (box.decoration as BoxDecoration).color!;
       }
 
+      bool blurs() => tester
+          .widget<BackdropFilter>(
+            find.descendant(
+              of: find.byType(CupertinoNavigationBar),
+              matching: find.byType(BackdropFilter),
+            ),
+          )
+          .enabled;
+
       expect(barColor().a, 0);
+      // Clear at rest, and not blurring either: a blur there smears what
+      // sits just under the bar's edge (a page's cover, its shadow) into a
+      // hard band.
+      expect(blurs(), isFalse);
       await tester.drag(find.text('3'), const Offset(0, -300));
       await tester.pumpAndSettle();
       expect(barColor(), JamColors.light.material);
+      expect(blurs(), isTrue);
     });
   });
 
