@@ -2419,18 +2419,16 @@ class _FacePileState extends State<_FacePile>
           ? widget.colors[i]
           : identityColor(name);
       final last = i == names.length - 1;
-      Widget face = _PileFace(
+      Widget face = JamAvatar.inPile(
         name: name,
+        size: size,
         color: color,
         // A covered face's letter moves into the part still showing.
-        shift: last ? 0 : (step - JamAvatarStack.cutout) / 2 - size / 2,
+        initialsShift: last ? 0 : (step - JamAvatarStack.cutout) / 2 - size / 2,
       );
       if (!last) {
         face = ClipPath(
-          clipper: const _PileKnockout(
-            offset: step,
-            gap: JamAvatarStack.cutout,
-          ),
+          clipper: const JamAvatarKnockout(offset: step),
           child: face,
         );
       }
@@ -2477,70 +2475,6 @@ class _FacePileState extends State<_FacePile>
 
 /// How long a new face waits before it grows in: the pile makes room first.
 const Duration _kArrivalDelay = Duration(milliseconds: 80);
-
-/// One face in [_FacePile]: [JamAvatar]'s face (the colour, one white
-/// Manrope initial), its letter moved by [shift].
-class _PileFace extends StatelessWidget {
-  const _PileFace({
-    required this.name,
-    required this.color,
-    required this.shift,
-  });
-
-  final String name;
-  final Color color;
-  final double shift;
-
-  @override
-  Widget build(BuildContext context) {
-    const size = _FacePile.size;
-    return DecoratedBox(
-      decoration: BoxDecoration(color: color, shape: BoxShape.circle),
-      child: Center(
-        child: Transform.translate(
-          offset: Offset(shift, 0),
-          child: Text(
-            identityInitials(name).characters.first,
-            maxLines: 1,
-            textScaler: TextScaler.noScaling,
-            style: context.jamBody.copyWith(
-              fontFamily: 'Manrope',
-              fontSize: size * 0.45,
-              fontWeight: FontWeight.w700,
-              color: JamAvatarPalette.initials,
-              height: 1,
-              letterSpacing: 0,
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-/// A face minus the next one ([offset] to the right), grown by [gap]: the
-/// pile's knock-out, a real hole rather than a painted ring.
-class _PileKnockout extends CustomClipper<Path> {
-  const _PileKnockout({required this.offset, required this.gap});
-
-  final double offset;
-  final double gap;
-
-  @override
-  Path getClip(Size size) {
-    final own = Path()..addOval(Offset.zero & size);
-    final r = size.width / 2;
-    final next = Path()
-      ..addOval(
-        Rect.fromCircle(center: Offset(offset + r, r), radius: r + gap),
-      );
-    return Path.combine(PathOperation.difference, own, next);
-  }
-
-  @override
-  bool shouldReclip(_PileKnockout oldClipper) =>
-      oldClipper.offset != offset || oldClipper.gap != gap;
-}
 
 /// A bare footer glyph (white 70%), or — selected — ivory behind a dark
 /// glyph, on the same soft rectangle as the app's small buttons. Its glyph's

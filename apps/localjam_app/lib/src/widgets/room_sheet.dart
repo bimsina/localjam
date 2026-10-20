@@ -664,31 +664,21 @@ List<String> jamRosterNames(JamEngine engine, {required String selfName}) {
   ];
 }
 
-/// Each person's face colour in [engine]'s jam, by peer id (D3).
-///
-/// Every face starts at its own name's colour ([identityColor]) and moves
-/// only to keep two people in the jam from sharing one. Who moves is decided
-/// in an order every phone in the jam agrees on — the host, then everyone
-/// else by name — not in this phone's own room order, so a person is the
-/// same colour on every phone in the jam, and in the footer, the People
-/// sheet and every "Added by" credit on each.
+/// Each person's face colour in [engine]'s jam, by peer id (D3): the jam's
+/// names through [jamPeopleColors], the host first — the order every phone
+/// in the jam agrees on — so a person is the same colour on every phone in
+/// the jam, and in the footer, the People sheet and every "Added by" credit
+/// on each, and on Past Jams afterwards.
 Map<String, Color> jamRosterColors(
   JamEngine engine, {
   required String selfName,
 }) {
   final ids = jamRosterPeerIds(engine);
   final names = jamRosterNames(engine, selfName: selfName);
-  final hostIndex = engine is JamGuestEngine ? 1 : 0;
-  final host = names[hostIndex];
-  final others = [
-    for (var i = 0; i < names.length; i++)
-      if (i != hostIndex) names[i],
-  ]..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
-  final order = [host, ...others];
-  final assigned = jamAvatarColors(order);
-  final byName = <String, Color>{
-    for (var i = 0; i < order.length; i++) order[i]: assigned[i],
-  };
+  final byName = jamPeopleColors(
+    names,
+    host: names[engine is JamGuestEngine ? 1 : 0],
+  );
   return {
     for (var i = 0; i < ids.length && i < names.length; i++)
       ids[i]: byName[names[i]] ?? identityColor(names[i]),

@@ -103,7 +103,7 @@ void main() {
       final colors = jamAvatarColors(ids);
       expect(colors.toSet().length, 8);
       // The first person keeps their own colour; order decides the rest.
-      expect(colors.first, jamAvatarColorForKey(ids.first));
+      expect(colors.first, identityColor(ids.first));
       expect(jamAvatarColors(ids), colors);
       // The same id twice is the same person.
       expect(jamAvatarColors(['x', 'x']).toSet().length, 1);
@@ -111,17 +111,31 @@ void main() {
       expect(jamAvatarColors([...ids, 'client-8']).length, 9);
     });
 
-    testWidgets('colorKey picks the colour from the id, not the name', (
-      tester,
-    ) async {
-      await pumpAvatar(
-        tester,
-        const JamAvatar(name: 'Silky Puffin', colorKey: 'device-42'),
-      );
-      expect(
-        tester.widget<JamAvatar>(find.byType(JamAvatar)).resolvedColor,
-        jamAvatarColorForKey('device-42'),
-      );
+    test('a jam\'s faces: the host keeps theirs, the rest move in name '
+        'order, the same from any phone', () {
+      // Two names that start on the same colour: whoever sorts later moves.
+      String sharing(String name) {
+        for (var i = 0; ; i++) {
+          final other = 'Guest $i';
+          if (other != name && identityColor(other) == identityColor(name)) {
+            return other;
+          }
+        }
+      }
+
+      const host = 'Bibek';
+      final twin = sharing(host);
+      // The host is first whatever the order they are listed in.
+      final fromHost = jamPeopleColors([host, twin, 'Mia'], host: host);
+      final fromGuest = jamPeopleColors(['Mia', twin, host], host: host);
+      expect(fromGuest, fromHost);
+      expect(fromHost[host], identityColor(host));
+      expect(fromHost[twin], isNot(identityColor(host)));
+      expect(fromHost.values.toSet(), hasLength(3));
+      // Without a host, name order alone decides — still one answer.
+      final unhosted = jamPeopleColors(['Mia', twin, host]);
+      expect(jamPeopleColors([twin, host, 'Mia']), unhosted);
+      expect(unhosted.values.toSet(), hasLength(3));
     });
 
     testWidgets('announces the person, not their initials', (tester) async {
@@ -191,21 +205,6 @@ void main() {
       expect(find.text('SK'), findsOneWidget);
     });
 
-    testWidgets('with ids, nobody in the pile shares a colour', (tester) async {
-      const names = ['A', 'B', 'C'];
-      const ids = ['id-1', 'id-2', 'id-3'];
-      await pumpAvatar(
-        tester,
-        const JamAvatarStack(names: names, colorKeys: ids),
-      );
-      final colors = tester
-          .widgetList<JamAvatar>(find.byType(JamAvatar))
-          .map((a) => a.resolvedColor)
-          .toList();
-      expect(colors, jamAvatarColors(ids));
-      expect(colors.toSet().length, 3);
-    });
-
     testWidgets('by name, nobody in the pile shares a colour either', (
       tester,
     ) async {
@@ -215,7 +214,8 @@ void main() {
           .widgetList<JamAvatar>(find.byType(JamAvatar))
           .map((a) => a.resolvedColor)
           .toList();
-      expect(colors, jamAvatarColors(names));
+      final byName = jamPeopleColors(names);
+      expect(colors, [for (final n in names) byName[n]]);
       expect(colors.toSet(), hasLength(3));
     });
 

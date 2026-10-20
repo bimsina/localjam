@@ -37,12 +37,6 @@ int _stableHash(String value) {
 Color identityColor(String name, [Brightness? brightness]) =>
     kJamAvatarPalette[_stableHash(name) % kJamAvatarPalette.length];
 
-/// The colour for an arbitrary [key]: what [JamAvatar.colorKey] paints when
-/// nothing has assigned the jam's colours. For a person, the key is their
-/// display name — this is then [identityColor].
-Color jamAvatarColorForKey(String key) =>
-    kJamAvatarPalette[_stableHash(key) % kJamAvatarPalette.length];
-
 /// Colours for everyone in one jam, in room order (spec §10.10, D3).
 ///
 /// [keys] are the roster's **display names** (this device first, then the
@@ -53,9 +47,8 @@ Color jamAvatarColorForKey(String key) =>
 /// palette starts over. The same name always gets the same colour within
 /// one call.
 ///
-/// Pass the same ordered list everywhere the jam's faces appear (the People
-/// sheet, the face pile, an "Added by" face) so a person keeps one colour
-/// across them.
+/// Faces for a whole jam go through [jamPeopleColors], which puts the
+/// names in the one order every phone and every screen agrees on.
 List<Color> jamAvatarColors(List<String> keys) {
   const palette = kJamAvatarPalette;
   final n = palette.length;
@@ -78,6 +71,37 @@ List<Color> jamAvatarColors(List<String> keys) {
     out.add(palette[slot]);
   }
   return out;
+}
+
+/// Each person's face colour in one jam, by display name (D3): the one
+/// assignment every face of a jam is painted from — the room's footer, the
+/// People sheet, an "Added by" face, Past Jams, a jam mark's host.
+///
+/// Every face starts at its own name's colour ([identityColor]) and moves
+/// only to keep two people in the jam from sharing one. Who moves is decided
+/// in an order every phone agrees on — the [host] first, then everyone else
+/// by name — not in any one phone's room order, so a person is the same
+/// colour on every phone in the jam and on every screen of each. The host
+/// is never the one who moves.
+///
+/// Without a [host] (a past jam this phone joined: its record does not say
+/// who hosted) everyone is in name order, which differs from the jam only
+/// where the host would have moved someone.
+Map<String, Color> jamPeopleColors(Iterable<String> people, {String? host}) {
+  final others = {
+    for (final name in people)
+      if (name != host) name,
+  }.toList()..sort(_byName);
+  final order = [?host, ...others];
+  final assigned = jamAvatarColors(order);
+  return {for (var i = 0; i < order.length; i++) order[i]: assigned[i]};
+}
+
+/// Name order, ignoring case — with case breaking a tie, so "mia" and "Mia"
+/// sort the same way on every phone.
+int _byName(String a, String b) {
+  final folded = a.toLowerCase().compareTo(b.toLowerCase());
+  return folded != 0 ? folded : a.compareTo(b);
 }
 
 /// One or two initials for [name]: "Silky Puffin" becomes "SP".
@@ -126,31 +150,28 @@ class JamAvatar extends StatelessWidget {
     this.dimmed = false,
     this.semanticLabel,
     this.initials,
-    this.colorKey,
     this.color,
-  }) : _initialsShift = 0;
+  }) : initialsShift = 0;
 
-  /// A face in a pile, its letters moved into the part left uncovered.
-  const JamAvatar._inPile({
+  /// A face in a pile, its letters moved [initialsShift] into the part the
+  /// next face leaves uncovered ([JamAvatarKnockout]). Decorative: the pile
+  /// says who is in it.
+  const JamAvatar.inPile({
+    super.key,
     required this.name,
     required this.size,
     this.color,
-    this._initialsShift = 0,
+    this.initialsShift = 0,
   }) : dimmed = false,
        semanticLabel = null,
-       initials = null,
-       colorKey = null;
+       initials = null;
 
   /// The display name the initials and (without [color]) the colour derive
   /// from.
   final String name;
 
-  /// A key to colour by instead of [name]. Leave it null for people: D3
-  /// keys every face by its name so it matches across screens.
-  final String? colorKey;
-
-  /// An assigned colour — from [jamAvatarColors] over the roster's names, so
-  /// nobody in the jam shares one. Wins over [colorKey] and [name].
+  /// An assigned colour — from [jamPeopleColors], so nobody in the jam
+  /// shares one. Without it, [name]'s own.
   final Color? color;
 
   /// Diameter — see [JamAvatarSize].
@@ -165,16 +186,15 @@ class JamAvatar extends StatelessWidget {
   /// Overrides the letters, keeping [name]'s colour.
   final String? initials;
 
-  final double _initialsShift;
+  /// How far the letters sit off-centre: in a pile, into the part of the
+  /// face still showing.
+  final double initialsShift;
 
   /// The face colour for [name].
   static Color colorFor(String name) => identityColor(name);
 
   /// The colour this avatar paints.
-  Color get resolvedColor {
-    final key = colorKey;
-    return color ?? (key == null ? colorFor(name) : jamAvatarColorForKey(key));
-  }
+  Color get resolvedColor => color ?? colorFor(name);
 
   String get _letters {
     final letters = initials ?? identityInitials(name);
@@ -202,11 +222,8 @@ class JamAvatar extends StatelessWidget {
         letterSpacing: 0,
       ),
     );
-    if (_initialsShift != 0) {
-      text = Transform.translate(
-        offset: Offset(_initialsShift, 0),
-        child: text,
-      );
+    if (initialsShift != 0) {
+      text = Transform.translate(offset: Offset(initialsShift, 0), child: text);
     }
     Widget face = Container(
       width: size,
@@ -238,20 +255,15 @@ class JamAvatarStack extends StatelessWidget {
     this.maxVisible = 3,
     this.overflowColor,
     this.semanticLabel,
-    this.colorKeys,
     this.colors,
   });
 
-  /// Display names, in room order. Without [colors] or [colorKeys] the pile
-  /// colours itself with [jamAvatarColors] over these names — distinct
-  /// within the pile and the same as the People sheet's.
+  /// Display names, in room order. Without [colors] the pile colours itself
+  /// with [jamPeopleColors] over these names — distinct within the pile.
   final List<String> names;
 
-  /// Keys parallel to [names] to assign the colours over instead. Leave it
-  /// null for people (D3 keys faces by name).
-  final List<String>? colorKeys;
-
-  /// Colours parallel to [names], already assigned (wins over [colorKeys]).
+  /// Colours parallel to [names], already assigned for the whole jam
+  /// ([jamPeopleColors]), so a face here matches the same person elsewhere.
   final List<Color>? colors;
 
   /// Diameter of each face.
@@ -280,13 +292,14 @@ class JamAvatarStack extends StatelessWidget {
     final visible = names.take(maxVisible).toList();
     final overflow = names.length - visible.length;
     final step = size * (1 - overlap);
-    final keys = colorKeys;
     final assigned = colors;
-    final palette = assigned != null && assigned.length >= visible.length
-        ? assigned
-        : jamAvatarColors(
-            keys != null && keys.length == names.length ? keys : names,
-          );
+    final List<Color> palette;
+    if (assigned != null && assigned.length >= visible.length) {
+      palette = assigned;
+    } else {
+      final byName = jamPeopleColors(names);
+      palette = [for (final name in visible) byName[name]!];
+    }
     // A covered face's letters move to the middle of the part still showing.
     final shift = (step - cutout) / 2 - size / 2;
 
@@ -301,14 +314,14 @@ class JamAvatarStack extends StatelessWidget {
               left: i * step,
               top: 0,
               child: i == visible.length - 1
-                  ? JamAvatar._inPile(
+                  ? JamAvatar.inPile(
                       name: visible[i],
                       size: size,
                       color: palette[i],
                     )
                   : ClipPath(
-                      clipper: _KnockoutClipper(offset: step, gap: cutout),
-                      child: JamAvatar._inPile(
+                      clipper: JamAvatarKnockout(offset: step),
+                      child: JamAvatar.inPile(
                         name: visible[i],
                         size: size,
                         color: palette[i],
@@ -349,10 +362,15 @@ class JamAvatarStack extends StatelessWidget {
   }
 }
 
-/// Clips a face to itself minus the next face — [offset] to the right —
-/// grown by [gap].
-class _KnockoutClipper extends CustomClipper<Path> {
-  const _KnockoutClipper({required this.offset, required this.gap});
+/// Clips a face to itself minus the next face in a pile — [offset] to the
+/// right — grown by [gap]: a real hole, so whatever is behind the pile shows
+/// through. Every face pile (this one, the room's animated footer) cuts its
+/// faces with it.
+class JamAvatarKnockout extends CustomClipper<Path> {
+  const JamAvatarKnockout({
+    required this.offset,
+    this.gap = JamAvatarStack.cutout,
+  });
 
   final double offset;
   final double gap;
@@ -369,6 +387,6 @@ class _KnockoutClipper extends CustomClipper<Path> {
   }
 
   @override
-  bool shouldReclip(_KnockoutClipper oldClipper) =>
+  bool shouldReclip(JamAvatarKnockout oldClipper) =>
       oldClipper.offset != offset || oldClipper.gap != gap;
 }
