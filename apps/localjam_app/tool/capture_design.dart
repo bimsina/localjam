@@ -466,11 +466,19 @@ void main() {
         ),
       );
       await cap.snap('04-nearby-hotspot');
+      // Who hosts each: Theo's jam says so under its name; "Mia’s jam"
+      // already does, so its card does not repeat it; the late shift's
+      // record does not say (a 1.0 host).
       (session.nearbyRooms as ValueNotifier<List<JamNearbyRoom>>).value = [
-        for (final name in ['Sunday at home', 'Mia’s jam', 'The late shift'])
+        for (final (name, host) in [
+          ('Sunday at home', 'Theo'),
+          ('Mia’s jam', 'Mia'),
+          ('The late shift', null),
+        ])
           JamNearbyRoom(
             key: name,
             sessionName: name,
+            hostName: host,
             joinUri: Uri.parse(
               'localjam://join?host=192.168.1.14&port=4242&token=preview&name=${Uri.encodeComponent(name)}',
             ),
@@ -483,7 +491,12 @@ void main() {
           loadRecords: () async => [],
         ),
       );
-      await cap.snap('05-nearby-available');
+      await cap.snap(
+        '05-nearby-available',
+        note:
+            'Hosts named under their jams (hname), except where the jam’s '
+            'name already says who, or the record does not.',
+      );
       unawaited(promptForJoinLink(cap.context));
       await cap.snap('06-join-link');
       await tester.enterText(
@@ -1295,14 +1308,15 @@ Future<void> captureStress(
     tracks: const [],
   );
   (session.nearbyRooms as ValueNotifier<List<JamNearbyRoom>>).value = [
-    for (final name in [
-      stressJam,
-      'Electric Mongoose Supreme’s jam',
-      'Kitchen',
+    for (final (name, host) in [
+      (stressJam, 'Anastasia Konstantinova'),
+      ('Electric Mongoose Supreme’s jam', 'Electric Mongoose Supreme'),
+      ('Kitchen', 'Jo'),
     ])
       JamNearbyRoom(
         key: name,
         sessionName: name,
+        hostName: host,
         joinUri: Uri.parse(
           'localjam://join?host=192.168.1.14&port=4242&token=stress&name=${Uri.encodeComponent(name)}',
         ),
@@ -1326,7 +1340,7 @@ Future<void> captureStress(
       '49-nearby-$label',
       tolerateOverflow: true,
       note:
-          'Long jam names and a seven-person Recent jam, '
+          'Long jam names, a long host name, and a seven-person Recent jam, '
           '${size.width.toInt()} pt wide at '
           '${scale == scale.roundToDouble() ? scale.toStringAsFixed(0) : scale}× '
           'text.',
