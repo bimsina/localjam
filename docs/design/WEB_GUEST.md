@@ -19,7 +19,7 @@ Browsers are guests only, never hosts (PROTOCOL.md goal 5).
 | D1 | Listener page is a **Flutter web** app, `apps/localjam_web`. | Shares `localjam_core` (ClockSync, protocol) and the audio sync controller; one stack for the team. Payload (~2 MB) loads over LAN in well under a second. |
 | D2 | The host **bundles the web build in the APK** and serves it. No hosted site. | Must work offline. An https page could not open `ws://` or fetch `http://` from a LAN IP anyway. |
 | D3 | **Plain http, no TLS.** PROTOCOL.md §9/§11 are rewritten: TLS is not a prerequisite for a web guest. | Web Audio, WebSocket, fetch and `performance.now()` all work on a plain `http://` LAN origin. Only service workers, PWA install and wake lock need a secure context, and listening needs none of them. A self-signed cert on a LAN IP gives every browser an interstitial and nothing to pin. |
-| D4 | **One join URL, http form, token in the fragment.** The QR, the share sheet and the Nearby list all carry it. `localjam://` stays valid (deep links, "Open in app"). | Phone cameras open http URLs with no app installed. The fragment never travels in the request or a `Referer`. |
+| D4 | **One join URL, http form, token in the fragment.** The QR, the share sheet and the Nearby list all carry it. `localjam://` stays valid (deep links, "Open in app"). | Phone cameras open http URLs with no app installed. The fragment is never in an HTTP request or a `Referer` — which keeps the token out of the page's request and its logs, not off the network: it stays in browser history, and crosses the LAN in `hello` and the media bearer like every guest's (§9). |
 | D5 | Phase 1 = **listen + control requests** when the room's permissions allow; no browser uploads. Phase 2 = uploads via a file input over the existing `POST /media`. | Control is one `request` frame; uploads need UI and testing we do not need for launch. |
 | D6 | Web Audio with `AudioBufferSourceNode.start(when)` (PROTOCOL.md §5.3), **not** an `<audio>` element driving playback. On iOS the graph is routed through a `MediaStreamAudioDestinationNode` into a playing `<audio>` element so the context survives screen lock and gets lock-screen controls. | Sample-accurate start; `<audio>.currentTime` is tens of ms coarse. |
 | D7 | **Decode only the current track** (one `AudioBuffer` at a time; `load` replaces). Raw bytes of prefetched items stay as `Uint8List` under a budget. | A 5-min track decodes to ~100 MB of PCM; mobile tabs die past ~1 GB. |
@@ -45,13 +45,15 @@ http://192.168.1.7:44100/join#v=1&token=<sessionToken>&name=RoadTrip&host=192.16
 ## Host routes (protocol 1.2, §1/§6 addition)
 
 Unauthenticated, `GET` only, same per-connection limits and `Connection: close`
-as everything else (§9.1). No token is needed to fetch the page; the token is
-needed to do anything with it.
+as everything else (§9.1), plus a send deadline (the longer of 10 s and the
+response's size at 32 KB/s) so that a client reading nothing cannot hold a
+connection slot. No token is needed to fetch the page; the token is needed
+to do anything with it.
 
 | Route | Serves |
 |---|---|
 | `GET /` and `GET /join` | the page's `index.html` — `text/html; charset=utf-8`, `Cache-Control: no-store` |
-| `GET /web/<path>` | a bundle file by exact path — its MIME, `Cache-Control: no-cache`, `ETag` (sha256 prefix), `304` on `If-None-Match` |
+| `GET /web/<path>` | a bundle file by exact path (after the HTTP stack's dot-segment removal) — its MIME, `Cache-Control: no-cache` (`no-store` for `index.html`), `ETag` (sha256 prefix), `304` on `If-None-Match` with no `Content-Type` and no body framing |
 | anything else | unchanged (`/ws`, `/media`, `/media/{id}`, `/artwork/{id}`); unknown paths `404` |
 
 - The host server (`localjam_net`, pure Dart) takes an optional **static
