@@ -89,6 +89,27 @@ class JamMemoryMediaStore extends JamMediaStore {
   @override
   bool accepts(MediaItem item) => _sha256.hasMatch(item.sha256);
 
+  /// The longest declared duration (µs) worth decoding in a tab: the
+  /// player holds the whole track as 32-bit float PCM, and 20 minutes of
+  /// 48 kHz stereo is ~460 MB — about where mobile browsers kill a tab
+  /// (D7). A DJ mix or an audiobook chapter past it is refused up front
+  /// rather than taking the page down mid-decode.
+  static const int maxDecodeUs = 20 * 60 * 1000000;
+
+  /// Refuses, before any fetch: a body declared bigger than [maxBytes] (it
+  /// could only sit above the budget, alone), and a track declared longer
+  /// than [maxDecodeUs]. A missing or zero `sizeBytes`/`durationUs` says
+  /// nothing and refuses nothing.
+  @override
+  String? refuses(MediaItem item) {
+    if (item.sizeBytes > maxBytes) return JamMediaStore.tooLarge;
+    final durationUs = item.durationUs;
+    if (durationUs != null && durationUs > maxDecodeUs) {
+      return JamMediaStore.tooLong;
+    }
+    return null;
+  }
+
   @override
   Future<String?> lookup(MediaItem item) async {
     final entry = _entries[item.sha256];
