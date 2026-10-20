@@ -311,8 +311,8 @@ void main() {
     expect(rows[0].addedByName, 'Neon Walrus');
     expect(rows[0].addedByColor, faces['Neon Walrus']);
     expect(rows[1].addedByYou, isTrue);
-    expect(rows[1].addedByColor, faces['Silky Puffin']);
-    expect(rows[1].addedByFaceName, 'Silky Puffin');
+    // Your own song carries no credit, so no face to colour (R3).
+    expect(rows[1].addedByColor, isNull);
     // Song rows are two lines (R3): the artist and the length; a credit is
     // a face, and only for someone else's song.
     expect(find.text('Perla · 3:42'), findsOneWidget);

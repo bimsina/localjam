@@ -67,7 +67,6 @@ class JamTrackRow extends StatelessWidget implements JamSelfSeparatingRow {
     this.addedByName,
     this.addedByYou = false,
     this.addedByColor,
-    this.addedByFaceName,
     this.reserveCredit,
     this.isCurrent = false,
     this.duration,
@@ -117,9 +116,6 @@ class JamTrackRow extends StatelessWidget implements JamSelfSeparatingRow {
   /// someone else's song, the credit is their face at the trailing edge;
   /// null draws no face — an unnamed adder ("Guest" is not a face).
   final Color? addedByColor;
-
-  /// Whose initial the face shows when it is not [addedByName]'s.
-  final String? addedByFaceName;
 
   /// Keeps the credit column's width when this row has no face, so the
   /// faces in a list share one column. Null: kept whenever the row knows
@@ -229,11 +225,9 @@ class JamTrackRow extends StatelessWidget implements JamSelfSeparatingRow {
         _lineOf(titleStyle, scaler) +
         (hasSubtitle ? _lineOf(subtitleStyle, scaler) : 0);
     // The face grows with the words beside it, to a point, so it stays a
-    // face rather than a dot next to large text.
-    final faceSize = JamAvatarSize.attribution * math.min(scaler.scale(1), 1.5);
-    final adder = addedByFaceName?.trim().isNotEmpty == true
-        ? addedByFaceName!
-        : addedByName;
+    // face rather than a dot next to large text (RB-17).
+    final faceSize = JamAvatarSize.scaled(context, JamAvatarSize.attribution);
+    final adder = addedByName;
 
     // At large text sizes a long title may take a second line, and the
     // rows grow to hold what they say rather than clip it.
@@ -339,7 +333,7 @@ class JamTrackRow extends StatelessWidget implements JamSelfSeparatingRow {
           row,
           Positioned(
             left: contentPadding.left + _artworkSize + kJamRowLeadingGap,
-            right: 0,
+            right: jamHairlineEndInset(context, contentPadding.right),
             bottom: 0,
             child: JamHairline(
               color: onBackdrop ? JamNowPlayingColors.track : null,

@@ -1059,7 +1059,10 @@ class _StageEstimate {
       if (credit) {
         titleH +=
             _kCreditGap +
-            math.max(JamAvatarSize.credit, _lineHeight(footnote, scaler));
+            math.max(
+              JamAvatarSize.scaled(context, JamAvatarSize.credit),
+              _lineHeight(footnote, scaler),
+            );
       }
     } else if (emptyBody) {
       titleH += JamSpace.xs + _lineHeight(styles.artist, scaler);
@@ -2329,7 +2332,7 @@ class _TitleBlock extends StatelessWidget {
     );
   }
 
-  /// "Added by Mia" with Mia's 16 pt face, a footnote under the artist. It
+  /// "Added by Mia" with Mia's 18 pt face, a footnote under the artist. It
   /// fades through when the next song is someone else's, and folds away as
   /// the queue opens — the rows below carry every song's credit.
   Widget _creditLine(BuildContext context, TextScaler scaler, double t) {
@@ -2338,6 +2341,8 @@ class _TitleBlock extends StatelessWidget {
     final style = context.jamFootnote.copyWith(
       color: JamNowPlayingColors.secondary,
     );
+    // Grows with the words beside it, to a point (RB-17).
+    final face = JamAvatarSize.scaled(context, JamAvatarSize.credit);
     final line = credit == null
         ? const SizedBox.shrink(key: ValueKey<String>('none'))
         : Row(
@@ -2349,7 +2354,7 @@ class _TitleBlock extends StatelessWidget {
                   child: JamAvatar(
                     name: credit.name,
                     color: credit.color,
-                    size: JamAvatarSize.credit,
+                    size: face,
                   ),
                 ),
                 const SizedBox(width: JamSpace.xs + JamSpace.xxs),
@@ -2376,10 +2381,7 @@ class _TitleBlock extends StatelessWidget {
               // The line's real box, not `scale(18)`: under Android's
               // nonlinear scaler the two differ and the descenders were cut
               // (RB-10).
-              height: math.max(
-                JamAvatarSize.credit,
-                _lineHeight(style, scaler),
-              ),
+              height: math.max(face, _lineHeight(style, scaler)),
               child: AnimatedSwitcher(
                 duration: reduced ? Duration.zero : JamDuration.fast,
                 switchInCurve: jamFadeThroughCurve,

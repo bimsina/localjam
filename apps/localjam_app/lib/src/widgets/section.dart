@@ -136,6 +136,7 @@ class JamSection extends StatelessWidget {
           for (var i = 0; i < rows.length; i++)
             JamRowScope(
               isLast: i == rows.length - 1,
+              plain: plain,
               child: rows[i] is JamSelfSeparatingRow
                   ? rows[i]
                   : (i == rows.length - 1
@@ -145,7 +146,10 @@ class JamSection extends StatelessWidget {
                             crossAxisAlignment: CrossAxisAlignment.stretch,
                             children: [
                               rows[i],
-                              const JamHairline(indent: kJamRowInset),
+                              JamHairline(
+                                indent: kJamRowInset,
+                                endIndent: plain ? kJamRowInset : 0,
+                              ),
                             ],
                           )),
             ),

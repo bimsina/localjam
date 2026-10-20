@@ -34,16 +34,34 @@ abstract final class JamListStrings {
 
 /// Where a row sits, published by `JamSection` to each child.
 class JamRowScope extends InheritedWidget {
-  const JamRowScope({super.key, required this.isLast, required super.child});
+  const JamRowScope({
+    super.key,
+    required this.isLast,
+    this.plain = false,
+    required super.child,
+  });
 
   /// The last row in its group draws no separator.
   final bool isLast;
+
+  /// The section is a plain list (`JamSection.plain`), not a block.
+  final bool plain;
 
   static JamRowScope? maybeOf(BuildContext context) =>
       context.dependOnInheritedWidgetOfExactType<JamRowScope>();
 
   @override
-  bool updateShouldNotify(JamRowScope old) => old.isLast != isLast;
+  bool updateShouldNotify(JamRowScope old) =>
+      old.isLast != isLast || old.plain != plain;
+}
+
+/// Where a row's hairline ends, as an inset from its trailing edge: at the
+/// block's edge inside an inset-grouped section, and where the row's
+/// content ends ([inset]) in a plain list (CR-18) — the one rule every
+/// self-separating row follows.
+double jamHairlineEndInset(BuildContext context, double inset) {
+  final scope = JamRowScope.maybeOf(context);
+  return scope == null || scope.plain ? inset : 0;
 }
 
 /// A 0.5 pt (one physical pixel) hairline in `separator`.
@@ -441,9 +459,7 @@ class _JamRowBody extends StatelessWidget {
           content,
           PositionedDirectional(
             start: inset,
-            // In a section the hairline meets the block's edge; in a plain
-            // list it stops where the row's content does (CR-18).
-            end: scope == null ? kJamRowInset : 0,
+            end: jamHairlineEndInset(context, kJamRowInset),
             bottom: 0,
             child: const JamHairline(),
           ),
@@ -593,7 +609,7 @@ class JamAddSongsRow extends StatelessWidget implements JamSelfSeparatingRow {
           content,
           PositionedDirectional(
             start: horizontalPadding + JamArtworkSize.row + kJamRowLeadingGap,
-            end: scope == null ? horizontalPadding : 0,
+            end: jamHairlineEndInset(context, horizontalPadding),
             bottom: 0,
             child: JamHairline(
               color: onBackdrop ? JamNowPlayingColors.separator : null,

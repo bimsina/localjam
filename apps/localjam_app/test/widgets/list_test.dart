@@ -8,6 +8,7 @@ import 'package:localjam_app/src/widgets/avatar.dart';
 import 'package:localjam_app/src/widgets/buttons.dart';
 import 'package:localjam_app/src/widgets/list.dart';
 import 'package:localjam_app/src/widgets/section.dart';
+import 'package:localjam_app/src/widgets/track_row.dart';
 
 Widget _host(Widget child, {bool dark = false}) {
   final theme = dark ? jamDarkTheme() : jamLightTheme();
@@ -406,6 +407,26 @@ void main() {
         tester.getRect(find.byType(JamHairline).first).right,
         closeTo(first.right, 0.5),
       );
+
+      // A plain section is a plain list: its rows' hairlines — a song's
+      // too — stop at the content, as a lone row's does.
+      await tester.pumpWidget(
+        _host(
+          const JamSection.plain(
+            children: [
+              JamRow(title: 'One'),
+              JamTrackRow(title: 'Two'),
+              JamTrackRow(title: 'Three'),
+            ],
+          ),
+        ),
+      );
+      final lines = find.byType(JamHairline);
+      expect(lines, findsNWidgets(2));
+      final edge = tester.getRect(find.byType(JamSection)).right;
+      for (final line in [lines.first, lines.last]) {
+        expect(tester.getRect(line).right, closeTo(edge - kJamRowInset, 0.5));
+      }
     });
 
     testWidgets('JamAddSongsRow: a plus tile and a tint title, one button', (

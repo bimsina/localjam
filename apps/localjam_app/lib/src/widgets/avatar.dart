@@ -139,7 +139,8 @@ abstract final class JamAvatarSize {
   /// still reads (RB-17).
   static const double credit = 18;
 
-  /// Small piles inside rows (Past Jams), a jam mark's host badge on Nearby.
+  /// A song row's credit (the queue, a past jam's songs) and the small
+  /// piles inside rows (Past Jams).
   static const double attribution = 20;
 
   /// The face pile on Now Playing's footer and the mini player.
@@ -151,7 +152,7 @@ abstract final class JamAvatarSize {
   /// A row in the People sheet.
   static const double sheet = 40;
 
-  /// A nearby room's host on Home.
+  /// The default: a face standing alone at row height.
   static const double list = 44;
 
   /// The profile row in Settings.

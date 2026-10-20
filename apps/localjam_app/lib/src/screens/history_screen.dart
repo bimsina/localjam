@@ -689,11 +689,11 @@ class JamHistoryRow extends StatelessWidget implements JamSelfSeparatingRow {
       content = Stack(
         children: [
           content,
-          const PositionedDirectional(
+          PositionedDirectional(
             start: kJamRowInset + mark + kJamRowLeadingGap,
-            end: 0,
+            end: jamHairlineEndInset(context, kJamRowInset),
             bottom: 0,
-            child: JamHairline(),
+            child: const JamHairline(),
           ),
         ],
       );
@@ -1032,7 +1032,6 @@ class _HistoryDetailScreenState extends State<HistoryDetailScreen> {
             _HistoryTrackRow(
               track: tracks[i],
               separator: i < tracks.length - 1,
-              self: _self,
               faces: faces,
             ),
         ],
@@ -1057,15 +1056,11 @@ class _HistoryTrackRow extends StatefulWidget {
   const _HistoryTrackRow({
     required this.track,
     required this.separator,
-    required this.self,
     required this.faces,
   });
 
   final JamHistoryTrack track;
   final bool separator;
-
-  /// This device's name: whose face "You" wears.
-  final String self;
 
   /// Everyone's face colour, by name ([jamRecordColorsByName]).
   final Map<String, Color> faces;
@@ -1099,7 +1094,6 @@ class _HistoryTrackRowState extends State<_HistoryTrackRow> {
     final adder = track.addedByName;
     // The store writes the literal 'You' against this device's tracks.
     final you = adder == HistoryStrings.storedYou;
-    final me = widget.self.trim();
     final cover = _cover;
     final durationUs = track.item.durationUs;
     return JamTrackRow(
@@ -1111,11 +1105,10 @@ class _HistoryTrackRowState extends State<_HistoryTrackRow> {
       artworkId: track.item.artworkId,
       addedByName: adder,
       addedByYou: you,
-      // A face where the jam gave one out; the words for anyone it did not.
-      addedByColor: you
-          ? (me.isEmpty ? null : widget.faces[me])
-          : (adder == null ? null : widget.faces[adder]),
-      addedByFaceName: you && me.isNotEmpty ? me : null,
+      // Someone else's song wears their face where the jam gave one out,
+      // and says their name where it did not; your own carries no credit
+      // (R3).
+      addedByColor: you || adder == null ? null : widget.faces[adder],
       duration: durationUs == null ? null : Duration(microseconds: durationUs),
       // Faded is the whole signal that a track has left the device.
       dimmed: !_local,
