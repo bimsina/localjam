@@ -2,8 +2,10 @@
 ///
 /// A grouped sheet with **Cancel** and **Start** in its nav bar, like
 /// creating an event in Apple Invites: the room name as a big inline field
-/// (its placeholder *is* the default name, so Start works untouched), the
-/// songs, who can do what, and whether people nearby can see it. Music is
+/// (filled in with the default name, in ink rather than a grey placeholder,
+/// so Start works untouched and the name never looks unset), the songs —
+/// under the app's one Add Songs row — who can do what, and whether people
+/// nearby can see it. Music is
 /// optional — a host can start empty and add songs once live
 /// (`JamHostEngine.addMediaFile` works mid-session).
 ///
@@ -41,7 +43,8 @@ abstract final class HostSetupStrings {
   static const String nameField = 'Jam name';
   static const String clear = 'Clear';
 
-  /// The default name, and the field's placeholder: "Mia’s Jam".
+  /// The default name, the field's starting text and its placeholder once
+  /// cleared: "Mia’s Jam".
   static String defaultName(String identity) =>
       identity.isEmpty ? fallbackName : '$identity’s Jam';
   static const String fallbackName = 'Jam';
@@ -108,6 +111,15 @@ class HostSetupScreen extends StatefulWidget {
 
 class _HostSetupScreenState extends State<HostSetupScreen> {
   final TextEditingController _name = TextEditingController();
+  final FocusNode _nameFocus = FocusNode();
+
+  /// Whether the field has been given the default name yet — once only, so
+  /// a name the host cleared is not filled back in under them.
+  bool _prefilled = false;
+
+  /// Whether the field still holds the default name nobody has touched:
+  /// the first tap then selects it all, so typing replaces it.
+  bool _defaultUntouched = false;
 
   /// The songs, in order, each with whatever is known about it so far: a
   /// library pick arrives with title, artist and length, a file with only
@@ -133,7 +145,11 @@ class _HostSetupScreenState extends State<HostSetupScreen> {
         JamPickedTrack(path: path),
     ], rebuild: false);
     final preset = widget.initialName;
-    if (preset != null && preset.isNotEmpty) _name.text = preset;
+    if (preset != null && preset.isNotEmpty) {
+      _name.text = preset;
+      _prefilled = true;
+    }
+    _nameFocus.addListener(_onNameFocus);
     unawaited(_loadDefaultName());
     if (widget.initialPaths == null) {
       _scanning = true;
@@ -149,6 +165,9 @@ class _HostSetupScreenState extends State<HostSetupScreen> {
   @override
   void dispose() {
     _networkPoll?.cancel();
+    _nameFocus
+      ..removeListener(_onNameFocus)
+      ..dispose();
     _name.dispose();
     super.dispose();
   }
@@ -156,7 +175,36 @@ class _HostSetupScreenState extends State<HostSetupScreen> {
   Future<void> _loadDefaultName() async {
     final identity = await JamIdentity.displayName();
     if (!mounted) return;
-    setState(() => _defaultName = HostSetupStrings.defaultName(identity));
+    setState(() {
+      _defaultName = HostSetupStrings.defaultName(identity);
+      // The default as real text, not a grey placeholder that reads as
+      // empty or disabled — unless someone has typed already.
+      if (!_prefilled && _name.text.isEmpty) {
+        _name.text = _defaultName;
+        _defaultUntouched = true;
+      }
+      _prefilled = true;
+    });
+  }
+
+  /// The first focus on an untouched default selects it all, so a new name
+  /// is typed straight over it — and keeping it is still zero taps.
+  void _onNameFocus() {
+    if (!_nameFocus.hasFocus || !_defaultUntouched) return;
+    _defaultUntouched = false;
+    if (_name.text != _defaultName) return;
+    void selectAll() => _name.selection = TextSelection(
+      baseOffset: 0,
+      extentOffset: _name.text.length,
+    );
+    selectAll();
+    // The tap that focused the field places its caret after this listener
+    // runs; select again once it has.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && _nameFocus.hasFocus && _name.text == _defaultName) {
+        selectAll();
+      }
+    });
   }
 
   /// How long the Documents sweep gets before the row stops spinning.
@@ -309,6 +357,7 @@ class _HostSetupScreenState extends State<HostSetupScreen> {
         JamSection(
           child: _NameField(
             controller: _name,
+            focusNode: _nameFocus,
             placeholder: _defaultName,
             onSubmitted: _dismissKeyboard,
           ),
@@ -386,7 +435,6 @@ class _HostSetupScreenState extends State<HostSetupScreen> {
   }
 
   Widget _songsSection() {
-    final colors = context.jamColors;
     final hasSongs = _tracks.isNotEmpty;
     final dpr = MediaQuery.devicePixelRatioOf(context);
     final coverPx = (JamArtworkSize.row * dpr).round();
@@ -398,30 +446,13 @@ class _HostSetupScreenState extends State<HostSetupScreen> {
           ? HostSetupStrings.songsFooter(_policy)
           : null,
       children: [
-        hasSongs
-            // On the songs' grid once there are songs: the plus sits in a
-            // cover-sized slot, so "Add Songs" starts where the titles do
-            // (Apple Music's playlist editor).
-            ? JamRow(
-                title: HostSetupStrings.addSongs,
-                leading: SizedBox.square(
-                  dimension: JamArtworkSize.row,
-                  child: Icon(
-                    CupertinoIcons.plus_circle_fill,
-                    size: JamMetrics.rowIcon,
-                    color: colors.tint,
-                  ),
-                ),
-                leadingWidth: JamArtworkSize.row,
-                tinted: true,
-                onTap: () => unawaited(_addSongs()),
-              )
-            : JamRow(
-                title: HostSetupStrings.addSongs,
-                icon: CupertinoIcons.plus_circle_fill,
-                tinted: true,
-                onTap: () => unawaited(_addSongs()),
-              ),
+        // The app's one Add Songs — the same row the queue has once the jam
+        // is live — and always on the songs' grid, so it does not move when
+        // the first song lands under it.
+        JamAddSongsRow(
+          onTap: () => unawaited(_addSongs()),
+          title: HostSetupStrings.addSongs,
+        ),
         if (_scanning && !hasSongs) const _LookingRow(),
         for (final track in _tracks)
           JamSwipeAction(
@@ -453,16 +484,19 @@ class _HostSetupScreenState extends State<HostSetupScreen> {
 }
 
 /// The room name, as a big inline field in its own grouped cell — Apple
-/// Invites' event title. The placeholder is the default name, so leaving it
-/// alone is a choice, not an error.
+/// Invites' event title. It starts filled with the default name; cleared,
+/// the placeholder says the same name, so leaving it is a choice, not an
+/// error.
 class _NameField extends StatelessWidget {
   const _NameField({
     required this.controller,
+    required this.focusNode,
     required this.placeholder,
     required this.onSubmitted,
   });
 
   final TextEditingController controller;
+  final FocusNode focusNode;
   final String placeholder;
   final VoidCallback onSubmitted;
 
@@ -475,10 +509,11 @@ class _NameField extends StatelessWidget {
       label: HostSetupStrings.nameField,
       child: CupertinoTextField.borderless(
         controller: controller,
+        focusNode: focusNode,
         // The in-app appearance, not the device's (§10.8).
         keyboardAppearance: CupertinoTheme.brightnessOf(context),
         placeholder: placeholder,
-        placeholderStyle: style.copyWith(color: colors.tertiaryLabel),
+        placeholderStyle: style.copyWith(color: colors.secondaryLabel),
         style: style,
         cursorColor: colors.tint,
         textCapitalization: TextCapitalization.words,
@@ -497,7 +532,8 @@ class _NameField extends StatelessWidget {
 }
 
 /// "Looking for music on this device…" while the Documents sweep runs — a
-/// system spinner in the row where the songs will land.
+/// system spinner in a cover's slot, on the songs' grid, where they will
+/// land.
 class _LookingRow extends StatelessWidget implements JamSelfSeparatingRow {
   const _LookingRow();
 
@@ -509,11 +545,11 @@ class _LookingRow extends StatelessWidget implements JamSelfSeparatingRow {
       excludeSemantics: true,
       child: JamRow(
         title: HostSetupStrings.looking,
-        leading: const SizedBox(
-          width: JamMetrics.rowIconBox,
+        leading: const SizedBox.square(
+          dimension: JamArtworkSize.row,
           child: CupertinoActivityIndicator(),
         ),
-        leadingWidth: JamMetrics.rowIconBox,
+        leadingWidth: JamArtworkSize.row,
         enabled: false,
       ),
     );

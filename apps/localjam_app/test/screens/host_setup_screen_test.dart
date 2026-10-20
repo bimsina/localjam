@@ -6,6 +6,7 @@ import 'package:flutter/cupertino.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:localjam_client/localjam_client.dart';
 import 'package:localjam_app/src/design/theme.dart';
+import 'package:localjam_app/src/design/tokens.dart';
 import 'package:localjam_app/src/router.dart';
 import 'package:localjam_app/src/screens/home_screen.dart';
 import 'package:localjam_app/src/screens/host_setup_screen.dart';
@@ -47,13 +48,16 @@ void main() {
     // Presented as an iOS page sheet over home.
     expect(find.byType(HomeScreen), findsOneWidget);
 
-    // The name is a big inline field whose placeholder is the default, with
-    // a typographic apostrophe.
+    // The name is a big inline field that starts filled with the default,
+    // in ink — a grey placeholder read as empty or disabled — with a
+    // typographic apostrophe. Cleared, the placeholder says the same name
+    // in a readable grey.
     final field = tester.widget<CupertinoTextField>(
       find.byType(CupertinoTextField),
     );
-    expect(field.controller!.text, isEmpty);
+    expect(field.controller!.text, 'Silky Puffin’s Jam');
     expect(field.placeholder, 'Silky Puffin’s Jam');
+    expect(field.placeholderStyle!.color, JamColors.light.secondaryLabel);
     expect(field.style!.fontSize, 22);
     expect(field.clearButtonMode, OverlayVisibilityMode.editing);
 
@@ -72,6 +76,51 @@ void main() {
     );
     expect(start.bold, isTrue);
     expect(start.onPressed, isNotNull);
+  });
+
+  testWidgets('the first tap on the default name selects it all', (
+    tester,
+  ) async {
+    final session = testSession();
+    await _tall(tester);
+    final router = await pumpApp(tester, session);
+    router.push('/host');
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byType(CupertinoTextField));
+    await tester.pumpAndSettle();
+    final controller = tester
+        .widget<CupertinoTextField>(find.byType(CupertinoTextField))
+        .controller!;
+    expect(
+      controller.selection,
+      TextSelection(baseOffset: 0, extentOffset: controller.text.length),
+    );
+    // Typing replaces it; Start then uses what was typed.
+    await tester.enterText(find.byType(CupertinoTextField), 'Van Jam');
+    expect(controller.text, 'Van Jam');
+  });
+
+  testWidgets('Add Songs is the app’s one row, and stays put when the first '
+      'song lands', (tester) async {
+    await _tall(tester);
+    Future<Rect> addRow(List<String> paths) async {
+      final session = testSession();
+      final router = await pumpApp(tester, session);
+      router.push(
+        '/host',
+        extra: HostSetupArgs(paths: paths, name: 'Jam'),
+      );
+      await tester.pumpAndSettle();
+      expect(find.byType(JamAddSongsRow), findsOneWidget);
+      expect(find.byIcon(CupertinoIcons.plus_circle_fill), findsNothing);
+      return tester.getRect(find.byIcon(CupertinoIcons.plus));
+    }
+
+    final empty = await addRow(const []);
+    final full = await addRow(const ['/music/Night Drive.mp3']);
+    expect(full.left, empty.left);
+    expect(full.width, empty.width);
   });
 
   testWidgets('Cancel dismisses the sheet back to home', (tester) async {
