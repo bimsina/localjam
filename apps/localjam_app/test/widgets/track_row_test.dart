@@ -42,7 +42,8 @@ void main() {
       }
     });
 
-    testWidgets('credits the adder in words with the length', (tester) async {
+    testWidgets('a song without an artist names its adder in words, so the '
+        'name is never read as the artist', (tester) async {
       await pumpRow(
         tester,
         const JamTrackRow(
@@ -53,22 +54,39 @@ void main() {
       );
       expect(find.text('Added by Mia · 3:42'), findsOneWidget);
       expect(find.byType(JamAvatar), findsNothing);
+    });
 
+    testWidgets('your own song carries no credit: the length stays', (
+      tester,
+    ) async {
+      final handle = tester.ensureSemantics();
       await pumpRow(
         tester,
         const JamTrackRow(
           title: 'Blue Moon',
+          byline: 'Billie',
           addedByName: 'You',
           addedByYou: true,
+          addedByColor: Color(0xFF2F815B),
+          duration: Duration(minutes: 3),
         ),
       );
-      expect(find.text(JamTrackRowStrings.addedByYou), findsOneWidget);
+      expect(find.text('Billie · 3:00'), findsOneWidget);
+      expect(find.textContaining('You'), findsNothing);
+      expect(find.byType(JamAvatar), findsNothing);
+      // A screen reader still hears whose it is.
+      expect(
+        find.bySemanticsLabel(RegExp(JamTrackRowStrings.addedByYou)),
+        findsOneWidget,
+      );
+      handle.dispose();
     });
 
-    testWidgets("in the jam the credit is the adder's face and name", (
+    testWidgets("someone else's song: two lines, and their face at the end", (
       tester,
     ) async {
       const mia = Color(0xFF2F815B);
+      final handle = tester.ensureSemantics();
       await pumpRow(
         tester,
         const JamTrackRow(
@@ -79,37 +97,66 @@ void main() {
           duration: Duration(minutes: 3, seconds: 42),
         ),
       );
-      expect(find.text('Mia · 3:42'), findsOneWidget);
+      expect(find.text('Billie · 3:42'), findsOneWidget);
+      expect(find.textContaining('Mia'), findsNothing);
       final face = tester.widget<JamAvatar>(find.byType(JamAvatar));
       expect(face.resolvedColor, mia);
-      expect(face.size, lessThan(JamAvatarSize.credit));
-
-      // Your own: your initial, and "You".
-      await pumpRow(
-        tester,
-        const JamTrackRow(
-          title: 'Blue Moon',
-          addedByName: 'You',
-          addedByYou: true,
-          addedByColor: mia,
-          addedByFaceName: 'Bibek',
-          duration: Duration(minutes: 3),
-        ),
+      expect(face.size, JamAvatarSize.attribution);
+      // Trailing: past the words, at the row's end.
+      expect(
+        tester.getCenter(find.byType(JamAvatar)).dx,
+        greaterThan(tester.getRect(find.text('Billie · 3:42')).right),
       );
-      expect(find.text('You · 3:00'), findsOneWidget);
-      expect(tester.widget<JamAvatar>(find.byType(JamAvatar)).name, 'Bibek');
+      expect(
+        tester.getSize(find.byType(JamTrackRow)).height,
+        kJamTrackRowHeight,
+      );
+      expect(
+        find.bySemanticsLabel(RegExp('${JamTrackRowStrings.addedBy} Mia')),
+        findsOneWidget,
+      );
+      handle.dispose();
     });
 
-    testWidgets('a long name is cut before the length ever is', (tester) async {
+    testWidgets('faces share one column down a list: the slot is kept on '
+        'rows without one', (tester) async {
+      await pumpRow(
+        tester,
+        const Column(
+          children: [
+            JamTrackRow(
+              title: 'Theirs',
+              byline: 'Billie',
+              addedByName: 'Mia',
+              addedByColor: Color(0xFF2F815B),
+            ),
+            JamTrackRow(title: 'Mine', byline: 'Billie', addedByYou: true),
+            JamTrackRow(title: 'Library', byline: 'Billie'),
+          ],
+        ),
+      );
+      double end(String title) =>
+          tester.getRect(find.text(title)).left +
+          tester
+              .renderObject<RenderParagraph>(find.text(title))
+              .constraints
+              .maxWidth;
+      expect(end('Mine'), end('Theirs'));
+      // A row that never credits anyone (the library) keeps the width.
+      expect(end('Library'), greaterThan(end('Theirs')));
+    });
+
+    testWidgets('a long artist is cut before the length ever is', (
+      tester,
+    ) async {
       await pumpRow(
         tester,
         const Center(
           child: SizedBox(
-            width: 220,
+            width: 300,
             child: JamTrackRow(
               title: 'Blue Moon',
-              byline: 'Billie',
-              addedByName: 'Electric Mongoose of the Long Road',
+              byline: 'Electric Mongoose of the Long Road',
               duration: Duration(minutes: 4, seconds: 10),
             ),
           ),
@@ -121,15 +168,15 @@ void main() {
       expect(
         tester
             .renderObject<RenderParagraph>(
-              find.text('Added by Electric Mongoose of the Long Road'),
+              find.text('Electric Mongoose of the Long Road'),
             )
             .didExceedMaxLines,
         isTrue,
-        reason: 'the name takes the ellipsis',
+        reason: 'the artist takes the ellipsis',
       );
     });
 
-    testWidgets('artist and contributor remain visible at large text sizes', (
+    testWidgets('both lines and the face stay at large text sizes', (
       tester,
     ) async {
       for (final scale in [1.0, 2.0, 3.0]) {
@@ -142,13 +189,14 @@ void main() {
                 title: 'Blue Moon',
                 byline: 'Billie',
                 addedByName: 'Mia',
+                addedByColor: Color(0xFF2F815B),
                 duration: Duration(minutes: 3, seconds: 42),
               ),
             ),
           ),
         );
-        expect(find.text('Billie'), findsOneWidget);
-        expect(find.text('Added by Mia · 3:42'), findsOneWidget);
+        expect(find.text('Billie · 3:42'), findsOneWidget);
+        expect(find.byType(JamAvatar), findsOneWidget);
         expect(tester.takeException(), isNull);
       }
     });
@@ -270,6 +318,11 @@ void main() {
   });
 
   group('formatTrackDuration', () {
+    test('a clip under a second is 0:01, never 0:00', () {
+      expect(formatTrackDuration(const Duration(milliseconds: 400)), '0:01');
+      expect(formatTrackDuration(Duration.zero), '0:00');
+    });
+
     test('is m:ss, and h:mm:ss past an hour', () {
       expect(formatTrackDuration(const Duration(seconds: 7)), '0:07');
       expect(

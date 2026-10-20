@@ -116,7 +116,8 @@ void main() {
 
       expect(find.text(jamHostControlsPlayback), findsOneWidget);
       // Quiet, not a dimmed slab: no opacity over the controls; every glyph
-      // in the backdrop's tertiary white and the square as glass.
+      // in the backdrop's tertiary white, and the square only an outline —
+      // no fill to say "button" louder than anything else (CR-25).
       expect(
         find.descendant(
           of: find.byType(JamTransport),
@@ -134,7 +135,27 @@ void main() {
           .map((i) => i.color);
       expect(glyphs, hasLength(3));
       expect(glyphs, everyElement(JamNowPlayingColors.tertiary));
-      expect(_squareColor(tester), JamNowPlayingColors.glass);
+      expect(_squareColor(tester), JamNowPlayingColors.clear);
+      final outline =
+          (tester
+                      .widget<AnimatedContainer>(
+                        find.descendant(
+                          of: find.byType(JamTransport),
+                          matching: find.byType(AnimatedContainer),
+                        ),
+                      )
+                      .decoration!
+                  as ShapeDecoration)
+              .shape;
+      expect(
+        (outline as RoundedSuperellipseBorder).side.color,
+        JamNowPlayingColors.separator,
+      );
+      // Its footprint kept: nothing moves when the host promotes you.
+      expect(
+        tester.getSize(find.byType(AnimatedContainer)),
+        const Size.square(JamMetrics.playSquare),
+      );
       // Its reason sits clear of the square, not against it.
       expect(
         tester.getTopLeft(find.text(jamHostControlsPlayback)).dy -
@@ -175,8 +196,8 @@ void main() {
       );
     });
 
-    testWidgets('the play square squeezes under a finger, and not under '
-        'reduced motion', (tester) async {
+    testWidgets('the play square squeezes under a finger; under reduced '
+        'motion it deepens instead', (tester) async {
       await tester.pumpWidget(
         _host(JamTransport(state: JamPlaybackState.paused, onPlayPause: () {})),
       );
@@ -205,12 +226,23 @@ void main() {
           ),
         ),
       );
+      expect(
+        find.descendant(
+          of: find.byType(JamTransport),
+          matching: find.byType(AnimatedScale),
+        ),
+        findsNothing,
+      );
+      expect(_squareColor(tester), JamNowPlayingColors.playSurface);
       final still = await tester.startGesture(
         tester.getCenter(find.byIcon(CupertinoIcons.play_fill)),
       );
       await tester.pump();
-      expect(scale(), 1);
+      // No movement, but the press still shows (RB-18).
+      expect(_squareColor(tester), isNot(JamNowPlayingColors.playSurface));
       await still.up();
+      await tester.pump();
+      expect(_squareColor(tester), JamNowPlayingColors.playSurface);
     });
 
     testWidgets('a missing next callback disables that glyph only', (

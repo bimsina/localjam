@@ -283,6 +283,11 @@ void main() {
     expect(rows[1].addedByYou, isTrue);
     expect(rows[1].addedByColor, faces['Silky Puffin']);
     expect(rows[1].addedByFaceName, 'Silky Puffin');
+    // Song rows are two lines (R3): the artist and the length; a credit is
+    // a face, and only for someone else's song.
+    expect(find.text('Perla · 3:42'), findsOneWidget);
+    await tester.scrollUntilVisible(find.text('3:00'), 80);
+    expect(find.text('3:00'), findsOneWidget);
   });
 
   testWidgets('a record whose files are gone cannot be re-hosted', (

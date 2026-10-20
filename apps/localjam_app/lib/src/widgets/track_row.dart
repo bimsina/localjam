@@ -1,12 +1,15 @@
 /// A song row: queue, history detail, Start a Jam's song list, the library
 /// picker (DESIGN_SPEC v3 §6.2/§6.3/§6.7).
 ///
-/// Cover, song title and artist lead. Contributor and duration sit on a
-/// quieter third line when both artist and contributor are available — in
-/// the queue as the adder's face and name ("● Mia · 4:10", D6), elsewhere in
-/// words ("Added by Mia · 4:10"). A long name is cut before the length ever
-/// is. [JamTrackRow.onBackdrop] renders it white for the queue that opens in
-/// place on Now Playing.
+/// Two lines, always (R3, IR-5): the song's title, then "Artist · 4:10".
+/// Who added it is a face at the trailing edge — only when it was someone
+/// else, so a face always means a friend's song and your own queue is not
+/// your own face seven times over. Rows in a list that credits anyone keep
+/// that face's column even when it is empty, so titles end at one x and the
+/// faces line up. A song with no artist says "Added by Mia" in words on its
+/// second line, so a name never sits where an artist would. A long artist
+/// or name is cut before the length ever is. [JamTrackRow.onBackdrop]
+/// renders it white for the queue that opens in place on Now Playing.
 ///
 /// Engine-free: hand it strings, bytes, fractions and callbacks.
 library;
@@ -30,8 +33,6 @@ abstract final class JamTrackRowStrings {
   static const String addedBy = 'Added by';
   static const String addedByYou = 'Added by you';
 
-  /// The adder, when it is this device and their face says the rest.
-  static const String you = 'You';
   static const String failed = 'Couldn’t be loaded';
   static const String fetching = 'Getting the song';
   static const String reorder = 'Reorder';
@@ -43,10 +44,14 @@ const double kJamTrackRowHeight = 60;
 
 const double _artworkSize = JamArtworkSize.row;
 
-/// The adder's face on a three-line row's 12 pt credit line: a step under
-/// Now Playing's 16, so it never competes with the cover beside it.
-const double _creditFaceSmall = 14;
+/// The credit column: the adder's face at attribution size, 8 pt clear of
+/// the text, in a slot of its own width.
+const double _creditSlot = 28;
+const double _creditGap = JamSpace.sm;
 const double _dragHandleWidth = 44;
+
+/// The text scale from which a long title may take a second line.
+const double _kWrapFromScale = 1.5;
 
 /// One song.
 class JamTrackRow extends StatelessWidget implements JamSelfSeparatingRow {
@@ -63,6 +68,7 @@ class JamTrackRow extends StatelessWidget implements JamSelfSeparatingRow {
     this.addedByYou = false,
     this.addedByColor,
     this.addedByFaceName,
+    this.reserveCredit,
     this.isCurrent = false,
     this.duration,
     this.prefetchProgress,
@@ -107,14 +113,19 @@ class JamTrackRow extends StatelessWidget implements JamSelfSeparatingRow {
   /// The adder is this device: "Added by you".
   final bool addedByYou;
 
-  /// The adder's face colour in the jam (`jamRosterColors`). Given, the
-  /// credit is their face and name ("● Mia · 4:10") instead of the words;
-  /// null keeps the words — an unnamed adder, a past jam.
+  /// The adder's face colour in the jam (`jamRosterColors`). Given for
+  /// someone else's song, the credit is their face at the trailing edge;
+  /// null draws no face — an unnamed adder ("Guest" is not a face).
   final Color? addedByColor;
 
-  /// Whose initial the face shows when it is not [addedByName]'s — this
-  /// device's own name for "You".
+  /// Whose initial the face shows when it is not [addedByName]'s.
   final String? addedByFaceName;
+
+  /// Keeps the credit column's width when this row has no face, so the
+  /// faces in a list share one column. Null: kept whenever the row knows
+  /// who added it (a queue, a past jam), and not otherwise (the library,
+  /// Start a Jam's songs).
+  final bool? reserveCredit;
 
   /// The song that is playing: semibold title (tint off the backdrop).
   final bool isCurrent;
@@ -159,24 +170,26 @@ class JamTrackRow extends StatelessWidget implements JamSelfSeparatingRow {
   /// Forces the bottom hairline; null follows the enclosing section.
   final bool? separator;
 
-  /// Whether the credit is a face and a name rather than words.
-  bool get _faced =>
-      addedByColor != null &&
-      (addedByYou || (addedByName?.isNotEmpty ?? false));
+  /// Someone else added it, and said who: the credit is about them.
+  bool get _bySomeoneElse => !addedByYou && (addedByName?.isNotEmpty ?? false);
 
-  /// The quiet line's two halves: what may be cut short (a name, an artist)
-  /// and what never is (the length, with its separator when it follows
-  /// something).
+  /// Whether the row wears the adder's face (R3: someone else's song).
+  bool get _faced => addedByColor != null && _bySomeoneElse;
+
+  /// Whether the row keeps the credit column.
+  bool get _creditColumn =>
+      _faced || (reserveCredit ?? (addedByYou || addedByName != null));
+
+  /// The second line's two halves: what may be cut short (the artist, or
+  /// "Added by Mia" for a song without one) and what never is (the length,
+  /// with its separator when it follows something).
   ({String? lead, String? tail}) _subtitleParts() {
-    final faced = _faced;
-    String? lead;
-    final adder = addedByName;
-    if (addedByYou) {
-      lead = faced ? JamTrackRowStrings.you : JamTrackRowStrings.addedByYou;
-    } else if (adder != null && adder.isNotEmpty) {
-      lead = faced ? adder : '${JamTrackRowStrings.addedBy} $adder';
+    String? lead = byline != null && byline!.isNotEmpty ? byline : null;
+    // No artist: the adder in words, so their name is never read as the
+    // artist's (RB-24). Your own songs carry no credit at all (R3).
+    if (lead == null && _bySomeoneElse) {
+      lead = '${JamTrackRowStrings.addedBy} $addedByName';
     }
-    if (lead == null && byline != null && byline!.isNotEmpty) lead = byline;
     final d = duration;
     final length = d != null && prefetchProgress == null
         ? formatTrackDuration(d)
@@ -200,11 +213,6 @@ class JamTrackRow extends StatelessWidget implements JamSelfSeparatingRow {
     final tertiary = onBackdrop
         ? JamNowPlayingColors.tertiary
         : colors.tertiaryLabel;
-    final hasArtistAndCredit =
-        !hasError &&
-        byline != null &&
-        byline!.isNotEmpty &&
-        (addedByYou || (addedByName?.isNotEmpty ?? false));
     final parts = _subtitleParts();
     final hasSubtitle = hasError || parts.lead != null || parts.tail != null;
 
@@ -212,22 +220,28 @@ class JamTrackRow extends StatelessWidget implements JamSelfSeparatingRow {
       color: isCurrent && !onBackdrop ? colors.tint : primary,
       fontWeight: isCurrent ? FontWeight.w600 : null,
     );
+    final subtitleStyle = context.jamSubheadline;
 
     final status = trailing ?? _status(tertiary);
 
     final scaler = MediaQuery.textScalerOf(context);
     final textHeight =
-        scaler.scale(17) * (22 / 17) +
-        (hasArtistAndCredit ? scaler.scale(15) * (20 / 15) : 0) +
-        (!hasSubtitle
-            ? 0
-            : hasArtistAndCredit
-            ? scaler.scale(12) * (16 / 12)
-            : scaler.scale(15) * (20 / 15));
-    Widget row = SizedBox(
-      height: math.max(
-        hasArtistAndCredit ? 80 : kJamTrackRowHeight,
-        textHeight + 16,
+        _lineOf(titleStyle, scaler) +
+        (hasSubtitle ? _lineOf(subtitleStyle, scaler) : 0);
+    // The face grows with the words beside it, to a point, so it stays a
+    // face rather than a dot next to large text.
+    final faceSize = JamAvatarSize.attribution * math.min(scaler.scale(1), 1.5);
+    final adder = addedByFaceName?.trim().isNotEmpty == true
+        ? addedByFaceName!
+        : addedByName;
+
+    // At large text sizes a long title may take a second line, and the
+    // rows grow to hold what they say rather than clip it.
+    final large = scaler.scale(1) >= _kWrapFromScale;
+
+    Widget row = ConstrainedBox(
+      constraints: BoxConstraints(
+        minHeight: math.max(kJamTrackRowHeight, textHeight + 16),
       ),
       child: Padding(
         padding: contentPadding,
@@ -245,67 +259,60 @@ class JamTrackRow extends StatelessWidget implements JamSelfSeparatingRow {
             ),
             const SizedBox(width: kJamRowLeadingGap),
             Expanded(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    title,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: titleStyle,
-                  ),
-                  if (hasArtistAndCredit)
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: JamSpace.sm),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
                     Text(
-                      byline!,
-                      maxLines: 1,
+                      title,
+                      maxLines: large ? 2 : 1,
                       overflow: TextOverflow.ellipsis,
-                      style: context.jamSubheadline.copyWith(color: secondary),
+                      style: titleStyle,
                     ),
-                  if (hasError)
-                    Text(
-                      errorText ?? JamTrackRowStrings.failed,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style:
-                          (hasArtistAndCredit
-                                  ? context.jamCaption1
-                                  : context.jamSubheadline)
-                              .copyWith(
-                                // On the backdrop, the pale red tuned for
-                                // the art (system red on a dark cover is
-                                // ~3:1).
-                                color: onBackdrop
-                                    ? JamNowPlayingColors.destructive
-                                    : colors.danger,
-                              ),
-                    )
-                  else if (hasSubtitle)
-                    _QuietLine(
-                      lead: parts.lead,
-                      tail: parts.tail,
-                      style: jamTabular(
-                        hasArtistAndCredit
-                            ? context.jamCaption1
-                            : context.jamSubheadline,
-                      ).copyWith(color: secondary),
-                      face: _faced
-                          ? JamAvatar(
-                              name: addedByFaceName?.trim().isNotEmpty == true
-                                  ? addedByFaceName!
-                                  : (addedByYou
-                                        ? JamTrackRowStrings.you
-                                        : addedByName!),
-                              color: addedByColor,
-                              size: hasArtistAndCredit
-                                  ? _creditFaceSmall
-                                  : JamAvatarSize.credit,
-                            )
-                          : null,
-                    ),
-                ],
+                    if (hasError)
+                      Text(
+                        errorText ?? JamTrackRowStrings.failed,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: subtitleStyle.copyWith(
+                          // On the backdrop, the pale red tuned for the art
+                          // (system red on a dark cover is ~3:1).
+                          color: onBackdrop
+                              ? JamNowPlayingColors.destructive
+                              : colors.danger,
+                        ),
+                      )
+                    else if (hasSubtitle)
+                      _QuietLine(
+                        lead: parts.lead,
+                        tail: parts.tail,
+                        style: jamTabular(
+                          subtitleStyle,
+                        ).copyWith(color: secondary),
+                      ),
+                  ],
+                ),
               ),
             ),
+            if (_creditColumn)
+              Padding(
+                padding: const EdgeInsetsDirectional.only(start: _creditGap),
+                child: SizedBox(
+                  width: math.max(_creditSlot, faceSize + JamSpace.sm),
+                  child: _faced && adder != null
+                      ? Center(
+                          heightFactor: 1,
+                          child: JamAvatar(
+                            name: adder,
+                            color: addedByColor,
+                            size: faceSize,
+                          ),
+                        )
+                      : null,
+                ),
+              ),
             if (status != null) ...[const SizedBox(width: JamSpace.sm), status],
             if (showDragHandle || reserveDragHandle)
               SizedBox(
@@ -407,8 +414,8 @@ class JamTrackRow extends StatelessWidget implements JamSelfSeparatingRow {
   }
 }
 
-/// A row's quiet line: [lead] (a name, an artist) cut short before [tail]
-/// (the length) ever is, behind the adder's [face] when there is one.
+/// A row's quiet line: [lead] (an artist, or who added it) cut short
+/// before [tail] (the length) ever is.
 ///
 /// One text while the whole line fits; split only when it would not, so the
 /// length survives a long name ("Electric Mongoose · 4:10").
@@ -417,60 +424,87 @@ class _QuietLine extends StatelessWidget {
     required this.lead,
     required this.tail,
     required this.style,
-    this.face,
   });
 
   final String? lead;
   final String? tail;
   final TextStyle style;
-  final Widget? face;
 
   @override
   Widget build(BuildContext context) {
     final lead = this.lead;
     final tail = this.tail;
-    final face = this.face;
     Widget text(String value) =>
         Text(value, maxLines: 1, overflow: TextOverflow.ellipsis, style: style);
 
-    final Widget words = lead == null || tail == null
-        ? text(lead ?? tail!)
-        : LayoutBuilder(
-            builder: (context, constraints) {
-              final whole = '$lead$tail';
-              final painter = TextPainter(
-                text: TextSpan(text: whole, style: style),
-                textDirection: Directionality.of(context),
-                textScaler: MediaQuery.textScalerOf(context),
-                maxLines: 1,
-              )..layout();
-              final fits = painter.width <= constraints.maxWidth;
-              painter.dispose();
-              if (fits) return text(whole);
-              return Row(
-                children: [
-                  Flexible(child: text(lead)),
-                  Text(tail, maxLines: 1, style: style),
-                ],
-              );
-            },
+    if (lead == null || tail == null) return text(lead ?? tail!);
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final whole = '$lead$tail';
+        final painter = TextPainter(
+          text: TextSpan(text: whole, style: style),
+          textDirection: Directionality.of(context),
+          textScaler: MediaQuery.textScalerOf(context),
+          maxLines: 1,
+        )..layout();
+        final fits = painter.width <= constraints.maxWidth;
+        painter.dispose();
+        if (fits) return text(whole);
+        // So large that the length would leave the artist a few letters at
+        // most: the line wraps once instead, so it is not cut to nothing.
+        final tailPainter = TextPainter(
+          text: TextSpan(text: tail, style: style),
+          textDirection: Directionality.of(context),
+          textScaler: MediaQuery.textScalerOf(context),
+          maxLines: 1,
+        )..layout();
+        final tailWidth = tailPainter.width;
+        tailPainter.dispose();
+        final room = constraints.maxWidth - tailWidth;
+        final letters = MediaQuery.textScalerOf(
+          context,
+        ).scale((style.fontSize ?? 15) * 3);
+        if (room < letters) {
+          return Text(
+            whole,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: style,
           );
-    if (face == null) return words;
-    return Row(
-      children: [
-        face,
-        const SizedBox(width: JamSpace.xs),
-        Expanded(child: words),
-      ],
+        }
+        return Row(
+          children: [
+            Flexible(child: text(lead)),
+            Text(tail, maxLines: 1, style: style),
+          ],
+        );
+      },
     );
   }
 }
 
+/// One line of [style] at [scaler], as laid out.
+double _lineOf(TextStyle style, TextScaler scaler) {
+  final painter = TextPainter(
+    text: TextSpan(text: 'Hg', style: style),
+    textDirection: TextDirection.ltr,
+    textScaler: scaler,
+    maxLines: 1,
+  )..layout();
+  final height = painter.height;
+  painter.dispose();
+  return height;
+}
+
 /// `m:ss` (or `h:mm:ss`) for a song length, Apple-style (no leading zero on
-/// minutes).
+/// minutes). A clip shorter than a second is "0:01", not "0:00": it has a
+/// length, and "0:00" reads as broken (RB-24).
 ///
 /// Local rather than `util/format.dart`, which imports the engine.
 String formatTrackDuration(Duration duration) {
+  if (duration > Duration.zero && duration < const Duration(seconds: 1)) {
+    duration = const Duration(seconds: 1);
+  }
   final seconds = duration.inSeconds.remainder(60).abs();
   final minutes = duration.inMinutes.remainder(60).abs();
   final hours = duration.inHours.abs();

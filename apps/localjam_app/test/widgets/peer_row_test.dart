@@ -5,6 +5,7 @@ import 'package:localjam_app/src/design/theme.dart';
 import 'package:localjam_app/src/design/tokens.dart';
 import 'package:localjam_app/src/widgets/avatar.dart';
 import 'package:localjam_app/src/widgets/menu.dart';
+import 'package:localjam_app/src/util/format.dart';
 import 'package:localjam_app/src/widgets/peer_row.dart';
 
 Future<void> pumpRow(WidgetTester tester, Widget child, {bool dark = false}) {
@@ -168,6 +169,68 @@ void main() {
         const JamPeerRow(name: 'Silky Puffin', role: JamPeerRole.cohost),
       );
       expect(find.bySemanticsLabel('Silky Puffin\nCo-host'), findsOneWidget);
+      handle.dispose();
+    });
+  });
+
+  group('JamPeopleLine', () {
+    const style = TextStyle(fontSize: 10, height: 1.2);
+    final eight = JamPeoplePhrase.summary([
+      'Electric Mongoose Supreme',
+      'Theo',
+      'Ana',
+      'Jo',
+      'Okon',
+      'Mia',
+      'Sam',
+      'Lu',
+    ]);
+
+    JamPeopleFit fit(JamPeoplePhrase phrase, double width) =>
+        JamPeopleFit.of(phrase, style: style, maxWidth: width);
+
+    test('the whole phrase when it fits', () {
+      final whole = fit(eight, 2000);
+      expect(whole.runs.single.text, eight.text);
+      expect(whole.spoken, eight.text);
+    });
+
+    test('a narrow line cuts the names, never the count', () {
+      final cut = fit(eight, 300);
+      expect(cut.runs.last, (text: ' and 6 others', width: null));
+      // The long name gives way first; the short one keeps all of itself.
+      final long = cut.runs.firstWhere(
+        (r) => r.text == 'Electric Mongoose Supreme',
+      );
+      expect(long.width, isNotNull);
+      expect(cut.runs.firstWhere((r) => r.text == 'Theo').width, isNull);
+      // The spoken line is the phrase it stands for.
+      expect(cut.spoken, eight.text);
+    });
+
+    test('too narrow for a letter of each name: the count alone', () {
+      final counted = fit(eight, 160);
+      expect(counted.runs.single.text, 'With 8 people');
+      expect(counted.spoken, 'With 8 people');
+    });
+
+    testWidgets('drawn: the count whole, no overflow, the label what it '
+        'shows', (tester) async {
+      final handle = tester.ensureSemantics();
+      await tester.pumpWidget(
+        Directionality(
+          textDirection: TextDirection.ltr,
+          child: Center(
+            child: SizedBox(
+              width: 300,
+              child: JamPeopleLine(eight, style: style),
+            ),
+          ),
+        ),
+      );
+      expect(tester.takeException(), isNull);
+      expect(find.text(' and 6 others'), findsOneWidget);
+      expect(find.bySemanticsLabel(eight.text), findsOneWidget);
       handle.dispose();
     });
   });

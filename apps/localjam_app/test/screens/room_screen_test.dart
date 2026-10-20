@@ -63,6 +63,24 @@ void main() {
       findsOneWidget,
     );
     expect(find.text(JamRoomStrings.nothingToPlay), findsNothing);
+    // "Nothing Playing" alone, and Add Songs where play will be: on the
+    // play square's line (IR-1), the ivory object always the next step.
+    expect(find.text(JamRoomStrings.nothingQueuedBody), findsNothing);
+    final square = find.descendant(
+      of: find.byType(JamTransport),
+      matching: find.byType(AnimatedContainer),
+    );
+    expect(
+      tester
+          .getCenter(
+            find.ancestor(
+              of: find.text(JamRoomStrings.addSongs),
+              matching: find.byType(JamButton),
+            ),
+          )
+          .dy,
+      closeTo(tester.getCenter(square).dy, 0.5),
+    );
     expect(
       tester
           .widget<Visibility>(
@@ -79,10 +97,8 @@ void main() {
     // The footer: the people in the room, Sound Offset, Up Next. A lone
     // face is its own count — no "1" beside it.
     expect(find.byKey(kJamRoomFacesKey), findsOneWidget);
-    expect(
-      find.bySemanticsLabel('${JamRoomStrings.people}, 1'),
-      findsOneWidget,
-    );
+    // Called what it shows (RB-9).
+    expect(find.bySemanticsLabel(JamRoomStrings.justYou), findsOneWidget);
     expect(find.text('1'), findsNothing);
     // Sound Offset is a slider, not a speaker (a speaker reads as volume).
     expect(find.byIcon(CupertinoIcons.slider_horizontal_3), findsNothing);
@@ -161,13 +177,16 @@ void main() {
     final handle = tester.ensureSemantics();
     await tester.pump();
 
+    // Its spoken name is the words on it (RB-9: label in name), and what
+    // it does is the hint.
     final people = tester.getSemantics(
-      find.bySemanticsLabel('${JamRoomStrings.people}, 1'),
+      find.bySemanticsLabel(JamRoomStrings.justYou),
     );
     expect(
       people,
       matchesSemantics(
-        label: '${JamRoomStrings.people}, 1',
+        label: JamRoomStrings.justYou,
+        hint: JamRoomStrings.peopleHint,
         isButton: true,
         hasTapAction: true,
         hasSelectedState: true,
@@ -418,6 +437,36 @@ void main() {
     await leaveTestSession(tester, session);
   });
 
+  testWidgets('a wide but short window turns the player side-on, cover '
+      'beside the controls (RB-6)', (tester) async {
+    final session = testSession();
+    await resize(tester, const Size(1280, 600));
+    final router = await pumpApp(tester, session);
+    await tester.runAsync(() async {
+      await session.startHost(
+        sessionName: 'Short Desk',
+        discoverable: false,
+        paths: makeTestTracks(count: 1),
+      );
+      await session.hostImport!.done;
+      session.hostEngine!.pause();
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+    });
+    router.push('/room');
+    await tester.pumpAndSettle();
+
+    expect(tester.takeException(), isNull);
+    // Still docked, and the cover beside the controls, not a stamp above a
+    // narrow strip of them.
+    expect(find.byType(QueuePanel), findsOneWidget);
+    final cover = tester.getRect(find.byType(JamArtworkTile).first);
+    final transport = tester.getRect(find.byType(JamTransport));
+    expect(cover.right, lessThan(transport.left));
+    expect(cover.width, greaterThan(300));
+
+    await leaveTestSession(tester, session);
+  });
+
   // 2026-10-17 run: an Android phone on its side showed only the tops of
   // the people strip's faces — it sat past the end of a scrolling column —
   // and, once that was pinned, a gated guest's play button was cut in half.
@@ -479,13 +528,16 @@ void main() {
     }
 
     /// Every [finders] entry is drawn whole between the room's bar and the
-    /// bottom inset; returns the scale the player was drawn at.
+    /// bottom inset; the [pinned] ones are never under a scroll edge (RB-5:
+    /// the controls stay put and the song scrolls). Returns the scale the
+    /// player was drawn at.
     double expectAllOnScreen(
       WidgetTester tester,
       Size size,
       EdgeInsets insets,
-      Map<String, Finder> finders,
-    ) {
+      Map<String, Finder> finders, {
+      Set<String> pinned = const {'the faces', 'Up Next', 'the transport'},
+    }) {
       final ceiling = insets.top + 56; // The room's own header.
       final floor = size.height - insets.bottom;
       for (final MapEntry(key: what, value: finder) in finders.entries) {
@@ -493,15 +545,14 @@ void main() {
         final rect = tester.getRect(finder);
         expect(rect.bottom, lessThanOrEqualTo(floor), reason: '$what clipped');
         expect(rect.top, greaterThanOrEqualTo(ceiling), reason: what);
+        if (pinned.contains(what)) {
+          expect(
+            find.ancestor(of: finder, matching: find.byType(Scrollable)),
+            findsNothing,
+            reason: '$what never hides below a scroll edge',
+          );
+        }
       }
-      expect(
-        find.descendant(
-          of: find.byType(RoomScreen),
-          matching: find.byType(Scrollable),
-        ),
-        findsNothing,
-        reason: 'nothing hides below a scroll edge',
-      );
       final transport = find.byType(JamTransport);
       return tester.getRect(transport).height /
           tester.getSize(transport).height;
@@ -577,14 +628,21 @@ void main() {
       const insets = EdgeInsets.only(left: 52, top: 52, bottom: 24);
       await pumpSideways(tester, guest, size, insets);
 
-      final scale = expectAllOnScreen(tester, size, insets, {
-        'the faces': find.byKey(kJamRoomFacesKey),
-        'the transport': find.byType(JamTransport),
-        'why it is dimmed': find.text(jamHostControlsPlayback),
-        'the timeline': find.byType(JamScrubber),
-        'the title': find.text('Golf Long'),
-      });
-      expect(scale, greaterThan(0.75), reason: 'a little smaller at most');
+      final scale = expectAllOnScreen(
+        tester,
+        size,
+        insets,
+        {
+          'the faces': find.byKey(kJamRoomFacesKey),
+          'the transport': find.byType(JamTransport),
+          'why it is dimmed': find.text(jamHostControlsPlayback),
+          'the title': find.text('Golf Long'),
+        },
+        pinned: {'the faces', 'the transport', 'why it is dimmed'},
+      );
+      // Never smaller (RB-5): a scaled player put its targets under 44 pt
+      // and undid the reader's text size. The song scrolls instead.
+      expect(scale, 1.0);
 
       await tester.runAsync(guest.leave);
       await tester.runAsync(host.leave);
@@ -735,10 +793,7 @@ void main() {
     // Alone: your own face, and no "Your jam" for anybody.
     expect(find.text(JamRoomStrings.justYou), findsOneWidget);
     expect(find.text('Your jam'), findsNothing);
-    expect(
-      find.bySemanticsLabel('${JamRoomStrings.people}, 1'),
-      findsOneWidget,
-    );
+    expect(find.bySemanticsLabel(JamRoomStrings.justYou), findsOneWidget);
 
     await tester.runAsync(() async {
       expect(
@@ -765,10 +820,7 @@ void main() {
 
     // Named, from your side: the others, never yourself.
     expect(find.text(JamRoomStrings.withPeople(['Ana'])), findsOneWidget);
-    expect(
-      find.bySemanticsLabel('${JamRoomStrings.people}, 2'),
-      findsOneWidget,
-    );
+    expect(find.bySemanticsLabel('With Ana'), findsOneWidget);
     // The pile shows the others: Ana's face, not your own.
     expect(
       tester
@@ -789,10 +841,17 @@ void main() {
     });
   });
 
-  testWidgets("someone else's song gets one quiet credit on Now Playing; "
-      'your own gets none', (tester) async {
-    final host = testSession();
-    final guest = testSession();
+  /// The bare clients [hostWithSongs] connected, by name.
+  final clients = <String, JamGuestClient>{};
+
+  /// A host with Ana joined (and [others], as bare clients) and two songs
+  /// queued — one of the host's own, one Ana added — Ana's playing.
+  Future<({String mine, String theirs})> hostWithSongs(
+    WidgetTester tester,
+    JamSessionController host,
+    JamSessionController ana, {
+    List<String> others = const [],
+  }) async {
     final cache = Directory.systemTemp.createTempSync('localjam_credit');
     addTearDown(() => cache.deleteSync(recursive: true));
     final tracks = makeTestTracks(count: 2);
@@ -801,14 +860,21 @@ void main() {
     await tester.runAsync(() async {
       await host.startHost(sessionName: 'Credit Jam', discoverable: false);
       expect(
-        await guest.join(
-          host.joinUri!,
-          clientName: 'Ana',
-          mediaCacheDir: cache,
-        ),
+        await ana.join(host.joinUri!, clientName: 'Ana', mediaCacheDir: cache),
         isTrue,
       );
-      expect(await _waitFor(() => host.engine!.peers.isNotEmpty), isTrue);
+      for (final name in others) {
+        final client = await JamGuestClient.connect(
+          host.hostEngine!.joinUriFor(InternetAddress.loopbackIPv4),
+          clientName: name,
+        );
+        clients[name] = client;
+        addTearDown(client.close);
+      }
+      expect(
+        await _waitFor(() => host.engine!.peers.length == 1 + others.length),
+        isTrue,
+      );
       final engine = host.hostEngine!;
       Future<String> add(String path, String? by) async {
         final item = await JamHostServer.describeFile(
@@ -816,7 +882,7 @@ void main() {
           kind: MediaKind.audio,
           mime: 'audio/wav',
           durationUs: 200000000,
-          title: by == null ? 'Mine' : 'Theirs',
+          title: by == JamPermissions.hostPeerId ? 'Mine' : 'Theirs',
           artist: 'LocalJam E2E',
           addedBy: by,
         );
@@ -824,38 +890,78 @@ void main() {
         return item.mediaId;
       }
 
+      final first = engine.peers.firstWhere((p) => p.clientName == 'Ana');
       mine = await add(tracks[0], JamPermissions.hostPeerId);
-      theirs = await add(tracks[1], engine.peers.single.peerId);
+      theirs = await add(tracks[1], first.peerId);
       engine.setMedia(theirs);
     });
+    return (mine: mine, theirs: theirs);
+  }
+
+  testWidgets("someone else's song gets one quiet credit on Now Playing; "
+      'your own gets none', (tester) async {
+    final host = testSession();
+    final ana = testSession();
+    final songs = await hostWithSongs(tester, host, ana, others: ['Theo']);
     await resize(tester, const Size(390, 844));
     await pumpRoom(tester, host);
     expect(find.text(JamRoomStrings.addedBy('Ana')), findsOneWidget);
 
     // Your own song: no credit, and the line's place kept so nothing moved.
     final transport = tester.getRect(find.byType(JamTransport));
-    await tester.runAsync(() async => host.hostEngine!.setMedia(mine));
+    await tester.runAsync(() async => host.hostEngine!.setMedia(songs.mine));
     await tester.pump();
     await tester.pump(const Duration(seconds: 1));
     expect(find.textContaining(JamTrackRowStrings.addedBy), findsNothing);
     expect(tester.getRect(find.byType(JamTransport)), transport);
 
+    // Back to Ana's song; Theo leaves mid-song. With one other person left
+    // the footer says whose song it is ("With Ana"), so the credit goes —
+    // but its line stays for the rest of the song: nothing moves (RB-16).
+    await tester.runAsync(() async => host.hostEngine!.setMedia(songs.theirs));
+    await tester.pump(const Duration(seconds: 1));
+    expect(find.text(JamRoomStrings.addedBy('Ana')), findsOneWidget);
+    final before = tester.getRect(find.byType(JamTransport));
+    await tester.runAsync(() async {
+      await clients['Theo']!.close();
+      expect(await _waitFor(() => host.engine!.peers.length == 1), isTrue);
+    });
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 1));
+    expect(find.text(JamRoomStrings.addedBy('Ana')), findsNothing);
+    expect(find.text(JamRoomStrings.withPeople(['Ana'])), findsOneWidget);
+    expect(tester.getRect(find.byType(JamTransport)), before);
+
     await tester.pumpWidget(const SizedBox.shrink());
     await tester.runAsync(() async {
-      await guest.leave();
+      await ana.leave();
       await host.leave();
     });
   });
 
-  test('the footer label shortens before it cuts a name', () {
+  testWidgets('with one other person, the footer already says whose song it '
+      'is: no credit, and no line kept for one', (tester) async {
+    final host = testSession();
+    final ana = testSession();
+    await hostWithSongs(tester, host, ana);
+    await resize(tester, const Size(390, 844));
+    await pumpRoom(tester, host);
+    expect(find.text(JamRoomStrings.withPeople(['Ana'])), findsOneWidget);
+    expect(find.textContaining(JamTrackRowStrings.addedBy), findsNothing);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.runAsync(() async {
+      await ana.leave();
+      await host.leave();
+    });
+  });
+
+  test('the footer says people the one way every screen does', () {
+    expect(JamRoomStrings.withPeople(const []), JamRoomStrings.justYou);
     expect(JamRoomStrings.withPeople(['Mia', 'Theo']), 'With Mia and Theo');
     expect(
-      JamRoomStrings.withPeople(['Mia', 'Theo'], named: 1, countOne: true),
-      'With Mia and 1 other',
-    );
-    expect(
-      JamRoomStrings.withPeople(['Mia', 'Theo', 'Ana', 'Jo'], named: 1),
-      'With Mia and 3 others',
+      JamRoomStrings.withPeople(['Mia', 'Theo', 'Ana', 'Jo']),
+      'With Mia, Theo and 2 others',
     );
   });
 
@@ -923,10 +1029,9 @@ void main() {
       closeTo(scrubber.left, 0.5),
     );
     expect(
-      tester.getCenter(find.byIcon(CupertinoIcons.list_bullet)).dx +
-          JamIconSize.row / 2,
+      tester.getCenter(find.byIcon(CupertinoIcons.list_bullet)).dx + 34 / 2,
       closeTo(scrubber.right, 0.5),
-      reason: "the glyph's edge, not its selected ground's",
+      reason: "the selected plate's edge: it never crosses the margin",
     );
 
     await tester.tap(find.bySemanticsLabel(JamRoomStrings.queue));
