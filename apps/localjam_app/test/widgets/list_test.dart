@@ -395,5 +395,27 @@ void main() {
       await tester.pumpWidget(_host(JamAddSongsRow(onTap: () {}, busy: true)));
       expect(find.byIcon(CupertinoIcons.plus), findsNothing);
     });
+
+    testWidgets('disabled: the tertiary ink; large text grows the row', (
+      tester,
+    ) async {
+      await tester.pumpWidget(_host(const JamAddSongsRow(onTap: null)));
+      expect(
+        tester.widget<Icon>(find.byIcon(CupertinoIcons.plus)).color,
+        JamColors.light.tertiaryLabel,
+      );
+      expect(find.byType(Opacity), findsNothing);
+
+      await tester.pumpWidget(
+        MediaQuery(
+          data: const MediaQueryData(textScaler: TextScaler.linear(3)),
+          child: _host(JamAddSongsRow(onTap: () {})),
+        ),
+      );
+      expect(
+        tester.getSize(find.byType(JamAddSongsRow)).height,
+        greaterThan(kJamAddSongsRowHeight),
+      );
+    });
   });
 }

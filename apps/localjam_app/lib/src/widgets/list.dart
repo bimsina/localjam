@@ -463,7 +463,7 @@ class JamAddSongsRow extends StatelessWidget implements JamSelfSeparatingRow {
     this.separator,
   });
 
-  /// Null disables the row (dimmed, as a disabled button is).
+  /// Null disables the row (the tertiary ink, as a disabled button).
   final VoidCallback? onTap;
 
   /// Title Case; also what a screen reader hears.
@@ -487,17 +487,29 @@ class JamAddSongsRow extends StatelessWidget implements JamSelfSeparatingRow {
   Widget build(BuildContext context) {
     final colors = context.jamColors;
     final enabled = onTap != null && !busy;
-    final accent = onBackdrop ? JamNowPlayingColors.text : colors.tint;
+    final disabled = onTap == null;
+    // Disabled is the one disabled look (R8): the tertiary ink, not the
+    // whole row at 35%.
+    final accent = disabled
+        ? (onBackdrop ? JamNowPlayingColors.tertiary : colors.tertiaryLabel)
+        : onBackdrop
+        ? JamNowPlayingColors.text
+        : colors.tint;
     final ground = onBackdrop
         ? JamNowPlayingColors.placeholderGround
         : colors.fillSecondary;
     final scope = JamRowScope.maybeOf(context);
     final showSeparator = separator ?? (scope != null && !scope.isLast);
 
-    Widget content = SizedBox(
-      height: kJamAddSongsRowHeight,
+    // A song row's height at the default text size — a minimum, so a large
+    // title grows the row rather than clipping (RB-3).
+    Widget content = ConstrainedBox(
+      constraints: const BoxConstraints(minHeight: kJamAddSongsRowHeight),
       child: Padding(
-        padding: EdgeInsets.symmetric(horizontal: horizontalPadding),
+        padding: EdgeInsets.symmetric(
+          horizontal: horizontalPadding,
+          vertical: (kJamAddSongsRowHeight - JamArtworkSize.row) / 2,
+        ),
         child: Row(
           children: [
             Container(
@@ -511,7 +523,7 @@ class JamAddSongsRow extends StatelessWidget implements JamSelfSeparatingRow {
                 ),
               ),
               child: busy
-                  ? JamSpinner(radius: 8, color: accent)
+                  ? JamProgressRing(color: accent)
                   : Icon(
                       CupertinoIcons.plus,
                       size: JamIconSize.row,
@@ -555,14 +567,11 @@ class JamAddSongsRow extends StatelessWidget implements JamSelfSeparatingRow {
       label: title,
       onTap: enabled ? onTap : null,
       excludeSemantics: true,
-      child: Opacity(
-        opacity: onTap == null ? 0.35 : 1,
-        child: JamPressable(
-          onTap: enabled ? onTap : null,
-          style: JamPressStyle.highlight,
-          highlightColor: onBackdrop ? JamNowPlayingColors.pressed : null,
-          child: content,
-        ),
+      child: JamPressable(
+        onTap: enabled ? onTap : null,
+        style: JamPressStyle.highlight,
+        highlightColor: onBackdrop ? JamNowPlayingColors.pressed : null,
+        child: content,
       ),
     );
   }

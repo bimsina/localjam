@@ -369,7 +369,9 @@ class JamColors extends ThemeExtension<JamColors> {
 
 /// [base] re-pointed at the Now Playing backdrop: white text at the
 /// backdrop's three strengths, white (not raspberry) for what can be tapped,
-/// see-through grounds, white hairlines and press highlights, and the
+/// see-through grounds (a control's `fill` — a switch's off track, a
+/// disabled button — is the backdrop's glass), white hairlines and press
+/// highlights, and the
 /// backdrop's own red and amber — the one "danger on artwork" and "warning on
 /// artwork" in the app (each ≥ 4.5:1 on the brightest ground the backdrop
 /// allows).
@@ -387,6 +389,7 @@ JamColors jamBackdropColors(JamColors base) => base.copyWith(
   label: JamNowPlayingColors.text,
   secondaryLabel: JamNowPlayingColors.secondary,
   tertiaryLabel: JamNowPlayingColors.tertiary,
+  fill: JamNowPlayingColors.glass,
   fillPressed: JamNowPlayingColors.pressed,
   tint: JamNowPlayingColors.text,
   tintPressed: JamNowPlayingColors.secondary,

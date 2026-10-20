@@ -308,6 +308,12 @@ void main() {
     await tester.enterText(find.byType(CupertinoTextField), '   ');
     await tester.pump();
     expect(_actions(tester).last.onPressed, isNull);
+    // The one disabled look (R8): neutral, not a faded raspberry.
+    expect(_ground(tester, 'Save'), JamColors.light.fill);
+    expect(
+      tester.widget<Text>(find.text('Save')).style!.color,
+      JamColors.light.tertiaryLabel,
+    );
 
     await tester.tap(find.text('Cancel'));
     await tester.pumpAndSettle();

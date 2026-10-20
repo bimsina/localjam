@@ -257,7 +257,9 @@ class _JamAlertButtons extends StatelessWidget {
 
 /// One of an alert's buttons, a soft rectangle: filled tint for the
 /// preferred action, filled `dangerFilled` for a destructive one, grey
-/// `fill` with `label` text otherwise.
+/// `fill` with `label` text otherwise. Disabled, any of them is the one
+/// disabled look (R8): `fill` under `tertiaryLabel`. [JamMetrics.
+/// alertButtonHeight] is a minimum: a large text size grows the button.
 class JamAlertButton extends StatelessWidget {
   const JamAlertButton({super.key, required this.action});
 
@@ -267,11 +269,22 @@ class JamAlertButton extends StatelessWidget {
   Widget build(BuildContext context) {
     final colors = context.jamColors;
     final enabled = action.onPressed != null;
-    final (Color ground, Color fg, bool strong) = action.destructive
+    final (Color ground, Color fg, bool strong) = !enabled
+        ? (
+            colors.fill,
+            colors.tertiaryLabel,
+            action.destructive || action.isDefault,
+          )
+        : action.destructive
         ? (colors.dangerFilled, colors.onTint, true)
         : action.isDefault
         ? (colors.tintFilled, colors.onTint, true)
         : (colors.fill, colors.label, false);
+    final style = (strong ? context.jamHeadline : context.jamBody).copyWith(
+      color: fg,
+      fontWeight: strong ? null : FontWeight.w500,
+    );
+    final line = (style.fontSize ?? 17) * (style.height ?? 1.3);
     return Semantics(
       container: true,
       button: true,
@@ -279,32 +292,32 @@ class JamAlertButton extends StatelessWidget {
       label: action.label,
       onTap: action.onPressed,
       excludeSemantics: true,
-      child: Opacity(
-        opacity: enabled ? 1 : 0.35,
-        child: JamPressable(
-          onTap: action.onPressed,
-          pressedOpacity: 0.7,
-          child: Container(
-            height: JamMetrics.alertButtonHeight,
-            alignment: Alignment.center,
-            padding: const EdgeInsets.symmetric(
-              horizontal: _JamAlertButtons._inset,
+      child: JamPressable(
+        onTap: action.onPressed,
+        pressedOpacity: 0.7,
+        child: Container(
+          constraints: const BoxConstraints(
+            minHeight: JamMetrics.alertButtonHeight,
+          ),
+          alignment: Alignment.center,
+          padding: EdgeInsets.symmetric(
+            horizontal: _JamAlertButtons._inset,
+            vertical: ((JamMetrics.alertButtonHeight - line) / 2).clamp(
+              0.0,
+              JamSpace.md,
             ),
-            decoration: ShapeDecoration(
-              color: ground,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(JamRadius.alertButton),
-              ),
+          ),
+          decoration: ShapeDecoration(
+            color: ground,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(JamRadius.alertButton),
             ),
-            child: Text(
-              action.label,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: (strong ? context.jamHeadline : context.jamBody).copyWith(
-                color: fg,
-                fontWeight: strong ? null : FontWeight.w500,
-              ),
-            ),
+          ),
+          child: Text(
+            action.label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: style,
           ),
         ),
       ),

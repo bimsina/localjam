@@ -63,6 +63,7 @@ class JamEmptyState extends StatelessWidget {
     this.onAction,
     this.actionVariant = JamButtonVariant.filled,
     this.actionLoading = false,
+    this.actionLoadingLabel,
     this.secondaryActionLabel,
     this.onSecondaryAction,
     this.foregroundColor,
@@ -90,7 +91,12 @@ class JamEmptyState extends StatelessWidget {
   /// look, it hugs its label.
   final JamButtonVariant actionVariant;
 
+  /// The action is under way: a turning ring in its label's place.
   final bool actionLoading;
+
+  /// What the action says while [actionLoading] ("Trying…"), after the
+  /// ring. Null: the ring alone.
+  final String? actionLoadingLabel;
 
   /// A second, plain action under the first — only for terminal states
   /// ("Try Again" + "Back to Nearby").
@@ -159,6 +165,7 @@ class JamEmptyState extends StatelessWidget {
                       variant: actionVariant,
                       onPressed: onAction,
                       loading: actionLoading,
+                      loadingLabel: actionLoadingLabel,
                       // On a page that sets its own foreground (white on
                       // the camera), an unfilled action's label follows.
                       color: actionVariant == JamButtonVariant.filled
