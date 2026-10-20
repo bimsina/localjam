@@ -189,6 +189,80 @@ void main() {
     });
   });
 
+  group('hosts the http form cannot render (review 2026-10-21)', () {
+    // Each of these used to parse, and then `toHttpUri()` threw.
+    const colonNotIPv6 = [
+      '1.2.3.4:99', // A port where an address goes.
+      'a:b',
+      'x:',
+      '1::2::3',
+      '::1%', // Empty zone id.
+      '::1%%', // A zone id holding a `%`.
+      'fe80::1%en0%1',
+    ];
+
+    test('are not hosts in the http form', () {
+      for (final host in colonNotIPv6) {
+        final text =
+            'http://192.168.1.7:44100/join#token=a'
+            '&host=${Uri.encodeQueryComponent(host)}';
+        expect(JoinLink.parse(text), isNull, reason: host);
+      }
+      expect(
+        JoinLink.parse('http://192.168.1.7:44100/join#token=a&host=::1%25%25'),
+        isNull,
+      );
+    });
+
+    test('are not hosts in the localjam form either', () {
+      for (final host in colonNotIPv6) {
+        final text =
+            'localjam://join?port=1&token=a'
+            '&host=${Uri.encodeQueryComponent(host)}';
+        expect(JoinLink.parse(text), isNull, reason: host);
+      }
+    });
+
+    test('a % outside an IPv6 zone id is not a host', () {
+      for (final host in ['a%b', 'abc%', '%41']) {
+        expect(
+          () => JoinLink(token: 't', hosts: [host], port: 1),
+          throwsArgumentError,
+          reason: host,
+        );
+      }
+    });
+
+    test('the constructor refuses them, wherever they stand in the list', () {
+      for (final host in colonNotIPv6) {
+        expect(
+          () => JoinLink(token: 't', hosts: [host], port: 1),
+          throwsArgumentError,
+          reason: host,
+        );
+        expect(
+          () => JoinLink(token: 't', hosts: ['10.0.0.1', host], port: 1),
+          throwsArgumentError,
+          reason: host,
+        );
+      }
+    });
+
+    test('real IPv6 literals still parse, render and round-trip', () {
+      for (final host in [
+        '::1',
+        'fe80::1%en0',
+        'fd00::2',
+        '::ffff:192.168.1.7',
+      ]) {
+        final link = JoinLink(token: 't', hosts: [host], port: 44100);
+        final uri = link.toHttpUri();
+        expect(JoinLink.fromUri(uri), link, reason: host);
+        expect(JoinLink.fromUri(link.toLocaljamUri()), link, reason: host);
+      }
+    });
+  });
+
   group('value type', () {
     test('both forms of one room are one link', () {
       expect(JoinLink.fromUri(link.toHttpUri()), link);

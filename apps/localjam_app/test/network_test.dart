@@ -313,5 +313,19 @@ void main() {
         expect(parseJoinUri(text), isNull, reason: 'refuse "$text"');
       }
     });
+
+    test('a candidate the http form cannot render is no link, never a '
+        'throw (review 2026-10-21)', () {
+      for (final text in [
+        'http://192.168.1.7:44100/join#token=a&host=1.2.3.4:99',
+        'http://192.168.1.7:44100/join#token=a&host=a:b',
+        'http://192.168.1.7:44100/join#token=a&host=::1%25%25',
+        'http://192.168.1.7:44100/join#token=a&host=::1%25',
+        'localjam://join?host=1.2.3.4:99&port=80&token=t',
+      ]) {
+        expect(() => parseJoinUri(text), returnsNormally, reason: text);
+        expect(parseJoinUri(text), isNull, reason: text);
+      }
+    });
   });
 }
