@@ -201,6 +201,38 @@ void main() {
     expect(find.text('With Mia, Theo and 2 others'), findsOneWidget);
   });
 
+  testWidgets('a long name is cut before the count is (RB-7)', (
+    tester,
+  ) async {
+    final session = testSession();
+    await pumpHistory(
+      tester,
+      session,
+      records: [
+        _record(
+          name: 'Van Jam',
+          peers: [
+            'Electric Mongoose Supreme',
+            'Theo',
+            'Ana',
+            'Jo',
+            'Okon',
+            'Priya',
+          ],
+        ),
+      ],
+    );
+    // The line is too narrow for the whole phrase: the long name gives way
+    // and the count stays whole.
+    expect(
+      find.text('With Electric Mongoose Supreme, Theo and 4 others'),
+      findsNothing,
+    );
+    expect(find.text(' and 4 others'), findsOneWidget);
+    expect(find.text('Electric Mongoose Supreme'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
   test('faces wear the colours the jam gave them (D3)', () {
     // Hosted here: this device was the host, so it kept its colour and the
     // others moved around it in name order — what the room's faces did.

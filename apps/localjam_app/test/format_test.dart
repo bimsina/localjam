@@ -27,11 +27,14 @@ void main() {
     });
 
     test('a list without the "With"', () {
-      expect(jamPeopleList(const []), '');
-      expect(jamPeopleList(['Mia']), 'Mia');
-      expect(jamPeopleList(['Mia', 'Theo', 'Ana']), 'Mia, Theo and Ana');
+      expect(JamPeoplePhrase.list(const []).text, '');
+      expect(JamPeoplePhrase.list(['Mia']).text, 'Mia');
       expect(
-        jamPeopleList(['Mia', 'Theo', 'Ana', 'Jo', 'Okon']),
+        JamPeoplePhrase.list(['Mia', 'Theo', 'Ana']).text,
+        'Mia, Theo and Ana',
+      );
+      expect(
+        JamPeoplePhrase.list(['Mia', 'Theo', 'Ana', 'Jo', 'Okon']).text,
         'Mia, Theo and 3 others',
       );
     });
@@ -43,7 +46,7 @@ void main() {
         expect(said, isNot(contains(' and 1 other')), reason: said);
         for (final named in [1, 2, 3]) {
           expect(
-            jamPeopleList(names.take(n).toList(), named: named),
+            JamPeoplePhrase.list(names.take(n).toList(), named: named).text,
             isNot(contains(' and 1 other')),
           );
         }

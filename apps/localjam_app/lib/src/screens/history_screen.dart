@@ -36,6 +36,7 @@ import '../widgets/empty_state.dart';
 import '../widgets/jam_mark.dart';
 import '../widgets/list.dart';
 import '../widgets/menu.dart';
+import '../widgets/peer_row.dart' show JamPeopleLine;
 import '../widgets/pressable.dart';
 import '../widgets/scaffold.dart';
 import '../widgets/session_gate.dart';
@@ -75,9 +76,10 @@ abstract final class HistoryStrings {
   }
 
   /// "With Mia", "With Mia and Neon Walrus", "With Mia, Neon Walrus and 2
-  /// others" — people said as everywhere else ([jamPeopleList]).
+  /// others" — people said as everywhere else ([jamPeopleSummary]); nothing
+  /// for a jam nobody else was in.
   static String withPeople(List<String> names) =>
-      names.isEmpty ? '' : 'With ${jamPeopleList(names)}';
+      names.isEmpty ? '' : jamPeopleSummary(names);
 
   /// The detail page's list of what played.
   static const String songsHeader = 'Songs';
@@ -748,11 +750,10 @@ class _People extends StatelessWidget {
         ),
       ),
       const SizedBox(width: JamSpace.sm),
+      // Names cut before the count is, as in the room (R9, RB-7).
       Flexible(
-        child: Text(
-          HistoryStrings.withPeople(names),
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
+        child: JamPeopleLine(
+          JamPeoplePhrase.summary(names),
           style: context.jamSubheadline.copyWith(
             color: context.jamColors.secondaryLabel,
           ),

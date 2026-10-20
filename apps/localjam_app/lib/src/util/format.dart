@@ -120,17 +120,6 @@ abstract final class JamPeopleStrings {
   static String withCount(int n) => '$with_ $n ${n == 1 ? 'person' : 'people'}';
 }
 
-/// People in a line, said the same way on every screen — the Now Playing
-/// footer, the Invite sheet, Past Jams: "Mia", "Mia and Theo", "Mia, Theo
-/// and Ana", "Mia, Theo and 2 others".
-///
-/// At most [named] names before the rest are counted — except that one
-/// person left over is always named rather than counted ("Mia, Theo and
-/// Ana", never "Mia, Theo and 1 other": the name is shorter to read and
-/// says more).
-String jamPeopleList(List<String> names, {int named = 2}) =>
-    JamPeoplePhrase.list(names, named: named).text;
-
 /// "Just you", "With Mia", "With Mia and Theo", "With Mia, Theo and Ana",
 /// "With Mia, Theo and 3 others" — the people in a jam besides you (R9),
 /// the one summary every screen says them with.
@@ -158,7 +147,13 @@ class JamPeoplePhrase {
     );
   }
 
-  /// [names] in a line: "Mia", "Mia and Theo", "Mia, Theo and 2 others".
+  /// [names] in a line: "Mia", "Mia and Theo", "Mia, Theo and Ana", "Mia,
+  /// Theo and 2 others".
+  ///
+  /// At most [named] names before the rest are counted — except that one
+  /// person left over is always named rather than counted ("Mia, Theo and
+  /// Ana", never "Mia, Theo and 1 other": the name is shorter to read and
+  /// says more).
   factory JamPeoplePhrase.list(List<String> names, {int named = 2}) {
     if (names.isEmpty) return const JamPeoplePhrase._([], 0);
     final cap = named < 1 ? 1 : named;
