@@ -21,6 +21,7 @@ import 'package:localjam_app/src/widgets/buttons.dart';
 import 'package:localjam_app/src/widgets/empty_state.dart';
 import 'package:localjam_app/src/widgets/jam_mark.dart';
 import 'package:localjam_app/src/widgets/list.dart';
+import 'package:localjam_app/src/widgets/menu.dart';
 import 'package:localjam_app/src/widgets/track_row.dart';
 import 'package:localjam_client/localjam_client.dart';
 
@@ -328,6 +329,35 @@ void main() {
     expect(find.text('Perla · 3:42'), findsOneWidget);
     await tester.scrollUntilVisible(find.text('3:00'), 80);
     expect(find.text('3:00'), findsOneWidget);
+  });
+
+  testWidgets('on a phone the "more" circle ends on the page margin, where '
+      'Host again does', (tester) async {
+    tester.view.physicalSize = const Size(402, 874);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    final session = testSession();
+    await pumpHistory(tester, session, records: [_barRoom()]);
+    await tester.tap(find.text('Bar Room'));
+    await tester.pumpAndSettle();
+    final circle = find.descendant(
+      of: find.byType(JamMenuButton),
+      matching: find.byWidgetPredicate(
+        (w) =>
+            w is DecoratedBox &&
+            w.decoration is ShapeDecoration &&
+            (w.decoration as ShapeDecoration).shape is CircleBorder,
+      ),
+    );
+    expect(
+      tester.getRect(circle).right,
+      closeTo(
+        tester
+            .getRect(find.widgetWithText(JamButton, HistoryStrings.hostAgain))
+            .right,
+        0.5,
+      ),
+    );
   });
 
   testWidgets('a record whose files are gone cannot be re-hosted', (

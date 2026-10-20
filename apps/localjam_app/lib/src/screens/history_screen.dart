@@ -899,6 +899,7 @@ class _HistoryDetailScreenState extends State<HistoryDetailScreen> {
     // the bar's other actions.
     final menu = JamMenuButton(
       semanticLabel: HistoryStrings.more,
+      triggerAlignment: AlignmentDirectional.centerEnd,
       groups: [
         [
           JamMenuItem(
@@ -1043,7 +1044,14 @@ class _HistoryDetailScreenState extends State<HistoryDetailScreen> {
       controller: _scroll,
       // A reading column, sized from the pane this page sits in.
       maxContentWidth: JamContentWidth.reading,
-      trailing: [menu],
+      // The circle's edge, not its 44 box, on the page margin — where Host
+      // again and the songs end.
+      trailing: [
+        Padding(
+          padding: const EdgeInsetsDirectional.only(end: kJamNavTrailingAir),
+          child: menu,
+        ),
+      ],
       slivers: [content],
     );
   }

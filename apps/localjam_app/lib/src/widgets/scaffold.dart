@@ -317,9 +317,15 @@ EdgeInsetsDirectional _navPaddingFor(double width, [double side = 0]) {
   return EdgeInsetsDirectional.only(
     start: side + margin,
     // A 44 icon button carries ~11 of air around a 22 glyph.
-    end: side + math.max(JamSpace.xs, margin - 12),
+    end: side + math.max(JamSpace.xs, margin - kJamNavTrailingAir),
   );
 }
+
+/// How far inside the page margin the nav bar's trailing edge stops: the
+/// air a 44 icon button carries around its 22 glyph, so the glyph — not its
+/// box — ends on the margin. A trailing item drawn to its box's edge (the
+/// "more" circle) gives this much back to land on the margin too.
+const double kJamNavTrailingAir = 12;
 
 /// The bare back chevron (spec §10.11), when [context]'s route can go back
 /// — never a "‹ Settings" label, whatever route the page sits in. Null when
