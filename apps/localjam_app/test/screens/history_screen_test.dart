@@ -15,8 +15,10 @@ import 'package:localjam_app/src/screens/history_screen.dart';
 import 'package:localjam_app/src/state/app_settings.dart';
 import 'package:localjam_app/src/state/session_controller.dart';
 import 'package:localjam_app/src/widgets/artwork.dart';
+import 'package:localjam_app/src/widgets/avatar.dart';
 import 'package:localjam_app/src/widgets/buttons.dart';
 import 'package:localjam_app/src/widgets/empty_state.dart';
+import 'package:localjam_app/src/widgets/jam_mark.dart';
 import 'package:localjam_app/src/widgets/list.dart';
 import 'package:localjam_app/src/widgets/track_row.dart';
 import 'package:localjam_client/localjam_client.dart';
@@ -107,32 +109,50 @@ void main() {
     expect(find.byType(JamButton), findsNothing);
   });
 
-  testWidgets('a record is one plain row: cover, name, summary, chevron', (
-    tester,
-  ) async {
+  testWidgets('a record is one row drawn as a jam: mark, name, people, '
+      'summary, chevron', (tester) async {
     final session = testSession();
     await pumpHistory(tester, session, records: [_barRoom()]);
 
     expect(find.text('Bar Room'), findsOneWidget);
+    // The jam's name in Manrope, like every other place a jam is named.
+    expect(
+      tester.widget<Text>(find.text('Bar Room')).style?.fontFamily,
+      'Manrope',
+    );
+    // The "when" is held together, so "PM" never wraps onto a line alone.
     expect(
       find.text(
         '${HistoryStrings.youHosted} · ${HistoryStrings.songs(2)} · '
-        '${HistoryStrings.justNow}',
+        '${HistoryStrings.justNow.replaceAll(' ', kJamNoBreakSpace)}',
       ),
       findsOneWidget,
     );
-    final row = tester.widget<JamRow>(find.byType(JamRow));
-    expect(row.chevron, isTrue);
+    // Who was there: their faces, then their names.
+    expect(find.text('With Neon Walrus and Amber Fox'), findsOneWidget);
+    final pile = tester.widget<JamAvatarStack>(find.byType(JamAvatarStack));
+    expect(pile.names, ['Neon Walrus', 'Amber Fox']);
+    expect(find.byType(JamDisclosureChevron), findsOneWidget);
+    // The jam's mark, at a Past Jams row's size.
     final mosaic = tester.widget<JamArtworkMosaic>(
       find.byType(JamArtworkMosaic),
     );
-    expect(mosaic.size, 56);
+    expect(mosaic.size, JamMarkSize.row);
+    expect(mosaic.name, 'Bar Room');
+    expect(find.byType(JamMark), findsOneWidget);
+    // One node that says it all, and opens the jam.
+    expect(
+      find.bySemanticsLabel(
+        RegExp(r'^Bar Room\. With Neon Walrus and Amber Fox\. You hosted'),
+      ),
+      findsOneWidget,
+    );
     // The queue lives on the detail page, not in the list.
     expect(find.byType(JamTrackRow), findsNothing);
     expect(find.textContaining('.m4a'), findsNothing);
   });
 
-  testWidgets('without four real covers the art is one tile, not a grid', (
+  testWidgets('a past jam with no cover here is its monogram, not a note', (
     tester,
   ) async {
     final session = testSession();
@@ -149,14 +169,35 @@ void main() {
       ],
     );
 
-    // No cover on this device: the plain placeholder, not four ghosts.
+    // No cover on this device: the jam's own letter, not four ghosts and
+    // not the placeholder a song without art gets.
+    final mark = tester.widget<JamMark>(find.byType(JamMark));
+    expect(mark.covers, isEmpty);
+    expect(find.text('L'), findsOneWidget);
     expect(
       find.descendant(
         of: find.byType(JamArtworkMosaic),
         matching: find.byType(JamArtworkTile),
       ),
-      findsOneWidget,
+      findsNothing,
     );
+  });
+
+  testWidgets('more than three people: three faces, and the names count the '
+      'rest', (tester) async {
+    final session = testSession();
+    await pumpHistory(
+      tester,
+      session,
+      records: [
+        _record(name: 'Van Jam', peers: ['Mia', 'Theo', 'Ana', 'Jo']),
+      ],
+    );
+    final pile = tester.widget<JamAvatarStack>(find.byType(JamAvatarStack));
+    expect(pile.names, ['Mia', 'Theo', 'Ana']);
+    // No "+1" beside "and 2 others".
+    expect(find.text('+1'), findsNothing);
+    expect(find.text('With Mia, Theo and 2 others'), findsOneWidget);
   });
 
   testWidgets('tapping a record opens its detail page', (tester) async {
@@ -167,19 +208,32 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.byType(HistoryDetailScreen), findsOneWidget);
-    // Cover 200, name, summary, people, Host Again, the queue.
+    // The jam's mark beside its name and summary, who was there, Host
+    // Again, then the songs under their own heading.
     final mosaic = tester.widget<JamArtworkMosaic>(
       find.byType(JamArtworkMosaic),
     );
-    expect(mosaic.size, 200);
+    expect(mosaic.size, JamMarkSize.ended);
+    expect(mosaic.name, 'Bar Room');
     expect(find.text('Bar Room'), findsOneWidget);
     expect(
-      find.text('${HistoryStrings.youHosted} · ${HistoryStrings.justNow}'),
+      find.text(
+        '${HistoryStrings.youHosted} · '
+        '${HistoryStrings.justNow.replaceAll(' ', kJamNoBreakSpace)}',
+      ),
       findsOneWidget,
     );
     expect(find.text('With Neon Walrus and Amber Fox'), findsOneWidget);
-    expect(
+    expect(find.byType(JamAvatarStack), findsOneWidget);
+    // The page's one action is a filled primary, like every other.
+    final hostAgain = tester.widget<JamButton>(
       find.widgetWithText(JamButton, HistoryStrings.hostAgain),
+    );
+    expect(hostAgain.variant, JamButtonVariant.filled);
+    expect(find.text(HistoryStrings.songsHeader), findsOneWidget);
+    // The count and length beside the heading, not as an album's footer.
+    expect(
+      find.text(HistoryStrings.songsAndLength(2, const Duration(seconds: 402))),
       findsOneWidget,
     );
     // No rule above the first song: the one hairline left is the separator
@@ -188,11 +242,6 @@ void main() {
     expect(find.text('Added by Neon Walrus · 3:42'), findsOneWidget);
     await tester.scrollUntilVisible(find.text('Added by you · 3:00'), 80);
     expect(find.text('Added by you · 3:00'), findsOneWidget);
-    final footer = find.text(
-      HistoryStrings.songsAndLength(2, const Duration(seconds: 402)),
-    );
-    await tester.scrollUntilVisible(footer, 100);
-    expect(footer, findsOneWidget);
   });
 
   testWidgets('a record whose files are gone cannot be re-hosted', (
@@ -379,6 +428,25 @@ void main() {
       expect(jamRelativeTime(DateTime(2026, 9, 2), now: now), 'Sep 2');
       expect(jamRelativeTime(DateTime(2025, 12, 31), now: now), 'Dec 31, 2025');
     });
+  });
+
+  test('a drawn summary keeps its "when" on one line', () {
+    final now = DateTime(2026, 10, 18, 15);
+    final record = _record(
+      name: 'Bar Room',
+      at: DateTime(2026, 10, 17, 17),
+      tracks: [JamHistoryTrack(item: _item('Night Bus'))],
+    );
+    // For matching, plain spaces; for drawing, "Yesterday, 5:00 PM" moves
+    // to the next line whole rather than leaving "PM" there alone.
+    expect(
+      jamHistorySummary(record, now: now),
+      'You hosted · 1 song · Yesterday, 5:00 PM',
+    );
+    expect(
+      jamHistorySummary(record, now: now, keepTimeTogether: true),
+      'You hosted · 1 song · Yesterday,\u00A05:00\u00A0PM',
+    );
   });
 
   test('summaries count songs, not tracks', () {
