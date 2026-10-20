@@ -8,8 +8,22 @@ install and no internet.
 ## Build
 
 ```sh
+tool/build.sh          # what the host should bundle (17 MB)
+```
+
+which is
+
+```sh
 flutter build web --release --base-href /web/ --no-web-resources-cdn --pwa-strategy none
 ```
+
+plus two scrubs and a prune: the CanvasKit-CDN and font-CDN defaults that
+Flutter's loader and engine still carry (unused by this build) are replaced
+by same-origin paths, the renderers a dart2js build never loads (`skwasm*`,
+`wimp*`, `webparagraph/`) and the `*.symbols` files are removed, and the
+script fails if anything still names `gstatic` or `googleapis`. The plain
+`flutter build web` output (40 MB) works too; it just carries those strings
+and the unused files.
 
 - `--base-href /web/`: `index.html` is served at `/join`, the bundle at `/web/…`.
 - `--no-web-resources-cdn`: CanvasKit comes from the host, not a CDN.
@@ -19,9 +33,8 @@ flutter build web --release --base-href /web/ --no-web-resources-cdn --pwa-strat
 
 What a browser loads: `index.html`, `flutter_bootstrap.js`, `main.dart.js`,
 `canvaskit/canvaskit.{js,wasm}` (or `canvaskit/chromium/…` in Chrome on a
-secure origin), the fonts under `assets/`, `favicon.png`. The `skwasm*`,
-`wimp*`, `webparagraph/` and `*.symbols` files are only for `--wasm` builds
-and debugging; a packager may leave them out.
+secure origin such as localhost), the fonts under `assets/` (Flutter's own
+bundled Roboto fallback included), `favicon.png`.
 
 ## Serve and check
 
