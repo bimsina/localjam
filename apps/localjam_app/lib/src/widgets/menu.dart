@@ -16,7 +16,12 @@
 ///   by which side of the screen the trigger is on;
 /// - from a **row** (a trigger wider than most of the screen), against the
 ///   row's trailing edge where its value and chevrons are — never centred
-///   over the row and the controls below it.
+///   over the row and the controls below it;
+/// - never over what a [JamMenuKeepClear] marks in the same
+///   [JamMenuKeepClearScope] (N6): a sheet's header with its Done, the Now
+///   Playing title beside its "•••". A region above the trigger is a
+///   ceiling the menu stays under; one beside it counts as part of the
+///   trigger, so the menu opens past it.
 ///
 /// ```dart
 /// JamMenuButton(
@@ -512,6 +517,26 @@ class _JamMenuAnchorState extends State<JamMenuAnchor>
     super.dispose();
   }
 
+  /// What this menu must not cover, in the root overlay's coordinates.
+  List<Rect> _keepClearRects() {
+    final regions = JamMenuKeepClearScope._regionsOf(context);
+    if (regions.isEmpty) return const [];
+    final overlay = Overlay.maybeOf(
+      context,
+      rootOverlay: true,
+    )?.context.findRenderObject();
+    if (overlay is! RenderBox || !overlay.attached) return const [];
+    return [
+      for (final region in regions)
+        if (region.findRenderObject() case final RenderBox box
+            when box.attached && box.hasSize)
+          MatrixUtils.transformRect(
+            box.getTransformTo(overlay),
+            Offset.zero & box.size,
+          ),
+    ];
+  }
+
   void _onOpenRequested(Offset? position, VoidCallback showOverlay) {
     showOverlay();
     if (jamReducedMotion(context)) {
@@ -547,6 +572,7 @@ class _JamMenuAnchorState extends State<JamMenuAnchor>
         preferUp: widget.preferUp,
         groups: widget.groups,
         semanticLabel: widget.semanticLabel,
+        keepClear: _keepClearRects(),
       );
       // Inside the room (or on its backdrop) the menu is the room's dark,
       // in its solid palette (R2), unless told otherwise.
@@ -657,9 +683,13 @@ class _JamMenuOverlay extends StatelessWidget {
     required this.preferUp,
     required this.groups,
     required this.semanticLabel,
+    required this.keepClear,
   });
 
   final RawMenuOverlayInfo info;
+
+  /// Regions the menu must not cover ([JamMenuKeepClear]).
+  final List<Rect> keepClear;
   final Animation<double> animation;
   final JamMenuAlignment alignment;
   final bool preferUp;
@@ -683,6 +713,7 @@ class _JamMenuOverlay extends StatelessWidget {
       width: width,
       alignment: alignment,
       preferUp: preferUp,
+      keepClear: keepClear,
     );
 
     final curved = CurvedAnimation(
@@ -705,7 +736,7 @@ class _JamMenuOverlay extends StatelessWidget {
     return Stack(
       children: [
         CustomSingleChildLayout(
-          delegate: _MenuLayout(placement: placement, safe: safe),
+          delegate: _MenuLayout(placement: placement),
           child: FadeTransition(
             opacity: curved,
             child: ScaleTransition(
@@ -729,9 +760,22 @@ class _Placement {
     required this.top,
     required this.bottom,
     required this.growFrom,
+    required this.minY,
+    required this.maxY,
+    this.narrowed = false,
   });
 
   final double left;
+
+  /// The band the menu stays inside: the safe area, less whatever it must
+  /// keep clear above and below its trigger.
+  final double minY;
+  final double maxY;
+
+  /// Whether a kept-clear region narrowed the band. A menu then gets the
+  /// whole band and, if it must, slides back over its own trigger, rather
+  /// than shrinking to the sliver left on its side.
+  final bool narrowed;
 
   /// Opening downward: the menu's top. Null when opening upward.
   final double? top;
@@ -749,6 +793,7 @@ _Placement _placeMenu({
   required double width,
   required JamMenuAlignment alignment,
   bool preferUp = false,
+  List<Rect> keepClear = const [],
 }) {
   final ratio = anchor.center.dx / overlay.width;
 
@@ -780,12 +825,37 @@ _Placement _placeMenu({
   );
   growX = side.toDouble();
 
+  // What it keeps clear (N6). A region wholly above the trigger (a sheet's
+  // header and its Done) is a ceiling; one wholly below, a floor; one
+  // beside it (the title next to Now Playing's "•••") is treated as part
+  // of the trigger, so the menu opens past its top or its bottom.
+  var anchorTop = anchor.top;
+  var anchorBottom = anchor.bottom;
+  var minY = safe.top;
+  var maxY = overlay.height - safe.bottom;
+  for (final region in keepClear) {
+    if (region.bottom <= anchor.top + 1) {
+      minY = math.max(minY, region.bottom + _kMenuGap);
+    } else if (region.top >= anchor.bottom - 1) {
+      maxY = math.min(maxY, region.top - _kMenuGap);
+    } else {
+      anchorTop = math.min(anchorTop, region.top);
+      anchorBottom = math.max(anchorBottom, region.bottom);
+    }
+  }
+  // A band too thin for a menu is no band: fall back to the safe area.
+  if (maxY - minY < JamMetrics.menuRow * 2) {
+    minY = safe.top;
+    maxY = overlay.height - safe.bottom;
+  }
+  final narrowed = minY > safe.top || maxY < overlay.height - safe.bottom;
+
   // Vertical: on the preferred side (below, unless [preferUp]) when there
   // is room there for a typical menu, else wherever there is more room.
-  final belowY = anchor.bottom + _kMenuGap;
-  final aboveY = anchor.top - _kMenuGap;
-  final roomBelow = overlay.height - safe.bottom - belowY;
-  final roomAbove = aboveY - safe.top;
+  final belowY = anchorBottom + _kMenuGap;
+  final aboveY = anchorTop - _kMenuGap;
+  final roomBelow = maxY - belowY;
+  final roomAbove = aboveY - minY;
   const typical = 220.0;
   final down = preferUp
       ? !(roomAbove >= typical || roomAbove > roomBelow)
@@ -795,22 +865,26 @@ _Placement _placeMenu({
     top: down ? belowY : null,
     bottom: down ? null : aboveY,
     growFrom: Alignment(growX, down ? -1 : 1),
+    minY: minY,
+    maxY: maxY,
+    narrowed: narrowed,
   );
 }
 
 class _MenuLayout extends SingleChildLayoutDelegate {
-  const _MenuLayout({required this.placement, required this.safe});
+  const _MenuLayout({required this.placement});
 
   final _Placement placement;
-  final EdgeInsets safe;
 
   @override
   BoxConstraints getConstraintsForChild(BoxConstraints constraints) {
     final top = placement.top;
     final bottom = placement.bottom;
-    final maxHeight = top != null
-        ? constraints.maxHeight - safe.bottom - top
-        : bottom! - safe.top;
+    final maxHeight = placement.narrowed
+        ? placement.maxY - placement.minY
+        : top != null
+        ? placement.maxY - top
+        : bottom! - placement.minY;
     return BoxConstraints.loose(
       Size(constraints.maxWidth, math.max(maxHeight, JamMetrics.menuRow * 2)),
     );
@@ -820,10 +894,12 @@ class _MenuLayout extends SingleChildLayoutDelegate {
   Offset getPositionForChild(Size size, Size childSize) {
     final top = placement.top;
     final y = top ?? (placement.bottom! - childSize.height);
+    // Inside the band; a menu taller than the room on its side slides back
+    // over its trigger rather than over what it keeps clear.
     final clampedY = y
         .clamp(
-          safe.top,
-          math.max(safe.top, size.height - safe.bottom - childSize.height),
+          placement.minY,
+          math.max(placement.minY, placement.maxY - childSize.height),
         )
         .toDouble();
     return Offset(placement.left, clampedY);
@@ -831,5 +907,85 @@ class _MenuLayout extends SingleChildLayoutDelegate {
 
   @override
   bool shouldRelayout(_MenuLayout oldDelegate) =>
-      oldDelegate.placement != placement || oldDelegate.safe != safe;
+      oldDelegate.placement != placement;
+}
+
+/// Marks where menus opened nearby keep clear of (N6): the regions
+/// registered by [JamMenuKeepClear]s under it, for menus opened under it.
+///
+/// A sheet is one (its header and Done are kept clear); so is the Now
+/// Playing title row (its title is).
+class JamMenuKeepClearScope extends StatefulWidget {
+  const JamMenuKeepClearScope({super.key, required this.child});
+
+  final Widget child;
+
+  /// The regions in force for a menu opened at [context]: those of every
+  /// scope above it.
+  static List<BuildContext> _regionsOf(BuildContext context) {
+    final out = <BuildContext>[];
+    context.visitAncestorElements((element) {
+      if (element.widget is _KeepClearRegistry) {
+        final registry = element.widget as _KeepClearRegistry;
+        out.addAll(registry.state._regions.where((r) => r.mounted));
+      }
+      return true;
+    });
+    return out;
+  }
+
+  @override
+  State<JamMenuKeepClearScope> createState() => _JamMenuKeepClearScopeState();
+}
+
+class _JamMenuKeepClearScopeState extends State<JamMenuKeepClearScope> {
+  final Set<BuildContext> _regions = {};
+
+  @override
+  Widget build(BuildContext context) =>
+      _KeepClearRegistry(state: this, child: widget.child);
+}
+
+class _KeepClearRegistry extends InheritedWidget {
+  const _KeepClearRegistry({required this.state, required super.child});
+
+  final _JamMenuKeepClearScopeState state;
+
+  @override
+  bool updateShouldNotify(_KeepClearRegistry old) => false;
+}
+
+/// A region no menu in the same [JamMenuKeepClearScope] may cover: a
+/// sheet's header with its Done, the title beside Now Playing's "•••".
+class JamMenuKeepClear extends StatefulWidget {
+  const JamMenuKeepClear({super.key, required this.child});
+
+  final Widget child;
+
+  @override
+  State<JamMenuKeepClear> createState() => _JamMenuKeepClearState();
+}
+
+class _JamMenuKeepClearState extends State<JamMenuKeepClear> {
+  _JamMenuKeepClearScopeState? _scope;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final scope = context
+        .getInheritedWidgetOfExactType<_KeepClearRegistry>()
+        ?.state;
+    if (scope == _scope) return;
+    _scope?._regions.remove(context);
+    _scope = scope?.._regions.add(context);
+  }
+
+  @override
+  void dispose() {
+    _scope?._regions.remove(context);
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => widget.child;
 }

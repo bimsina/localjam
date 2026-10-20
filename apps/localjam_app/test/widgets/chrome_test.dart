@@ -652,6 +652,114 @@ void main() {
       expect(downMenu.top, greaterThanOrEqualTo(high.bottom));
     });
 
+    testWidgets('an upward menu opens past the title beside its trigger, '
+        'never over it (N6)', (tester) async {
+      await tester.pumpWidget(
+        _app(
+          Scaffold(
+            body: Align(
+              alignment: const Alignment(0, 0.4),
+              child: JamMenuKeepClearScope(
+                child: Row(
+                  children: [
+                    const Expanded(
+                      child: JamMenuKeepClear(
+                        child: SizedBox(height: 60, child: Text('Night Bus')),
+                      ),
+                    ),
+                    JamMenuButton(
+                      preferUp: true,
+                      groups: [
+                        [
+                          JamMenuItem(title: 'Sound offset', onPressed: () {}),
+                          JamMenuItem(title: 'Diagnostics', onPressed: () {}),
+                        ],
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      final title = tester.getRect(
+        find
+            .ancestor(
+              of: find.text('Night Bus'),
+              matching: find.byType(SizedBox),
+            )
+            .first,
+      );
+      final trigger = tester.getRect(find.byType(JamMenuButton));
+      // The trigger sits lower than the title's top.
+      expect(trigger.top, greaterThan(title.top));
+      await tester.tap(find.byType(JamMenuButton));
+      await tester.pumpAndSettle();
+      final menu = tester.getRect(find.byType(JamMenuPanel));
+      expect(menu.bottom, lessThanOrEqualTo(title.top));
+    });
+
+    testWidgets('a menu in a sheet never covers the sheet’s header and Done '
+        '(N6)', (tester) async {
+      tester.view.physicalSize = const Size(800, 900);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+      await tester.pumpWidget(
+        _app(
+          Scaffold(
+            body: JamMenuKeepClearScope(
+              child: Column(
+                children: [
+                  const SizedBox(height: 560),
+                  const JamMenuKeepClear(
+                    child: SizedBox(height: 44, child: Text('Done')),
+                  ),
+                  const SizedBox(height: 120),
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: JamMenuButton(
+                      groups: [
+                        [
+                          for (final t in [
+                            'Make co-host',
+                            'Add songs',
+                            'Control playback',
+                            'Edit the queue',
+                          ])
+                            JamMenuItem(title: t, onPressed: () {}),
+                        ],
+                        [
+                          JamMenuItem(
+                            title: 'Remove from jam',
+                            destructive: true,
+                            onPressed: () {},
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+      final done = tester.getRect(
+        find
+            .ancestor(of: find.text('Done'), matching: find.byType(SizedBox))
+            .first,
+      );
+      final trigger = tester.getRect(find.byType(JamMenuButton));
+      await tester.tap(find.byType(JamMenuButton));
+      await tester.pumpAndSettle();
+      final menu = tester.getRect(find.byType(JamMenuPanel));
+      // Too tall for the room between Done and the trigger: it slides back
+      // over its trigger, not up over Done.
+      expect(menu.height, greaterThan(trigger.top - done.bottom));
+      expect(menu.top, greaterThanOrEqualTo(done.bottom));
+    });
+
     testWidgets('a row-wide trigger opens against its trailing edge', (
       tester,
     ) async {

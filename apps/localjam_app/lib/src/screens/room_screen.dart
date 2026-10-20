@@ -2365,42 +2365,49 @@ class _TitleBlock extends StatelessWidget {
         }
 
         final titleLine = _lineHeight(titleStyle, scaler);
-        return Row(
-          crossAxisAlignment: accessible
-              ? CrossAxisAlignment.start
-              : CrossAxisAlignment.center,
-          children: [
-            Expanded(
-              child: Semantics(
-                container: true,
-                header: true,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    if (accessible)
-                      // Wrapped at AX5, but never inside a word (N3).
-                      JamWholeWords(child: Text(title, style: titleStyle))
-                    else
-                      JamMarquee(title, style: titleStyle),
-                    ?subtitle,
-                    ?creditLine,
-                  ],
+        return JamMenuKeepClearScope(
+          child: Row(
+            crossAxisAlignment: accessible
+                ? CrossAxisAlignment.start
+                : CrossAxisAlignment.center,
+            children: [
+              Expanded(
+                child: Semantics(
+                  container: true,
+                  header: true,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      // The "•••" beside it opens past the title, never
+                      // over it (N6).
+                      JamMenuKeepClear(
+                        child: accessible
+                            // Wrapped at AX5, but never inside a word (N3).
+                            ? JamWholeWords(
+                                child: Text(title, style: titleStyle),
+                              )
+                            : JamMarquee(title, style: titleStyle),
+                      ),
+                      ?subtitle,
+                      ?creditLine,
+                    ],
+                  ),
                 ),
               ),
-            ),
-            const SizedBox(width: JamSpace.sm),
-            // The menu's 30 circle sits at the end of its 44 target
-            // (`triggerAlignment`), so the circle's edge lines up with the
-            // cover's. Over a wrapped title it stays on the first line.
-            if (accessible)
-              Transform.translate(
-                offset: Offset(0, (titleLine - JamMetrics.hitTarget) / 2),
-                child: menu,
-              )
-            else
-              menu,
-          ],
+              const SizedBox(width: JamSpace.sm),
+              // The menu's 30 circle sits at the end of its 44 target
+              // (`triggerAlignment`), so the circle's edge lines up with the
+              // cover's. Over a wrapped title it stays on the first line.
+              if (accessible)
+                Transform.translate(
+                  offset: Offset(0, (titleLine - JamMetrics.hitTarget) / 2),
+                  child: menu,
+                )
+              else
+                menu,
+            ],
+          ),
         );
       },
     );

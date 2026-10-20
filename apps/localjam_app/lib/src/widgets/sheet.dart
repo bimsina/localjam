@@ -55,6 +55,7 @@ import '../design/tokens.dart';
 import '../design/typography.dart';
 import 'buttons.dart';
 import 'list.dart';
+import 'menu.dart';
 import 'progress.dart';
 import 'section.dart';
 
@@ -530,7 +531,8 @@ class _JamSheetScaffoldState extends State<JamSheetScaffold> {
           const JamSheetGrabber()
         else if (form)
           const SizedBox(height: JamSpace.sm),
-        ?header,
+        // Menus opened in the sheet never cover its header and Done (N6).
+        if (header != null) JamMenuKeepClear(child: header),
         if (scrollController == null)
           Flexible(child: content)
         else
@@ -542,7 +544,10 @@ class _JamSheetScaffoldState extends State<JamSheetScaffold> {
       controller: scrollController,
       child: _JamSheetDragScope(
         notifier: _lock,
-        child: JamSheetDragGuard(lock: _lock, child: column),
+        child: JamSheetDragGuard(
+          lock: _lock,
+          child: JamMenuKeepClearScope(child: column),
+        ),
       ),
     );
   }
