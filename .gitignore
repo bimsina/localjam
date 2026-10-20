@@ -13,3 +13,13 @@ test-media/
 # (identity-v4) or by a native device pass (native-*). Not committed — too large.
 docs/screenshots/identity-v4/
 docs/screenshots/native-*/
+
+# The browser player the host app serves to web guests: apps/localjam_web's
+# release build, copied in by tool/build_web_guest.sh. Build output is never
+# committed. The .gitkeep in each directory apps/localjam_app/pubspec.yaml
+# declares is, because Flutter refuses to build with a declared asset
+# directory missing: without the player the app still builds, and its rooms
+# serve the built-in "install the app" page instead.
+apps/localjam_app/assets/web/**
+!apps/localjam_app/assets/web/**/
+!apps/localjam_app/assets/web/**/.gitkeep

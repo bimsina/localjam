@@ -12,6 +12,7 @@ import 'package:localjam_app/src/design/theme.dart';
 import 'package:localjam_app/src/router.dart';
 import 'package:localjam_app/src/state/app_settings.dart';
 import 'package:localjam_app/src/state/session_controller.dart';
+import 'package:localjam_app/src/state/web_guest_bundle.dart';
 import 'package:localjam_client/localjam_client.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -51,12 +52,21 @@ void mockNativeChannels({int durationUs = 60000000}) {
 /// A controller wired for tests: native channels mocked, prefs seeded with a
 /// known identity, and jam-history recording disabled so nothing touches
 /// the real application-support directory.
-JamSessionController testSession({String identity = 'Silky Puffin'}) {
+///
+/// Its rooms serve no browser player unless [webGuest] brings one: the
+/// app's own is whatever this checkout last built into `assets/web/`, and a
+/// test must not pass on one laptop and fail on a clean clone.
+JamSessionController testSession({
+  String identity = 'Silky Puffin',
+  WebGuestBundle? webGuest,
+}) {
   mockNativeChannels();
   SharedPreferences.setMockInitialValues({'localjam.displayName': identity});
   final previous = JamEngine.historyStoreProvider;
   JamEngine.historyStoreProvider = () async => null;
-  final controller = JamSessionController();
+  final controller = JamSessionController(
+    webGuest: webGuest ?? WebGuestBundle.loaded(null),
+  );
   addTearDown(() async {
     await controller.leave();
     JamEngine.historyStoreProvider = previous;
