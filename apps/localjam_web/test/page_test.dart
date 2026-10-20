@@ -103,6 +103,51 @@ void main() {
       expect(t.link!.port, 5000);
     });
 
+    test('startup remembers the invitation and drops it from the address; a '
+        'reload without it reads the remembered one', () {
+      final opened = InviteStartup.resolve(pageUrl, null);
+      expect(opened.page, pageUrl);
+      expect(opened.remember, pageUrl.fragment);
+      expect(
+        opened.cleanAddress.toString(),
+        'http://192.168.1.7:44100/join',
+        reason: 'same path, no token',
+      );
+
+      final reloaded = InviteStartup.resolve(
+        opened.cleanAddress!,
+        opened.remember,
+      );
+      expect(reloaded.remember, isNull);
+      expect(reloaded.cleanAddress, isNull);
+      final target = JoinTarget.fromPageUrl(reloaded.page);
+      expect(target.link!.token, 't0k3n');
+      expect(target.jamName, 'Road Trip');
+      expect(JoinLink.fromUri(target.appLink!)!.hosts, [
+        '192.168.1.7',
+        '192.168.43.1',
+      ], reason: 'Open in App keeps every candidate after a reload');
+
+      // A new link in the same tab replaces the remembered one.
+      final other = Uri.parse('http://192.168.1.7:44100/join#v=1&token=n3w');
+      final replaced = InviteStartup.resolve(other, opened.remember);
+      expect(replaced.remember, other.fragment);
+      expect(JoinTarget.fromPageUrl(replaced.page).link!.token, 'n3w');
+
+      // A fragment that is no invitation is read as it is, never mixed
+      // with a remembered one; nothing remembered is nothing to join.
+      final junk = Uri.parse('http://192.168.1.7:44100/join#v=1&name=x');
+      final kept = InviteStartup.resolve(junk, opened.remember);
+      expect(kept.page, junk);
+      expect(kept.cleanAddress, isNull);
+      expect(
+        JoinTarget.fromPageUrl(
+          InviteStartup.resolve(opened.cleanAddress!, null).page,
+        ).canJoin,
+        isFalse,
+      );
+    });
+
     test('no token, or not http, is no invitation', () {
       for (final url in [
         'http://192.168.1.7:44100/join',
@@ -513,7 +558,7 @@ void main() {
     await listen(tester);
     final line = find.bySemanticsLabel('Getting this song…');
     final data = tester.getSemantics(line).getSemanticsData();
-    expect(data.hasFlag(SemanticsFlag.isLiveRegion), isTrue);
+    expect(data.flagsCollection.isLiveRegion, isTrue);
     room
       ..prefetch = {
         'm_a': const JamPrefetchState(

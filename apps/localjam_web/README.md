@@ -44,9 +44,12 @@ dart run tool/browser_check.dart --listen 'http://<lan-ip>:<port>/join#v=1&token
 ```
 
 `tool/browser_check.dart` drives headless Chrome over the DevTools protocol:
-it lists every request (and fails if one left the origin), checks the
-address bar still holds the invitation, clicks "Tap to Listen" as a real
-input event and prints what the page says as the jam goes on.
+it lists every request (and fails if one left the origin), checks the token
+left the address bar (the page keeps the invitation in the tab's
+`sessionStorage` and drops the fragment with `history.replaceState`, so the
+token is not in the browser's history) and that a reload still finds it,
+clicks "Tap to Listen" as a real input event and prints what the page says as
+the jam goes on.
 
 ## Tests
 

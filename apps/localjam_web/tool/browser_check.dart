@@ -4,8 +4,9 @@
 ///
 /// * every request the page made, and whether any left the page's origin
 ///   (the page must make none: the room has no internet);
-/// * that the address bar still holds the invitation after Flutter started
-///   (the fragment carries the token, so a reload must still work);
+/// * that the token left the address bar once the page started (it is kept
+///   in the tab's sessionStorage instead, so it is not in the browser's
+///   history), and that a reload still finds the invitation;
 /// * with `--listen`, a real (trusted) click on "Tap to Listen" — Chrome's
 ///   input pipeline, not a script, so the page's audio unlock runs inside a
 ///   user gesture — and then what the page says (its accessibility text) as
@@ -91,18 +92,24 @@ Future<void> main(List<String> args) async {
 
     final href = await cdp.evaluate('location.href');
     stdout.writeln('address bar after start: $href');
-    stdout.writeln(
-      href == url
-          ? '  OK: the invitation (fragment) is still there'
-          : '  CHANGED: was $url',
+    final remembered = await cdp.evaluate(
+      "sessionStorage.getItem('localjam.invite')",
     );
+    final expected = Uri.parse(url).removeFragment().toString();
+    stdout.writeln(
+      href == expected && remembered == Uri.parse(url).fragment
+          ? '  OK: the token left the address and is kept for this tab'
+          : '  UNEXPECTED: kept "$remembered", was $url',
+    );
+    await cdp.call('Page.reload');
+    await Future<void>.delayed(const Duration(seconds: 5));
 
     // Flutter's accessibility tree, so the page can be read and clicked.
     await cdp.evaluate(
       "document.querySelector('flt-semantics-placeholder')?.click(); true",
     );
     await Future<void>.delayed(const Duration(seconds: 1));
-    stdout.writeln('landing says: ${await _pageText(cdp)}');
+    stdout.writeln('landing, after a reload, says: ${await _pageText(cdp)}');
 
     if (listen) {
       final box = await cdp.evaluate('''(() => {

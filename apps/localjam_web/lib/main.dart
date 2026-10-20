@@ -4,13 +4,16 @@
 ///
 /// The page's own URL is the invitation: its fragment (`#v=1&token=…`)
 /// carries the token and its origin is the host. It is read once, here,
-/// before anything else runs, and the address bar is then left exactly as
-/// it was opened: no URL strategy at all. Flutter's default hash strategy
-/// would read the fragment as a route; the path strategy keeps the
-/// fragment out of routing but rewrites the address on startup — under
-/// `--base-href /web/` to `/web/join`, without the fragment — so a reload
-/// would land on a 404 with the invitation gone. The page has one screen
-/// and no routes, so it needs no browser-history integration.
+/// before anything else runs ([InviteStartup]): kept in this tab's
+/// `sessionStorage` and dropped from the address with
+/// `history.replaceState` (same path, no fragment), so the token does not
+/// sit in the browser's history; a reload reads it back from the tab. A
+/// tab that cannot store it keeps the address as it was opened. No URL
+/// strategy at all: Flutter's default hash strategy would read the
+/// fragment as a route; the path strategy rewrites the address on startup
+/// — under `--base-href /web/` to `/web/join` — so a reload would land on
+/// a 404. The page has one screen and no routes, so it needs no
+/// browser-history integration.
 library;
 
 import 'package:flutter/widgets.dart';
@@ -22,8 +25,21 @@ import 'src/engine_room.dart';
 import 'src/join_target.dart';
 import 'src/listener_app.dart';
 
+/// This tab's remembered invitation (the join fragment), per origin.
+const String _inviteKey = 'localjam.invite';
+
 void main() {
-  final target = JoinTarget.fromPageUrl(Uri.base);
+  final startup = InviteStartup.resolve(Uri.base, _readInvite());
+  final remember = startup.remember;
+  final clean = startup.cleanAddress;
+  if (remember != null && clean != null && _storeInvite(remember)) {
+    try {
+      web.window.history.replaceState(null, '', clean.toString());
+    } catch (_) {
+      // The address keeps the token; the page works either way.
+    }
+  }
+  final target = JoinTarget.fromPageUrl(startup.page);
   setUrlStrategy(null);
   runApp(
     ListenerApp(
@@ -37,4 +53,24 @@ void main() {
       openUrl: (uri) => web.window.location.href = uri.toString(),
     ),
   );
+}
+
+/// The remembered invitation, or null (none, or storage unavailable:
+/// private modes and disabled site data throw).
+String? _readInvite() {
+  try {
+    return web.window.sessionStorage.getItem(_inviteKey);
+  } catch (_) {
+    return null;
+  }
+}
+
+/// Remembers [fragment] for this tab; false when it could not.
+bool _storeInvite(String fragment) {
+  try {
+    web.window.sessionStorage.setItem(_inviteKey, fragment);
+    return web.window.sessionStorage.getItem(_inviteKey) == fragment;
+  } catch (_) {
+    return false;
+  }
 }
