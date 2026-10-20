@@ -361,6 +361,14 @@ class Capture {
 
   /// Lets reads, decodes and backdrop sampling finish while the clock
   /// moves only half a second: a title that scrolls is still at its start.
+  /// Lets a scrolling Now Playing title make its passes and come to rest
+  /// at its start, so a capture shows how a long title reads at rest
+  /// rather than a frame of its scroll.
+  Future<void> titleAtRest() async {
+    await tester.pump(const Duration(minutes: 2));
+    await tester.pump();
+  }
+
   Future<void> settleStill() async {
     for (var cycle = 0; cycle < 12; cycle++) {
       await tester.runAsync(
@@ -1181,12 +1189,14 @@ Future<void> captureStress(
     });
 
     await cap.mount(const RoomScreen());
+    await cap.titleAtRest();
     await cap.snap(
       '46-player-long-title',
       still: true,
       note:
           'A long tagged title, a long jam name and seven people (host + six '
-          'guests over loopback); captured before a scrolling title moves.',
+          'guests over loopback); the title at rest at its start, after its '
+          'passes.',
     );
     unawaited(
       showRoomSheet(
@@ -1230,6 +1240,7 @@ Future<void> captureStress(
     await tester.runAsync(() async => host.setMedia(items.first.mediaId));
     cap.scale = 2;
     await cap.mount(const RoomScreen());
+    await cap.titleAtRest();
     await cap.snap(
       '48-player-2x-text',
       still: true,
