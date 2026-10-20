@@ -431,18 +431,20 @@ class JamAlertTextField extends StatelessWidget {
   }
 }
 
-/// Presents an alert on the root navigator over the `scrim`.
+/// Presents an alert on the root navigator over the `scrim`, in the
+/// appearance of where it was opened from ([jamPresentationBrightness]):
+/// End Jam? over the room is the room's dark, in both appearances (R2).
 Future<T?> showJamAlert<T>(
   BuildContext context, {
   required WidgetBuilder builder,
   bool barrierDismissible = false,
 }) {
-  final colors = context.jamColors;
+  final appearance = jamPresentationBrightness(context);
   return Navigator.of(context, rootNavigator: true).push<T>(
     CupertinoDialogRoute<T>(
       context: context,
-      builder: builder,
-      barrierColor: colors.scrim,
+      builder: jamPresentedIn(appearance, builder),
+      barrierColor: jamPresentationColors(context, appearance).scrim,
       barrierDismissible: barrierDismissible,
     ),
   );

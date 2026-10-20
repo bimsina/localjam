@@ -637,6 +637,39 @@ void main() {
       );
     });
 
+    testWidgets('inside the room — or on its backdrop — a menu is the room\'s '
+        'solid dark (R2)', (tester) async {
+      for (final backdrop in [false, true]) {
+        await tester.pumpWidget(const SizedBox());
+        Widget menu = JamMenuButton(
+          groups: [
+            [JamMenuItem(title: 'Diagnostics', onPressed: () {})],
+          ],
+        );
+        if (backdrop) menu = JamOnBackdrop(child: menu);
+        await tester.pumpWidget(
+          _host(
+            Stack(
+              alignment: Alignment.center,
+              children: [
+                const JamPresentationAppearance(brightness: Brightness.dark),
+                menu,
+              ],
+            ),
+          ),
+        );
+        await tester.tap(find.byType(JamMenuButton));
+        await tester.pumpAndSettle();
+        final item = tester.element(find.text('Diagnostics'));
+        expect(Theme.of(item).brightness, Brightness.dark);
+        // The menu's own ground, never the backdrop's see-through one.
+        expect(
+          item.jamColors.elevatedGroupedSurface,
+          JamColors.dark.elevatedGroupedSurface,
+        );
+      }
+    });
+
     testWidgets('JamMenuPanel hands the choice back when asked to', (
       tester,
     ) async {

@@ -424,4 +424,168 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Invite People'), findsNothing);
   });
+
+  group('the room keeps what it opens in its own dark (R2)', () {
+    /// A page that is dark whatever the app says, as the room is: its
+    /// State-level context sits above its own dark theme, and it declares
+    /// the appearance of what it presents.
+    Widget room(void Function(BuildContext) open, {bool declare = true}) =>
+        MaterialApp(
+          theme: jamLightTheme(),
+          home: Builder(
+            builder: (outer) => JamForcedAppearance(
+              brightness: Brightness.dark,
+              child: Scaffold(
+                body: Stack(
+                  children: [
+                    if (declare)
+                      const JamPresentationAppearance(
+                        brightness: Brightness.dark,
+                      ),
+                    Center(
+                      child: TextButton(
+                        // The outer context: above the page's dark theme,
+                        // like a room State's own.
+                        onPressed: () => open(outer),
+                        child: const Text('Open'),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        );
+
+    Color sheetGround(WidgetTester tester) => tester
+        .widget<ColoredBox>(
+          find
+              .descendant(
+                of: find.byType(JamSheetSurface),
+                matching: find.byType(ColoredBox),
+              )
+              .first,
+        )
+        .color;
+
+    Color barrier(WidgetTester tester) =>
+        tester.widgetList<ModalBarrier>(find.byType(ModalBarrier)).last.color!;
+
+    testWidgets('a sheet asked for from the room is dark in a light app', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        room(
+          (context) => showJamSheet<void>(
+            context,
+            title: 'People',
+            builder: (_) => const SizedBox(height: 40),
+          ),
+        ),
+      );
+      await tester.tap(find.text('Open'));
+      await tester.pumpAndSettle();
+      expect(sheetGround(tester), JamColors.dark.elevated);
+      expect(
+        Theme.of(tester.element(find.text('People'))).brightness,
+        Brightness.dark,
+      );
+      expect(barrier(tester), JamColors.dark.scrim);
+      // And anything opened from inside it stays dark too.
+      expect(
+        jamPresentationBrightness(tester.element(find.text('People'))),
+        Brightness.dark,
+      );
+    });
+
+    testWidgets('without the declaration the State context gets the app\'s', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        room(
+          (context) => showJamSheet<void>(
+            context,
+            title: 'People',
+            builder: (_) => const SizedBox(height: 40),
+          ),
+          declare: false,
+        ),
+      );
+      await tester.tap(find.text('Open'));
+      await tester.pumpAndSettle();
+      expect(sheetGround(tester), JamColors.light.elevated);
+    });
+
+    testWidgets('a call from inside a dark subtree follows it', (tester) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: jamLightTheme(),
+          home: JamForcedAppearance(
+            brightness: Brightness.dark,
+            child: Scaffold(
+              body: Builder(
+                builder: (inner) => TextButton(
+                  onPressed: () => showJamSheet<void>(
+                    inner,
+                    title: 'Sound Offset',
+                    builder: (_) => const SizedBox(height: 40),
+                  ),
+                  child: const Text('Open'),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.tap(find.text('Open'));
+      await tester.pumpAndSettle();
+      expect(sheetGround(tester), JamColors.dark.elevated);
+    });
+
+    testWidgets('on an ordinary page nothing changes', (tester) async {
+      await tester.pumpWidget(
+        _host(
+          (context) => showJamSheet<void>(
+            context,
+            title: 'Library',
+            builder: (_) => const SizedBox(height: 40),
+          ),
+        ),
+      );
+      await tester.tap(find.text('Open'));
+      await tester.pumpAndSettle();
+      expect(sheetGround(tester), JamColors.light.elevated);
+      expect(barrier(tester), JamColors.light.scrim);
+      expect(
+        jamPresentationBrightness(tester.element(find.text('Library'))),
+        isNull,
+      );
+    });
+
+    testWidgets('the declaration goes with the page that made it', (
+      tester,
+    ) async {
+      late BuildContext page;
+      Widget app({required bool declare}) => MaterialApp(
+        theme: jamLightTheme(),
+        home: Builder(
+          builder: (context) {
+            page = context;
+            return Stack(
+              children: [
+                if (declare)
+                  const JamPresentationAppearance(brightness: Brightness.dark),
+              ],
+            );
+          },
+        ),
+      );
+      await tester.pumpWidget(app(declare: true));
+      expect(jamPresentationBrightness(page), Brightness.dark);
+      // The room becomes the light "jam ended" page: its sheets follow
+      // the app again.
+      await tester.pumpWidget(app(declare: false));
+      expect(jamPresentationBrightness(page), isNull);
+    });
+  });
 }

@@ -352,4 +352,41 @@ void main() {
     expect(find.text('Dark'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets('End Jam? asked for from the room is the room\'s dark (R2)', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: jamLightTheme(),
+        home: Builder(
+          builder: (outer) => Scaffold(
+            body: Stack(
+              children: [
+                const JamPresentationAppearance(brightness: Brightness.dark),
+                Center(
+                  child: TextButton(
+                    onPressed: () => JamDialogs.confirmDestructive(
+                      outer,
+                      title: 'End Jam?',
+                      confirmLabel: 'End Jam',
+                    ),
+                    child: const Text('Go'),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('Go'));
+    await tester.pumpAndSettle();
+    expect(_ground(tester, 'Cancel'), JamColors.dark.fill);
+    expect(_ground(tester, 'End Jam'), JamColors.dark.dangerFilled);
+    expect(
+      Theme.of(tester.element(find.text('End Jam?'))).brightness,
+      Brightness.dark,
+    );
+  });
 }

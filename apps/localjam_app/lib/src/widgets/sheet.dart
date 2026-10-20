@@ -43,6 +43,7 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 
+import '../design/theme.dart';
 import '../design/tokens.dart';
 import '../design/typography.dart';
 import 'buttons.dart';
@@ -1044,22 +1045,29 @@ class _JamSheetPageState<T> extends State<_JamSheetPage<T>>
 /// on top of this; a sheet that owns its header (the library picker, whose
 /// title follows the selection) or has none (a permission primer) calls it
 /// directly — never a bare `showModalBottomSheet`.
+///
+/// It takes the appearance of where it was opened from
+/// ([jamPresentationBrightness]): anything opened inside the room is the
+/// room's dark, in both appearances (R2), scrim included.
 Future<T?> showJamModalSheet<T>(
   BuildContext context, {
   required WidgetBuilder builder,
   bool enableDrag = true,
   bool isDismissible = true,
   RouteSettings? routeSettings,
-}) => Navigator.of(context, rootNavigator: true).push<T>(
-  JamSheetRoute<T>(
-    builder: builder,
-    formSheet: jamUsesFormSheet(context),
-    barrierColor: context.jamColors.scrim,
-    enableDrag: enableDrag,
-    isDismissible: isDismissible,
-    settings: routeSettings,
-  ),
-);
+}) {
+  final appearance = jamPresentationBrightness(context);
+  return Navigator.of(context, rootNavigator: true).push<T>(
+    JamSheetRoute<T>(
+      builder: jamPresentedIn(appearance, builder),
+      formSheet: jamUsesFormSheet(context),
+      barrierColor: jamPresentationColors(context, appearance).scrim,
+      enableDrag: enableDrag,
+      isDismissible: isDismissible,
+      settings: routeSettings,
+    ),
+  );
+}
 
 /// Opens a LocalJam sheet.
 ///
