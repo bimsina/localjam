@@ -227,7 +227,17 @@ void main() {
       findsNothing,
     );
     expect(find.text(' and 4 others'), findsOneWidget);
-    expect(find.text('Electric Mongoose Supreme'), findsOneWidget);
+    // The long name, cut, ends in its own ellipsis with nothing before it.
+    final cut = find.byWidgetPredicate((w) {
+      final text = w is Text ? w.data ?? '' : '';
+      return text.length > 1 &&
+          text.endsWith('…') &&
+          !text.endsWith(' …') &&
+          'Electric Mongoose Supreme'.startsWith(
+            text.substring(0, text.length - 1),
+          );
+    });
+    expect(cut, findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
