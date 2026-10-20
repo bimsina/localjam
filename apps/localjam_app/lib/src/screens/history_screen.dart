@@ -895,9 +895,8 @@ class _HistoryDetailScreenState extends State<HistoryDetailScreen> {
     // The songs credit people by face, coloured as the jam coloured them.
     final faces = jamRecordColorsByName(record, self: _self);
 
-    // The nav bar's own tint ellipsis, like the app's other nav actions: a
-    // glass circle is for the player's backdrop, and on paper it vanishes
-    // in light mode while it shows in dark.
+    // The app's one "•••": a fill circle on paper, its dots in the tint of
+    // the bar's other actions.
     final menu = JamMenuButton(
       semanticLabel: HistoryStrings.more,
       groups: [

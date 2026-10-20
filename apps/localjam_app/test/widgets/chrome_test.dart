@@ -429,7 +429,14 @@ void main() {
           ),
         ),
       );
-      expect(find.byIcon(CupertinoIcons.ellipsis_circle), findsOneWidget);
+      // The app's one "•••": dots in a fill circle, in the tint of a nav
+      // bar's actions — never the outlined ellipsis_circle.
+      expect(find.byIcon(CupertinoIcons.ellipsis_circle), findsNothing);
+      final more = tester.widget<JamGlassButton>(find.byType(JamGlassButton));
+      expect(more.icon, CupertinoIcons.ellipsis);
+      expect(more.visualSize, kJamMoreButtonSize);
+      expect(more.fillColor, JamColors.light.fill);
+      expect(more.iconColor, JamColors.light.tint);
       await tester.tap(find.byType(JamMenuButton));
       await tester.pumpAndSettle();
       expect(find.text('Invite people'), findsOneWidget);
@@ -781,7 +788,9 @@ void main() {
           ),
         ),
       );
-      expect(find.byType(JamGlassButton), findsOneWidget);
+      final more = tester.widget<JamGlassButton>(find.byType(JamGlassButton));
+      expect(more.onArtwork, isTrue);
+      expect(more.visualSize, kJamMoreButtonSize);
       expect(find.byIcon(CupertinoIcons.ellipsis), findsOneWidget);
     });
   });

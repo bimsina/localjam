@@ -573,7 +573,6 @@ class _RoomScreenState extends State<RoomScreen>
     // its own.
     final menu = JamMenuButton(
       trigger: JamMenuTrigger.glassOnArtwork,
-      visualSize: 30,
       triggerAlignment: AlignmentDirectional.centerEnd,
       semanticLabel: JamRoomStrings.more,
       // Dark over the backdrop, whatever the app theme says.

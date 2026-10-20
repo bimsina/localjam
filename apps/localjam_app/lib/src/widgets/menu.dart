@@ -39,7 +39,6 @@ import 'package:flutter/services.dart';
 import '../design/theme.dart';
 import '../design/tokens.dart';
 import '../design/typography.dart';
-import 'buttons.dart';
 import 'glass.dart';
 import 'pressable.dart';
 
@@ -404,16 +403,24 @@ class JamMenuBorder extends OutlinedBorder {
 }
 
 /// How the menu's trigger looks.
+///
+/// Both draw the app's one "more" button: a [kJamMoreButtonSize] circle
+/// with "•••" in it — never a bare glyph, never an outlined circle — so a
+/// menu looks the same on a page, a row and the player.
 enum JamMenuTrigger {
-  /// A bare tint "•••" (`ellipsis_circle`) for nav bars and rows.
+  /// On paper and in sheets: a flat `fill` circle, its dots in `tint` (in
+  /// a nav bar, with the bar's other actions) or as the caller colours
+  /// them (`secondaryLabel` in a list of rows, where a column of raspberry
+  /// would outshout the names).
   plain,
 
-  /// A round chrome-glass button with "•••" — over ordinary content.
-  glass,
-
-  /// A round glass button over artwork / the Now Playing backdrop.
+  /// Over artwork / the Now Playing backdrop: the same circle in glass,
+  /// its dots white.
   glassOnArtwork,
 }
+
+/// The "more" button's circle: the one size it is drawn at everywhere.
+const double kJamMoreButtonSize = 30;
 
 /// Which edge of its trigger a menu lines up with.
 enum JamMenuAlignment {
@@ -560,7 +567,7 @@ class JamMenuButton extends StatelessWidget {
     this.semanticLabel = JamMenuStrings.more,
     this.trigger = JamMenuTrigger.plain,
     this.icon,
-    this.visualSize = JamMetrics.glassButton,
+    this.visualSize = kJamMoreButtonSize,
     this.iconColor,
     this.builder,
     this.enabled = true,
@@ -576,11 +583,10 @@ class JamMenuButton extends StatelessWidget {
   final String semanticLabel;
   final JamMenuTrigger trigger;
 
-  /// Overrides the trigger glyph (default: `ellipsis` for glass,
-  /// `ellipsis_circle` for plain).
+  /// Overrides the trigger glyph (default: `ellipsis`).
   final IconData? icon;
 
-  /// The glass trigger's circle (30 for the Now Playing title row).
+  /// The trigger's circle ([kJamMoreButtonSize]).
   final double visualSize;
 
   final Color? iconColor;
@@ -601,9 +607,9 @@ class JamMenuButton extends StatelessWidget {
   /// [JamMenuAnchor.preferUp]).
   final bool preferUp;
 
-  /// Where a glass trigger's circle sits in its 44 hit box (see
-  /// `JamGlassButton.alignment`) — `centerRight` to put the circle's edge
-  /// on the content's trailing edge.
+  /// Where the trigger's circle sits in its 44 hit box (see
+  /// `JamGlassButton.alignment`) — `centerEnd` to put the circle's edge on
+  /// the content's trailing edge.
   final AlignmentGeometry triggerAlignment;
 
   @override
@@ -619,24 +625,21 @@ class JamMenuButton extends StatelessWidget {
           : null;
       final custom = builder;
       if (custom != null) return custom(context, open ?? () {});
-      return switch (trigger) {
-        JamMenuTrigger.plain => JamIconButton(
-          icon: icon ?? CupertinoIcons.ellipsis_circle,
-          semanticLabel: semanticLabel,
-          color: iconColor,
-          onPressed: open,
-        ),
-        JamMenuTrigger.glass || JamMenuTrigger.glassOnArtwork => JamGlassButton(
-          icon: icon ?? CupertinoIcons.ellipsis,
-          semanticLabel: semanticLabel,
-          onArtwork: trigger == JamMenuTrigger.glassOnArtwork,
-          visualSize: visualSize,
-          iconSize: visualSize <= 30 ? JamIconSize.inline : 18,
-          iconColor: iconColor,
-          alignment: triggerAlignment,
-          onPressed: open,
-        ),
-      };
+      final onArtwork = trigger == JamMenuTrigger.glassOnArtwork;
+      final colors = context.jamColors;
+      return JamGlassButton(
+        icon: icon ?? CupertinoIcons.ellipsis,
+        semanticLabel: semanticLabel,
+        onArtwork: onArtwork,
+        // Flat on paper, where the blurred chrome would vanish into the
+        // page in light mode.
+        fillColor: onArtwork ? null : colors.fill,
+        visualSize: visualSize,
+        iconSize: visualSize <= 30 ? JamIconSize.inline : 18,
+        iconColor: iconColor ?? (onArtwork ? null : colors.tint),
+        alignment: triggerAlignment,
+        onPressed: open,
+      );
     },
   );
 }

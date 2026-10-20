@@ -48,9 +48,6 @@ enum JamPeerRole { guest, cohost, host }
 /// `MediaReadiness`.
 enum JamPeerReadiness { ready, fetching, missing }
 
-/// How far the "•••" glyph sits inside its 44 pt box.
-const double _kMenuGlyphInset = (JamMetrics.hitTarget - JamMetrics.navIcon) / 2;
-
 /// One person: face, name, and at most one quiet line about them.
 class JamPeerRow extends StatelessWidget implements JamSelfSeparatingRow {
   const JamPeerRow({
@@ -150,23 +147,16 @@ class JamPeerRow extends StatelessWidget implements JamSelfSeparatingRow {
       ),
       leadingWidth: JamAvatarSize.sheet,
       trailing: menu != null
-          // A quiet "•••": tint is for the one primary action, and a column
-          // of raspberry circles would outshout the names. Its glyph, not
-          // its 44 box, ends on the row's trailing inset, where a switch or
-          // a value ends on the rows around it (CR-13).
-          ? Transform.translate(
-              offset: Offset(
-                Directionality.of(context) == TextDirection.rtl
-                    ? -_kMenuGlyphInset
-                    : _kMenuGlyphInset,
-                0,
-              ),
-              child: JamMenuButton(
-                groups: menu,
-                semanticLabel: JamPeerRowStrings.more(name),
-                icon: CupertinoIcons.ellipsis,
-                iconColor: colors.secondaryLabel,
-              ),
+          // The app's one "•••", its dots quiet: tint is for the one
+          // primary action, and a column of raspberry would outshout the
+          // names. Its circle, not its 44 box, ends on the row's trailing
+          // inset, where a switch or a value ends on the rows around it
+          // (CR-13).
+          ? JamMenuButton(
+              groups: menu,
+              semanticLabel: JamPeerRowStrings.more(name),
+              iconColor: colors.secondaryLabel,
+              triggerAlignment: AlignmentDirectional.centerEnd,
             )
           : trailing,
       onTap: onTap,

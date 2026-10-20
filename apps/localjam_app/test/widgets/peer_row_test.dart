@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:localjam_app/src/design/theme.dart';
 import 'package:localjam_app/src/design/tokens.dart';
 import 'package:localjam_app/src/widgets/avatar.dart';
+import 'package:localjam_app/src/widgets/glass.dart';
 import 'package:localjam_app/src/widgets/menu.dart';
 import 'package:localjam_app/src/util/format.dart';
 import 'package:localjam_app/src/widgets/peer_row.dart';
@@ -130,10 +131,15 @@ void main() {
         find.bySemanticsLabel(JamPeerRowStrings.more('Silky Puffin')),
         findsOneWidget,
       );
-      // A quiet glyph in secondaryLabel, not a raspberry circle per row.
+      // The app's one "•••" circle, its dots quiet in secondaryLabel — not
+      // a raspberry column, and not a bare glyph of its own.
       final glyph = tester.widget<Icon>(find.byIcon(CupertinoIcons.ellipsis));
       expect(glyph.color, JamColors.light.secondaryLabel);
       expect(find.byIcon(CupertinoIcons.ellipsis_circle), findsNothing);
+      expect(
+        tester.widget<JamGlassButton>(find.byType(JamGlassButton)).fillColor,
+        JamColors.light.fill,
+      );
       await tester.tap(find.byIcon(CupertinoIcons.ellipsis));
       await tester.pumpAndSettle();
       await tester.tap(find.text('Make co-host'));
