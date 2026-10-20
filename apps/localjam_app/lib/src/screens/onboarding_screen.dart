@@ -256,6 +256,9 @@ class _Feature extends StatelessWidget {
   }
 }
 
+/// Above this text scale the identity card stacks Change under the name.
+const double kJamIdentityRowStackScale = 1.6;
+
 /// "You’ll appear as / Sparkly Kiwi" with your face and **Change**, on a
 /// card of its own — the name the app made up, said before it is on anyone
 /// else's screen. Leaving it alone keeps it; Continue is still the one tap.
@@ -271,6 +274,40 @@ class _IdentityRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final colors = context.jamColors;
     final known = name.isNotEmpty;
+    // At large text the name needs the card's whole width: Change moves
+    // under it instead of squeezing it to nothing.
+    final largeText =
+        MediaQuery.textScalerOf(context).scale(1) > kJamIdentityRowStackScale;
+    final avatar = known
+        ? JamAvatar(name: name, size: JamAvatarSize.sheet)
+        : const SizedBox.square(dimension: JamAvatarSize.sheet);
+    final words = Expanded(
+      child: Semantics(
+        label: OnboardingStrings.appearAs(name),
+        excludeSemantics: true,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              OnboardingStrings.appearAsLead.trim(),
+              style: context.jamFootnote.copyWith(color: colors.secondaryLabel),
+            ),
+            Text(
+              name,
+              maxLines: largeText ? 3 : 1,
+              overflow: TextOverflow.ellipsis,
+              style: context.jamHeadline,
+            ),
+          ],
+        ),
+      ),
+    );
+    final change = JamButton.plain(
+      label: OnboardingStrings.change,
+      semanticLabel: OnboardingStrings.changeName,
+      size: JamButtonSize.small,
+      onPressed: known ? onChange : null,
+    );
     // The same card a nearby jam sits on: the one object on this page that
     // is yours.
     final radius = BorderRadius.circular(JamRadius.section);
@@ -290,45 +327,30 @@ class _IdentityRow extends StatelessWidget {
           JamSpace.sm,
           JamSpace.md,
         ),
-        child: Row(
-          children: [
-            if (known)
-              JamAvatar(name: name, size: JamAvatarSize.sheet)
-            else
-              const SizedBox.square(dimension: JamAvatarSize.sheet),
-            const SizedBox(width: JamSpace.md),
-            Expanded(
-              child: Semantics(
-                label: OnboardingStrings.appearAs(name),
-                excludeSemantics: true,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      OnboardingStrings.appearAsLead.trim(),
-                      style: context.jamFootnote.copyWith(
-                        color: colors.secondaryLabel,
-                      ),
-                    ),
-                    Text(
-                      name,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: context.jamHeadline,
-                    ),
-                  ],
-                ),
+        child: largeText
+            ? Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      avatar,
+                      const SizedBox(width: JamSpace.md),
+                      words,
+                    ],
+                  ),
+                  const SizedBox(height: JamSpace.sm),
+                  change,
+                ],
+              )
+            : Row(
+                children: [
+                  avatar,
+                  const SizedBox(width: JamSpace.md),
+                  words,
+                  const SizedBox(width: JamSpace.sm),
+                  change,
+                ],
               ),
-            ),
-            const SizedBox(width: JamSpace.sm),
-            JamButton.plain(
-              label: OnboardingStrings.change,
-              semanticLabel: OnboardingStrings.changeName,
-              size: JamButtonSize.small,
-              onPressed: known ? onChange : null,
-            ),
-          ],
-        ),
       ),
     );
     final reduceMotion = jamReducedMotion(context);

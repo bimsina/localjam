@@ -7,6 +7,11 @@ import 'package:flutter_svg/flutter_svg.dart';
 import '../design/tokens.dart';
 import '../design/typography.dart';
 
+/// The most the wordmark grows with the reader's text size. It is a logo,
+/// not reading text, and its name is announced as "LocalJam" either way;
+/// beyond this it would push the header's controls off a phone.
+const double kJamWordmarkMaxTextScale = 1.3;
+
 /// The symbol's edge in the wordmark: about 1.5× the word's cap height, so
 /// the mark sits beside the name instead of overpowering it.
 const double kJamWordmarkSymbol = 20;
@@ -27,27 +32,30 @@ class JamWordmark extends StatelessWidget {
     return Semantics(
       label: 'LocalJam',
       excludeSemantics: true,
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          SvgPicture.asset(
-            'assets/brand/logo.svg',
-            width: kJamWordmarkSymbol,
-            height: kJamWordmarkSymbol,
-            colorFilter: ColorFilter.mode(colors.tint, BlendMode.srcIn),
-          ),
-          const SizedBox(width: 6),
-          Text(
-            'LocalJam',
-            style: context.jamTitle3.copyWith(
-              fontSize: 18,
-              height: 22 / 18,
-              fontWeight: FontWeight.w700,
-              letterSpacing: -0.5,
-              color: ink,
+      child: MediaQuery.withClampedTextScaling(
+        maxScaleFactor: kJamWordmarkMaxTextScale,
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            SvgPicture.asset(
+              'assets/brand/logo.svg',
+              width: kJamWordmarkSymbol,
+              height: kJamWordmarkSymbol,
+              colorFilter: ColorFilter.mode(colors.tint, BlendMode.srcIn),
             ),
-          ),
-        ],
+            const SizedBox(width: 6),
+            Text(
+              'LocalJam',
+              style: context.jamTitle3.copyWith(
+                fontSize: 18,
+                height: 22 / 18,
+                fontWeight: FontWeight.w700,
+                letterSpacing: -0.5,
+                color: ink,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

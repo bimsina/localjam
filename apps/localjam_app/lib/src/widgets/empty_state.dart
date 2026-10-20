@@ -33,23 +33,42 @@ const double kJamEmptyBlockHeight = 320;
 /// above any medium sheet that rises over it.
 ///
 /// The page's last sliver; `JamScaffold` gives it the bottom clearance, so
-/// an empty page never scrolls.
-SliverFillRemaining jamAnchoredEmptyState(Widget child) => SliverFillRemaining(
-  hasScrollBody: false,
-  child: Padding(
-    padding: const EdgeInsets.symmetric(vertical: JamSpace.xxxl),
-    child: Column(
-      children: [
-        const Spacer(),
-        ConstrainedBox(
-          constraints: const BoxConstraints(minHeight: kJamEmptyBlockHeight),
+/// an empty page never scrolls — except at large text ([kJamEmptyFlowScale]
+/// and up), where the block can outgrow any anchor: there it simply follows
+/// the title and the page scrolls.
+Widget jamAnchoredEmptyState(Widget child) => Builder(
+  builder: (context) {
+    if (MediaQuery.textScalerOf(context).scale(1) > kJamEmptyFlowScale) {
+      return SliverToBoxAdapter(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: JamSpace.xxl),
           child: Align(alignment: Alignment.topCenter, child: child),
         ),
-        const Spacer(flex: 2),
-      ],
-    ),
-  ),
+      );
+    }
+    return SliverFillRemaining(
+      hasScrollBody: false,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: JamSpace.xxxl),
+        child: Column(
+          children: [
+            const Spacer(),
+            ConstrainedBox(
+              constraints: const BoxConstraints(
+                minHeight: kJamEmptyBlockHeight,
+              ),
+              child: Align(alignment: Alignment.topCenter, child: child),
+            ),
+            const Spacer(flex: 2),
+          ],
+        ),
+      ),
+    );
+  },
 );
+
+/// Above this text scale an empty page's block flows instead of anchoring.
+const double kJamEmptyFlowScale = 1.6;
 
 /// The centred empty-state block, capped at 320 wide.
 class JamEmptyState extends StatelessWidget {
