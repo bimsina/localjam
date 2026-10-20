@@ -104,13 +104,29 @@ int _byName(String a, String b) {
   return folded != 0 ? folded : a.compareTo(b);
 }
 
-/// One or two initials for [name]: "Silky Puffin" becomes "SP".
+/// The first letter or digit in [text], upper-cased — skipping emoji,
+/// punctuation and symbols — or null when it has none. Faces and jam marks
+/// both take their letters this way.
+String? jamFirstLetterOf(String text) {
+  for (final c in text.characters) {
+    if (_letterOrDigit.hasMatch(c)) return c.toUpperCase();
+  }
+  return null;
+}
+
+final RegExp _letterOrDigit = RegExp(r'[\p{L}\p{N}]', unicode: true);
+
+/// One or two initials for [name]: "Silky Puffin" becomes "SP". Only
+/// letters and digits count (RB-21): "🎸 Mia" is "M", "(Mia)" is "M",
+/// "- DJ K" is "DK"; a name with none is "?".
 String identityInitials(String name) {
-  final words = name.trim().split(RegExp(r'\s+')).where((w) => w.isNotEmpty);
-  if (words.isEmpty) return '?';
-  if (words.length == 1) return words.first.characters.first.toUpperCase();
-  return (words.first.characters.first + words.last.characters.first)
-      .toUpperCase();
+  final letters = [
+    for (final word in name.trim().split(RegExp(r'\s+')))
+      ?jamFirstLetterOf(word),
+  ];
+  if (letters.isEmpty) return '?';
+  if (letters.length == 1) return letters.first;
+  return letters.first + letters.last;
 }
 
 /// At or below this diameter a face shows one initial (spec §10.10): two
@@ -119,8 +135,9 @@ const double kJamAvatarSingleInitialMax = 24;
 
 /// The avatar diameters the design uses.
 abstract final class JamAvatarSize {
-  /// The face beside "Added by Mia" on Now Playing (D6).
-  static const double credit = 16;
+  /// The face beside "Added by Mia" on Now Playing (D6): 18, so its letter
+  /// still reads (RB-17).
+  static const double credit = 18;
 
   /// Small piles inside rows (Past Jams), a jam mark's host badge on Nearby.
   static const double attribution = 20;
@@ -139,6 +156,14 @@ abstract final class JamAvatarSize {
 
   /// The profile row in Settings.
   static const double profile = 56;
+
+  /// [size] for a face that sits in a line of text (a credit, a row's
+  /// adder): it grows with the text beside it, up to 1.5× (RB-17), so a
+  /// large text size never puts a dot beside a word.
+  static double scaled(BuildContext context, double size) {
+    final scale = MediaQuery.textScalerOf(context).scale(17) / 17;
+    return size * scale.clamp(1.0, 1.5);
+  }
 }
 
 /// A person: initials on their identity colour.

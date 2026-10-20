@@ -115,13 +115,7 @@ class JamMark extends StatelessWidget {
 
   /// The letter a jam called [name] is marked with: its first letter or
   /// digit, upper-cased; null when it has none.
-  static String? monogramOf(String name) {
-    final letter = RegExp(r'[\p{L}\p{N}]', unicode: true);
-    for (final c in name.characters) {
-      if (letter.hasMatch(c)) return c.toUpperCase();
-    }
-    return null;
-  }
+  static String? monogramOf(String name) => jamFirstLetterOf(name);
 
   @override
   Widget build(BuildContext context) {

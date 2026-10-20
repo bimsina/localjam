@@ -240,4 +240,26 @@ void main() {
       expect(find.byType(JamAvatar), findsNothing);
     });
   });
+
+  testWidgets('a face beside text grows with it, up to 1.5× (RB-17)', (
+    tester,
+  ) async {
+    late double plain, large, huge;
+    Widget probe(double scale, void Function(double) out) => MediaQuery(
+      data: MediaQueryData(textScaler: TextScaler.linear(scale)),
+      child: Builder(
+        builder: (context) {
+          out(JamAvatarSize.scaled(context, JamAvatarSize.credit));
+          return const SizedBox.shrink();
+        },
+      ),
+    );
+    await tester.pumpWidget(probe(1, (v) => plain = v));
+    await tester.pumpWidget(probe(1.3, (v) => large = v));
+    await tester.pumpWidget(probe(3, (v) => huge = v));
+    expect(plain, JamAvatarSize.credit);
+    expect(large, closeTo(JamAvatarSize.credit * 1.3, 0.01));
+    expect(huge, JamAvatarSize.credit * 1.5);
+    expect(JamAvatarSize.credit, greaterThanOrEqualTo(18));
+  });
 }
