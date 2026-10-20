@@ -305,6 +305,7 @@ class JamTrackRow extends StatelessWidget implements JamSelfSeparatingRow {
                             name: adder,
                             color: addedByColor,
                             size: faceSize,
+                            tokenSize: JamAvatarSize.attribution,
                           ),
                         )
                       : null,

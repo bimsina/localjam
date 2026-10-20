@@ -2427,6 +2427,7 @@ class _TitleBlock extends StatelessWidget {
                     name: credit.name,
                     color: credit.color,
                     size: face,
+                    tokenSize: JamAvatarSize.credit,
                   ),
                 ),
                 const SizedBox(width: JamSpace.xs + JamSpace.xxs),

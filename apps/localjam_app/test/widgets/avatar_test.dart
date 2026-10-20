@@ -262,4 +262,29 @@ void main() {
     expect(huge, JamAvatarSize.credit * 1.5);
     expect(JamAvatarSize.credit, greaterThanOrEqualTo(18));
   });
+
+  testWidgets('a face grown with its text keeps its design size\'s letters: '
+      'one person reads the same way across a screen', (tester) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: jamLightTheme(),
+        home: const Row(
+          children: [
+            // The credit at 1.5×: 27 across, but an 18 face.
+            JamAvatar(
+              name: 'Electric Mongoose Supreme',
+              size: JamAvatarSize.credit * 1.5,
+              tokenSize: JamAvatarSize.credit,
+            ),
+            JamAvatar(
+              name: 'Electric Mongoose Supreme',
+              size: JamAvatarSize.strip,
+            ),
+          ],
+        ),
+      ),
+    );
+    expect(find.text('E'), findsNWidgets(2));
+    expect(find.text('ES'), findsNothing);
+  });
 }

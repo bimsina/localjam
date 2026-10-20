@@ -177,6 +177,7 @@ class JamAvatar extends StatelessWidget {
     this.semanticLabel,
     this.initials,
     this.color,
+    this.tokenSize,
   }) : initialsShift = 0;
 
   /// A face in a pile, its letters moved [initialsShift] into the part the
@@ -190,7 +191,8 @@ class JamAvatar extends StatelessWidget {
     this.initialsShift = 0,
   }) : dimmed = false,
        semanticLabel = null,
-       initials = null;
+       initials = null,
+       tokenSize = null;
 
   /// The display name the initials and (without [color]) the colour derive
   /// from.
@@ -216,6 +218,12 @@ class JamAvatar extends StatelessWidget {
   /// face still showing.
   final double initialsShift;
 
+  /// For a face drawn at [JamAvatarSize.scaled] of a design size: that
+  /// size. It, not the grown [size], decides one initial or two, so a
+  /// person reads the same way in every face on a screen ("E" in the
+  /// credit and in the pile, not "ES" in one) whatever the text size.
+  final double? tokenSize;
+
   /// The face colour for [name].
   static Color colorFor(String name) => identityColor(name);
 
@@ -224,7 +232,8 @@ class JamAvatar extends StatelessWidget {
 
   String get _letters {
     final letters = initials ?? identityInitials(name);
-    if (size > kJamAvatarSingleInitialMax || letters.characters.length < 2) {
+    if ((tokenSize ?? size) > kJamAvatarSingleInitialMax ||
+        letters.characters.length < 2) {
       return letters;
     }
     return letters.characters.first;
