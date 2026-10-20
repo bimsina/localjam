@@ -18,7 +18,10 @@ const _seekStepUs = 10_000_000; // 10 s
 const _tickInterval = Duration(milliseconds: 250);
 
 const joinUsage = '''
-Usage: localjam join [options] <localjam://join?...>
+Usage: localjam join [options] <join URL>
+
+The join URL is either form a host prints: http://host:port/join#...
+or localjam://join?...
 
 Join a LocalJam session as a guest and run a simulated, drift-corrected
 player (no audio output; the sync telemetry is the product).
@@ -54,13 +57,13 @@ Future<int> runJoinCommand(ArgResults args) async {
     stderr.writeln(joinUsage);
     return 64;
   }
-  final Uri joinUri;
-  try {
-    joinUri = Uri.parse(args.rest.single);
-  } on FormatException catch (e) {
-    stderr.writeln('join: invalid URI: ${e.message}');
+  // Either form (§1): the transport speaks the localjam:// one.
+  final link = JoinLink.parse(args.rest.single);
+  if (link == null) {
+    stderr.writeln('join: not a LocalJam join URL: ${args.rest.single}');
     return 64;
   }
+  final joinUri = link.toLocaljamUri();
   final skewPpm = double.tryParse(args['skew-ppm'] as String);
   if (skewPpm == null) {
     stderr.writeln('join: --skew-ppm must be a number');

@@ -17,6 +17,13 @@ ArgParser _buildParser() {
       help: 'TCP port to bind (0 = ephemeral).',
     )
     ..addOption('name', defaultsTo: 'LocalJam', help: 'Session name.')
+    ..addOption(
+      'web-dir',
+      valueHelp: 'path',
+      help:
+          'Serve this built web player to browser guests (a\n'
+          '`flutter build web --base-href /web/` directory).',
+    )
     ..addFlag('help', abbr: 'h', negatable: false, help: 'Show usage.');
 
   parser.addCommand('join')
@@ -57,7 +64,7 @@ void _printUsage(ArgParser parser, IOSink out) {
   out.writeln('  host <file...>   Serve media files as a session.');
   out.writeln(_indent(parser.commands['host']!.usage));
   out.writeln();
-  out.writeln('  join <uri>       Join a session as a guest.');
+  out.writeln('  join <url>       Join a session as a guest.');
   out.writeln(_indent(parser.commands['join']!.usage));
   out.writeln();
   out.writeln(
@@ -69,7 +76,7 @@ void _printUsage(ArgParser parser, IOSink out) {
   out.writeln('Example (two terminals):');
   out.writeln(r'  $ localjam host song.mp3 other.mp3');
   out.writeln(
-    r'  $ localjam join "localjam://join?v=1&host=..." '
+    r'  $ localjam join "http://192.168.1.7:44100/join#v=1&token=..." '
     '--skew-ppm 5000',
   );
   out.writeln();

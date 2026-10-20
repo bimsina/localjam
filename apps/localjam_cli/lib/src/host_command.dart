@@ -1,6 +1,8 @@
 /// `localjam host <file...>` — starts a [JamHostServer] on all interfaces,
-/// registers the given files as the playlist, prints join URIs, and shows a
-/// live status line with interactive keyboard transport control.
+/// registers the given files as the playlist, prints join URLs, and shows a
+/// live status line with interactive keyboard transport control. With
+/// `--web-dir` it also serves a built web player to browser guests
+/// (PROTOCOL.md §1.1) at the printed http join URL.
 library;
 
 import 'dart:async';
@@ -11,6 +13,7 @@ import 'package:args/args.dart';
 import 'package:localjam_net/localjam_net.dart';
 
 import 'tui.dart';
+import 'web_dir.dart';
 
 const _seekStepUs = 10_000_000; // 10 s
 
@@ -18,6 +21,10 @@ const hostUsage = '''
 Usage: localjam host [options] <file...>
 
 Serve one or more media files as a LocalJam session.
+
+--web-dir <path> serves a built web player (flutter build web
+--base-href /web/) to browsers that open the http join URL; without it
+they get a page saying to install the app.
 
 Keys: p = play/pause  s = seek +10s  S = seek -10s  n = next track  q = quit
 ''';
@@ -36,7 +43,24 @@ Future<int> runHostCommand(ArgResults args) async {
     return 64;
   }
 
-  final server = JamHostServer(sessionName: args['name'] as String);
+  StaticSite? site;
+  final webDir = args['web-dir'] as String?;
+  if (webDir != null) {
+    try {
+      site = await loadWebDir(Directory(webDir));
+    } on WebDirException catch (e) {
+      stderr.writeln('host: --web-dir: $e');
+      return 66;
+    } on FileSystemException catch (e) {
+      stderr.writeln('host: --web-dir: ${e.message}: ${e.path}');
+      return 66;
+    }
+  }
+
+  final server = JamHostServer(
+    sessionName: args['name'] as String,
+    staticSite: site,
+  );
   await server.start(address: InternetAddress.anyIPv4, port: port);
 
   final screen = StatusScreen();
@@ -60,6 +84,14 @@ Future<int> runHostCommand(ArgResults args) async {
     }
     server.setMedia(server.playlist.first.mediaId);
 
+    if (site != null) {
+      screen.log(
+        'web player: ${site.files.length} files, '
+        '${(site.totalBytes / (1024 * 1024)).toStringAsFixed(1)} MB'
+        '${site.index == null ? ' — no index.html, browsers get the '
+                  'install-the-app page' : ''}',
+      );
+    }
     await _printJoinInfo(server, screen);
     screen.log('');
     screen.log(
@@ -93,24 +125,25 @@ Future<void> _printJoinInfo(JamHostServer server, StatusScreen screen) async {
     'on port ${server.port}',
   );
   for (final addr in addresses) {
-    screen.log('  ${addr.address.padRight(15)} ${server.joinUriFor(addr)}');
+    screen.log(
+      '  ${addr.address.padRight(15)} ${server.joinLinkFor(addr).toHttpUri()}',
+    );
   }
   // One plain copy-paste line carrying every candidate address (§1: guests
-  // try `host` candidates in order).
-  final combined = Uri(
-    scheme: 'localjam',
-    host: 'join',
-    queryParameters: {
-      'v': '${MessageCodec.protocolVersion}',
-      'host': addresses.map((a) => a.address).join(','),
-      'port': '${server.port}',
-      'token': server.token,
-      'name': server.sessionName,
-    },
+  // try `host` candidates in order), in the http form a browser opens and
+  // `localjam join` reads alike — plus the localjam:// form for 1.0 apps.
+  final combined = JoinLink(
+    v: MessageCodec.protocolVersion,
+    token: server.token,
+    name: server.sessionName,
+    hosts: [for (final a in addresses) a.address],
+    port: server.port,
   );
   screen.log('');
-  screen.log('join with:');
-  screen.log('$combined');
+  screen.log('join with (browser, app or `localjam join`):');
+  screen.log('${combined.toHttpUri()}');
+  screen.log('or, in the app\'s own scheme:');
+  screen.log('${combined.toLocaljamUri()}');
 }
 
 Future<int> _runLoop(JamHostServer server, StatusScreen screen) async {
