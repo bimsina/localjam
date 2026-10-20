@@ -1,0 +1,41 @@
+name: localjam_web
+description: "The LocalJam browser listener page: join a jam from a browser, no install, no internet (docs/design/WEB_GUEST.md)."
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.12.2
+
+dependencies:
+  flutter:
+    sdk: flutter
+  # usePathUrlStrategy (the page reads its own fragment; no router).
+  flutter_web_plugins:
+    sdk: flutter
+  # The guest engine (re-exports localjam_net's guest + localjam_audio).
+  localjam_client:
+    path: ../../packages/localjam_client
+  # Icons, from a font bundled with the page (no off-origin request, D8).
+  cupertino_icons: ^1.0.8
+  # "Open in App" navigates the page to the localjam:// link.
+  web: ^1.1.0
+
+# localjam_client depends on bonsoir for native discovery, which the page
+# never reaches; overrides do not propagate, so repeat the vendored copy.
+dependency_overrides:
+  bonsoir_darwin:
+    path: ../../packages/third_party/bonsoir_darwin
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
+  # The one face the page draws with. Bundled, and named by the theme, so the
+  # engine never fetches a default font from the internet (WEB_GUEST.md D8).
+  fonts:
+    - family: Manrope
+      fonts:
+        - asset: assets/fonts/Manrope.ttf

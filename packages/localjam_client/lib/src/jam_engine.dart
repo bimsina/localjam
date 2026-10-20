@@ -522,8 +522,9 @@ abstract class JamEngine {
     // OS media session: lock-screen/notification metadata + transport.
     _mediaSessionController ??= JamMediaSessionController(this)..start();
     // Jam history: record the session as it unfolds (store opens async —
-    // the flag closes the race against a fast stopSessionGuards).
-    if (!_historyWanted) {
+    // the flag closes the race against a fast stopSessionGuards). Not in a
+    // browser: a listener page keeps no history, and the store is files.
+    if (!_historyWanted && !kIsWeb) {
       _historyWanted = true;
       unawaited(() async {
         final store = await historyStoreProvider();

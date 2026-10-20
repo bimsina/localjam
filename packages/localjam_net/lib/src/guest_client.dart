@@ -729,11 +729,19 @@ class JamGuestClient {
   /// and the platform's connection error when the connection breaks
   /// ([JamTransportException] in a browser; `dart:io`'s `SocketException` or
   /// `HttpException` natively). A stall, an over-size body and a digest
-  /// mismatch abandon the sink and report `media_status: none`.
+  /// mismatch abandon the sink and report `media_status: none`, and so does
+  /// a connection that breaks mid-body (the error propagates after that).
+  ///
+  /// With [reportReady] false the verified body is NOT reported `ready`:
+  /// the caller reports it once the bytes are usable, which is later than
+  /// "they arrived" for a guest that must decode first (§3.1: a browser
+  /// guest reports `ready` only once an item has decoded). Everything else
+  /// — `fetching` with progress, `none` on failure — is reported as usual.
   Future<void> fetchMediaToSink(
     String mediaId,
     JamMediaSink sink, {
     void Function(double progress)? onProgress,
+    bool reportReady = true,
   }) async {
     final item = _playlist.firstWhere(
       (i) => i.mediaId == mediaId,
@@ -782,6 +790,8 @@ class JamGuestClient {
     var lastReported = 0.0;
     var overSize = false;
     Object? stalled;
+    Object? broken;
+    StackTrace? brokenTrace;
     try {
       await for (final chunk in _idleBounded(response)) {
         if (limit > 0 && received + chunk.length > limit) {
@@ -808,10 +818,22 @@ class JamGuestClient {
       }
     } on TimeoutException catch (e) {
       stalled = e;
+    } catch (e, trace) {
+      // The connection broke mid-body: what arrived is a fragment.
+      broken = e;
+      brokenTrace = trace;
     } finally {
       await sink.close();
     }
     hasher.close();
+
+    if (broken != null) {
+      // §6.2: a fragment is not possession. Discard it and say so, or the
+      // host's readiness view keeps this guest at `fetching` until the next
+      // report (§6.3 gate: a guest that gave up counts as `none`).
+      await _abandonFetch(mediaId, sink);
+      Error.throwWithStackTrace(broken, brokenTrace!);
+    }
 
     if (stalled != null) {
       // The error ended the `await for`, which cancelled the response and
@@ -838,7 +860,9 @@ class JamGuestClient {
       );
     }
     onProgress?.call(1.0);
-    _send(MediaStatusMessage(mediaId: mediaId, state: MediaFetchState.ready));
+    if (reportReady) {
+      _send(MediaStatusMessage(mediaId: mediaId, state: MediaFetchState.ready));
+    }
   }
 
   /// Fetches `GET /media/{mediaId}` into memory (§6.2), reporting

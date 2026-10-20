@@ -75,8 +75,9 @@ extension JamGuestClientFiles on JamGuestClient {
   /// [HttpException] ([JamHttpStatusException]) on a non-200 response,
   /// [TimeoutException] when the host stops answering (no connection, no
   /// response, or no body bytes within `mediaTimeout`), and [StateError] on
-  /// a digest mismatch or an over-size body; those last three delete the
-  /// partial [destination] and report `media_status: none`. See
+  /// a digest mismatch or an over-size body; those last three, and a
+  /// connection that breaks mid-body, delete the partial [destination] and
+  /// report `media_status: none`. See
   /// [JamGuestClient.fetchMediaToSink], which this wraps with a
   /// [JamFileMediaSink].
   Future<File> fetchMediaToFile(

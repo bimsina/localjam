@@ -1,7 +1,9 @@
 /// The whole guest side of a jam behind one object: an auto-reconnecting
 /// [JamGuestSession], a [LocaljamAudio] player driven by the shared
 /// [AudioSyncController], and policy-driven prefetching (PROTOCOL.md §6.2)
-/// into a persistent sha256-keyed media cache ([JamMediaCache]).
+/// into a [JamMediaStore]: natively the persistent sha256-keyed media cache
+/// ([JamFileMediaStore]), in a browser bytes in memory under a budget
+/// ([JamMemoryMediaStore], docs/design/WEB_GUEST.md D7).
 library;
 
 import 'dart:async';
@@ -10,7 +12,6 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:localjam_audio/localjam_audio.dart';
 import 'package:localjam_net/localjam_net.dart';
-import 'package:path_provider/path_provider.dart';
 
 import 'audio_sync_controller.dart';
 import 'engine_notifier.dart';
@@ -18,6 +19,9 @@ import 'jam_engine.dart';
 import 'jam_identity.dart';
 import 'media_cache.dart';
 import 'media_mime.dart';
+import 'media_store.dart';
+import 'media_store_file.dart';
+import 'platform/default_media_store.dart';
 
 /// What the guest prefetches, and in what order (§6.2).
 ///
@@ -68,6 +72,13 @@ enum JamPrefetchPhase {
   /// [JamGuestEngine.retryFetch], a reconnect, or it becoming the current
   /// track — never stuck on "getting this track" with nothing happening.
   failed,
+
+  /// Fetched and verified, but this device cannot decode it (a browser
+  /// guest, §3.1: Ogg in Safari). Reported `none` to the host and never
+  /// fetched again this session; it never blocks the room (§6.3 waits only
+  /// for `fetching`). Copy: "Can't play in this browser". Only a store that
+  /// [JamMediaStore.verifiesDecode] produces it.
+  unplayable,
 }
 
 /// Prefetch bookkeeping for one playlist item (§6.2/§6.3).
@@ -91,8 +102,10 @@ class JamPrefetchState {
   /// Download progress in [0, 1].
   final double progress;
 
-  /// Local (cache) file path, set once the item is fully fetched and
-  /// sha256-verified — or found already sitting in the cache.
+  /// The item's [JamMediaStore] ref — natively its cache file's path — set
+  /// once the item is fully fetched and sha256-verified (and, where the
+  /// store [JamMediaStore.verifiesDecode], decoded once), or found already
+  /// sitting in the store.
   final String? path;
 
   /// The last fetch error for this item, if any. Kept while re-queued so UIs
@@ -160,16 +173,21 @@ class JamNotConnectedException implements Exception {
 /// Create with [join]; release with [close]. The engine feeds every
 /// authoritative snapshot into its [AudioSyncController] — holding the first
 /// one back until the §4 clock-sync join burst lands, since scheduling needs
-/// a session→local mapping — prefetches per its [prefetchPolicy] into the
-/// persistent sha256-keyed [JamMediaCache], and resolves media for the
-/// controller from that cache. Because cache files are keyed by content
-/// hash, rejoining a jam (or joining another jam playing the same files)
-/// re-fetches nothing.
+/// a session→local mapping — prefetches per its [prefetchPolicy] into its
+/// [JamMediaStore], and resolves media for the controller from that store.
+/// Natively the store is the persistent sha256-keyed [JamMediaCache]: files
+/// are keyed by content hash, so rejoining a jam (or joining another jam
+/// playing the same files) re-fetches nothing. In a browser it is memory
+/// ([JamMemoryMediaStore]), and an item is `ready` (§6.3) only once it has
+/// also decoded: the bytes are probed with [LocaljamAudio.probeDurationUs],
+/// which decodes without touching playback, one item at a time in the
+/// prefetch order (the current track, then the next). An item that will not
+/// decode is [JamPrefetchPhase.unplayable], reported `none`, and dropped.
 class JamGuestEngine extends JamEngine {
   JamGuestEngine._(
     this._session,
     this.player,
-    this._cache, {
+    this._store, {
     required this.prefetchPolicy,
     required this.hostGoneTimeout,
     required this.hostAwayTimeout,
@@ -215,11 +233,15 @@ class JamGuestEngine extends JamEngine {
   /// read by [JoinLink] — wires up player + sync controller, and starts
   /// prefetching per [prefetchPolicy].
   ///
-  /// [mediaCacheDir] is the persistent sha256-keyed media cache directory;
-  /// it defaults to `getApplicationCacheDirectory()/localjam_media`
-  /// (`path_provider`), shared across sessions so rejoining a jam re-fetches
-  /// nothing. Override it in tests (or to relocate the cache).
-  /// [cacheMaxBytes] caps the cache size (default 1 GB): after each completed
+  /// [mediaStore] is where prefetched media lives (the engine owns it and
+  /// disposes it on [close]). Without one, [mediaCacheDir] names a
+  /// persistent sha256-keyed cache directory ([JamFileMediaStore]); without
+  /// either, the platform default is used: natively
+  /// `getApplicationCacheDirectory()/localjam_media` (`path_provider`),
+  /// shared across sessions so rejoining a jam re-fetches nothing; in a
+  /// browser a [JamMemoryMediaStore]. Override it in tests (or to relocate
+  /// the cache). [cacheMaxBytes] caps the store (default: 1 GB on disk,
+  /// [JamMemoryMediaStore.defaultMaxBytes] in a browser): after each completed
   /// fetch, least-recently-used files are evicted — never the current track
   /// or the rest of the prefetch window (the whole playlist with
   /// [JamPrefetchPolicy.prefetchAll]); an evicted item stops being ready and
@@ -254,8 +276,9 @@ class JamGuestEngine extends JamEngine {
     String? clientName,
     String clientKind = 'flutter',
     Directory? mediaCacheDir,
+    JamMediaStore? mediaStore,
     JamPrefetchPolicy prefetchPolicy = const JamPrefetchPolicy(),
-    int cacheMaxBytes = 1 << 30,
+    int? cacheMaxBytes,
     JamBackoff? backoff,
     Duration hostGoneTimeout = const Duration(seconds: 90),
     Duration hostAwayTimeout = const Duration(minutes: 10),
@@ -281,14 +304,18 @@ class JamGuestEngine extends JamEngine {
       backoff: backoff,
       clientId: clientId ?? await JamIdentity.clientId(),
     );
-    final Directory cacheDir;
+    final JamMediaStore store;
     try {
-      cacheDir =
-          mediaCacheDir ??
-          Directory(
-            '${(await getApplicationCacheDirectory()).path}/localjam_media',
-          );
-      await cacheDir.create(recursive: true);
+      if (mediaStore != null) {
+        store = mediaStore;
+      } else if (mediaCacheDir != null) {
+        await mediaCacheDir.create(recursive: true);
+        store = JamFileMediaStore(
+          JamMediaCache(mediaCacheDir, maxBytes: cacheMaxBytes ?? 1 << 30),
+        );
+      } else {
+        store = await openDefaultMediaStore(maxBytes: cacheMaxBytes);
+      }
     } catch (_) {
       await session.close();
       rethrow;
@@ -296,7 +323,7 @@ class JamGuestEngine extends JamEngine {
     final engine = JamGuestEngine._(
       session,
       LocaljamAudio(),
-      JamMediaCache(cacheDir, maxBytes: cacheMaxBytes),
+      store,
       prefetchPolicy: prefetchPolicy,
       hostGoneTimeout: hostGoneTimeout,
       hostAwayTimeout: hostAwayTimeout,
@@ -315,7 +342,23 @@ class JamGuestEngine extends JamEngine {
   }
 
   final JamGuestSession _session;
-  final JamMediaCache _cache;
+  final JamMediaStore _store;
+
+  /// Where this guest keeps prefetched media (§6.2).
+  JamMediaStore get mediaStore => _store;
+
+  /// Items (by sha256) that decoded at least once this session — where the
+  /// store [JamMediaStore.verifiesDecode] — so a lookup hit needs no second
+  /// probe.
+  final Set<String> _decoded = {};
+
+  /// Items (by sha256) this device cannot decode: never fetched again this
+  /// session, always [JamPrefetchPhase.unplayable].
+  final Set<String> _undecodable = {};
+
+  /// The ref a decode probe is reading right now, whose `blob:` URL must
+  /// outlive any release.
+  String? _probingRef;
 
   /// The join URI this engine joined with, in whichever form it was given
   /// ([JoinLink] reads both) — kept so a UI
@@ -742,7 +785,12 @@ class JamGuestEngine extends JamEngine {
       mime: mime,
       durationUs: durationUs,
     );
-    final cached = await _cache.seed(file, described);
+    // Seeding needs files: only the file-backed store has any to seed from
+    // (a browser guest does not upload, WEB_GUEST.md D5).
+    final store = _store;
+    final cached = store is JamFileMediaStore
+        ? await store.cache.seed(file, described)
+        : null;
     if (!canSendCommands) throw _notConnected();
     _uploadProgress.value = 0;
     try {
@@ -837,25 +885,16 @@ class JamGuestEngine extends JamEngine {
   }
 
   Future<Uint8List?> _loadArtwork(String artworkId) async {
-    // The id comes from the host and names a file: an id that is not a §6.5
-    // artwork id is a permanent cache miss, and no path is built from it.
-    final file = _cache.artworkFileFor(artworkId);
-    if (file != null) {
-      try {
-        final bytes = await file.readAsBytes();
-        if (bytes.isNotEmpty) return bytes;
-      } catch (_) {
-        // Miss: fetch from the host.
-      }
+    try {
+      final cached = await _store.readArtwork(artworkId);
+      if (cached != null) return cached;
+    } catch (_) {
+      // Miss: fetch from the host.
     }
     try {
       final bytes = await _session.fetchArtwork(artworkId);
       try {
-        if (file == null) throw const FormatException('uncacheable artworkId');
-        await _cache.dir.create(recursive: true);
-        final tmp = File('${file.path}.part');
-        await tmp.writeAsBytes(bytes, flush: true);
-        await tmp.rename(file.path);
+        await _store.writeArtwork(artworkId, bytes);
       } catch (_) {
         // Cache write failure: the bytes are still usable this session.
       }
@@ -875,6 +914,8 @@ class JamGuestEngine extends JamEngine {
     _checkForSleep();
     if (snapshot.mediaId != _lastPlanMediaId) {
       _lastPlanMediaId = snapshot.mediaId;
+      // Only the current track's `blob:` URL is needed (a browser's `load`).
+      _releaseUrlsExceptCurrent();
       _reevaluatePrefetch();
       // The track the room just moved to is worth another try even if it
       // failed while it was only "up next".
@@ -1174,62 +1215,70 @@ class JamGuestEngine extends JamEngine {
     ];
   }
 
-  /// Cache paths eviction must never remove: everything the policy wants
-  /// local — the current track and the ahead window, or with `prefetchAll`
-  /// the whole playlist (evicting what the policy then fetches straight
-  /// back would only churn the network) — plus any in-flight destination.
-  Set<String> _protectedCachePaths() => protectedCachePathsFor(
-    _targetItems(),
-    inFlight: _fetchingItem,
-    fileFor: _cache.fileFor,
-  );
-
   /// The cache paths of [wanted] and of the [inFlight] fetch — each item's
-  /// file and its `.part` — as [fileFor] names them. The in-flight one is
-  /// spared whatever the window says now: the room moving on mid-transfer
-  /// must not delete the `.part` being written (the rename that completes
-  /// it would fail, and count against a track that did nothing wrong), nor
-  /// the file it just became.
+  /// file and its `.part` — as [fileFor] names them: what the file-backed
+  /// store ([JamFileMediaStore.protectedPathsFor]) spares when it evicts.
   @visibleForTesting
   static Set<String> protectedCachePathsFor(
     Iterable<MediaItem> wanted, {
     MediaItem? inFlight,
     required File? Function(MediaItem item) fileFor,
-  }) => {
-    for (final item in [...wanted, ?inFlight])
-      if (fileFor(item) case final file?) ...[file.path, '${file.path}.part'],
-  };
+  }) => JamFileMediaStore.protectedPathsFor(
+    wanted,
+    inFlight: inFlight,
+    fileFor: fileFor,
+  );
 
-  /// Trims the cache to its cap, then un-readies whatever that deleted.
+  /// Trims the store to its cap, then un-readies whatever that evicted.
+  /// Spared: everything the policy wants local — the current track and the
+  /// ahead window, or with `prefetchAll` the whole playlist (evicting what
+  /// the policy then fetches straight back would only churn the network) —
+  /// plus the in-flight fetch.
   Future<void> _evictCache() async {
     final Set<String> deleted;
     try {
-      deleted = await _cache.evict(protectedPaths: _protectedCachePaths());
+      deleted = await _store.evict(
+        keep: _targetItems(),
+        inFlight: _fetchingItem,
+      );
     } catch (_) {
       return; // Best-effort: a cache we cannot trim is merely big.
     }
     _onCachedFilesGone(deleted);
   }
 
-  /// The controller's media resolver: the cached file of a ready item —
-  /// checked, because a ready item's file can still vanish (evicted by
-  /// another session sharing the cache, cleared by the OS under storage
-  /// pressure). A file that is gone un-readies its item, which is fetched
-  /// again, and resolves to null: the controller waits for
-  /// [AudioSyncController.notifyMediaAvailable] instead of failing the
-  /// track as undecodable.
+  /// The controller's media resolver: what the store resolves a ready
+  /// item's ref to — natively its cache file, in a browser a `blob:` URL
+  /// minted now (§6.2, WEB_GUEST.md D7). Checked, because a ready item's
+  /// bytes can still vanish (natively: evicted by another session sharing
+  /// the cache, cleared by the OS under storage pressure). Bytes that are
+  /// gone un-ready their item, which is fetched again, and resolve to null:
+  /// the controller waits for [AudioSyncController.notifyMediaAvailable]
+  /// instead of failing the track as undecodable.
   Future<String?> _resolveMediaPath(String mediaId) async {
     final path = prefetchStates.value[mediaId]?.path;
     if (path == null) return null;
-    bool exists;
+    String? resolved;
     try {
-      exists = await File(path).exists();
+      resolved = await _store.resolve(path);
     } catch (_) {
-      exists = false;
+      resolved = null;
     }
-    if (exists) return path;
+    if (resolved != null) return resolved;
     _onCachedFilesGone({path});
     return null;
+  }
+
+  /// Lets go of every minted `blob:` URL except the current track's (and a
+  /// probe's in flight): only `load` needs one, and only for the current
+  /// item. The bytes stay. A no-op natively.
+  void _releaseUrlsExceptCurrent() {
+    final current = _session.snapshot.mediaId;
+    for (final entry in prefetchStates.value.entries) {
+      final ref = entry.value.path;
+      if (ref == null || entry.key == current || ref == _probingRef) continue;
+      _store.release(ref);
+    }
   }
 
   /// Items whose cache files are gone ([paths]) are not ready any more: back
@@ -1274,6 +1323,9 @@ class JamGuestEngine extends JamEngine {
       final existing = previous[id];
       if ((existing?.ready ?? false) || id == _fetchingId) {
         next[id] = existing!;
+      } else if (_undecodable.contains(item.sha256)) {
+        _forgetFailures(id);
+        next[id] = _unplayableState;
       } else if (targetIds.contains(id)) {
         next[id] = existing?.phase == JamPrefetchPhase.failed
             ? existing!
@@ -1304,11 +1356,12 @@ class JamGuestEngine extends JamEngine {
   /// backoff, re-queues it, and runs the pipeline. For a "Couldn't get this
   /// track — Retry" control on a [JamPrefetchPhase.failed] item. Returns
   /// false when there is nothing to retry: the item is ready, in flight,
-  /// outside the prefetch window, or not in the playlist.
+  /// unplayable here, outside the prefetch window, or not in the playlist.
   bool retryFetch(String mediaId) {
     if (_closed || _ended) return false;
     final state = prefetchStates.value[mediaId];
     if (state == null || state.ready || mediaId == _fetchingId) return false;
+    if (state.phase == JamPrefetchPhase.unplayable) return false;
     if (!_targetItems().any((i) => i.mediaId == mediaId)) return false;
     _forgetFailures(mediaId);
     _setPrefetch(mediaId, JamPrefetchState(error: state.error));
@@ -1372,9 +1425,12 @@ class JamGuestEngine extends JamEngine {
       if ((prefetchStates.value[id]?.ready ?? false) || id == _fetchingId) {
         continue;
       }
-      File? cached;
+      // Bytes that have not decoded here yet are the pipeline's to probe
+      // (§3.1: a browser reports `ready` only once an item decoded).
+      if (_store.verifiesDecode && !_decoded.contains(item.sha256)) continue;
+      String? cached;
       try {
-        cached = await _cache.lookup(item);
+        cached = await _store.lookup(item);
       } catch (_) {
         continue; // Cache probe failed: leave it to the ordinary pipeline.
       }
@@ -1390,7 +1446,7 @@ class JamGuestEngine extends JamEngine {
         JamPrefetchState(
           phase: JamPrefetchPhase.ready,
           progress: 1,
-          path: cached.path,
+          path: cached,
         ),
       );
       _reportMediaStatus(id, MediaFetchState.ready);
@@ -1441,39 +1497,31 @@ class JamGuestEngine extends JamEngine {
     }
   }
 
-  /// Fetches one item into the sha-keyed cache — unless the cache already
-  /// holds it (right name, right size), in which case the network is skipped
-  /// entirely, the item reports ready immediately, and the host is told
-  /// directly via [JamGuestSession.sendMediaStatus] (§6.3) since no
-  /// `fetchMediaToFile` call happens to report it for us.
+  /// Fetches one item into the store — unless the store already holds it
+  /// (natively: right name, right size), in which case the network is
+  /// skipped entirely, the item reports ready immediately, and the host is
+  /// told directly via [JamGuestSession.sendMediaStatus] (§6.3) since no
+  /// fetch happens to report it for us. Where the store
+  /// [JamMediaStore.verifiesDecode], the bytes must also decode once
+  /// ([_settle]) before the item is ready.
   Future<void> _fetchOne(MediaItem item) async {
     final id = item.mediaId;
     try {
-      final cached = await _cache.lookup(item);
+      final cached = await _store.lookup(item);
       if (cached != null) {
         if (_closed) return;
         _forgetFailures(id);
-        _setPrefetch(
-          id,
-          JamPrefetchState(
-            phase: JamPrefetchPhase.ready,
-            progress: 1,
-            path: cached.path,
-          ),
-        );
-        _reportMediaStatus(id, MediaFetchState.ready);
-        await sync.notifyMediaAvailable(id);
+        await _settle(item, cached);
         return;
       }
     } catch (_) {
       // Cache probe failed: fall through to the network.
     }
     if (_closed) return;
-    final dest = _cache.fileFor(item);
-    if (dest == null) {
+    if (!_store.accepts(item)) {
       // §6.1 says a MediaItem carries a sha256; one that does not is not
       // fetchable (there is nothing to verify the bytes against) and never
-      // touches the cache directory. No retry would change that.
+      // touches the store. No retry would change that.
       _setPrefetch(
         id,
         const JamPrefetchState(
@@ -1491,15 +1539,19 @@ class JamGuestEngine extends JamEngine {
         failures: failuresBefore,
       ),
     );
-    final part = File('${dest.path}.part');
+    final write = _store.open(item);
     try {
-      // fetchMediaToFile streams to disk (never whole files in memory),
-      // verifies the sha256, and reports media_status upstream (§6.3). It
-      // is bounded: a host that stops answering mid-transfer surfaces as a
-      // TimeoutException instead of hanging the pipeline.
-      await _session.fetchMediaToFile(
+      // The fetch streams into the store's sink (natively a `.part` file,
+      // never whole files in memory), verifies the sha256, and reports
+      // media_status upstream (§6.3): `fetching` with progress, `none` when
+      // it gives up — and `ready`, unless the bytes still have to decode
+      // here. It is bounded: a host that stops answering mid-transfer
+      // surfaces as a TimeoutException instead of hanging the pipeline, and
+      // a connection that breaks mid-body leaves nothing behind.
+      await _session.fetchMediaToSink(
         id,
-        part,
+        write.sink,
+        reportReady: !_store.verifiesDecode,
         onProgress: (progress) {
           if (_closed) return;
           _setPrefetch(
@@ -1512,28 +1564,113 @@ class JamGuestEngine extends JamEngine {
           );
         },
       );
-      final stored = await part.rename(dest.path);
-      await _cache.touch(stored);
+      final ref = await write.commit();
       if (_closed) return;
       _forgetFailures(id);
-      _setPrefetch(
-        id,
-        JamPrefetchState(
-          phase: JamPrefetchPhase.ready,
-          progress: 1,
-          path: stored.path,
-        ),
-      );
-      // fetchMediaToFile already sent the `ready` report on the wire (§6.3);
-      // just record it so the next _reportReadyStates() doesn't resend it.
-      _lastReportedMediaState[id] = MediaFetchState.ready;
-      await sync.notifyMediaAvailable(id);
+      if (_store.verifiesDecode) {
+        // The fetch said `fetching` and nothing since: the decode decides.
+        _lastReportedMediaState[id] = MediaFetchState.fetching;
+      } else {
+        // The fetch already sent `ready` on the wire (§6.3); just record it
+        // so the next _reportReadyStates() doesn't resend it.
+        _lastReportedMediaState[id] = MediaFetchState.ready;
+      }
+      await _settle(item, ref);
       await _evictCache();
     } on Object catch (e) {
+      try {
+        await write.discard();
+      } catch (_) {
+        // Nothing to undo.
+      }
       if (_closed) return;
+      // Whatever the host last heard of this fetch, the fetch itself said
+      // `none` when it gave up after the host's `200` (§6.2); a refusal
+      // before it never said `fetching`.
+      _lastReportedMediaState[id] = MediaFetchState.none;
       _onFetchFailed(id, e);
     }
   }
+
+  /// Makes a stored item [JamPrefetchPhase.ready] — after a decode check
+  /// where the store [JamMediaStore.verifiesDecode] — reports it (§6.3) and
+  /// tells the controller. An item that will not decode becomes
+  /// [JamPrefetchPhase.unplayable] instead: its bytes are dropped, the host
+  /// hears `none`, and it is never fetched again this session.
+  Future<void> _settle(MediaItem item, String ref) async {
+    final id = item.mediaId;
+    if (_store.verifiesDecode && !_decoded.contains(item.sha256)) {
+      _setPrefetch(
+        id,
+        const JamPrefetchState(phase: JamPrefetchPhase.fetching, progress: 1),
+      );
+      final decodes = await _decodesHere(item, ref);
+      if (_closed) return;
+      if (decodes == null) {
+        // The bytes left the store mid-probe: fetch them again.
+        _setPrefetch(id, const JamPrefetchState());
+        return;
+      }
+      if (!decodes) {
+        _undecodable.add(item.sha256);
+        try {
+          await _store.remove(ref);
+        } catch (_) {
+          // Best effort: eviction gets it later.
+        }
+        _setPrefetch(id, _unplayableState);
+        _reportMediaStatus(id, MediaFetchState.none);
+        return;
+      }
+      _decoded.add(item.sha256);
+    }
+    _setPrefetch(
+      id,
+      JamPrefetchState(phase: JamPrefetchPhase.ready, progress: 1, path: ref),
+    );
+    _reportMediaStatus(id, MediaFetchState.ready);
+    await sync.notifyMediaAvailable(id);
+  }
+
+  /// Whether [item]'s bytes ([ref]) decode on this device: a full decode
+  /// through [LocaljamAudio.probeDurationUs], which never touches the loaded
+  /// track or playback (the web player keeps one decoded buffer, D7, and
+  /// this one is dropped as soon as the probe returns). The `blob:` URL the
+  /// probe read is released afterwards unless the item is the current track
+  /// (whose `load` wants it). Null when the bytes are gone from the store.
+  Future<bool?> _decodesHere(MediaItem item, String ref) async {
+    final String? url;
+    try {
+      url = await _store.resolve(ref);
+    } catch (_) {
+      return null;
+    }
+    if (url == null) return null;
+    _probingRef = ref;
+    int? durationUs;
+    try {
+      durationUs = await player.probeDurationUs(url);
+    } catch (_) {
+      durationUs = null;
+    } finally {
+      _probingRef = null;
+      if (_session.snapshot.mediaId != item.mediaId) _store.release(ref);
+    }
+    if (durationUs != null && durationUs > 0) return true;
+    // A failed probe of bytes that are no longer there says nothing about
+    // the format.
+    try {
+      if (await _store.lookup(item) == null) return null;
+    } catch (_) {
+      return null;
+    }
+    return false;
+  }
+
+  static const JamPrefetchState _unplayableState = JamPrefetchState(
+    phase: JamPrefetchPhase.unplayable,
+    error: 'unsupported_format',
+  );
 
   /// A fetch of [mediaId] failed. A dropped connection is not the item's
   /// fault: it goes back in the queue for the reconnect (which retries it at
@@ -1614,6 +1751,11 @@ class JamGuestEngine extends JamEngine {
       // Native side may not be up (tests, stub platforms).
     }
     await _session.close();
+    try {
+      await _store.dispose();
+    } catch (_) {
+      // Best effort: nothing else holds it.
+    }
     _prefetchStates.dispose();
     _uploadProgress.dispose();
     _hostAway.dispose();

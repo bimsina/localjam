@@ -21,6 +21,8 @@ dependencies:
   # Manual sync-nudge persistence (PROTOCOL.md §7).
   shared_preferences: ^2.3.2
   bonsoir: ^7.1.5
+  # The browser guest's `blob:` URLs for prefetched media (media_store_memory).
+  web: ^1.1.0
 
 # `bonsoir_darwin` 7.1.1's `broadcast.start` waits for the Bonjour daemon with a
 # synchronous `DNSServiceProcessResult` on the platform main thread, which on
@@ -34,6 +36,9 @@ dependency_overrides:
 
 dev_dependencies:
   flutter_test:
+    sdk: flutter
+  # The browser test routes channels through a web plugin Registrar.
+  flutter_web_plugins:
     sdk: flutter
   fake_async: ^1.3.1
   flutter_lints: ^6.0.0
