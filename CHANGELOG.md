@@ -6,23 +6,37 @@ Notable changes to LocalJam. Dates are the day the work landed on `main`.
 
 ### Design
 
-- Full visual overhaul: a raspberry / plum / cream brand, Plus Jakarta Sans
-  throughout (roman weights, real tabular figures so the room timer stops
-  jittering), and a light-first palette with a matching dark theme.
+- **Identity v4.1** — LocalJam's own look: Apple-inspired ease without
+  reading as Apple Music. Warm paper and warm-charcoal palettes, Manrope for
+  names and headings with the system font for body text, raspberry only on
+  what you can tap, soft rectangles instead of capsules. Spec:
+  `docs/design/DESIGN_SPEC.md`.
+- Song-first room: a matte wash sampled from the cover's main colour, an
+  ivory play square, skip buttons with end bars, one-line titles that scroll
+  when they're too long (and stay still under Reduce Motion), and a footer
+  that names who's there ("With Mia and Theo").
+- People and jams: each person keeps one colour on every screen; a jam has
+  one tile and one cover across Nearby, Invite, Past jams and the ended page;
+  queue credits show a friend's face only on songs someone else added.
+- Sheets, alerts and menus opened inside the room stay dark in both themes.
+  Dark-mode destructive buttons and the other contrast failures are fixed.
+- Large text is a real layout: Now Playing, Nearby and every button hold from
+  320 pt phones up to the largest accessibility sizes; tablet, desktop and
+  landscape layouts line up.
+- Sentence case for all UI copy.
 - New app icon, adaptive and monochrome Android layers, and launch screens on
   every platform — no white flash between the splash and the first frame.
-- Artwork now tints the room: a clamped, contrast-safe accent derived from the
-  cover art, used only for ambience (glow, background wash, room-bar wash) and
-  never for text, icons or controls.
-- The room is the subject: people, roles and attribution are first-class, the
-  sync indicator is quiet while correct, and the queue and people sheets share
-  one visual language.
-- Responsive layout — sidebar navigation and a docked room panel on wide
-  screens, a drag-to-dismiss player on phones.
-- Three-panel onboarding on first run.
 
 ### App
 
+- Nearby shows who hosts a jam when the host advertises it.
+- Past jams keep their cover and find their songs after the app is updated or
+  reinstalled, and list the host first, as the room does.
+- Ended and failed-rejoin pages name the jam; a restarted jam offers
+  "Scan code"; "Back to Nearby" works while a rejoin is still trying.
+- Fix: songs picked through the iOS Files app no longer vanish about a minute
+  after import — they're copied into the app's own storage.
+- Fix: iOS Reduce Motion is honoured everywhere (it was ignored).
 - Nearby jams, QR and `localjam://` links all land in the same join flow;
   discovery restarts when you return to the home screen.
 - Permission rationale sheets before every OS prompt (local network, camera,
@@ -42,6 +56,12 @@ Notable changes to LocalJam. Dates are the day the work landed on `main`.
 
 ### Engine / protocol
 
+- **PROTOCOL 1.1** (additive; 1.0 joiners ignore it): an optional `hname`
+  TXT key carries the host's display name — trimmed, at most 63 bytes,
+  display-only and unauthenticated (§1, §9).
+- Jam history records store the host's name, a portable reference for each
+  song's path (re-based when the app's container moves), and a small cover
+  picture beside the record.
 - **PROTOCOL v0.2** (additive; v0.1 clients interoperate unchanged):
   - `session_ended` (§3.4) — a host that ends a jam deliberately says so, and
     guests reach the terminal state at once instead of burning the 90 s
@@ -110,6 +130,9 @@ Notable changes to LocalJam. Dates are the day the work landed on `main`.
 
 ### Tooling
 
+- `apps/localjam_app/tool/capture_design.dart` renders every page and state
+  in light and dark for design review; the generated galleries are
+  git-ignored.
 - GitHub Actions CI: analyzer and tests for every package, plus Android, iOS
   simulator and Linux build jobs.
 - Android release signing scaffold — `android/key.properties` (git-ignored)
