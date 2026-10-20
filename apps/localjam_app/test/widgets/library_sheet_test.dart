@@ -1,9 +1,11 @@
 /// The Android library picker: Apple Music's "Add Songs" sheet.
 library;
 
+import 'package:flutter/cupertino.dart' show CupertinoSearchTextField;
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:localjam_app/src/design/theme.dart';
+import 'package:localjam_app/src/widgets/buttons.dart';
 import 'package:localjam_app/src/widgets/library_sheet.dart';
 import 'package:localjam_app/src/widgets/track_row.dart';
 import 'package:localjam_client/localjam_client.dart';
@@ -56,6 +58,31 @@ void main() {
     final sheet = tester.getRect(find.byType(JamLibraryPicker));
     final label = tester.getRect(find.text(LibrarySheetStrings.selectAll));
     expect(sheet.right - label.right, closeTo(16, 0.5));
+  });
+
+  testWidgets('the commit says what it does: Add, live once something is '
+      'chosen', (tester) async {
+    await _pump(tester);
+    JamTextButton add() => tester.widget<JamTextButton>(
+      find.widgetWithText(JamTextButton, LibrarySheetStrings.add),
+    );
+    expect(find.text('Done'), findsNothing);
+    expect(add().onPressed, isNull);
+    await tester.tap(find.text('Low Tide'));
+    await tester.pump();
+    expect(add().onPressed, isNotNull);
+  });
+
+  testWidgets('no results: no "0 songs", no dead Select All, and the '
+      'query said back', (tester) async {
+    await _pump(tester);
+    await tester.enterText(find.byType(CupertinoSearchTextField), 'zzz');
+    await tester.pump();
+
+    expect(find.text(LibrarySheetStrings.noResults), findsOneWidget);
+    expect(find.text(LibrarySheetStrings.noResultsFor('zzz')), findsOneWidget);
+    expect(find.text(LibrarySheetStrings.available(0)), findsNothing);
+    expect(find.text(LibrarySheetStrings.selectAll), findsNothing);
   });
 
   testWidgets('renders on the dark palette', (tester) async {
