@@ -248,7 +248,9 @@ class LocaljamAudio {
     int Function() dartNowUs, {
     int samples = 10,
   }) async {
-    var bestRtt = 1 << 62;
+    // 2^53 − 1, not `1 << 62`: compiled to JS that shift is 0, no sample
+    // would ever win and the web offset would read 0.
+    var bestRtt = 0x1FFFFFFFFFFFFF;
     var bestOffset = 0;
     for (var i = 0; i < samples; i++) {
       final t0 = dartNowUs();

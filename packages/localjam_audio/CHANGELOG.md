@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.4.0
+
+- Web platform (`LocaljamAudioWeb`, inline `web:` plugin) for the browser
+  listener page: Web Audio `AudioBufferSourceNode.start(when)` on one decoded
+  buffer, `nowUs` = `performance.now()`, anchors mapped through
+  `getOutputTimestamp()`, `load`/`probeDuration` take `blob:` or same-origin
+  URLs, iOS routed through a hidden `<audio>` element. Same methods, error
+  codes and events as native; web-only `setMuted`. See README "Web".
+- `calibrate` works when compiled to JS: its "no sample yet" RTT was
+  `1 << 62`, which is 0 in JS, so no sample ever won and the offset was 0.
+- Browser tests (`flutter test --platform chrome`, with
+  `CHROME_EXECUTABLE=tool/chrome_autoplay.sh` for the playback ones).
+
 ## 0.3.0
 
 - `probeDurationUs(path)` (`probeDuration`): a file's duration without loading
