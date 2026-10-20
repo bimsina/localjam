@@ -50,7 +50,6 @@ class JamTrackRow extends StatelessWidget implements JamSelfSeparatingRow {
     this.artworkOverlay,
     this.addedByName,
     this.addedByYou = false,
-    this.addedByAvatarName,
     this.isCurrent = false,
     this.duration,
     this.prefetchProgress,
@@ -94,9 +93,6 @@ class JamTrackRow extends StatelessWidget implements JamSelfSeparatingRow {
 
   /// The adder is this device: "Added by you".
   final bool addedByYou;
-
-  /// Kept for older call sites; faces are no longer drawn on rows.
-  final String? addedByAvatarName;
 
   /// The song that is playing: semibold title (tint off the backdrop).
   final bool isCurrent;

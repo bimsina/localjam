@@ -160,7 +160,7 @@ class _JamGuestsCanRowState extends State<JamGuestsCanRow> {
             const SizedBox(width: JamSpace.xs),
             Icon(
               CupertinoIcons.chevron_up_chevron_down,
-              size: JamMetrics.disclosureIcon,
+              size: JamIconSize.disclosure,
               color: colors.tertiaryLabel,
             ),
           ],
@@ -186,11 +186,11 @@ class _JamGuestsCanRowState extends State<JamGuestsCanRow> {
     // the whole group: the menu lines its trailing edge up with the value's
     // chevrons, and opens past the group's top or bottom edge rather than
     // over any row in it.
-    final anchor = CupertinoMenuAnchor(
+    final anchor = JamMenuAnchor(
       controller: _menu,
-      useRootOverlay: true,
-      consumeOutsideTaps: true,
-      menuChildren: jamMenuChildren([
+      alignment: JamMenuAlignment.trailing,
+      semanticLabel: JamPresetStrings.guestsCan,
+      groups: [
         [
           for (final preset in kJamPresets)
             JamMenuItem(
@@ -204,8 +204,8 @@ class _JamGuestsCanRowState extends State<JamGuestsCanRow> {
               },
             ),
         ],
-      ]),
-      builder: (context, controller, child) =>
+      ],
+      builder: (context, controller) =>
           const IgnorePointer(child: SizedBox.expand()),
     );
 
@@ -217,16 +217,7 @@ class _JamGuestsCanRowState extends State<JamGuestsCanRow> {
           bottom: 0,
           end: kJamRowInset,
           width: 1,
-          // The menu is drawn in the root overlay but inherits from here: a
-          // complete ambient text style keeps its titles off the framework's
-          // fallback.
-          child: DefaultTextStyle(
-            style: context.jamBody.copyWith(
-              color: colors.label,
-              decoration: TextDecoration.none,
-            ),
-            child: anchor,
-          ),
+          child: anchor,
         ),
       ],
     );

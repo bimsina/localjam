@@ -27,8 +27,7 @@ import '../design/typography.dart';
 import '../state/session_controller.dart';
 import '../util/format.dart';
 import '../util/media_picking.dart';
-import 'artwork.dart';
-import 'glass.dart';
+import 'list.dart' show JamAddSongsRow;
 import 'menu.dart';
 import 'pressable.dart';
 import 'progress.dart';
@@ -370,7 +369,9 @@ class _QueuePanelState extends State<QueuePanel> {
                 JamFixedColors.white,
                 JamFixedColors.clear,
               ],
-              stops: [0, 0.03, 0.92, 1],
+              // Long enough at the bottom that a row cut by the edge
+              // dissolves rather than looking sliced.
+              stops: [0, 0.03, 0.85, 1],
             ).createShader(rect),
             blendMode: BlendMode.dstIn,
             child: CustomScrollView(
@@ -379,9 +380,12 @@ class _QueuePanelState extends State<QueuePanel> {
                 const SliverToBoxAdapter(child: SizedBox(height: JamSpace.xs)),
                 if (canAdd)
                   SliverToBoxAdapter(
-                    child: _AddSongsRow(
+                    child: JamAddSongsRow(
+                      title: QueueSheetStrings.addSongs,
+                      onBackdrop: true,
                       horizontalPadding: pad,
                       busy: _adding,
+                      separator: false,
                       onTap: canSend ? () => unawaited(_add()) : null,
                     ),
                   ),
@@ -506,82 +510,6 @@ List<MediaItem> jamUpNext(List<MediaItem> playlist, String? currentId) {
     return null;
   }
   return (mediaId: movedId, toIndex: toIndex);
-}
-
-/// The first row: a plus tile the size of a cover and "Add Songs".
-class _AddSongsRow extends StatelessWidget {
-  const _AddSongsRow({
-    required this.horizontalPadding,
-    required this.onTap,
-    this.busy = false,
-  });
-
-  final double horizontalPadding;
-  final VoidCallback? onTap;
-  final bool busy;
-
-  @override
-  Widget build(BuildContext context) {
-    final enabled = onTap != null && !busy;
-    return Semantics(
-      container: true,
-      button: true,
-      enabled: enabled,
-      label: QueueSheetStrings.addSongs,
-      onTap: enabled ? onTap : null,
-      excludeSemantics: true,
-      child: Opacity(
-        opacity: onTap == null ? 0.35 : 1,
-        child: JamPressable(
-          onTap: enabled ? onTap : null,
-          style: JamPressStyle.highlight,
-          highlightColor: JamNowPlayingColors.pressed,
-          child: SizedBox(
-            height: kJamTrackRowHeight,
-            child: Padding(
-              padding: EdgeInsets.symmetric(horizontal: horizontalPadding),
-              child: Row(
-                children: [
-                  Container(
-                    width: JamArtworkSize.row,
-                    height: JamArtworkSize.row,
-                    decoration: BoxDecoration(
-                      color: JamNowPlayingColors.placeholderGround,
-                      borderRadius: BorderRadius.circular(
-                        JamRadius.artwork(JamArtworkSize.row),
-                      ),
-                    ),
-                    alignment: Alignment.center,
-                    child: busy
-                        ? const JamSpinner(
-                            radius: 8,
-                            color: JamNowPlayingColors.text,
-                          )
-                        : const Icon(
-                            CupertinoIcons.plus,
-                            size: 22,
-                            color: JamNowPlayingColors.text,
-                          ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Text(
-                      QueueSheetStrings.addSongs,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: context.jamBody.copyWith(
-                        color: JamNowPlayingColors.text,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
 }
 
 /// Music on its way into the room, as a thin line under the header: a
@@ -752,7 +680,10 @@ class _QueueRow extends StatelessWidget {
       builder: (context, snapshot) => JamTrackRow(
         onBackdrop: true,
         title: jamDisplayTitle(item),
-        byline: artworkByline(item),
+        // The artist is the song's identity; the album is catalogue
+        // detail nobody acts on here (it stands in only when there is no
+        // artist).
+        byline: _queueByline(item),
         artworkBytes: snapshot.data,
         artworkId: item.artworkId,
         artworkLoading:
@@ -854,6 +785,15 @@ class _QueueRow extends StatelessWidget {
 
     return animateIn ? _InsertReveal(child: row) : row;
   }
+}
+
+/// A queue row's second line: the artist, or the album when the file
+/// names no artist.
+String? _queueByline(MediaItem item) {
+  final artist = item.artist?.trim();
+  if (artist != null && artist.isNotEmpty) return artist;
+  final album = item.album?.trim();
+  return album == null || album.isEmpty ? null : album;
 }
 
 /// Swipe-to-remove that rebuilds its row with whether it is open, so the
@@ -1057,33 +997,14 @@ class _RowMenuPage extends StatelessWidget {
   Widget build(BuildContext context) {
     final reduced = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
     final padding = MediaQuery.paddingOf(context);
-    final colors = context.jamColors;
     void dismiss() => Navigator.of(context).pop();
 
-    final menu = Semantics(
-      scopesRoute: true,
-      namesRoute: true,
-      explicitChildNodes: true,
-      label: QueueRowMenuStrings.actions,
-      child: JamBlurSurface(
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(JamRadius.menu),
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            for (var i = 0; i < route.items.length; i++) ...[
-              if (i > 0) Container(height: 0.5, color: colors.separator),
-              _RowMenuItem(
-                item: route.items[i],
-                onPressed: () =>
-                    Navigator.of(context).pop(route.items[i].onPressed),
-              ),
-            ],
-          ],
-        ),
-      ),
+    // The app's one menu surface; the choice closes the menu first and runs
+    // after (see [_showRowMenu]).
+    final menu = JamMenuPanel(
+      groups: [route.items],
+      semanticLabel: QueueRowMenuStrings.actions,
+      onSelected: (item) => Navigator.of(context).pop(item.onPressed),
     );
 
     return AnimatedBuilder(
@@ -1122,10 +1043,12 @@ class _RowMenuPage extends StatelessWidget {
                   child: IgnorePointer(
                     child: Transform.scale(
                       scale: 1 + (_kLiftScale - 1) * t,
+                      // The menu's ground and corner, so the two read as one
+                      // object.
                       child: DecoratedBox(
                         decoration: BoxDecoration(
                           color: JamNowPlayingColors.liftedRow,
-                          borderRadius: BorderRadius.circular(JamRadius.md),
+                          borderRadius: BorderRadius.circular(JamRadius.menu),
                         ),
                         child: route.preview,
                       ),
@@ -1144,56 +1067,6 @@ class _RowMenuPage extends StatelessWidget {
           ],
         );
       },
-    );
-  }
-}
-
-class _RowMenuItem extends StatelessWidget {
-  const _RowMenuItem({required this.item, required this.onPressed});
-
-  final JamMenuItem item;
-  final VoidCallback onPressed;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.jamColors;
-    final color = item.destructive ? colors.danger : colors.label;
-    final enabled = item.onPressed != null;
-    return Semantics(
-      container: true,
-      button: true,
-      enabled: enabled,
-      label: item.title,
-      onTap: enabled ? onPressed : null,
-      excludeSemantics: true,
-      child: JamPressable(
-        onTap: enabled ? onPressed : null,
-        style: JamPressStyle.highlight,
-        highlightColor: colors.fillPressed,
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(minHeight: JamMetrics.menuRow),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(
-              horizontal: JamSpace.page,
-              vertical: JamSpace.sm,
-            ),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    item.title,
-                    style: context.jamBody.copyWith(color: color),
-                  ),
-                ),
-                if (item.icon != null) ...[
-                  const SizedBox(width: JamSpace.md),
-                  Icon(item.icon, size: 20, color: color),
-                ],
-              ],
-            ),
-          ),
-        ),
-      ),
     );
   }
 }
@@ -1252,10 +1125,16 @@ class _RowMenuLayout extends MultiChildLayoutDelegate {
 
     layoutChild(_RowMenuSlot.preview, BoxConstraints.tight(row.size));
     positionChild(_RowMenuSlot.preview, Offset(row.left, shownRowTop));
-    final left = row.left
+    // The menu shares the lifted platter's leading edge — where the platter
+    // is once it has grown about its centre.
+    final platterLeft = row.left - row.width * (_kLiftScale - 1) / 2 * t;
+    final left = platterLeft
         .clamp(
-          JamSpace.page,
-          math.max(JamSpace.page, size.width - width - JamSpace.page),
+          padding.left + JamSpace.sm,
+          math.max(
+            padding.left + JamSpace.sm,
+            size.width - padding.right - width - JamSpace.sm,
+          ),
         )
         .toDouble();
     positionChild(_RowMenuSlot.menu, Offset(left, menuTop + shift));

@@ -53,6 +53,7 @@ import '../widgets/buttons.dart';
 import '../widgets/diagnostics_sheet.dart';
 import '../widgets/dialogs.dart';
 import '../widgets/drag_to_dismiss.dart';
+import '../widgets/list.dart' show JamDisclosureChevron;
 import '../widgets/menu.dart';
 import '../widgets/nudge_slider.dart';
 import '../widgets/pressable.dart';
@@ -162,9 +163,6 @@ abstract final class JamRoomStrings {
 /// here, and so does a short desktop window.
 const double kRoomShortHeight = 560;
 
-/// The cover's side margin on a phone (§6.3: 28–32).
-const double _kArtMargin = 28;
-
 /// The cover's side margin in a tablet or desktop pane, where the cover
 /// grows with the space (§10.12) rather than stopping at a phone's size.
 const double _kArtMarginWide = 48;
@@ -184,12 +182,6 @@ const double _kThumbGap = 12;
 
 /// How far the paused cover springs back (§6.3).
 const double _kPausedScale = 0.96;
-
-/// The paused spring's length — long enough for its settle to read.
-const Duration _kPauseSpring = Duration(milliseconds: 550);
-
-/// The docked panel's width on wide windows.
-const double _kPanelWidth = 360;
 
 class RoomScreen extends StatefulWidget {
   const RoomScreen({super.key});
@@ -480,8 +472,6 @@ class _RoomScreenState extends State<RoomScreen>
     final guest = engine is JamGuestEngine ? engine : null;
     final isHost = engine is JamHostEngine;
     final roster = _roster(engine);
-    // Parallel to [roster]: the ids its faces are coloured over (§10.10).
-    final rosterKeys = jamRosterPeerIds(engine);
     final canAdd = engine.can(JamCapability.addTracks);
     // A sheet over the player (People, Sound Offset) brings its own grabber;
     // two stacked bars read as one broken one.
@@ -535,7 +525,6 @@ class _RoomScreenState extends State<RoomScreen>
       stageMemo: _stageMemo,
       menu: menu,
       roster: roster,
-      rosterKeys: rosterKeys,
       queueSelected: wide && _panel == _PanelView.queue,
       peopleSelected: wide && _panel == _PanelView.people,
       onClose: _minimise,
@@ -622,7 +611,6 @@ class _Player extends StatelessWidget {
     required this.stageMemo,
     required this.menu,
     required this.roster,
-    required this.rosterKeys,
     required this.queueSelected,
     required this.peopleSelected,
     required this.onClose,
@@ -646,9 +634,6 @@ class _Player extends StatelessWidget {
   final _StageMemo stageMemo;
   final Widget menu;
   final List<String> roster;
-
-  /// [roster]'s colour keys (peer ids), parallel to it.
-  final List<String> rosterKeys;
 
   /// Wide only: which docked view the footer's buttons are showing.
   final bool queueSelected;
@@ -707,7 +692,6 @@ class _Player extends StatelessWidget {
 
     final footer = _Footer(
       roster: roster,
-      rosterKeys: rosterKeys,
       queueSelected: queueSelected,
       peopleSelected: peopleSelected,
       queue: wide ? null : queue,
@@ -752,7 +736,7 @@ class _Player extends StatelessWidget {
                     // left after the controls caps both.
                     final phone =
                         context.jamBreakpoint == JamBreakpoint.compact;
-                    final margin = phone ? _kArtMargin : _kArtMarginWide;
+                    final margin = phone ? JamSpace.player : _kArtMarginWide;
                     final maxContent = phone ? double.infinity : _kArtMaxWide;
                     // The list lines up with the cover it replaces.
                     final listPad = math.max(
@@ -785,7 +769,7 @@ class _Player extends StatelessWidget {
                             child: IgnorePointer(
                               ignoring: queue.value < 1,
                               child: Opacity(
-                                opacity: Curves.easeIn.transform(queue.value),
+                                opacity: JamCurve.exit.transform(queue.value),
                                 child: QueuePanel(
                                   engine: engine,
                                   horizontalPadding: listPad,
@@ -1437,7 +1421,7 @@ class _ArtState extends State<_Art> {
       const <BoxShadow>[],
       t,
     );
-    final radius = lerpDouble(JamRadius.nowPlaying, JamRadius.artworkS, t)!;
+    final radius = lerpDouble(JamRadius.largeCover, JamRadius.artworkS, t)!;
 
     // The mini player's cover grows into this one (and back).
     Widget tile(double size, Uint8List? bytes) => JamArtworkHero(
@@ -1467,7 +1451,7 @@ class _ArtState extends State<_Art> {
               );
         return TweenAnimationBuilder<double>(
           tween: Tween<double>(end: widget.paused ? _kPausedScale : 1),
-          duration: reduced ? Duration.zero : _kPauseSpring,
+          duration: reduced ? Duration.zero : JamDuration.spring,
           curve: JamCurve.spring,
           builder: (context, scale, child) =>
               Transform.scale(scale: lerpDouble(scale, 1, t)!, child: child),
@@ -1781,7 +1765,6 @@ class _TransportArea extends StatelessWidget {
 class _Footer extends StatelessWidget {
   const _Footer({
     required this.roster,
-    required this.rosterKeys,
     required this.queueSelected,
     required this.peopleSelected,
     required this.queue,
@@ -1790,9 +1773,6 @@ class _Footer extends StatelessWidget {
   });
 
   final List<String> roster;
-
-  /// [roster]'s colour keys (peer ids), parallel to it.
-  final List<String> rosterKeys;
 
   /// Wide windows: the docked panel's view. Phones follow [queue] instead.
   final bool queueSelected;
@@ -1835,14 +1815,15 @@ class _Footer extends StatelessWidget {
                 color: peopleSelected
                     ? JamNowPlayingColors.placeholderGround
                     : JamNowPlayingColors.clear,
-                shape: const StadiumBorder(),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(JamRadius.buttonSmall),
+                ),
               ),
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   JamAvatarStack(
                     names: roster,
-                    colorKeys: rosterKeys,
                     size: JamAvatarSize.strip,
                     maxVisible: 3,
                     overflowColor: JamNowPlayingColors.secondary,
@@ -1855,9 +1836,7 @@ class _Footer extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(width: 4),
-                  const Icon(
-                    CupertinoIcons.chevron_right,
-                    size: 12,
+                  const JamDisclosureChevron(
                     color: JamNowPlayingColors.secondary,
                   ),
                 ],
@@ -1972,7 +1951,7 @@ class _DockedPanel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return SizedBox(
-      width: _kPanelWidth,
+      width: JamContentWidth.panel,
       child: ColoredBox(
         // A shade of the backdrop, not a card: just enough to set the
         // panel apart from the player.
@@ -1996,6 +1975,7 @@ class _DockedPanel extends StatelessWidget {
                   },
                   groupValue: view,
                   onValueChanged: onView,
+                  onBackdrop: true,
                 ),
               ),
               Expanded(
@@ -2004,12 +1984,11 @@ class _DockedPanel extends StatelessWidget {
                     engine: engine,
                     showHeader: false,
                   ),
-                  _PanelView.people => _OnBackdrop(
-                    child: RoomPanel(
-                      engine: engine,
-                      selfName: selfName,
-                      network: network,
-                    ),
+                  // On the backdrop by itself (`RoomPanel.onBackdrop`).
+                  _PanelView.people => RoomPanel(
+                    engine: engine,
+                    selfName: selfName,
+                    network: network,
                   ),
                 },
               ),
@@ -2017,49 +1996,6 @@ class _DockedPanel extends StatelessWidget {
           ),
         ),
       ),
-    );
-  }
-}
-
-/// The docked People panel's content on the immersive backdrop (wide
-/// windows): its grouped rows become translucent white over the cover's
-/// colours instead of opaque dark cards pasted onto it, with the backdrop's
-/// own secondary and hairline colours — and white, not raspberry, for what
-/// can be tapped, like every other control on Now Playing.
-class _OnBackdrop extends StatelessWidget {
-  const _OnBackdrop({required this.child});
-
-  final Widget child;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final colors = context.jamColors;
-    final onBackdrop = colors.copyWith(
-      background: JamNowPlayingColors.clear,
-      groupedBackground: JamNowPlayingColors.clear,
-      elevatedGroupedBackground: JamNowPlayingColors.clear,
-      groupedSurface: JamNowPlayingColors.groupedRow,
-      elevatedGroupedSurface: JamNowPlayingColors.groupedRow,
-      separator: JamNowPlayingColors.separator,
-      label: JamNowPlayingColors.text,
-      secondaryLabel: JamNowPlayingColors.secondary,
-      tertiaryLabel: JamNowPlayingColors.tertiary,
-      fillPressed: JamNowPlayingColors.pressed,
-      tint: JamNowPlayingColors.text,
-      tintPressed: JamNowPlayingColors.secondary,
-      danger: JamNowPlayingColors.destructive,
-      warning: JamNowPlayingColors.warning,
-    );
-    return Theme(
-      data: theme.copyWith(
-        extensions: [
-          for (final extension in theme.extensions.values)
-            if (extension is! JamColors) extension,
-          onBackdrop,
-        ],
-      ),
-      child: child,
     );
   }
 }

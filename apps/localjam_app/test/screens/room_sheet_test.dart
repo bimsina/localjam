@@ -297,34 +297,46 @@ void main() {
     await tester.runAsync(host.leave);
   });
 
-  testWidgets('faces are coloured by peer id, the same on every device', (
+  testWidgets('faces are coloured by name, the same on every device (D3)', (
     tester,
   ) async {
     final host = testSession();
-    final guest = await _hostWithGuest(tester, host);
-    final guestId = host.engine!.peers.single.peerId;
+    // A guest whose own colour differs from the host's, so nobody is moved
+    // off theirs.
+    final name = [
+      'Ana',
+      'Mia',
+      'Theo',
+      'Okon',
+      'Bea',
+    ].firstWhere((n) => identityColor(n) != identityColor('Silky Puffin'));
+    final guest = await _hostWithGuest(tester, host, name: name);
 
-    Map<String, String?> keys() => {
+    Map<String, Color?> colors() => {
       for (final row in tester.widgetList<JamPeerRow>(find.byType(JamPeerRow)))
-        row.name: row.colorKey,
+        row.name: row.color,
     };
 
     await _pump(tester, host, _panel(host));
-    final fromHost = keys();
-    expect(fromHost['Silky Puffin'], JamPermissions.hostPeerId);
-    expect(fromHost['Ana'], guestId);
-    // The key reaches the face.
+    final fromHost = colors();
+    expect(fromHost['Silky Puffin'], identityColor('Silky Puffin'));
+    expect(fromHost[name], identityColor(name));
+    // The colour reaches the face.
     expect(
       tester
           .widgetList<JamAvatar>(find.byType(JamAvatar))
-          .map((a) => a.colorKey),
-      containsAll(<String>[JamPermissions.hostPeerId, guestId]),
+          .map((a) => a.resolvedColor),
+      containsAll(<Color>[identityColor('Silky Puffin'), identityColor(name)]),
     );
 
-    await _pump(tester, guest, _panel(guest, self: 'Ana'));
-    final fromGuest = keys();
-    expect(fromGuest['Ana'], guestId);
-    expect(fromGuest.values, contains(JamPermissions.hostPeerId));
+    await _pump(tester, guest, _panel(guest, self: name));
+    final fromGuest = colors();
+    expect(fromGuest[name], fromHost[name]);
+    expect(
+      fromGuest.entries.where((e) => e.key != name).single.value,
+      fromHost['Silky Puffin'],
+      reason: 'the host is the same colour from the guest\'s side',
+    );
 
     await tester.runAsync(guest.leave);
     await tester.runAsync(host.leave);

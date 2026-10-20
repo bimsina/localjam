@@ -21,13 +21,13 @@ import 'dart:async';
 
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/foundation.dart' show ValueListenable, debugPrint;
-import 'package:flutter/material.dart' show Theme, ThemeData;
 import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 import 'package:localjam_client/localjam_client.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:share_plus/share_plus.dart';
 
+import '../design/theme.dart';
 import '../design/tokens.dart';
 import '../design/typography.dart';
 import '../state/session_controller.dart';
@@ -245,11 +245,6 @@ class RoomPanel extends StatefulWidget {
 class _RoomPanelState extends State<RoomPanel> {
   final List<StreamSubscription<Object?>> _subs = [];
 
-  /// The backdrop theme, kept per base theme so a rebuild is not a new
-  /// theme for every descendant.
-  ThemeData? _backdropBase;
-  ThemeData? _backdropTheme;
-
   bool get _onBackdrop => widget.onBackdrop ?? !widget.inSheet;
 
   JamEngine get _engine => widget.engine;
@@ -333,17 +328,15 @@ class _RoomPanelState extends State<RoomPanel> {
     // is two people bigger than the list from that side.
     final count = peers.length + (isHost ? 1 : 2);
 
-    // Coloured over the same ordered ids as the face pile, so a person is
-    // one colour on every screen of the jam (§10.10).
-    final roster = jamRosterPeerIds(_engine);
-    final faces = jamAvatarColors(roster);
-    Color faceOf(String peerId) => faces[roster.indexOf(peerId)];
+    // Coloured over the same ordered names as the face pile, so a person
+    // is one colour on every screen of the jam (§10.10, D3).
+    final faces = jamRosterColors(_engine, selfName: widget.selfName);
+    Color? faceOf(String peerId) => faces[peerId];
 
     final people = <Widget>[
       // This device first, so you can see your own standing.
       JamPeerRow(
         name: widget.selfName,
-        colorKey: _engine.selfPeerId,
         color: faceOf(_engine.selfPeerId),
         role: isHost
             ? JamPeerRole.host
@@ -356,14 +349,12 @@ class _RoomPanelState extends State<RoomPanel> {
       if (!isHost)
         JamPeerRow(
           name: _hostName(_engine),
-          colorKey: _engine.hostPeer?.peerId ?? JamPermissions.hostPeerId,
-          color: faces[1],
+          color: faceOf(_engine.hostPeer?.peerId ?? JamPermissions.hostPeerId),
           role: JamPeerRole.host,
         ),
       for (final peer in peers)
         JamPeerRow(
           name: jamPeerName(peer),
-          colorKey: peer.peerId,
           color: faceOf(peer.peerId),
           role: _roleOf(permissions.roleOf(peer.peerId)),
           detail: _overrideDetail(permissions, peer.peerId),
@@ -458,18 +449,9 @@ class _RoomPanelState extends State<RoomPanel> {
     // Docked beside the player (D7): no cards on the cover's colours. The
     // panel's shade is the ground, the rows are plain, and the text is the
     // backdrop's white — the same look as Up Next beside it.
-    return Theme(
-      data: _themeOnBackdrop(Theme.of(context)),
+    return JamOnBackdrop(
       child: JamGroupedSurface(elevated: false, child: list),
     );
-  }
-
-  ThemeData _themeOnBackdrop(ThemeData base) {
-    if (identical(base, _backdropBase) && _backdropTheme != null) {
-      return _backdropTheme!;
-    }
-    _backdropBase = base;
-    return _backdropTheme = _themeForBackdrop(base);
   }
 
   double? _fetchProgress(JamHostEngine? host, String peerId, String? mediaId) {
@@ -578,37 +560,6 @@ JamSection _section({
       )
     : JamSection(header: header, footer: footer, children: children);
 
-/// System red lifted toward white: ≥ 4.5:1 on the backdrop under its
-/// overlay, where `danger` itself drops to about 2.7:1 on a vivid cover.
-const Color _backdropDanger = Color(0xFFFFA8A0);
-
-/// [base] with the Now Playing backdrop's colours: white text at the
-/// backdrop's secondary and tertiary strengths, white for what can be
-/// tapped (as on the rest of Now Playing), see-through row grounds and a
-/// white press highlight. Switches stay green; destructive stays red, lifted
-/// to [_backdropDanger] so End Jam still reads on a saturated cover.
-ThemeData _themeForBackdrop(ThemeData base) {
-  final colors = (base.extension<JamColors>() ?? JamColors.dark).copyWith(
-    groupedSurface: JamFixedColors.clear,
-    elevatedGroupedSurface: JamFixedColors.clear,
-    label: JamNowPlayingColors.text,
-    secondaryLabel: JamNowPlayingColors.secondary,
-    tertiaryLabel: JamNowPlayingColors.tertiary,
-    separator: JamNowPlayingColors.track,
-    fillPressed: JamNowPlayingColors.pressed,
-    tint: JamNowPlayingColors.text,
-    tintPressed: JamNowPlayingColors.fill,
-    danger: _backdropDanger,
-  );
-  return base.copyWith(
-    extensions: [
-      for (final extension in base.extensions.values)
-        if (extension is! JamColors) extension,
-      colors,
-    ],
-  );
-}
-
 /// What [peerId]'s role and the room policy give them, before overrides.
 bool _baseAllows(JamPermissions permissions, String peerId, JamCapability c) {
   if (permissions.roleOf(peerId) == JamRole.cohost) {
@@ -663,6 +614,49 @@ String? _overrideDetail(JamPermissions permissions, String peerId) {
 String _hostName(JamEngine engine) {
   final name = engine.hostPeer?.clientName.trim() ?? '';
   return name.isEmpty ? RoomSheetStrings.host : name;
+}
+
+/// Everyone in [engine]'s jam by display name, in room order: this device
+/// ([selfName], or "You" before it is known), then — from a guest — the
+/// host, then everyone else. Parallel to `jamRosterPeerIds`.
+List<String> jamRosterNames(JamEngine engine, {required String selfName}) {
+  final self = selfName.trim();
+  return <String>[
+    self.isEmpty ? JamPeerRowStrings.you : self,
+    if (engine is JamGuestEngine) _hostName(engine),
+    for (final peer in engine.peers) jamPeerName(peer),
+  ];
+}
+
+/// Each person's face colour in [engine]'s jam, by peer id (D3).
+///
+/// Every face starts at its own name's colour ([identityColor]) and moves
+/// only to keep two people in the jam from sharing one. Who moves is decided
+/// in an order every phone in the jam agrees on — the host, then everyone
+/// else by name — not in this phone's own room order, so a person is the
+/// same colour on every phone in the jam, and in the footer, the People
+/// sheet and every "Added by" credit on each.
+Map<String, Color> jamRosterColors(
+  JamEngine engine, {
+  required String selfName,
+}) {
+  final ids = jamRosterPeerIds(engine);
+  final names = jamRosterNames(engine, selfName: selfName);
+  final hostIndex = engine is JamGuestEngine ? 1 : 0;
+  final host = names[hostIndex];
+  final others = [
+    for (var i = 0; i < names.length; i++)
+      if (i != hostIndex) names[i],
+  ]..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+  final order = [host, ...others];
+  final assigned = jamAvatarColors(order);
+  final byName = <String, Color>{
+    for (var i = 0; i < order.length; i++) order[i]: assigned[i],
+  };
+  return {
+    for (var i = 0; i < ids.length && i < names.length; i++)
+      ids[i]: byName[names[i]] ?? identityColor(names[i]),
+  };
 }
 
 /// The engine's role, as the row's presentational one.
@@ -735,7 +729,6 @@ class _Removed extends StatelessWidget {
           for (final peer in kicked)
             JamPeerRow(
               name: jamPeerName(peer),
-              colorKey: peer.peerId,
               dimmed: true,
               trailing: JamButton.plain(
                 label: RoomSheetStrings.letBackIn,
