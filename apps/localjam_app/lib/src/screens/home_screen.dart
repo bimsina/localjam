@@ -55,6 +55,9 @@ abstract final class HomeStrings {
   static String joining(String room) => 'Joining $room…';
   static String joinRoom(String room) => 'Join $room';
 
+  /// A nearby jam whose card names its host, as a screen reader hears it.
+  static String hostedBy(String room, String host) => '$room, hosted by $host';
+
   /// The scanner — the same two words on every button that opens it, and
   /// the scanner's own title.
   static const String scan = 'Scan code';
@@ -128,6 +131,42 @@ const double _minNameWidth = 140;
 
 /// The most lines a Nearby card gives a jam's name at large text.
 const int _maxNameLinesLargeText = 5;
+
+/// The most lines a Nearby card gives its host's name at large text.
+const int _maxHostLinesLargeText = 2;
+
+/// The face beside a nearby jam's host: a step under a song row's credit,
+/// because it sits beside a footnote rather than a row's text.
+const double _hostFaceSize = 16;
+
+/// Who hosts [room], as its Nearby card says it: the name its record
+/// carries (`hname`, PROTOCOL.md §1), or null when the card should not say
+/// it — no name came with the record, the host is [self] (this device's
+/// name), or the jam's name already says who ("Mia’s jam", hosted by Mia).
+///
+/// The name is unauthenticated (§9): anyone on the network can advertise
+/// one. It is shown as text and nothing is ever keyed by it.
+String? jamNearbyHost(JamNearbyRoom room, {required String self}) {
+  final host = room.hostName;
+  if (host == null) return null;
+  if (host == jamTxtHostName(self)) return null;
+  if (jamNameMentions(room.sessionName, host)) return null;
+  return host;
+}
+
+/// Whether [text] contains [name] as a whole word or phrase, ignoring case:
+/// "Mia’s jam" mentions Mia, "Mian’s jam" does not.
+bool jamNameMentions(String text, String name) {
+  final wanted = name.trim();
+  if (wanted.isEmpty) return false;
+  return RegExp(
+    r'(?<![\p{L}\p{N}\p{M}])'
+    '${RegExp.escape(wanted)}'
+    r'(?![\p{L}\p{N}\p{M}])',
+    caseSensitive: false,
+    unicode: true,
+  ).hasMatch(text);
+}
 
 /// The widest Start a Jam grows once the column is wider than a phone: a
 /// full-width capsule across a desktop pane would be a banner.
@@ -551,6 +590,7 @@ class _HomeScreenState extends State<HomeScreen> {
           return _RoomRow(
             key: ValueKey(room.identity),
             room: room,
+            host: jamNearbyHost(room, self: _identity),
             // One join at a time: the others go quiet rather than queueing
             // up handshakes behind the one in flight.
             joining: joining == room.joinUri || _probing == room.identity,
@@ -688,15 +728,18 @@ class _LiveJamMarkState extends State<_LiveJamMark> {
 /// One discoverable room, as a jam: its mark, its name in Manrope, and a
 /// tinted Join — on a card of its own, the whole card the target.
 ///
-/// `JamNearbyRoom` carries only a key, a name and a join URI over mDNS, so
-/// the row says nothing it cannot know — no listener count, no preset, no
-/// cover, no face. The mark is the name's monogram: a jam called "Mia’s
-/// jam" may well not be Mia's, so no face is guessed from it.
+/// `JamNearbyRoom` carries only a key, a name, a join URI and, from a 1.1
+/// host, the host's name, so the row says nothing it cannot know — no
+/// listener count, no preset, no cover. The mark is the name's monogram and
+/// never carries a face: a jam called "Mia’s jam" may well not be Mia's.
+/// When the record names its host, a quiet line under the jam's name says
+/// who ([jamNearbyHost]).
 class _RoomRow extends StatelessWidget {
   const _RoomRow({
     super.key,
     required this.room,
     required this.onTap,
+    this.host,
     this.joining = false,
     this.enabled = true,
     this.animateIn = false,
@@ -704,6 +747,10 @@ class _RoomRow extends StatelessWidget {
 
   final JamNearbyRoom room;
   final VoidCallback onTap;
+
+  /// The host's name for the line under the jam's, or null for no line
+  /// ([jamNearbyHost]).
+  final String? host;
 
   /// This is the row whose join is in flight.
   final bool joining;
@@ -727,6 +774,16 @@ class _RoomRow extends StatelessWidget {
     // many lines as a real name needs (R10) — capped only against a name
     // no one would type — rather than being cut at two.
     final largeText = MediaQuery.textScalerOf(context).scale(1) > 1.3;
+    final host = this.host;
+    final title = JamWholeWords(
+      child: Text(
+        name,
+        maxLines: largeText ? _maxNameLinesLargeText : 2,
+        overflow: TextOverflow.ellipsis,
+        // A jam's name is a named thing: Manrope, at row scale.
+        style: context.jamNameRow,
+      ),
+    );
 
     final body = Padding(
       padding: const EdgeInsets.all(JamSpace.md),
@@ -744,15 +801,17 @@ class _RoomRow extends StatelessWidget {
               minLeadWidth: MediaQuery.textScalerOf(
                 context,
               ).scale(_minNameWidth),
-              lead: JamWholeWords(
-                child: Text(
-                  name,
-                  maxLines: largeText ? _maxNameLinesLargeText : 2,
-                  overflow: TextOverflow.ellipsis,
-                  // A jam's name is a named thing: Manrope, at row scale.
-                  style: context.jamNameRow,
-                ),
-              ),
+              lead: host == null
+                  ? title
+                  : Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        title,
+                        const SizedBox(height: JamSpace.xxs),
+                        _NearbyHost(name: host, largeText: largeText),
+                      ],
+                    ),
               trailing: JamButton.tinted(
                 label: HomeStrings.join,
                 size: JamButtonSize.small,
@@ -765,13 +824,17 @@ class _RoomRow extends StatelessWidget {
       ),
     );
 
+    final spoken = host == null ? name : HomeStrings.hostedBy(name, host);
     final card = Padding(
       padding: EdgeInsets.fromLTRB(side, JamSpace.xs, side, JamSpace.xs),
       child: Semantics(
         container: true,
         button: true,
         enabled: enabled || joining,
-        label: joining ? HomeStrings.joining(name) : HomeStrings.joinRoom(name),
+        // What the card shows: the host only when their line is there.
+        label: joining
+            ? HomeStrings.joining(spoken)
+            : HomeStrings.joinRoom(spoken),
         onTap: tap,
         excludeSemantics: true,
         child: DecoratedBox(
@@ -807,6 +870,47 @@ class _RoomRow extends StatelessWidget {
         ),
       ),
       child: card,
+    );
+  }
+}
+
+/// Who hosts a nearby jam: their face — the colour their name has
+/// everywhere ([identityColor]) — and their name in `secondaryLabel`, a
+/// footnote under the jam's name. A line in the card, never a badge on its
+/// mark: list rows carry no host badge.
+///
+/// At large text the face grows with the words, up to 1.5×, and the name
+/// wraps between words onto a second line before it is cut, the face
+/// centred on it as a face pile is on a past jam's people line.
+class _NearbyHost extends StatelessWidget {
+  const _NearbyHost({required this.name, required this.largeText});
+
+  final String name;
+  final bool largeText;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        JamAvatar(
+          name: name,
+          size: JamAvatarSize.scaled(context, _hostFaceSize),
+          tokenSize: _hostFaceSize,
+        ),
+        const SizedBox(width: JamSpace.xs + JamSpace.xxs),
+        Flexible(
+          child: JamWholeWords(
+            child: Text(
+              name,
+              maxLines: largeText ? _maxHostLinesLargeText : 1,
+              overflow: TextOverflow.ellipsis,
+              style: context.jamFootnote.copyWith(
+                color: context.jamColors.secondaryLabel,
+              ),
+            ),
+          ),
+        ),
+      ],
     );
   }
 }

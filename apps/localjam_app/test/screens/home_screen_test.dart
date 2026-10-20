@@ -34,13 +34,18 @@ void publishNearby(JamSessionController session, List<JamNearbyRoom> rooms) {
   (session.nearbyRooms as ValueNotifier<List<JamNearbyRoom>>).value = rooms;
 }
 
-JamNearbyRoom room(String name) => JamNearbyRoom(
+JamNearbyRoom room(String name, {String? host}) => JamNearbyRoom(
   key: '_$name._localjam._tcp',
   sessionName: name,
+  hostName: host,
   joinUri: Uri.parse(
     'localjam://join?host=192.168.1.20&port=45999&token=t_$name&name=$name',
   ),
 );
+
+/// The face beside a nearby jam's host line, for [name].
+Finder hostFace(String name) =>
+    find.byWidgetPredicate((w) => w is JamAvatar && w.name == name);
 
 /// The filled Start a Jam button, if it is on screen.
 Iterable<JamButton> filledButtons(WidgetTester tester) => tester
@@ -511,6 +516,225 @@ void main() {
       tester.getRect(find.byType(JamButton)).width,
       lessThanOrEqualTo(400),
     );
+  });
+
+  group('who hosts a nearby jam', () {
+    testWidgets('a jam whose record names its host says who, quietly, under '
+        'its name', (tester) async {
+      final session = testSession();
+      await pumpApp(tester, session);
+      publishNearby(session, [room('Sunday at home', host: 'Theo')]);
+      await tester.pumpAndSettle();
+
+      final name = tester.getRect(find.text('Sunday at home'));
+      final host = tester.getRect(find.text('Theo'));
+      expect(host.top, greaterThanOrEqualTo(name.bottom));
+      expect(host.left, greaterThan(name.left));
+      // Quiet: a footnote in secondaryLabel, after a 16 pt face in Theo's
+      // own colour — the one his name has everywhere.
+      final colors = tester.element(find.text('Theo')).jamColors;
+      final style = tester.widget<Text>(find.text('Theo')).style!;
+      expect(style.color, colors.secondaryLabel);
+      expect(style.fontSize, 13);
+      final face = tester.widget<JamAvatar>(hostFace('Theo'));
+      expect(face.size, 16);
+      expect(face.resolvedColor, identityColor('Theo'));
+      expect(tester.getRect(hostFace('Theo')).right, lessThan(host.left));
+      expect(tester.getCenter(hostFace('Theo')).dy, closeTo(host.center.dy, 1));
+      // A line on the card, never a badge on its mark.
+      final mark = tester.widget<JamMark>(find.byType(JamMark));
+      expect(mark.hostName, isNull);
+      expect(
+        find.descendant(of: find.byType(JamMark), matching: hostFace('Theo')),
+        findsNothing,
+      );
+      // Heard as it is shown.
+      expect(
+        find.bySemanticsLabel(
+          HomeStrings.joinRoom(HomeStrings.hostedBy('Sunday at home', 'Theo')),
+        ),
+        findsOne,
+      );
+      expect(
+        HomeStrings.hostedBy('Sunday at home', 'Theo'),
+        'Sunday at home, hosted by Theo',
+      );
+    });
+
+    testWidgets('no line when the jam’s name already says who, when it is '
+        'you, or when the record does not say', (tester) async {
+      final session = testSession(); // You are "Silky Puffin".
+      await pumpApp(tester, session);
+      publishNearby(session, [
+        room('Mia’s jam', host: 'Mia'),
+        room('THEO RADIO', host: 'theo'),
+        room('Late shift', host: 'Silky Puffin'),
+        room('Kitchen'),
+      ]);
+      await tester.pumpAndSettle();
+
+      for (final name in ['Mia', 'theo', 'Silky Puffin']) {
+        expect(find.text(name), findsNothing, reason: name);
+      }
+      expect(hostFace('Mia'), findsNothing);
+      expect(hostFace('theo'), findsNothing);
+      // Your own face stays where it always is — the nav bar — and only
+      // there.
+      expect(hostFace('Silky Puffin'), findsOne);
+      for (final name in ['Mia’s jam', 'THEO RADIO', 'Late shift', 'Kitchen']) {
+        expect(
+          find.bySemanticsLabel(HomeStrings.joinRoom(name)),
+          findsOne,
+          reason: name,
+        );
+      }
+    });
+
+    testWidgets('a name inside another word is not the host’s name', (
+      tester,
+    ) async {
+      final session = testSession();
+      await pumpApp(tester, session);
+      publishNearby(session, [room('Mian’s jam', host: 'Mia')]);
+      await tester.pumpAndSettle();
+
+      expect(find.text('Mia'), findsOne);
+      expect(hostFace('Mia'), findsOne);
+    });
+
+    test('whole words, any case, any script', () {
+      expect(jamNameMentions('Mia’s jam', 'Mia'), isTrue);
+      expect(jamNameMentions("mia's jam", 'Mia'), isTrue);
+      expect(jamNameMentions('Jam at Mia’s', 'MIA'), isTrue);
+      expect(jamNameMentions('Silky Puffin’s jam', 'Silky Puffin'), isTrue);
+      expect(jamNameMentions('Road trip (Theo)', 'Theo'), isTrue);
+      expect(jamNameMentions('बिबेकको जाम', 'बिबेक'), isFalse);
+      expect(jamNameMentions('बिबेक को जाम', 'बिबेक'), isTrue);
+      expect(jamNameMentions('Mian’s jam', 'Mia'), isFalse);
+      expect(jamNameMentions('Amia’s jam', 'Mia'), isFalse);
+      expect(jamNameMentions('Theodore', 'Theo'), isFalse);
+      expect(jamNameMentions('Silky’s jam', 'Silky Puffin'), isFalse);
+      expect(jamNameMentions('C++ night', 'C++'), isTrue);
+      expect(jamNameMentions('Kitchen', ''), isFalse);
+    });
+
+    test('the host line is only for a name the card does not already say', () {
+      JamNearbyRoom r(String name, String? host) => room(name, host: host);
+      expect(jamNearbyHost(r('Sunday at home', 'Theo'), self: 'Mia'), 'Theo');
+      expect(jamNearbyHost(r('Sunday at home', null), self: 'Mia'), isNull);
+      expect(jamNearbyHost(r('Mia’s jam', 'Mia'), self: 'Theo'), isNull);
+      expect(jamNearbyHost(r('Sunday', 'Mia'), self: 'Mia'), isNull);
+      // You are compared as your name goes on the wire: trimmed and capped.
+      final long = 'Electric Mongoose Supreme the Third of Kathmandu Valley';
+      expect(
+        jamNearbyHost(r('Sunday', jamTxtHostName(long)), self: long),
+        isNull,
+      );
+      // Before your name has loaded, nobody is you.
+      expect(jamNearbyHost(r('Sunday', 'Theo'), self: ''), 'Theo');
+    });
+
+    for (final (width, scale) in [(320.0, 2.0), (360.0, 3.1), (320.0, 3.1)]) {
+      testWidgets('at $scale× text, ${width.toInt()} pt wide, the line wraps '
+          'between words, the face grows, and nothing overflows', (
+        tester,
+      ) async {
+        tester.view.physicalSize = Size(width, 780);
+        tester.view.devicePixelRatio = 1;
+        addTearDown(tester.view.reset);
+        final session = testSession();
+        await pumpApp(tester, session);
+        const host = 'Anastasia Konstantinova';
+        publishNearby(session, [room('Sunday at home', host: host)]);
+        await tester.pumpAndSettle();
+        // Home at 1×, then the person's text size: the pages the shell
+        // shows on its way to Home are not what this is about.
+        tester.platformDispatcher.textScaleFactorTestValue = scale;
+        addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+        await tester.pumpAndSettle();
+
+        expect(tester.takeException(), isNull);
+        final line = tester.renderObject<RenderParagraph>(find.text(host));
+        expect(line.didExceedMaxLines, isFalse);
+        // Never "Konstantinov / a": each word sits on one line.
+        var from = 0;
+        for (final word in host.split(' ')) {
+          from = host.indexOf(word, from);
+          final tops = {
+            for (final box in line.getBoxesForSelection(
+              TextSelection(baseOffset: from, extentOffset: from + word.length),
+            ))
+              box.top.round(),
+          };
+          expect(tops, hasLength(1), reason: '"$word" is split');
+          from += word.length;
+        }
+        // The face grows with the words, up to 1.5×, centred on the name
+        // however many lines it takes.
+        expect(tester.getSize(hostFace(host)).width, 24);
+        expect(
+          tester.getCenter(hostFace(host)).dy,
+          closeTo(tester.getCenter(find.text(host)).dy, 1),
+        );
+        // Join moves under the whole block, the host line included.
+        final join = tester.getRect(
+          find.ancestor(
+            of: find.text(HomeStrings.join),
+            matching: find.byType(JamButton),
+          ),
+        );
+        expect(
+          join.top,
+          greaterThanOrEqualTo(tester.getRect(find.text(host)).bottom),
+        );
+      });
+    }
+
+    testWidgets('a long host name is cut at one line, beside Join or above '
+        'it', (tester) async {
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+      const host = 'Electric Mongoose Supreme the Third';
+      for (final width in [360.0, 320.0]) {
+        tester.view.physicalSize = Size(width, 700);
+        final session = testSession();
+        await pumpApp(tester, session);
+        publishNearby(session, [room('Kitchen', host: host)]);
+        await tester.pumpAndSettle();
+
+        expect(tester.takeException(), isNull);
+        final line = tester.renderObject<RenderParagraph>(find.text(host));
+        expect(line.didExceedMaxLines, isTrue, reason: 'one line, then …');
+        final text = tester.getRect(find.text(host));
+        final join = tester.getRect(
+          find.ancestor(
+            of: find.text(HomeStrings.join),
+            matching: find.byType(JamButton),
+          ),
+        );
+        if (width == 360) {
+          expect(text.right, lessThan(join.left), reason: 'beside');
+        } else {
+          expect(join.top, greaterThanOrEqualTo(text.bottom), reason: 'under');
+          expect(text.right, lessThanOrEqualTo(width - JamSpace.page));
+        }
+        await tester.pumpWidget(const SizedBox());
+      }
+    });
+
+    testWidgets('on the dark palette too', (tester) async {
+      final session = testSession();
+      await pumpApp(tester, session, theme: jamDarkTheme());
+      publishNearby(session, [room('Sunday at home', host: 'Theo')]);
+      await tester.pumpAndSettle();
+
+      expect(tester.takeException(), isNull);
+      final colors = tester.element(find.text('Theo')).jamColors;
+      expect(
+        tester.widget<Text>(find.text('Theo')).style!.color,
+        colors.secondaryLabel,
+      );
+    });
   });
 
   testWidgets('renders on the dark palette', (tester) async {
