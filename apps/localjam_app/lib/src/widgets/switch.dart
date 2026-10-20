@@ -61,8 +61,10 @@ class JamSwitch extends StatelessWidget {
 /// dark ([JamFixedColors.segmentThumbDark]); the chosen label is `label`
 /// semibold, the others `secondaryLabel` — the choice reads from the words,
 /// not only from a soft shape (RB-22). On the Now Playing backdrop
-/// ([onBackdrop]) the track is glass and the thumb the backdrop's white,
-/// with a warm-ink label — the selected footer circle's look.
+/// ([onBackdrop]) the track is a quieter glass and the thumb the selected
+/// footer plate's glass, the chosen label white semibold and the others the
+/// backdrop's secondary white — never ivory, which is the play square's
+/// alone.
 ///
 /// 44 tall at the default text size — every segment is a full target — and
 /// taller with the text. The thumb slides in [JamDuration.fast] (not under
@@ -145,9 +147,11 @@ class _JamSegmentedControlState<T extends Object>
       color: onBackdrop ? JamNowPlayingColors.clear : colors.separator,
       width: 1 / MediaQuery.devicePixelRatioOf(context),
     );
-    final track = onBackdrop ? JamNowPlayingColors.glass : colors.fillSecondary;
+    final track = onBackdrop
+        ? JamNowPlayingColors.segmentTrack
+        : colors.fillSecondary;
     final thumb = onBackdrop
-        ? JamNowPlayingColors.fill
+        ? JamNowPlayingColors.glass
         : dark
         ? JamFixedColors.segmentThumbDark
         : colors.groupedSurface;
@@ -161,8 +165,8 @@ class _JamSegmentedControlState<T extends Object>
       }
       if (onBackdrop) {
         return chosen
-            ? JamNowPlayingColors.selectedGlyph
-            : JamNowPlayingColors.text;
+            ? JamNowPlayingColors.text
+            : JamNowPlayingColors.secondary;
       }
       return chosen ? colors.label : colors.secondaryLabel;
     }

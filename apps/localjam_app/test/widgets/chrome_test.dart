@@ -883,6 +883,45 @@ void main() {
       }
     });
 
+    testWidgets('on the backdrop the chosen segment is glass, never ivory', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        _host(
+          SizedBox(
+            width: 300,
+            child: JamSegmentedControl<String>(
+              segments: const {'queue': 'Up next', 'people': 'People'},
+              groupValue: 'queue',
+              onValueChanged: (_) {},
+              onBackdrop: true,
+            ),
+          ),
+          dark: true,
+        ),
+      );
+      final fills = [
+        for (final box in tester.widgetList<DecoratedBox>(
+          find.descendant(
+            of: find.byType(JamSegmentedControl<String>),
+            matching: find.byType(DecoratedBox),
+          ),
+        ))
+          if (box.decoration case ShapeDecoration(:final color?)) color,
+      ];
+      // The footer's selected plate on a quieter track: the play square is
+      // the room's one ivory object.
+      expect(fills, contains(JamNowPlayingColors.glass));
+      expect(fills, contains(JamNowPlayingColors.segmentTrack));
+      expect(fills, isNot(contains(JamNowPlayingColors.fill)));
+      TextStyle styleOf(String label) => DefaultTextStyle.of(
+        tester.element(find.text(label)),
+      ).style.merge(tester.widget<Text>(find.text(label)).style);
+      expect(styleOf('Up next').color, JamNowPlayingColors.text);
+      expect(styleOf('Up next').fontWeight, FontWeight.w600);
+      expect(styleOf('People').color, JamNowPlayingColors.secondary);
+    });
+
     testWidgets('the selection check: the brand fill in both themes (CR-5)', (
       tester,
     ) async {

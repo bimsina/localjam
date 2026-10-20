@@ -471,6 +471,11 @@ abstract final class JamNowPlayingColors {
   /// A row's press highlight on the backdrop.
   static const Color pressed = Color(0x1AFFFFFF);
 
+  /// The segmented control's track on the backdrop (white 8%): quieter than
+  /// [glass], so its selected glass thumb — the footer's selected plate —
+  /// stands on it.
+  static const Color segmentTrack = Color(0x14FFFFFF);
+
   /// The docked panel's shade over the backdrop (wide windows): just enough
   /// to set it apart from the player, not a card.
   static const Color panelShade = Color(0x2E000000);
