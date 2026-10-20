@@ -200,7 +200,42 @@ class _HomeScreenState extends State<HomeScreen> {
     }
     // A jam that just ended leaves a fresh record behind it.
     if (!session.hasRoom) unawaited(_loadRecents());
+    // The ended page's "Scan New Code" came here for the scanner.
+    if (!session.hasRoom && session.scanRequested) _scanWhenOnTop();
   }
+
+  /// Opens the scanner (or Join with Link) that [JamSessionController.
+  /// requestScan] asked for, once this page is the one on top: the room
+  /// that asked is still on its way out when the request lands.
+  void _scanWhenOnTop({int frames = 0}) {
+    if (_scanScheduled) return;
+    _scanScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _scanScheduled = false;
+      if (!mounted) return;
+      final session = JamSession.read(context);
+      if (session.hasRoom || !session.scanRequested) return;
+      if (ModalRoute.of(context)?.isCurrent == false) {
+        // Something is still over Home: look again next frame — for about
+        // as long as a page takes to leave. A scanner that opened by itself
+        // whenever Home next came back would be a surprise, not a follow-on.
+        if (frames < _scanWaitFrames) {
+          _scanWhenOnTop(frames: frames + 1);
+        } else {
+          session.takeScanRequest();
+        }
+        return;
+      }
+      if (session.takeScanRequest()) _scanOrLink();
+    });
+    // The callback needs a frame to run in, even on a page sitting still.
+    WidgetsBinding.instance.ensureVisualUpdate();
+  }
+
+  bool _scanScheduled = false;
+
+  /// How many frames a scan request waits for Home to be on top.
+  static const int _scanWaitFrames = 90;
 
   @override
   void dispose() {

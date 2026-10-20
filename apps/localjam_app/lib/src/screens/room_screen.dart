@@ -324,6 +324,16 @@ class _RoomScreenState extends State<RoomScreen>
     );
   }
 
+  /// "Scan New Code" for a jam that restarted under one: out of the dead
+  /// room to Home, which opens its own scanner (or Join with Link) as soon
+  /// as it is on top — the same way in as from Nearby.
+  Future<void> _scanNew(JamSessionController session) async {
+    await session.acknowledgeEnd();
+    if (!mounted) return;
+    context.go('/');
+    session.requestScan();
+  }
+
   /// A pop, so the room plays its reverse slide back down. `go` would
   /// replace the stack and skip the exit animation entirely.
   void _minimise() => context.canPop() ? context.pop() : context.go('/');
@@ -413,9 +423,27 @@ class _RoomScreenState extends State<RoomScreen>
     if (session.phase == JamSessionPhase.ended || session.rejoining) {
       final reason = session.endReason;
       final rejoining = session.rejoining;
+      // The jam as it ended — its name, its host, the cover that was
+      // playing — kept by the controller past the engine a retry tears
+      // down. Before it is known, the name the host's restart or the link
+      // carried.
+      final ended = session.endedJam;
+      final link = session.lastJoinUri;
+      final cover = ended?.cover;
+      final coverPx =
+          (JamMarkSize.ended * MediaQuery.devicePixelRatioOf(context)).round();
       return JamSessionEndedView(
         reason: reason,
         rejectReason: session.endRejectReason,
+        jamName:
+            ended?.name ??
+            session.restartArgs?.name ??
+            (link == null ? null : joinUriName(link)),
+        hostName: ended?.hostName,
+        covers: [
+          if (cover != null)
+            ResizeImage(MemoryImage(cover), width: coverPx, height: coverPx),
+        ],
         retrying: rejoining,
         // Only a failed "Try Again" leaves an error behind on this screen;
         // anything older was cleared when the session started.
@@ -439,6 +467,9 @@ class _RoomScreenState extends State<RoomScreen>
         onStartNew: reason == JamSessionEndReason.listenerFailed
             ? () => unawaited(_startNew(session))
             : null,
+        // The view offers it only where a new code is the way back in, and
+        // never while a retry runs.
+        onScan: () => unawaited(_scanNew(session)),
       );
     }
     if (engine == null) {

@@ -42,14 +42,24 @@ abstract final class JamSessionEndedStrings {
   // `rejected`, by the host's reason (JamSessionController.endRejectReason).
   // A reason this version does not know — or none — keeps the generic pair,
   // which names the likeliest cause without promising it.
+  //
+  // Where the page offers the new code itself ([newCode], `offersCode`),
+  // the sentence stops at the reason: the button under it is the way, and
+  // "ask the host" is only the advice for a page with no such button.
   static const String rejectedTitle = 'Couldn’t Get Back In';
   static const String rejectedBody =
       'The jam turned this phone away. It may have restarted, so ask the '
       'host for a new code.';
-  static String rejected(String? jam) => jam == null
-      ? rejectedBody
-      : '$jam turned this phone away. It may have restarted, so ask the '
-            'host for a new code.';
+  static String rejected(String? jam, {bool offersCode = false}) {
+    if (!offersCode) {
+      return jam == null
+          ? rejectedBody
+          : '$jam turned this phone away. It may have restarted, so ask the '
+                'host for a new code.';
+    }
+    return '${jam ?? 'The jam'} turned this phone away. It may have '
+        'restarted with a new code.';
+  }
 
   /// `bad_token`: the room restarted under a new code. The old link can
   /// never work again, so there is no "Try Again" — a new code is the way.
@@ -57,10 +67,15 @@ abstract final class JamSessionEndedStrings {
   static const String restartedBody =
       'The code this phone joined with doesn’t work any more. Ask the host '
       'for the new one.';
-  static String restarted(String? jam) => jam == null
-      ? restartedBody
-      : '$jam has a new code, so the old one won’t work. Ask the host for '
-            'it.';
+  static String restarted(String? jam, {bool offersCode = false}) {
+    if (jam == null) {
+      return offersCode
+          ? 'The code this phone joined with doesn’t work any more.'
+          : restartedBody;
+    }
+    const why = 'has a new code, so the old one won’t work.';
+    return offersCode ? '$jam $why' : '$jam $why Ask the host for it.';
+  }
 
   /// `version`: no retry fixes this; an update does — and an update needs
   /// the internet this group does not have, so it says when.
@@ -170,7 +185,8 @@ class JamSessionEndedView extends StatelessWidget {
 
   /// Join again with a new code — offered when the jam restarted under one
   /// (`bad_token`) or turned this phone away for a reason this version does
-  /// not know. Null: the page only says to ask the host for it.
+  /// not know. The room leaves for Home and opens its scanner (Join with
+  /// Link where there is no camera). Null: the page says to ask the host.
   final VoidCallback? onScan;
 
   /// A "Try Again" is running: its button spins in place.
@@ -195,6 +211,8 @@ class JamSessionEndedView extends StatelessWidget {
     final colors = context.jamColors;
     final named = jamName?.trim();
     final jam = (named == null || named.isEmpty) ? null : named;
+    // A page with the new code's button under it says only why.
+    final offersCode = onScan != null;
     final (icon, title, detail) = switch (reason) {
       JamSessionEndReason.hostGone => (
         CupertinoIcons.wifi_slash,
@@ -210,7 +228,7 @@ class JamSessionEndedView extends StatelessWidget {
         RejectReason.badToken => (
           CupertinoIcons.arrow_2_circlepath,
           JamSessionEndedStrings.restartedTitle,
-          JamSessionEndedStrings.restarted(jam),
+          JamSessionEndedStrings.restarted(jam, offersCode: offersCode),
         ),
         RejectReason.version => (
           CupertinoIcons.arrow_up_circle,
@@ -232,7 +250,7 @@ class JamSessionEndedView extends StatelessWidget {
         RejectReason.unknown || null => (
           CupertinoIcons.lock,
           JamSessionEndedStrings.rejectedTitle,
-          JamSessionEndedStrings.rejected(jam),
+          JamSessionEndedStrings.rejected(jam, offersCode: offersCode),
         ),
       },
       // The host said goodbye on purpose (§3.4). Nothing to try again for —

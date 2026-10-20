@@ -764,6 +764,8 @@ void main() {
       expect(await waitFor(() => guest.phase == JamSessionPhase.ended), isTrue);
       expect(guest.endReason, JamSessionEndReason.hostEnded);
       expect(guest.endRejectReason, isNull);
+      // The ended page names the jam from what the engine said as it ended.
+      expect(guest.endedJam?.name, 'Short Room');
 
       final another = JamHostServer(sessionName: 'Another Room');
       await another.start(address: InternetAddress.loopbackIPv4, port: port);
@@ -776,9 +778,28 @@ void main() {
       // The screen's own copy names the cause; the error line only has to
       // say the retry did not work.
       expect(guest.error, kJamRejoinFailed);
+      // The retry tore the engine down; the page still knows which jam.
+      expect(guest.engine, isNull);
+      expect(guest.endedJam?.name, 'Short Room');
 
       await guest.leave();
+      expect(guest.endedJam, isNull);
     });
+  });
+
+  test('a scan request is taken once', () {
+    final session = JamSessionController();
+    addTearDown(session.dispose);
+    var notified = 0;
+    session.addListener(() => notified++);
+    expect(session.scanRequested, isFalse);
+    expect(session.takeScanRequest(), isFalse);
+    session.requestScan();
+    expect(notified, 1, reason: 'Home hears it');
+    expect(session.scanRequested, isTrue);
+    expect(session.takeScanRequest(), isTrue);
+    expect(session.scanRequested, isFalse);
+    expect(session.takeScanRequest(), isFalse);
   });
 
   testWidgets('a guest hears the host say no', (tester) async {

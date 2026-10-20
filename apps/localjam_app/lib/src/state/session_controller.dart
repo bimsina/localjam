@@ -163,6 +163,23 @@ bool jamRejectIsRetryable(RejectReason? reason) => switch (reason) {
 /// setup on the room that just died, queue and all.
 typedef JamRestartArgs = ({String name, List<String> paths});
 
+/// The jam that just ended, as the page it ended on draws it: its name, its
+/// host and the cover that was playing ([JamSessionController.endedJam]).
+@immutable
+class JamEndedJam {
+  const JamEndedJam({required this.name, this.hostName, this.cover});
+
+  /// The jam's name (§3.1).
+  final String name;
+
+  /// The host's display name, when they shared one.
+  final String? hostName;
+
+  /// The cover of the song that was playing, once read; null when it had
+  /// none, or none could be read.
+  final Uint8List? cover;
+}
+
 /// What "Start a new jam" re-hosts after a room died: the [queue] as it
 /// stood (its order, its additions), then whatever of the original pick
 /// ([picked]) never made it into the queue — the import had not reached it,
@@ -282,6 +299,12 @@ class JamSessionController extends ChangeNotifier {
   /// The room a host lost to [JamSessionEndReason.listenerFailed], for
   /// "Start a new jam".
   JamRestartArgs? _restartArgs;
+
+  /// The jam that ended, read off its engine as it ended ([endedJam]).
+  JamEndedJam? _endedJam;
+
+  /// A "Scan New Code" waiting for Home ([requestScan]).
+  bool _scanRequested = false;
 
   /// Every file the hosted room was started with, in the order picked — so
   /// "Start a new jam" can bring back what the import had not reached yet,
@@ -410,6 +433,32 @@ class JamSessionController extends ChangeNotifier {
   /// Enough to reopen host setup on a room the OS took away
   /// ([JamSessionEndReason.listenerFailed]); null otherwise.
   JamRestartArgs? get restartArgs => _restartArgs;
+
+  /// The jam that ended — its name, its host, the cover that was playing —
+  /// for the page it ended on, while [phase] is `ended` or a "Try Again"
+  /// runs. Read off the engine as the jam ended and kept past it: a retry
+  /// tears the engine down, and the page goes on naming the jam whatever the
+  /// retry says. Null otherwise.
+  JamEndedJam? get endedJam => _endedJam;
+
+  /// Whether a [requestScan] is waiting for Home to act on.
+  bool get scanRequested => _scanRequested;
+
+  /// Asks Home to open its own way in with a code — the scanner, or Join
+  /// with Link where there is no camera — once it is the page on top. The
+  /// ended page's "Scan New Code" leaves the dead room for Home first, so
+  /// the flow cannot be opened from where the button is.
+  void requestScan() {
+    _scanRequested = true;
+    notifyListeners();
+  }
+
+  /// Home's side of [requestScan]: true once per request.
+  bool takeScanRequest() {
+    final requested = _scanRequested;
+    _scanRequested = false;
+    return requested;
+  }
 
   /// What host setup opens with — "Host it again", "Start a new jam" — or
   /// null for a blank one. Held here rather than only in the route's
@@ -1028,6 +1077,7 @@ class JamSessionController extends ChangeNotifier {
     _endReason = null;
     _endRejectReason = null;
     _restartArgs = null;
+    _endedJam = null;
     _hostPick = const [];
     _joiningUri = null;
     _joiningName = null;
@@ -1067,6 +1117,7 @@ class JamSessionController extends ChangeNotifier {
     _connection = JamConnectionState.connected;
     _endReason = null;
     _endRejectReason = null;
+    _endedJam = null;
     _position = JamPositionTicker(engine);
     _lastMediaId = engine.snapshot.mediaId;
     // The room we are in is the one room we can never join. A host reads its
@@ -1321,8 +1372,38 @@ class JamSessionController extends ChangeNotifier {
     _endRejectReason = engine is JamGuestEngine
         ? engine.lastRejectReason
         : null;
+    _keepEndedJam(engine);
     _phase = JamSessionPhase.ended;
     notifyListeners();
+  }
+
+  /// Keeps what the ended page draws the jam with ([endedJam]): its name
+  /// and host now, and the playing song's cover once it has been read —
+  /// started here, while the engine is still there to read it from.
+  void _keepEndedJam(JamEngine engine) {
+    final host = engine.hostPeer?.clientName.trim() ?? '';
+    final jam = JamEndedJam(
+      name: engine.sessionName,
+      hostName: host.isEmpty ? null : host,
+    );
+    _endedJam = jam;
+    final item = engine.currentItem;
+    if (item == null || item.artworkId == null) return;
+    unawaited(
+      engine.artworkFor(item).then((bytes) {
+        // A retry that got back in, or a jam left meanwhile, is not this
+        // jam's page any more.
+        if (bytes == null || bytes.isEmpty || !identical(_endedJam, jam)) {
+          return;
+        }
+        _endedJam = JamEndedJam(
+          name: jam.name,
+          hostName: jam.hostName,
+          cover: bytes,
+        );
+        notifyListeners();
+      }),
+    );
   }
 
   void _onHostAway() => notifyListeners();
@@ -1368,6 +1449,8 @@ class JamSessionController extends ChangeNotifier {
 
   @override
   void dispose() {
+    // A cover still being read for the ended page lands on nothing.
+    _endedJam = null;
     JamIdentity.changes.removeListener(_onIdentityChanged);
     unawaited(_detach());
     unawaited(_stopBrowsing());

@@ -10,6 +10,7 @@ library;
 import 'dart:async';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -19,6 +20,8 @@ import 'package:localjam_app/src/screens/room_screen.dart';
 import 'package:localjam_app/src/screens/session_ended_view.dart';
 import 'package:localjam_app/src/state/session_controller.dart';
 import 'package:localjam_app/src/widgets/buttons.dart';
+import 'package:localjam_app/src/widgets/jam_mark.dart';
+import 'package:localjam_app/src/widgets/join_link_dialog.dart';
 import 'package:localjam_app/src/widgets/notice.dart';
 import 'package:localjam_app/src/widgets/nudge_slider.dart';
 import 'package:localjam_app/src/widgets/room_banner.dart';
@@ -817,6 +820,81 @@ void main() {
       expect(find.text(guest.error!), findsOneWidget);
 
       await _endApp(tester, [guest, host]);
+    });
+
+    testWidgets('a jam that restarted: its ended page names it, and the new '
+        'code is one tap — Home opens its own way in', (tester) async {
+      // A desktop guest: the way in with a code is the Join with Link alert,
+      // which a widget test can open (there is no camera to drive).
+      debugDefaultTargetPlatformOverride = TargetPlatform.linux;
+      try {
+        final guest = testSession(identity: 'Ana');
+        final cache = _tempCache();
+        late JamHostServer room;
+        await tester.runAsync(() async {
+          room = JamHostServer(sessionName: 'Restart Room');
+          await room.start(address: InternetAddress.loopbackIPv4);
+          final uri = room.joinUriFor(InternetAddress.loopbackIPv4);
+          expect(await guest.join(uri, mediaCacheDir: cache), isTrue);
+        });
+        final router = await pumpApp(tester, guest);
+        router.push('/room');
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 800));
+
+        // The host restarts on the same port under a new token: the guest's
+        // reconnect is refused with bad_token.
+        await tester.runAsync(() async {
+          final port = room.port;
+          await room.close(announce: false);
+          final restarted = JamHostServer(sessionName: 'Restart Room');
+          await restarted.start(
+            address: InternetAddress.loopbackIPv4,
+            port: port,
+          );
+          addTearDown(restarted.close);
+          expect(
+            await _waitFor(() => guest.phase == JamSessionPhase.ended),
+            isTrue,
+          );
+        });
+        await tester.pump();
+        expect(guest.endRejectReason, RejectReason.badToken);
+        expect(inRoom(JamSessionEndedStrings.restartedTitle), findsOneWidget);
+        // Named, by the jam's own mark — and with a button for the new
+        // code, no "ask the host".
+        final mark = tester.widget<JamMark>(
+          find.descendant(
+            of: find.byType(JamSessionEndedView),
+            matching: find.byType(JamMark),
+          ),
+        );
+        expect(mark.name, 'Restart Room');
+        expect(
+          inRoom(
+            JamSessionEndedStrings.restarted('Restart Room', offersCode: true),
+          ),
+          findsOneWidget,
+        );
+
+        await tester.tap(inRoom(JamSessionEndedStrings.newCode));
+        await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 200)),
+        );
+        for (var i = 0; i < 30; i++) {
+          await tester.pump(const Duration(milliseconds: 50));
+        }
+        expect(guest.phase, JamSessionPhase.idle);
+        expect(guest.scanRequested, isFalse, reason: 'taken by Home');
+        expect(find.byType(RoomScreen), findsNothing);
+        expect(find.byType(JoinLinkDialog), findsOneWidget);
+
+        Navigator.of(tester.element(find.byType(JoinLinkDialog))).pop();
+        await tester.pump(const Duration(milliseconds: 500));
+        await _endApp(tester, [guest]);
+      } finally {
+        debugDefaultTargetPlatformOverride = null;
+      }
     });
 
     testWidgets('a retry in flight spins in place and cannot be left', (

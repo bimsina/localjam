@@ -84,7 +84,12 @@ void main() {
       onScan: () {},
     );
     expect(find.text(JamSessionEndedStrings.restartedTitle), findsOneWidget);
-    expect(find.text(JamSessionEndedStrings.restarted(_jam)), findsOneWidget);
+    // The button under it is the way back: the sentence says only why.
+    expect(
+      find.text(JamSessionEndedStrings.restarted(_jam, offersCode: true)),
+      findsOneWidget,
+    );
+    expect(find.textContaining('Ask the host'), findsNothing);
     // The old link can never work: no "Try Again".
     expect(find.text(JamSessionEndedStrings.tryAgain), findsNothing);
     expect(
@@ -110,6 +115,43 @@ void main() {
       _button(tester, JamSessionEndedStrings.back).variant,
       JamButtonVariant.gray,
     );
+    // With no button for it, the copy says where the new code comes from.
+    expect(find.text(JamSessionEndedStrings.restarted(_jam)), findsOneWidget);
+    expect(JamSessionEndedStrings.restarted(_jam), contains('Ask the host'));
+    await _pump(
+      tester,
+      JamSessionEndReason.rejected,
+      rejectReason: RejectReason.badToken,
+      jamName: null,
+    );
+    expect(find.text(JamSessionEndedStrings.restartedBody), findsOneWidget);
+  });
+
+  testWidgets('turned away with a new code on offer: the reason, and no '
+      '"ask the host"', (tester) async {
+    await _pump(
+      tester,
+      JamSessionEndReason.rejected,
+      rejectReason: RejectReason.unknown,
+      onScan: () {},
+    );
+    expect(
+      find.text(JamSessionEndedStrings.rejected(_jam, offersCode: true)),
+      findsOneWidget,
+    );
+    expect(find.textContaining('ask the host'), findsNothing);
+    await _pump(
+      tester,
+      JamSessionEndReason.rejected,
+      rejectReason: RejectReason.badToken,
+      jamName: null,
+      onScan: () {},
+    );
+    expect(
+      find.text(JamSessionEndedStrings.restarted(null, offersCode: true)),
+      findsOneWidget,
+    );
+    expect(find.textContaining('Ask the host'), findsNothing);
   });
 
   testWidgets('turned away for no known reason: try again, a new code, or '
