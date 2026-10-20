@@ -260,8 +260,8 @@ void main() {
     expect(empty.title, HomeStrings.hotspotTitle);
     // The viewfinder the nav bar and the camera primer show — one QR glyph.
     expect(empty.icon, CupertinoIcons.qrcode_viewfinder);
-    // Start a Jam stays the one filled action; scanning stays quiet.
-    expect(empty.actionVariant, JamButtonVariant.plain);
+    // Start a Jam stays the one filled action; scanning stays neutral.
+    expect(empty.actionVariant, JamButtonVariant.gray);
     expect(filledButtons(tester).length, 1);
   });
 

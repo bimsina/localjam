@@ -591,7 +591,7 @@ class _HomeScreenState extends State<HomeScreen> {
 /// The tallest empty state (glyph, title, a sentence and two actions), with
 /// room for its sentence to run a line longer: every state is laid out in a
 /// block this tall, so the glyph does not move when the words do.
-const double _emptyBlockHeight = 300;
+const double _emptyBlockHeight = 320;
 
 /// A one-line state's action: its label and what it does.
 typedef _LineAction = (String, VoidCallback);
@@ -918,14 +918,16 @@ class _EmptyNearby extends StatelessWidget {
       icon: icon,
       title: title,
       body: body,
-      // Quieter than Start a Jam, which owns the bottom of the screen.
+      // Neutral — quieter than Start a Jam, which owns the bottom of the
+      // screen — with the link plainly under it: a button and its
+      // alternative, not two loose words.
       actionLabel: !showScan
           ? null
           : canScanQrCodes
           ? HomeStrings.scan
           : HomeStrings.joinWithLink,
       onAction: showScan ? onScan : null,
-      actionVariant: JamButtonVariant.plain,
+      actionVariant: JamButtonVariant.gray,
       secondaryActionLabel: showScan && onLink != null
           ? HomeStrings.enterLink
           : null,
