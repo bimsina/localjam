@@ -210,9 +210,10 @@ class JamGuestEngine extends JamEngine {
     unawaited(_feedAfterClockSync());
   }
 
-  /// Connects to the host in [joinUri] (a `localjam://join?...` URI, §1),
-  /// wires up player + sync controller, and starts prefetching per
-  /// [prefetchPolicy].
+  /// Connects to the host in [joinUri] — either join form (§1): a
+  /// `localjam://join?...` URI or the 1.2 `http://host:port/join#...` URL,
+  /// read by [JoinLink] — wires up player + sync controller, and starts
+  /// prefetching per [prefetchPolicy].
   ///
   /// [mediaCacheDir] is the persistent sha256-keyed media cache directory;
   /// it defaults to `getApplicationCacheDirectory()/localjam_media`
@@ -242,8 +243,9 @@ class JamGuestEngine extends JamEngine {
   /// host's pongs.
   ///
   /// Throws [JamRejectedException] if the host rejects the join (a kicked
-  /// device gets [RejectReason.kicked]), or [SocketException] if no host
-  /// candidate is reachable.
+  /// device gets [RejectReason.kicked]), [SocketException] if no host
+  /// candidate is reachable, or [FormatException] if [joinUri] is neither
+  /// join form.
   static Future<JamGuestEngine> join(
     Uri joinUri, {
 
@@ -266,8 +268,14 @@ class JamGuestEngine extends JamEngine {
     /// roster. Defaults to the persistent [JamIdentity.clientId].
     String? clientId,
   }) async {
+    final link = JoinLink.fromUri(joinUri);
+    if (link == null) {
+      // Not echoed: a join link carries the room's token.
+      throw const FormatException('Not a LocalJam join link');
+    }
     final session = await JamGuestSession.connect(
-      joinUri,
+      // The transport speaks the `localjam://` form; both say the same.
+      link.toLocaljamUri(),
       clientName: clientName ?? await JamIdentity.displayName(),
       clientKind: clientKind,
       backoff: backoff,
@@ -309,7 +317,8 @@ class JamGuestEngine extends JamEngine {
   final JamGuestSession _session;
   final JamMediaCache _cache;
 
-  /// The `localjam://join?...` URI this engine joined with — kept so a UI
+  /// The join URI this engine joined with, in whichever form it was given
+  /// ([JoinLink] reads both) — kept so a UI
   /// can offer "rejoin" after a terminal end (host suspension, §10 host
   /// death) by calling [join] again with it; the sha-keyed cache makes the
   /// rejoin re-fetch nothing.

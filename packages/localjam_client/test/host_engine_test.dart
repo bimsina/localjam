@@ -4,6 +4,7 @@
 /// it — server, sockets, controller plumbing — is real.
 library;
 
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -194,8 +195,18 @@ void main() {
 
       expect(engine.sessionName, 'HostJam');
       expect(engine.port, greaterThan(0));
-      expect(engine.joinUri.scheme, 'localjam');
-      expect(engine.joinUri.queryParameters['token'], engine.token);
+      // §1 (1.2): the QR carries the http form, token in the fragment; the
+      // same room as a `localjam://` deep link is one getter away.
+      expect(engine.joinUri.scheme, 'http');
+      expect(engine.joinUri.path, '/join');
+      expect(engine.joinUri.query, isEmpty);
+      expect(engine.joinUri.port, engine.port);
+      expect(JoinLink.fromUri(engine.joinUri), engine.joinLink);
+      expect(engine.joinLink.token, engine.token);
+      expect(engine.joinLink.name, 'HostJam');
+      expect(engine.joinUri.host, engine.joinLink.hosts.first);
+      expect(engine.localjamUri.scheme, 'localjam');
+      expect(JoinLink.fromUri(engine.localjamUri), engine.joinLink);
       expect(engine.snapshot.status, PlaybackStatus.idle);
 
       // addMediaFile probes the §5.5 duration from the file's headers —
@@ -459,4 +470,37 @@ void main() {
       expect(engine.positionUsNow(), lessThanOrEqualTo(1_000_000));
     },
   );
+
+  test('the room serves the static site it was given, and one set later '
+      '(§1.1)', () async {
+    mockAudioChannel();
+    final page = StaticSite({
+      'index.html': StaticFile.text('<p>player</p>', 'text/html'),
+    });
+    final engine = await JamHostEngine.start(
+      sessionName: 'WebJam',
+      hostName: 'Silky Puffin',
+      address: InternetAddress.loopbackIPv4,
+      discoverable: false,
+      staticSite: page,
+    );
+    addTearDown(engine.close);
+    expect(engine.staticSite, same(page));
+    Future<String> fetch() async {
+      final client = HttpClient();
+      try {
+        final req = await client.getUrl(
+          Uri.parse('http://127.0.0.1:${engine.port}/join'),
+        );
+        final res = await req.close();
+        return await res.transform(const Utf8Decoder()).join();
+      } finally {
+        client.close(force: true);
+      }
+    }
+
+    expect(await fetch(), '<p>player</p>');
+    engine.staticSite = null;
+    expect(await fetch(), contains('no browser player'));
+  });
 }

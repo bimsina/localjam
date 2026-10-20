@@ -322,8 +322,7 @@ void main() {
         discoverable: false,
       );
       addTearDown(engine.close);
-      List<String> hosts() =>
-          engine.joinUri.queryParameters['host']!.split(',');
+      List<String> hosts() => engine.joinLink.hosts;
       expect(engine.hasLanAddress, isTrue);
       expect(hosts(), ['192.168.1.7', '127.0.0.1']);
 
@@ -373,7 +372,7 @@ void main() {
       );
       addTearDown(engine.close);
       expect(engine.hasLanAddress, isFalse);
-      expect(engine.joinUri.queryParameters['host'], '127.0.0.1');
+      expect(engine.joinLink.hosts, ['127.0.0.1']);
       expect(engine.boundAddress, InternetAddress.anyIPv4);
     });
   });
