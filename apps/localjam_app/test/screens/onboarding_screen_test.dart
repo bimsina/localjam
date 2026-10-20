@@ -5,10 +5,16 @@ library;
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:localjam_client/localjam_client.dart' show JamIdentity;
 import 'package:localjam_app/src/design/theme.dart';
+import 'package:localjam_app/src/design/tokens.dart';
 import 'package:localjam_app/src/screens/onboarding_screen.dart';
 import 'package:localjam_app/src/state/onboarding_prefs.dart';
+import 'package:localjam_app/src/widgets/avatar.dart';
+import 'package:localjam_app/src/widgets/brand.dart';
 import 'package:localjam_app/src/widgets/buttons.dart';
+import 'package:localjam_app/src/widgets/rename_dialog.dart';
+import 'package:localjam_app/src/widgets/scaffold.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 Future<JamOnboardingPrefs> pumpOnboarding(
@@ -16,8 +22,10 @@ Future<JamOnboardingPrefs> pumpOnboarding(
   VoidCallback? onDone,
   ThemeData? theme,
   Size? size,
+  String identity = 'Sparkly Kiwi',
 }) async {
-  SharedPreferences.setMockInitialValues({});
+  SharedPreferences.setMockInitialValues({'localjam.displayName': identity});
+  JamIdentity.resetCacheForTesting();
   final prefs = JamOnboardingPrefs();
   if (size != null) {
     tester.view.physicalSize = size * tester.view.devicePixelRatio;
@@ -51,10 +59,60 @@ void main() {
     ]) {
       expect(find.text(text), findsOneWidget);
     }
-    // No carousel, no page dots, one button.
+    // No carousel, no page dots, one filled button.
     expect(find.byType(PageView), findsNothing);
-    expect(find.byType(JamButton), findsOneWidget);
-    expect(find.text(OnboardingStrings.continueLabel), findsOneWidget);
+    final filled = tester
+        .widgetList<JamButton>(find.byType(JamButton))
+        .where((b) => b.variant == JamButtonVariant.filled);
+    expect(filled.single.label, OnboardingStrings.continueLabel);
+    // A typographic list: no glyph column, so nothing raspberry that cannot
+    // be tapped (D8).
+    expect(find.byType(Icon), findsNothing);
+  });
+
+  testWidgets('says the name you will appear as, and changes it', (
+    tester,
+  ) async {
+    await pumpOnboarding(
+      tester,
+      identity: 'Sparkly Kiwi',
+      size: const Size(402, 874),
+    );
+
+    expect(
+      find.bySemanticsLabel(OnboardingStrings.appearAs('Sparkly Kiwi')),
+      findsOneWidget,
+    );
+    expect(find.byType(JamAvatar), findsOneWidget);
+
+    await tester.tap(find.text(OnboardingStrings.change));
+    await tester.pumpAndSettle();
+    expect(find.text(RenameStrings.title), findsOneWidget);
+    await tester.enterText(find.byType(CupertinoTextField), 'Mia');
+    await tester.tap(find.text(RenameStrings.save));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.bySemanticsLabel(OnboardingStrings.appearAs('Mia')),
+      findsOneWidget,
+    );
+    expect(await JamIdentity.displayName(), 'Mia');
+  });
+
+  testWidgets('leaving the name alone keeps it, and Continue is still one '
+      'tap', (tester) async {
+    var done = 0;
+    await pumpOnboarding(
+      tester,
+      identity: 'Sparkly Kiwi',
+      onDone: () => done++,
+    );
+
+    await tester.tap(find.text(OnboardingStrings.continueLabel));
+    await tester.pumpAndSettle();
+
+    expect(done, 1);
+    expect(await JamIdentity.displayName(), 'Sparkly Kiwi');
   });
 
   testWidgets('continuing marks the flag and hands back to the caller', (
@@ -140,27 +198,51 @@ void main() {
     expect(find.text(OnboardingStrings.continueLabel), findsOneWidget);
   });
 
-  testWidgets('title, feature glyphs and Continue share one leading edge', (
+  testWidgets('wordmark, words and Continue share Nearby’s page edge', (
     tester,
   ) async {
-    // Four edges before: title 36, glyphs 43, text 92, button 20.
+    // Four edges before (title 36, glyphs 43, text 92, button 20), then
+    // two (words 32, button 16): now one, the page margin Nearby uses, so
+    // nothing moves sideways when Continue hands over.
     await pumpOnboarding(tester, size: const Size(402, 874));
+    final wordmark = tester.getRect(find.byType(JamWordmark));
     final title = tester.getRect(find.text(OnboardingStrings.title));
-    final glyph = tester.getRect(find.byIcon(CupertinoIcons.headphones));
+    final feature = tester.getRect(find.text(OnboardingStrings.oneTitle));
     final button = tester.getRect(
       find.widgetWithText(JamButton, OnboardingStrings.continueLabel),
     );
-    expect(glyph.left, closeTo(title.left, 0.5));
-    expect(button.left, closeTo(title.left, 0.5));
-    // Title 1, the same row pattern as the permission primers.
+    for (final edge in [wordmark.left, title.left, feature.left]) {
+      expect(edge, closeTo(button.left, 0.5));
+    }
+    expect(button.left, JamSpace.page);
+    // Continue sits where Start a Jam does: on the bottom bar's inset.
+    expect(874 - button.bottom, jamBottomBarInset(0));
     expect(
       tester.widget<Text>(find.text(OnboardingStrings.title)).style?.fontSize,
       34,
     );
+    // The feature headlines are named things in Manrope, not system chrome.
     expect(
-      tester.widget<Icon>(find.byIcon(CupertinoIcons.headphones)).size,
-      24,
+      tester
+          .widget<Text>(find.text(OnboardingStrings.oneTitle))
+          .style
+          ?.fontFamily,
+      'Manrope',
     );
+  });
+
+  testWidgets('the name sits at the foot of the page, above Continue', (
+    tester,
+  ) async {
+    await pumpOnboarding(tester, size: const Size(402, 874));
+    final name = tester.getRect(find.text(OnboardingStrings.change));
+    final button = tester.getRect(
+      find.widgetWithText(JamButton, OnboardingStrings.continueLabel),
+    );
+    final features = tester.getRect(find.text(OnboardingStrings.threeBody));
+    expect(name.bottom, lessThan(button.top));
+    expect(button.top - name.bottom, lessThan(JamSpace.giant));
+    expect(name.top, greaterThan(features.bottom));
   });
 
   testWidgets('renders on the dark palette', (tester) async {

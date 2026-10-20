@@ -3,9 +3,10 @@
 /// Used by Start a Jam and by the in-room Add Songs: on Android most music is
 /// in MediaStore, not in a folder DocumentsUI will show you.
 ///
-/// Apple Music's "Add Songs" picker: a large sheet with Cancel and Done, a
-/// search field, plain song rows (cover, title, "Artist · 3:42") and a
-/// checkmark circle on each chosen one. The title counts the selection.
+/// Apple Music's "Add Songs" picker: a large sheet with Cancel and **Add**
+/// (the verb the sheet commits — §10.2), a search field, plain song rows
+/// (cover, title, "Artist · 3:42") and a checkmark circle on each chosen
+/// one. The title counts the selection.
 library;
 
 import 'dart:async';
@@ -28,14 +29,18 @@ import 'track_row.dart';
 abstract final class LibrarySheetStrings {
   static const String title = 'Music Library';
   static const String cancel = 'Cancel';
-  static const String done = 'Done';
+
+  /// The commit: what it does to the jam, not "Done".
+  static const String add = 'Add';
   static const String search = 'Search';
   static const String selectAll = 'Select All';
   static const String deselectAll = 'Deselect All';
   static const String unknownArtist = 'Unknown Artist';
   static const String selected = 'Selected';
   static const String noResults = 'No Results';
-  static const String noResultsBody = 'Check the spelling or try a new search.';
+
+  /// Says what was searched for, rather than a stock "check the spelling".
+  static String noResultsFor(String query) => 'No songs match “$query”.';
 
   /// "3 Songs Selected" — the title once something is chosen.
   static String selectedCount(int n) =>
@@ -175,7 +180,7 @@ class _JamLibraryPickerState extends State<JamLibraryPicker> {
             ? LibrarySheetStrings.title
             : LibrarySheetStrings.selectedCount(count),
         actions: JamSheetActions.confirm(
-          label: LibrarySheetStrings.done,
+          label: LibrarySheetStrings.add,
           onConfirm: count == 0 ? null : _submit,
           onCancel: () => Navigator.of(context).pop(),
         ),
@@ -200,44 +205,47 @@ class _JamLibraryPickerState extends State<JamLibraryPicker> {
                   color: colors.secondaryLabel,
                 ),
                 backgroundColor: colors.fillSecondary,
+                // The same field radius as the alert's text field: one
+                // field shape in the app.
+                borderRadius: BorderRadius.circular(JamRadius.field),
                 itemColor: colors.secondaryLabel,
               ),
             ),
           ),
-          SliverToBoxAdapter(
-            child: Padding(
-              // The small plain button pads its label by 4, so 12 here puts
-              // "Select All" on the same 16 trailing edge as the search field
-              // and the checkmarks.
-              padding: const EdgeInsetsDirectional.fromSTEB(
-                JamSpace.page,
-                JamSpace.xs,
-                JamSpace.page - JamSpace.xs,
-                0,
-              ),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      LibrarySheetStrings.available(visible.length),
-                      style: context.jamFootnote.copyWith(
-                        color: colors.secondaryLabel,
+          // No "0 songs" and no dead Select All over an empty result.
+          if (visible.isNotEmpty)
+            SliverToBoxAdapter(
+              child: Padding(
+                // The small plain button pads its label by 4, so 12 here puts
+                // "Select All" on the same 16 trailing edge as the search field
+                // and the checkmarks.
+                padding: const EdgeInsetsDirectional.fromSTEB(
+                  JamSpace.page,
+                  JamSpace.xs,
+                  JamSpace.page - JamSpace.xs,
+                  0,
+                ),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        LibrarySheetStrings.available(visible.length),
+                        style: context.jamFootnote.copyWith(
+                          color: colors.secondaryLabel,
+                        ),
                       ),
                     ),
-                  ),
-                  JamButton.plain(
-                    label: allVisibleSelected
-                        ? LibrarySheetStrings.deselectAll
-                        : LibrarySheetStrings.selectAll,
-                    size: JamButtonSize.small,
-                    onPressed: visible.isEmpty
-                        ? null
-                        : () => _toggleAll(visible),
-                  ),
-                ],
+                    JamButton.plain(
+                      label: allVisibleSelected
+                          ? LibrarySheetStrings.deselectAll
+                          : LibrarySheetStrings.selectAll,
+                      size: JamButtonSize.small,
+                      onPressed: () => _toggleAll(visible),
+                    ),
+                  ],
+                ),
               ),
             ),
-          ),
           if (visible.isEmpty)
             SliverToBoxAdapter(
               child: Padding(
@@ -245,7 +253,7 @@ class _JamLibraryPickerState extends State<JamLibraryPicker> {
                 child: JamEmptyState(
                   icon: CupertinoIcons.search,
                   title: LibrarySheetStrings.noResults,
-                  body: LibrarySheetStrings.noResultsBody,
+                  body: LibrarySheetStrings.noResultsFor(_query.text.trim()),
                 ),
               ),
             ),

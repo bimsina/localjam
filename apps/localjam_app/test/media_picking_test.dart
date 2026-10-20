@@ -7,15 +7,70 @@ library;
 
 import 'dart:io';
 
+import 'package:flutter/cupertino.dart' show CupertinoActionSheet;
 import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:localjam_app/src/design/theme.dart';
 import 'package:localjam_app/src/util/format.dart';
 import 'package:localjam_app/src/util/media_picking.dart';
+import 'package:localjam_app/src/widgets/list.dart';
+import 'package:localjam_app/src/widgets/sheet.dart';
 import 'package:localjam_client/localjam_client.dart';
 
 import 'fixtures.dart';
 
 void main() {
+  group('the Add Songs From choice', () {
+    Future<Future<JamAddSource?>> open(WidgetTester tester) async {
+      late Future<JamAddSource?> answer;
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: jamLightTheme(),
+          home: Builder(
+            builder: (context) => Center(
+              child: GestureDetector(
+                onTap: () => answer = showJamAddSourceSheet(context),
+                child: const Text('Go'),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.tap(find.text('Go'));
+      await tester.pumpAndSettle();
+      return answer;
+    }
+
+    testWidgets('is the app’s own sheet, not the system action sheet', (
+      tester,
+    ) async {
+      await open(tester);
+      expect(find.byType(CupertinoActionSheet), findsNothing);
+      expect(find.byType(JamSheetSurface), findsOneWidget);
+      expect(find.text(JamPickerStrings.addFrom), findsOneWidget);
+      // Two rows that say where their songs come from.
+      expect(find.byType(JamRow), findsNWidgets(2));
+      expect(find.text(JamPickerStrings.libraryDetail), findsOneWidget);
+      expect(find.text(JamPickerStrings.filesDetail), findsOneWidget);
+    });
+
+    testWidgets('a row answers with its source', (tester) async {
+      final answer = await open(tester);
+      await tester.tap(find.text(JamPickerStrings.files));
+      await tester.pumpAndSettle();
+      expect(await answer, JamAddSource.files);
+      expect(find.byType(JamSheetSurface), findsNothing);
+    });
+
+    testWidgets('the xmark backs out with no answer', (tester) async {
+      final answer = await open(tester);
+      await tester.tap(find.bySemanticsLabel(JamSheetStrings.close));
+      await tester.pumpAndSettle();
+      expect(await answer, isNull);
+    });
+  });
+
   group('jamAudioTypeGroup', () {
     tearDown(() => debugDefaultTargetPlatformOverride = null);
 

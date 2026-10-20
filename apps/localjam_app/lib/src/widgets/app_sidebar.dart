@@ -4,7 +4,9 @@
 /// nav-bar icons read as leftovers from a smaller screen. The sidebar holds
 /// identity and the destinations, permanently visible — a column like
 /// Music's on the Mac: rows of icon and title, the selected one on a tinted
-/// rounded highlight. The live jam's mini player is not in here: it floats
+/// rounded highlight. Raspberry marks only that selected row (D8): every
+/// other icon is `secondaryLabel`, so the tint keeps meaning "you are
+/// here". The live jam's mini player is not in here: it floats
 /// over the bottom of the content pane (the router shell), where the song's
 /// name and both transport buttons have room — in a 260 pt column it cut
 /// the title short and dropped Next.
@@ -37,7 +39,7 @@ abstract final class AppSidebarStrings {
 const double kJamSidebarRowHeight = 36;
 
 const double _rowRadius = JamRadius.sm;
-const double _rowIcon = 18;
+const double _rowIcon = JamIconSize.control;
 
 class AppSidebar extends StatelessWidget {
   const AppSidebar({super.key, required this.identity, this.onRename});
@@ -195,7 +197,11 @@ class _NavItem extends StatelessWidget {
               children: [
                 SizedBox(
                   width: JamMetrics.rowIconBox - 6,
-                  child: Icon(icon, size: _rowIcon, color: colors.tint),
+                  child: Icon(
+                    icon,
+                    size: _rowIcon,
+                    color: selected ? colors.tint : colors.secondaryLabel,
+                  ),
                 ),
                 const SizedBox(width: JamSpace.sm),
                 Expanded(

@@ -32,9 +32,11 @@ import '../widgets/avatar.dart';
 import '../widgets/buttons.dart';
 import '../widgets/brand.dart';
 import '../widgets/empty_state.dart';
+import '../widgets/jam_mark.dart';
 import '../widgets/join_link_dialog.dart';
 import '../widgets/list.dart';
 import '../widgets/pressable.dart';
+import '../widgets/room_sheet.dart' show showInviteSheet;
 import '../widgets/scaffold.dart';
 import '../widgets/section.dart';
 import '../widgets/session_gate.dart';
@@ -55,9 +57,14 @@ abstract final class HomeStrings {
   static const String scan = 'Scan a Code';
   static const String host = 'Start a Jam';
 
-  /// The paste-a-link way in. On a phone it lives in the scanner; here it is
-  /// only the nav-bar action on platforms with no camera.
+  /// The paste-a-link way in: the nav-bar action on platforms with no
+  /// camera, and the one way in on those everywhere else on this screen.
   static const String joinWithLink = 'Join with Link';
+
+  /// The same alert where there *is* a camera — named as the scanner names
+  /// it, and offered beside Scan so a link sent in a chat never has to go
+  /// through the camera's permission sheet first.
+  static const String enterLink = 'Enter Link';
 
   static const String settings = 'Settings';
   static const String recent = 'Recent';
@@ -67,22 +74,44 @@ abstract final class HomeStrings {
   static const String offlineBody =
       'Join a Wi‑Fi network, or turn on your hotspot and have everyone '
       'connect to it.';
-  static const String hotspotTitle = 'No Jams Nearby';
+
+  /// This phone is *sharing* the hotspot, so it is almost always the host.
+  static const String hotspotTitle = 'You’re Sharing a Hotspot';
   static const String hotspotBody =
-      'Jams don’t show up over a hotspot. Scan the host’s code to join.';
-  static const String quietTitle = 'No Jams Nearby';
-  static const String quietBody = 'Jams on this Wi‑Fi show up here.';
+      'Nearby jams can’t be listed over a hotspot. Start one here, or scan '
+      'the host’s code.';
+
+  /// Not "No Jams Nearby" under a large "Nearby": the page title already
+  /// says where.
+  static const String quietTitle = 'No Jams Yet';
+  static const String quietBody =
+      'When someone on this Wi‑Fi starts one, it shows up here.';
 
   /// The one-line versions, for when Recent is under them: the full empty
   /// state is for a screen that has nothing else to show.
   static const String offlineLine = 'Not on Wi‑Fi. Nearby jams need one.';
-  static const String hotspotLine = 'Jams don’t show up over a hotspot.';
+  static const String hotspotLine = 'Jams can’t be listed over your hotspot.';
   static const String quietLine = 'No jams nearby on this Wi‑Fi.';
-  static const String scanShort = 'Scan';
 
-  /// What home says while *this* device is in a jam: one quiet line. The
-  /// mini player is the way back in, and the browse stops while a jam runs —
-  /// "No Jams Nearby" over your own live room is a contradiction.
+  /// The scanner and the link, side by side on a line: two verbs with their
+  /// nouns, so they read as two actions rather than one phrase.
+  static const String scanShort = 'Scan Code';
+
+  /// Under the rooms: mDNS misses jams (hotspots, client isolation), so the
+  /// other ways in are offered right where a missing jam is noticed.
+  static const String notListed = 'Don’t see your jam?';
+
+  /// What home says while *this* device is in a jam: the jam itself (its
+  /// mark, its name as the title) and your part in it. The mini player is
+  /// the way back in, and the browse stops while a jam runs — "No Jams
+  /// Nearby" over your own live room is a contradiction.
+  static const String hostingEnds =
+      'You’re hosting. Nearby jams show up again when it ends.';
+  static const String guestingEnds =
+      'You’re in this jam. Nearby jams show up again when you leave.';
+  static const String invite = 'Invite People';
+
+  /// The one-line versions, above Recent.
   static String hostingBody(String room) =>
       'Nearby jams show up again when $room ends.';
   static String guestingBody(String room) =>
@@ -105,15 +134,15 @@ const double _roomEntryOffset = 8;
 const double _maxButtonWidth = 400;
 
 /// The room name's possessive suffix ("Mia’s Jam"), used to give a nearby
-/// room its host's initials rather than "MJ" for every jam.
+/// room's mark its host's face rather than "MJ" for every jam.
 final RegExp _possessiveJam = RegExp(r'^(.+?)[’\x27]s Jam$');
 
 /// The host's name, when the room name is the default "Mia’s Jam".
 String jamHostNameFromRoom(String room) =>
     _possessiveJam.firstMatch(room.trim())?.group(1) ?? room;
 
-/// Whether [room] names its host ("Mia’s Jam"). Only then does its row get
-/// a face: initials made from "Van Jam" pose as a person called VJ.
+/// Whether [room] names its host ("Mia’s Jam"). Only then does its mark
+/// wear a face: initials made from "Van Jam" pose as a person called VJ.
 bool jamRoomNamesHost(String room) => _possessiveJam.hasMatch(room.trim());
 
 class HomeScreen extends StatefulWidget {
@@ -132,6 +161,10 @@ class _HomeScreenState extends State<HomeScreen> {
   JamNetworkStatus _network = JamNetworkStatus.offline;
   Timer? _networkPoll;
   List<JamHistoryRecord> _recents = const [];
+
+  /// The [_recents] with a cover still on this device ([JamHistoryRecord.
+  /// sessionId]); the rest are drawn as their jam's monogram.
+  Set<String> _covered = const {};
 
   /// Rooms already on screen ([JamNearbyRoom.identity]), so only a *newly*
   /// discovered one animates in and buzzes — a rebuild is not an arrival,
@@ -210,7 +243,19 @@ class _HomeScreenState extends State<HomeScreen> {
         )) {
       return;
     }
-    setState(() => _recents = next);
+    // Which of them still have a cover on this device — asked once here
+    // (it touches the file system), not on every build.
+    final covered = {
+      for (final record in next)
+        if (record.tracks.any(
+          (t) => t.item.artworkId != null && t.existsLocally,
+        ))
+          record.sessionId,
+    };
+    setState(() {
+      _recents = next;
+      _covered = covered;
+    });
   }
 
   /// A past jam's detail page; Forget there has to take the row away
@@ -297,6 +342,23 @@ class _HomeScreenState extends State<HomeScreen> {
   /// The nav-bar code action: the scanner where there is a camera, the Join
   /// with Link alert where there is not.
   void _scanOrLink() => unawaited(canScanQrCodes ? _scan() : _joinWithLink());
+
+  /// The ways in that are not a nearby row, for the one-line states: Scan
+  /// and Enter Link where there is a camera — the link straight to its
+  /// alert, never through the camera's permission sheet — and Join with
+  /// Link where there is not.
+  List<_LineAction> get _waysIn => [
+    if (canScanQrCodes) (HomeStrings.scanShort, () => unawaited(_scan())),
+    (
+      canScanQrCodes ? HomeStrings.enterLink : HomeStrings.joinWithLink,
+      () => unawaited(_joinWithLink()),
+    ),
+  ];
+
+  /// The live jam's Invite sheet, for a host who has come back to Home.
+  void _invite(JamEngine engine) => unawaited(
+    showInviteSheet(context, engine, selfName: _identity, network: _network),
+  );
 
   Future<void> _scan() async {
     final scanned = await context.push<String>('/scan');
@@ -414,6 +476,7 @@ class _HomeScreenState extends State<HomeScreen> {
             padding: const EdgeInsets.only(top: JamSpace.lg),
             child: _RecentSection(
               records: records,
+              covered: _covered,
               onSeeAll: () => unawaited(context.push('/history')),
               onOpen: (record) => unawaited(_openRecent(record)),
             ),
@@ -424,32 +487,54 @@ class _HomeScreenState extends State<HomeScreen> {
       // In a jam, or with Recent to show, "nothing nearby" is one quiet
       // line rather than a 230 pt block that pushes Recent to mid-screen.
       if (session.isLive && engine != null) {
+        final room = engine.sessionName;
+        if (recents == null) {
+          // Nothing else on the page: say whose jam this is, as a jam —
+          // and offer the host the thing they most likely came back for.
+          return [
+            _anchored(
+              JamEmptyState(
+                mark: JamMark(
+                  name: room,
+                  size: JamMarkSize.row,
+                  hostName: session.isHost ? _identity : null,
+                ),
+                title: room,
+                body: session.isHost
+                    ? HomeStrings.hostingEnds
+                    : HomeStrings.guestingEnds,
+                actionLabel: session.isHost ? HomeStrings.invite : null,
+                onAction: session.isHost ? () => _invite(engine) : null,
+                actionVariant: JamButtonVariant.gray,
+              ),
+            ),
+          ];
+        }
         return [
           SliverToBoxAdapter(
             child: _NearbyLine(
               text: session.isHost
-                  ? HomeStrings.hostingBody(engine.sessionName)
-                  : HomeStrings.guestingBody(engine.sessionName),
+                  ? HomeStrings.hostingBody(room)
+                  : HomeStrings.guestingBody(room),
             ),
           ),
-          if (recents != null) SliverToBoxAdapter(child: recents),
+          SliverToBoxAdapter(child: recents),
         ];
       }
       if (recents != null) {
         return [
           SliverToBoxAdapter(
-            child: _NearbyLine.forNetwork(_network, onScan: _scanOrLink),
+            child: _NearbyLine.forNetwork(_network, actions: _waysIn),
           ),
           SliverToBoxAdapter(child: recents),
         ];
       }
-      // Alone, the empty state sits in the middle of the page.
       return [
-        SliverFillRemaining(
-          hasScrollBody: false,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(vertical: JamSpace.xxxl),
-            child: _EmptyNearby(network: _network, onScan: _scanOrLink),
+        _anchored(
+          _EmptyNearby(
+            network: _network,
+            onScan: _scanOrLink,
+            onLink: canScanQrCodes ? () => unawaited(_joinWithLink()) : null,
           ),
         ),
       ];
@@ -470,15 +555,46 @@ class _HomeScreenState extends State<HomeScreen> {
             joining: joining == room.joinUri || _probing == room.identity,
             enabled: !busy,
             animateIn: arrivals.contains(room.identity),
-            separator: index < rooms.length - 1,
             onTap: () => unawaited(_joinNearby(room)),
           );
         },
       ),
+      SliverToBoxAdapter(
+        child: _NearbyLine(text: HomeStrings.notListed, actions: _waysIn),
+      ),
       if (recents != null) SliverToBoxAdapter(child: recents),
     ];
   }
+
+  /// A page with nothing else on it: the empty state *anchored* a third of
+  /// the way down rather than centred on its own height, so its glyph lands
+  /// at the same height whichever state it is (with one action, two or
+  /// none) — and above any medium sheet that rises over it.
+  Widget _anchored(Widget child) => SliverFillRemaining(
+    hasScrollBody: false,
+    child: Padding(
+      padding: const EdgeInsets.symmetric(vertical: JamSpace.xxxl),
+      child: Column(
+        children: [
+          const Spacer(),
+          ConstrainedBox(
+            constraints: const BoxConstraints(minHeight: _emptyBlockHeight),
+            child: Align(alignment: Alignment.topCenter, child: child),
+          ),
+          const Spacer(flex: 2),
+        ],
+      ),
+    ),
+  );
 }
+
+/// The tallest empty state (glyph, title, a sentence and two actions), with
+/// room for its sentence to run a line longer: every state is laid out in a
+/// block this tall, so the glyph does not move when the words do.
+const double _emptyBlockHeight = 320;
+
+/// A one-line state's action: its label and what it does.
+typedef _LineAction = (String, VoidCallback);
 
 /// Your avatar in the nav bar: the way to Settings (and from there your
 /// name), as in Apple Music and Invites.
@@ -516,11 +632,13 @@ class _AvatarButton extends StatelessWidget {
   }
 }
 
-/// One discoverable room: a plain row with the host's face, the room's name
-/// and a tinted Join.
+/// One discoverable room, as a jam: its mark, its name in Manrope, and a
+/// tinted Join — on a card of its own, the whole card the target.
 ///
 /// `JamNearbyRoom` carries only a key, a name and a join URI over mDNS, so
-/// the row says nothing it cannot know — no listener count, no preset.
+/// the row says nothing it cannot know — no listener count, no preset, no
+/// cover. The mark is the name's monogram, and wears the host's face only
+/// when the name says whose jam it is ("Mia’s Jam").
 class _RoomRow extends StatelessWidget {
   const _RoomRow({
     super.key,
@@ -529,7 +647,6 @@ class _RoomRow extends StatelessWidget {
     this.joining = false,
     this.enabled = true,
     this.animateIn = false,
-    this.separator = false,
   });
 
   final JamNearbyRoom room;
@@ -544,56 +661,73 @@ class _RoomRow extends StatelessWidget {
   /// Whether this room was just discovered, and should rise into place.
   final bool animateIn;
 
-  final bool separator;
-
   @override
   Widget build(BuildContext context) {
+    final colors = context.jamColors;
     final still = MediaQuery.disableAnimationsOf(context);
     final tap = enabled ? onTap : null;
+    final name = room.sessionName;
+    final side = JamSpace.pageFor(MediaQuery.sizeOf(context).width);
+    // The card's corner, concentric with the mark's at the card's padding.
+    final radius = BorderRadius.circular(JamRadius.section);
 
-    final row = Semantics(
-      container: true,
-      button: true,
-      enabled: enabled || joining,
-      label: joining
-          ? HomeStrings.joining(room.sessionName)
-          : HomeStrings.joinRoom(room.sessionName),
-      onTap: tap,
-      excludeSemantics: true,
-      child: JamRow(
-        title: room.sessionName,
-        leading: jamRoomNamesHost(room.sessionName)
-            ? JamAvatar(
-                name: jamHostNameFromRoom(room.sessionName),
-                size: JamAvatarSize.list,
-              )
-            : const _RoomMark(),
-        leadingWidth: JamAvatarSize.list,
-        separator: false,
-        onTap: tap,
-        trailing: JamButton.tinted(
-          label: HomeStrings.join,
-          size: JamButtonSize.small,
-          loading: joining,
-          onPressed: tap ?? (joining ? () {} : null),
-        ),
+    final body = Padding(
+      padding: const EdgeInsets.all(JamSpace.md),
+      child: Row(
+        children: [
+          JamMark(
+            name: name,
+            size: JamMarkSize.nearby,
+            hostName: jamRoomNamesHost(name) ? jamHostNameFromRoom(name) : null,
+          ),
+          const SizedBox(width: kJamRowLeadingGap),
+          Expanded(
+            child: Text(
+              name,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              // A jam's name is a named thing: Manrope, as where it is
+              // born (Start a Jam's field) and on the Invite.
+              style: context.jamTitle3,
+            ),
+          ),
+          const SizedBox(width: JamSpace.sm),
+          JamButton.tinted(
+            label: HomeStrings.join,
+            size: JamButtonSize.small,
+            loading: joining,
+            onPressed: tap ?? (joining ? () {} : null),
+          ),
+        ],
       ),
     );
 
-    final card = Container(
-      margin: EdgeInsets.fromLTRB(
-        JamSpace.pageFor(MediaQuery.sizeOf(context).width),
-        6,
-        JamSpace.pageFor(MediaQuery.sizeOf(context).width),
-        6,
+    final card = Padding(
+      padding: EdgeInsets.fromLTRB(side, JamSpace.xs, side, JamSpace.xs),
+      child: Semantics(
+        container: true,
+        button: true,
+        enabled: enabled || joining,
+        label: joining ? HomeStrings.joining(name) : HomeStrings.joinRoom(name),
+        onTap: tap,
+        excludeSemantics: true,
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            color: colors.groupedSurface,
+            border: Border.all(
+              color: colors.separator,
+              width: JamHairline.thicknessOf(context),
+            ),
+            borderRadius: radius,
+          ),
+          child: JamPressable(
+            onTap: tap,
+            style: JamPressStyle.highlight,
+            borderRadius: radius,
+            child: body,
+          ),
+        ),
       ),
-      padding: const EdgeInsets.symmetric(vertical: 8),
-      decoration: BoxDecoration(
-        color: context.jamColors.groupedSurface,
-        border: Border.all(color: context.jamColors.separator, width: 0.5),
-        borderRadius: BorderRadius.circular(JamRadius.section),
-      ),
-      child: row,
     );
     if (!animateIn || still) return card;
     // A one-shot rise, with no controller of its own to keep alive: the
@@ -618,11 +752,15 @@ class _RoomRow extends StatelessWidget {
 class _RecentSection extends StatelessWidget {
   const _RecentSection({
     required this.records,
+    required this.covered,
     required this.onSeeAll,
     required this.onOpen,
   });
 
   final List<JamHistoryRecord> records;
+
+  /// The records with a cover still on this device.
+  final Set<String> covered;
   final VoidCallback onSeeAll;
   final ValueChanged<JamHistoryRecord> onOpen;
 
@@ -649,13 +787,17 @@ class _RecentSection extends StatelessWidget {
             subtitleMaxLines: 2,
             // The same detail page Past Jams pushes, so the same chevron.
             chevron: true,
-            // The same covers Past Jams reads back off this device.
-            leading: JamArtworkMosaic(
-              tracks: record.tracks,
-              size: JamArtworkSize.thumb,
-              semanticLabel: HistoryStrings.cover(record.sessionName),
-            ),
-            leadingWidth: JamArtworkSize.thumb,
+            // The jam's mark: the covers Past Jams reads back off this
+            // device, or — with none left — its monogram, never a
+            // missing-artwork note.
+            leading: covered.contains(record.sessionId)
+                ? JamArtworkMosaic(
+                    tracks: record.tracks,
+                    size: JamMarkSize.recent,
+                    semanticLabel: HistoryStrings.cover(record.sessionName),
+                  )
+                : JamMark(name: record.sessionName, size: JamMarkSize.recent),
+            leadingWidth: JamMarkSize.recent,
             onTap: () => onOpen(record),
           ),
       ],
@@ -663,91 +805,66 @@ class _RecentSection extends StatelessWidget {
   }
 }
 
-/// A nearby room whose name does not say whose it is: a neutral mark in the
-/// avatar's place, not initials that pose as a person.
-class _RoomMark extends StatelessWidget {
-  const _RoomMark();
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.jamColors;
-    return Container(
-      width: JamAvatarSize.list,
-      height: JamAvatarSize.list,
-      decoration: BoxDecoration(
-        color: colors.fillSecondary,
-        shape: BoxShape.circle,
-      ),
-      child: Icon(
-        CupertinoIcons.music_note_2,
-        size: JamAvatarSize.list * 0.45,
-        color: colors.tertiaryLabel,
-      ),
-    );
-  }
-}
-
-/// "Nothing nearby" as one quiet line, for a Home that has other things on
-/// it: Recent below, or the mini player of the jam you are in.
+/// "Nothing nearby" (or "not listed") as one quiet line, for a Home that
+/// has other things on it: the rooms above, Recent below, or the mini
+/// player of the jam you are in.
 class _NearbyLine extends StatelessWidget {
-  const _NearbyLine({required this.text, this.actionLabel, this.onAction});
+  const _NearbyLine({required this.text, this.actions = const []});
 
-  /// The line for this network, with a Scan action where scanning helps.
+  /// The line for this network, with the other ways in where they help.
   factory _NearbyLine.forNetwork(
     JamNetworkStatus network, {
-    required VoidCallback onScan,
-  }) {
-    final (text, showScan) = switch (network) {
-      JamNetworkStatus(connected: false) => (HomeStrings.offlineLine, false),
-      JamNetworkStatus(isHotspotHost: true) => (HomeStrings.hotspotLine, true),
-      _ => (HomeStrings.quietLine, true),
-    };
-    return _NearbyLine(
-      text: text,
-      actionLabel: !showScan
-          ? null
-          : canScanQrCodes
-          ? HomeStrings.scanShort
-          : HomeStrings.joinWithLink,
-      onAction: showScan ? onScan : null,
-    );
-  }
+    required List<_LineAction> actions,
+  }) => switch (network) {
+    // Nothing to scan or paste into without a network.
+    JamNetworkStatus(connected: false) => const _NearbyLine(
+      text: HomeStrings.offlineLine,
+    ),
+    JamNetworkStatus(isHotspotHost: true) => _NearbyLine(
+      text: HomeStrings.hotspotLine,
+      actions: actions,
+    ),
+    _ => _NearbyLine(text: HomeStrings.quietLine, actions: actions),
+  };
 
   final String text;
-  final String? actionLabel;
-  final VoidCallback? onAction;
+  final List<_LineAction> actions;
 
   @override
   Widget build(BuildContext context) {
     final colors = context.jamColors;
-    final label = actionLabel;
     return ConstrainedBox(
       constraints: const BoxConstraints(minHeight: JamMetrics.rowHeight),
       child: Padding(
-        // The small plain button pads its label by 4: 12 here puts the
-        // label on the 16 margin.
-        padding: EdgeInsetsDirectional.fromSTEB(
+        padding: const EdgeInsetsDirectional.fromSTEB(
           kJamRowInset,
           JamSpace.xs,
-          label == null ? kJamRowInset : kJamRowInset - JamSpace.xs,
+          kJamRowInset,
           JamSpace.xs,
         ),
         child: Row(
           children: [
             Expanded(
-              child: Text(
+              // Balanced, so a wrapped line never leaves one word alone.
+              child: JamBalancedText(
                 text,
+                textAlign: TextAlign.start,
                 style: context.jamSubheadline.copyWith(
                   color: colors.secondaryLabel,
                 ),
               ),
             ),
-            if (label != null && onAction != null)
-              JamButton.plain(
+            // Small neutral buttons, not bare words: beside a sentence, two
+            // tinted words read as its last phrase ("…Wi‑Fi. Scan Code Enter
+            // Link"). Neutral, so they never pose as a room's Join.
+            for (final (i, (label, onPressed)) in actions.indexed) ...[
+              SizedBox(width: i == 0 ? JamSpace.md : JamSpace.sm),
+              JamButton.gray(
                 label: label,
                 size: JamButtonSize.small,
-                onPressed: onAction,
+                onPressed: onPressed,
               ),
+            ],
           ],
         ),
       ),
@@ -758,10 +875,20 @@ class _NearbyLine extends StatelessWidget {
 /// The "nothing nearby" situations, which need different actions — on a
 /// Home with nothing else to show.
 class _EmptyNearby extends StatelessWidget {
-  const _EmptyNearby({required this.network, required this.onScan});
+  const _EmptyNearby({
+    required this.network,
+    required this.onScan,
+    this.onLink,
+  });
 
   final JamNetworkStatus network;
+
+  /// The scanner, or Join with Link where there is no camera.
   final VoidCallback onScan;
+
+  /// Enter Link beside the scanner, where there is one: a link sent in a
+  /// chat goes straight to its alert, not through the camera's sheet.
+  final VoidCallback? onLink;
 
   @override
   Widget build(BuildContext context) {
@@ -773,7 +900,8 @@ class _EmptyNearby extends StatelessWidget {
         false,
       ),
       JamNetworkStatus(isHotspotHost: true) => (
-        CupertinoIcons.qrcode,
+        // The same viewfinder the nav bar and the camera primer show.
+        CupertinoIcons.qrcode_viewfinder,
         HomeStrings.hotspotTitle,
         HomeStrings.hotspotBody,
         true,
@@ -790,14 +918,20 @@ class _EmptyNearby extends StatelessWidget {
       icon: icon,
       title: title,
       body: body,
-      // Quieter than Start a Jam, which owns the bottom of the screen.
+      // Neutral — quieter than Start a Jam, which owns the bottom of the
+      // screen — with the link plainly under it: a button and its
+      // alternative, not two loose words.
       actionLabel: !showScan
           ? null
           : canScanQrCodes
           ? HomeStrings.scan
           : HomeStrings.joinWithLink,
       onAction: showScan ? onScan : null,
-      actionVariant: JamButtonVariant.plain,
+      actionVariant: JamButtonVariant.gray,
+      secondaryActionLabel: showScan && onLink != null
+          ? HomeStrings.enterLink
+          : null,
+      onSecondaryAction: showScan ? onLink : null,
     );
   }
 }

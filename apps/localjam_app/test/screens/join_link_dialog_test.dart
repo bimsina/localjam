@@ -8,6 +8,7 @@ import 'package:flutter/material.dart'
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:localjam_app/src/design/theme.dart';
+import 'package:localjam_app/src/design/tokens.dart';
 import 'package:localjam_app/src/widgets/dialogs.dart';
 import 'package:localjam_app/src/widgets/join_link_dialog.dart';
 
@@ -118,9 +119,15 @@ void main() {
     await tester.tap(find.text(JamJoinLinkStrings.paste));
     await tester.pumpAndSettle();
     expect(find.text('milk, eggs, a new amp'), findsNothing);
-    // The message line says why, in its own place.
+    // The field says why, and the instructions stay above it.
     expect(find.text(JamJoinLinkStrings.invalid), findsOneWidget);
-    expect(find.text(JamJoinLinkStrings.message), findsNothing);
+    expect(find.text(JamJoinLinkStrings.message), findsOneWidget);
+    expect(
+      tester
+          .widget<JamAlertTextField>(find.byType(JamAlertTextField))
+          .errorText,
+      JamJoinLinkStrings.invalid,
+    );
   });
 
   testWidgets('no Paste when the clipboard is empty', (tester) async {
@@ -156,9 +163,7 @@ void main() {
     expect((await pending)?.queryParameters['token'], 'abc123');
   });
 
-  testWidgets('Return on a bad link says why, in the message line', (
-    tester,
-  ) async {
+  testWidgets('Return on a bad link says why, on the field', (tester) async {
     mockClipboard(null);
     await openDialog(tester);
 
@@ -166,8 +171,12 @@ void main() {
     await tester.testTextInput.receiveAction(TextInputAction.go);
     await tester.pumpAndSettle();
 
+    // An error, not a second instruction: the danger footnote under a
+    // red-edged field, with the message still explaining what to paste.
     expect(find.text(JamJoinLinkStrings.invalid), findsOneWidget);
-    expect(find.text(JamJoinLinkStrings.message), findsNothing);
+    expect(find.text(JamJoinLinkStrings.message), findsOneWidget);
+    final error = tester.widget<Text>(find.text(JamJoinLinkStrings.invalid));
+    expect(error.style?.color, JamColors.light.danger);
     expect(find.byType(SnackBar), findsNothing);
     // Still open: the correction belongs where the mistake is.
     expect(find.text(JamJoinLinkStrings.title), findsOneWidget);

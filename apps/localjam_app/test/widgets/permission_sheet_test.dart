@@ -107,9 +107,15 @@ void main() {
       find.text(JamPermissionSheetStrings.localNetworkBody),
     );
     expect(body.left - sheet.left, greaterThanOrEqualTo(32));
-    // The promise glyphs are not tint: nothing there can be tapped.
+    // The promise glyphs are not tint: nothing there can be tapped. Row
+    // icons, so they mark the rows rather than out-sizing the headings.
     final glyph = tester.widget<Icon>(find.byIcon(CupertinoIcons.lock));
     expect(glyph.color, isNot(JamColors.light.tint));
+    expect(glyph.size, JamIconSize.row);
+    // Nor is the hero glyph: one rule with every empty state's (D8).
+    final hero = tester.widget<Icon>(find.byIcon(rationale.icon));
+    expect(hero.color, JamColors.light.secondaryLabel);
+    expect(hero.size, JamIconSize.hero);
     expect(find.text(JamPermissionSheetStrings.continueLabel), findsOneWidget);
     expect(find.text(JamPermissionSheetStrings.dismissLabel), findsOneWidget);
   });

@@ -15,9 +15,11 @@ import 'package:file_selector/file_selector.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:localjam_client/localjam_client.dart';
 
-import '../design/tokens.dart';
 import '../state/session_controller.dart';
 import '../widgets/library_sheet.dart';
+import '../widgets/list.dart';
+import '../widgets/section.dart';
+import '../widgets/sheet.dart';
 import 'format.dart';
 import 'permissions.dart';
 
@@ -27,8 +29,9 @@ abstract final class JamPickerStrings {
 
   static const String addFrom = 'Add Songs From';
   static const String library = 'Music Library';
+  static const String libraryDetail = 'Songs saved on this phone';
   static const String files = 'Files';
-  static const String cancel = 'Cancel';
+  static const String filesDetail = 'Downloads and cloud storage';
 
   static const String pickerFailed = 'Couldn’t open the file picker.';
   static const String libraryReadFailed = 'Couldn’t read your music library.';
@@ -187,35 +190,43 @@ enum JamAddSource { library, files }
 Future<JamAddSource?> chooseAddSource(BuildContext context) async {
   if (!jamLibraryAvailable) return JamAddSource.files;
   _dismissKeyboard();
-  // An iOS action sheet on every platform (D2): the choice between two
-  // sources is exactly what one is for.
-  return showCupertinoModalPopup<JamAddSource>(
-    context: context,
-    builder: (context) {
-      final colors = context.jamColors;
-      Widget action(String label, JamAddSource source) =>
-          CupertinoActionSheetAction(
-            onPressed: () => Navigator.of(context).pop(source),
-            child: Text(label, style: TextStyle(color: colors.tint)),
-          );
-      return CupertinoActionSheet(
-        title: const Text(JamPickerStrings.addFrom),
-        actions: [
-          action(JamPickerStrings.library, JamAddSource.library),
-          action(JamPickerStrings.files, JamAddSource.files),
-        ],
-        cancelButton: CupertinoActionSheetAction(
-          isDefaultAction: true,
-          onPressed: () => Navigator.of(context).pop(),
-          child: Text(
-            JamPickerStrings.cancel,
-            style: TextStyle(color: colors.tint),
-          ),
-        ),
-      );
-    },
-  );
+  return showJamAddSourceSheet(context);
 }
+
+/// The choice itself, on the app's own sheet rather than the system's grey
+/// action sheet: sized to its two rows, floating like every other short
+/// sheet, the xmark to back out. Each row says where its songs come from.
+/// Resolves to the source picked, or null when dismissed.
+Future<JamAddSource?> showJamAddSourceSheet(BuildContext context) =>
+    showJamSheet<JamAddSource>(
+      context,
+      title: JamPickerStrings.addFrom,
+      actions: const JamSheetActions.close(),
+      grouped: true,
+      scrollable: false,
+      builder: (context) {
+        void pick(JamAddSource source) => Navigator.of(context).pop(source);
+        // Scrolls rather than clips at the largest text sizes.
+        return SingleChildScrollView(
+          child: JamSection(
+            children: [
+              JamRow(
+                icon: CupertinoIcons.music_albums,
+                title: JamPickerStrings.library,
+                subtitle: JamPickerStrings.libraryDetail,
+                onTap: () => pick(JamAddSource.library),
+              ),
+              JamRow(
+                icon: CupertinoIcons.folder,
+                title: JamPickerStrings.files,
+                subtitle: JamPickerStrings.filesDetail,
+                onTap: () => pick(JamAddSource.files),
+              ),
+            ],
+          ),
+        );
+      },
+    );
 
 /// Opens the system file picker. Returns the chosen paths, empty when the
 /// user cancelled or the picker could not open (which is reported as a

@@ -2,7 +2,7 @@
 library;
 
 import 'package:flutter/cupertino.dart';
-import 'package:flutter/material.dart' show Icons;
+import 'package:flutter/material.dart' show Icons, MaterialApp;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:localjam_client/localjam_client.dart';
 import 'package:localjam_app/src/design/theme.dart';
@@ -10,11 +10,15 @@ import 'package:localjam_app/src/screens/history_screen.dart';
 import 'package:localjam_app/src/screens/home_screen.dart';
 import 'package:localjam_app/src/screens/settings_screen.dart';
 import 'package:localjam_app/src/state/session_controller.dart';
+import 'package:localjam_app/src/util/network.dart';
 import 'package:localjam_app/src/widgets/avatar.dart';
 import 'package:localjam_app/src/widgets/buttons.dart';
 import 'package:localjam_app/src/widgets/empty_state.dart';
-import 'package:localjam_app/src/widgets/list.dart';
+import 'package:localjam_app/src/widgets/jam_mark.dart';
+import 'package:localjam_app/src/widgets/join_link_dialog.dart';
 import 'package:localjam_app/src/widgets/notice.dart';
+import 'package:localjam_app/src/widgets/permission_sheet.dart';
+import 'package:localjam_app/src/widgets/room_sheet.dart';
 
 import '../harness.dart';
 
@@ -38,6 +42,47 @@ JamNearbyRoom room(String name) => JamNearbyRoom(
 Iterable<JamButton> filledButtons(WidgetTester tester) => tester
     .widgetList<JamButton>(find.byType(JamButton))
     .where((b) => b.variant == JamButtonVariant.filled);
+
+const JamNetworkStatus lan = JamNetworkStatus(
+  addresses: ['192.168.1.20'],
+  interface: 'en0',
+);
+const JamNetworkStatus hotspot = JamNetworkStatus(
+  addresses: ['172.20.10.1'],
+  interface: 'bridge100',
+);
+
+JamHistoryRecord record(String name) => JamHistoryRecord(
+  sessionId: 's_$name',
+  sessionName: name,
+  wasHost: true,
+  startedAt: DateTime(2026, 10, 17, 20),
+  updatedAt: DateTime(2026, 10, 17, 22),
+  tracks: const [],
+);
+
+/// Home on its own, on a network and with recents of the test's choosing.
+Future<void> pumpHome(
+  WidgetTester tester, {
+  required JamNetworkStatus network,
+  List<JamHistoryRecord> records = const [],
+}) async {
+  final session = testSession();
+  await tester.pumpWidget(
+    JamSession(
+      controller: session,
+      child: MaterialApp(
+        theme: jamLightTheme(),
+        home: HomeScreen(
+          key: UniqueKey(),
+          networkReader: () async => network,
+          loadRecords: () async => records,
+        ),
+      ),
+    ),
+  );
+  await tester.pumpAndSettle();
+}
 
 void main() {
   testWidgets('home leads with discovery and one way to start', (tester) async {
@@ -105,7 +150,7 @@ void main() {
     expect(filledButtons(tester).length, 1);
   });
 
-  testWidgets('a discovered room is a plain row with a tinted Join', (
+  testWidgets('a discovered room is a jam card with a tinted Join', (
     tester,
   ) async {
     final session = testSession();
@@ -115,7 +160,13 @@ void main() {
 
     expect(find.text('Bar Room'), findsOneWidget);
     expect(find.text('Kitchen Sunday'), findsOneWidget);
-    expect(find.byType(JamRow), findsNWidgets(2));
+    // Each room is drawn as a jam — its mark — and its name in Manrope, as
+    // where the name is born (Start a Jam's field).
+    expect(find.byType(JamMark), findsNWidgets(2));
+    expect(
+      tester.widget<Text>(find.text('Bar Room')).style?.fontFamily,
+      'Manrope',
+    );
     final joins = tester
         .widgetList<JamButton>(find.byType(JamButton))
         .where((b) => b.label == HomeStrings.join)
@@ -129,6 +180,17 @@ void main() {
     expect(find.textContaining('listening'), findsNothing);
     expect(find.textContaining('localjam://'), findsNothing);
     expect(find.byType(JamEmptyState), findsNothing);
+    // No circles posing as a jam: a person is a circle, a jam a square.
+    expect(find.byIcon(CupertinoIcons.music_note_2), findsNothing);
+  });
+
+  testWidgets('a room card is one button that joins', (tester) async {
+    final session = testSession();
+    await pumpApp(tester, session);
+    publishNearby(session, [room('Bar Room')]);
+    await tester.pumpAndSettle();
+
+    expect(find.bySemanticsLabel(HomeStrings.joinRoom('Bar Room')), findsOne);
   });
 
   testWidgets('a default-named room shows its host’s initials', (tester) async {
@@ -140,20 +202,111 @@ void main() {
     expect(jamRoomNamesHost('Van Jam'), isFalse);
   });
 
-  testWidgets('a room named for no one shows a neutral mark, not initials', (
+  testWidgets('only a room that names its host wears a face on its mark', (
     tester,
   ) async {
     final session = testSession();
     await pumpApp(tester, session);
-    publishNearby(session, [room('Van Jam')]);
+    publishNearby(session, [room('Van Jam'), room('Mia’s Jam')]);
     await tester.pumpAndSettle();
-    expect(
-      find.descendant(
-        of: find.widgetWithText(JamRow, 'Van Jam'),
-        matching: find.byType(JamAvatar),
-      ),
-      findsNothing,
+
+    final marks = {
+      for (final mark in tester.widgetList<JamMark>(find.byType(JamMark)))
+        mark.name: mark,
+    };
+    expect(marks['Van Jam']!.hostName, isNull);
+    expect(marks['Mia’s Jam']!.hostName, 'Mia');
+    // No cover travels over mDNS: the monogram, never a guessed picture.
+    expect(marks.values.every((m) => m.covers.isEmpty), isTrue);
+  });
+
+  testWidgets('under the rooms, the other ways in — the link without the '
+      'camera', (tester) async {
+    final session = testSession();
+    await pumpApp(tester, session);
+    publishNearby(session, [room('Bar Room')]);
+    await tester.pumpAndSettle();
+
+    expect(find.text(HomeStrings.notListed), findsOneWidget);
+    expect(find.text(HomeStrings.scanShort), findsOneWidget);
+    await tester.tap(find.text(HomeStrings.enterLink));
+    await tester.pumpAndSettle();
+    // Straight to the link alert: no camera primer on the way.
+    expect(find.byType(JoinLinkDialog), findsOneWidget);
+    expect(find.byType(JamPermissionSheet), findsNothing);
+  });
+
+  testWidgets('the empty state offers the link beside the scanner', (
+    tester,
+  ) async {
+    await pumpHome(tester, network: lan);
+
+    final empty = tester.widget<JamEmptyState>(find.byType(JamEmptyState));
+    expect(empty.title, HomeStrings.quietTitle);
+    expect(empty.actionLabel, HomeStrings.scan);
+    expect(empty.secondaryActionLabel, HomeStrings.enterLink);
+    await tester.tap(find.text(HomeStrings.enterLink));
+    await tester.pumpAndSettle();
+    expect(find.byType(JoinLinkDialog), findsOneWidget);
+    expect(find.byType(JamPermissionSheet), findsNothing);
+  });
+
+  testWidgets('a phone sharing its hotspot is talked to as the host', (
+    tester,
+  ) async {
+    await pumpHome(tester, network: hotspot);
+
+    final empty = tester.widget<JamEmptyState>(find.byType(JamEmptyState));
+    expect(empty.title, HomeStrings.hotspotTitle);
+    // The viewfinder the nav bar and the camera primer show — one QR glyph.
+    expect(empty.icon, CupertinoIcons.qrcode_viewfinder);
+    // Start a Jam stays the one filled action; scanning stays neutral.
+    expect(empty.actionVariant, JamButtonVariant.gray);
+    expect(filledButtons(tester).length, 1);
+  });
+
+  testWidgets('offline, there is nothing to scan or paste into', (
+    tester,
+  ) async {
+    await pumpHome(tester, network: JamNetworkStatus.offline);
+
+    final empty = tester.widget<JamEmptyState>(find.byType(JamEmptyState));
+    expect(empty.title, HomeStrings.offlineTitle);
+    expect(empty.actionLabel, isNull);
+    expect(empty.secondaryActionLabel, isNull);
+  });
+
+  testWidgets('the empty state sits at the same height whatever it says', (
+    tester,
+  ) async {
+    // Centring moved the glyph 20–30 pt between states (one action, two, or
+    // none); anchored, it does not move at all.
+    await pumpHome(tester, network: JamNetworkStatus.offline);
+    final offline = tester.getTopLeft(find.byIcon(CupertinoIcons.wifi_slash));
+    await pumpHome(tester, network: lan);
+    final quiet = tester.getTopLeft(
+      find.byIcon(CupertinoIcons.antenna_radiowaves_left_right),
     );
+    expect(offline.dy, closeTo(quiet.dy, 0.5));
+  });
+
+  testWidgets('with Recent below, one line with every way in', (tester) async {
+    await pumpHome(tester, network: lan, records: [record('Van Jam')]);
+
+    expect(find.byType(JamEmptyState), findsNothing);
+    expect(find.text(HomeStrings.quietLine), findsOneWidget);
+    expect(find.text(HomeStrings.scanShort), findsOneWidget);
+    expect(find.text(HomeStrings.enterLink), findsOneWidget);
+  });
+
+  testWidgets('a recent jam with no cover left is its monogram, not a '
+      'missing-art note', (tester) async {
+    await pumpHome(tester, network: lan, records: [record('Van Jam')]);
+
+    final mark = tester.widget<JamMark>(find.byType(JamMark));
+    expect(mark.name, 'Van Jam');
+    expect(mark.size, JamMarkSize.recent);
+    expect(find.byIcon(CupertinoIcons.music_note), findsNothing);
   });
 
   testWidgets('home says you are hosting rather than "nobody is hosting"', (
@@ -166,15 +319,29 @@ void main() {
     await startTestHost(tester, session, 'Bar Room');
     await tester.pumpAndSettle();
 
-    // One quiet line, not a second "you're hosting" block over the mini
-    // player, and no duplicate "Open Jam" — the mini player is the way back.
-    expect(find.text(HomeStrings.hostingBody('Bar Room')), findsOneWidget);
+    // With nothing else on the page, the jam itself: its mark, whose it is,
+    // and the host's likeliest next step. No "No Jams" over your own room,
+    // and no duplicate "Open Jam" — the mini player is the way back.
+    final empty = tester.widget<JamEmptyState>(find.byType(JamEmptyState));
+    expect(empty.title, 'Bar Room');
+    expect(empty.body, HomeStrings.hostingEnds);
     expect(find.text(HomeStrings.quietTitle), findsNothing);
-    expect(find.byType(JamEmptyState), findsNothing);
     expect(find.text('Open Jam'), findsNothing);
+    final mark = tester.widget<JamMark>(find.byType(JamMark));
+    expect(mark.name, 'Bar Room');
+    final invite = tester
+        .widgetList<JamButton>(find.byType(JamButton))
+        .singleWhere((b) => b.label == HomeStrings.invite);
+    expect(invite.variant, JamButtonVariant.gray);
     // You cannot host two at once, and the mini player owns the bottom: the
     // Start a Jam button is gone while the jam runs.
     expect(filledButtons(tester), isEmpty);
+
+    await tester.tap(find.text(HomeStrings.invite));
+    await tester.pumpAndSettle();
+    expect(find.byType(InvitePanel), findsOneWidget);
+    Navigator.of(tester.element(find.byType(InvitePanel))).pop();
+    await tester.pumpAndSettle();
 
     await leaveTestSession(tester, session);
     await tester.pumpAndSettle();
