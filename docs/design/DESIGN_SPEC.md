@@ -112,8 +112,9 @@ no status dots or connection badges, no emoji and no filler copy.
   you", "With Mia", "With Mia and Theo", "With Mia, Theo and 3 others".
   - It never says "and 1 other"; a single extra person is named instead.
   - People are always listed in one order: the host first when known, then
-    by name. A record of a jam you joined doesn't say who hosted, so Recent
-    and Past jams list everyone by name.
+    by name. A record of a jam you joined keeps who hosted, so Recent and
+    Past jams list them first, in the colour the room gave them; a record
+    from before that (or of a host with no name) lists everyone by name.
   - `JamPeopleLine` cuts long names before it ever cuts the count, and never
     to fewer than three letters. At large text the line wraps onto a
     second line instead of cutting; if it still doesn't fit, it says the
@@ -186,6 +187,10 @@ no status dots or connection badges, no emoji and no filler copy.
   the people line, "You hosted · 12 songs · Yesterday", and a chevron. A past
   jam's page shows the 88 mark, Host again (filled), and its songs credited
   the same way the queue credits them.
+  - A past jam's mark is its first song with art: read from that song's file
+    while it is on this device, then from the small copy its record keeps
+    (so the cover outlives the song), then the first other song still here
+    with a cover, then the monogram.
 - **Start a jam.** The jam's name is a large inline Manrope field. Below it
   come the Songs (under the one Add songs row), Guests can, and Show to
   people nearby.
