@@ -68,6 +68,7 @@ class JamMark extends StatelessWidget {
     this.semanticLabel,
     this.shadow = false,
     this.onBackdrop = false,
+    this.ground,
   });
 
   /// The jam's name: where the monogram comes from.
@@ -103,6 +104,9 @@ class JamMark extends StatelessWidget {
   /// material a song without art sits on there — not an opaque theme tile.
   final bool onBackdrop;
 
+  /// The monogram's ground off the backdrop; null is `fill`.
+  final Color? ground;
+
   /// The host badge's diameter for a mark [size] across.
   static double badgeSizeFor(double size) =>
       (size * 0.42).roundToDouble().clamp(16.0, 36.0);
@@ -130,9 +134,9 @@ class JamMark extends StatelessWidget {
     final ink = onBackdrop
         ? JamNowPlayingColors.placeholderGlyph
         : colors.secondaryLabel;
-    final ground = onBackdrop
+    final tileGround = onBackdrop
         ? JamNowPlayingColors.placeholderGround
-        : colors.fill;
+        : ground ?? colors.fill;
 
     final Widget content;
     final Object contentKey;
@@ -161,7 +165,7 @@ class JamMark extends StatelessWidget {
           );
 
     Widget tile = DecoratedBox(
-      decoration: ShapeDecoration(color: ground, shape: shape),
+      decoration: ShapeDecoration(color: tileGround, shape: shape),
       child: SizedBox.square(
         dimension: size,
         child: AnimatedSwitcher(

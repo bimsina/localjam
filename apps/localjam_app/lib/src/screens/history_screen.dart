@@ -1,12 +1,12 @@
 /// Past Jams: every session leaves a record (queue + who added what + who
 /// was there); tracks still on this device can seed a new jam in one tap.
 ///
-/// A jam is drawn the way it is everywhere else (D4): its mark — covers, or
-/// its monogram — its name in Manrope, and the people who were there. The
-/// list is plain rows (mark 56, name, faces + "With Mia and Theo", "You
+/// A jam is drawn the way it is everywhere else (D4): its mark — one cover,
+/// or its monogram — its name in Manrope, and the people who were there.
+/// The list is plain rows (mark 56, name, faces + "With Mia and Theo", "You
 /// hosted · 12 songs · Yesterday, 9:10 PM", chevron), swipe to Forget, tap
-/// for the jam's page: the mark beside its name, who was there, **Host
-/// Again**, and the songs with who added what.
+/// for the jam's page: the mark beside its name, when and who, **Host
+/// Again**, and the songs with who added what — as faces, as in the queue.
 ///
 /// History records carry no artwork bytes — a `JamHistoryTrack` is a
 /// `MediaItem` and a path — so covers are read back out of the files that are
@@ -123,7 +123,7 @@ abstract final class HistoryStrings {
     'Dec',
   ];
 
-  /// Announced for a cover or mosaic, which is decorative on its own.
+  /// Announced for a past jam's cover, which is decorative on its own.
   static String cover(String name) => 'Cover art from $name';
   static String forgetHint(String name) => '$forget $name';
   static const String more = 'More';
@@ -202,6 +202,16 @@ String jamHistorySummary(
 /// U+00A0: a space a line never breaks at.
 const String kJamNoBreakSpace = '\u00A0';
 
+/// A jam's name in a list row — Nearby, Recent, Past Jams: Manrope 17/22
+/// bold. A named thing at row scale, level with the row's 17 pt text and
+/// its Join; larger Manrope is for page and sheet titles.
+TextStyle jamRowNameStyle(BuildContext context) => context.jamTitle3.copyWith(
+  fontSize: 17,
+  height: 22 / 17,
+  fontWeight: FontWeight.w700,
+  letterSpacing: -0.2,
+);
+
 // ---------------------------------------------------------------------------
 // Covers
 // ---------------------------------------------------------------------------
@@ -235,7 +245,7 @@ abstract final class _HistoryCovers {
   /// is still here.
   static List<JamHistoryTrack> distinct(
     Iterable<JamHistoryTrack> tracks, {
-    int limit = 4,
+    int limit = 3,
   }) {
     final seen = <String>{};
     final out = <JamHistoryTrack>[];
@@ -308,15 +318,16 @@ ImageProvider _coverImage(BuildContext context, Uint8List bytes, double size) {
   return ResizeImage(MemoryImage(bytes), width: px, height: px);
 }
 
-/// A past jam's mark (`JamMark`, D4) from the covers still on this device:
-/// a 2×2 mosaic when the queue has at least four distinct real covers,
-/// otherwise the first cover — and with none here, the jam's monogram
-/// rather than a music note (a note is a *song* without art; this is a jam).
+/// A past jam's mark (`JamMark`, D4): the cover of its first song whose
+/// cover is still on this device — one cover, as the jam is drawn on the
+/// Invite sheet and the page it ended on — and with none here, the jam's
+/// monogram rather than a music note (a note is a *song* without art; this
+/// is a jam).
 ///
 /// Used by every past-jam row (Past Jams, Home's Recent) and the detail
 /// page.
-class JamArtworkMosaic extends StatefulWidget {
-  const JamArtworkMosaic({
+class JamHistoryMark extends StatefulWidget {
+  const JamHistoryMark({
     super.key,
     required this.tracks,
     required this.size,
@@ -327,7 +338,7 @@ class JamArtworkMosaic extends StatefulWidget {
 
   final List<JamHistoryTrack> tracks;
 
-  /// Edge length of the whole tile.
+  /// Edge length of the tile.
   final double size;
 
   /// The jam's name: where its monogram comes from.
@@ -340,12 +351,12 @@ class JamArtworkMosaic extends StatefulWidget {
   final bool shadow;
 
   @override
-  State<JamArtworkMosaic> createState() => _JamArtworkMosaicState();
+  State<JamHistoryMark> createState() => _JamHistoryMarkState();
 }
 
-class _JamArtworkMosaicState extends State<JamArtworkMosaic> {
-  /// Loaded covers, in queue order. Null until the reads finish.
-  List<Uint8List>? _covers;
+class _JamHistoryMarkState extends State<JamHistoryMark> {
+  /// The cover, once read. Null until then, and when there is none.
+  Uint8List? _cover;
   Object? _token;
 
   @override
@@ -355,43 +366,35 @@ class _JamArtworkMosaicState extends State<JamArtworkMosaic> {
   }
 
   @override
-  void didUpdateWidget(JamArtworkMosaic old) {
+  void didUpdateWidget(JamHistoryMark old) {
     super.didUpdateWidget(old);
     if (!identical(old.tracks, widget.tracks)) unawaited(_load());
   }
 
   Future<void> _load() async {
     final token = _token = Object();
-    final candidates = _HistoryCovers.distinct(widget.tracks);
-    if (candidates.isEmpty) {
-      if (_covers != null && mounted) setState(() => _covers = null);
-      return;
+    // The first song with a cover, in queue order; a file whose tag turns
+    // out to hold none hands over to the next.
+    for (final track in _HistoryCovers.distinct(widget.tracks)) {
+      final bytes = await _HistoryCovers.load(track);
+      if (!mounted || token != _token) return;
+      if (bytes != null && bytes.isNotEmpty) {
+        setState(() => _cover = bytes);
+        return;
+      }
     }
-    // Fewer than four distinct covers can only ever show the first one, so
-    // only that one is read.
-    final wanted = candidates.length >= 4 ? candidates : [candidates.first];
-    final results = await Future.wait([
-      for (final track in wanted) _HistoryCovers.load(track),
-    ]);
-    if (!mounted || token != _token) return;
-    setState(() => _covers = [...results.nonNulls]);
+    if (_cover != null && mounted) setState(() => _cover = null);
   }
 
   @override
   Widget build(BuildContext context) {
-    final size = widget.size;
-    final covers = _covers ?? const <Uint8List>[];
-    final grid = covers.length >= 4;
-    final edge = grid ? size / 2 : size;
+    final cover = _cover;
     return JamMark(
       name: widget.name,
-      size: size,
-      covers: [
-        for (final bytes in covers.take(grid ? 4 : 1))
-          _coverImage(context, bytes, edge),
-      ],
+      size: widget.size,
+      covers: [if (cover != null) _coverImage(context, cover, widget.size)],
       semanticLabel: widget.semanticLabel,
-      shadow: widget.shadow && covers.isNotEmpty,
+      shadow: widget.shadow && cover != null,
     );
   }
 }
@@ -405,12 +408,21 @@ List<Color> jamRecordFaceColors(
   JamHistoryRecord record, {
   required String self,
 }) {
+  final byName = jamRecordColorsByName(record, self: self);
+  return [for (final name in record.peerNames) byName[name]!];
+}
+
+/// Every face of [record] by name, this device's under [self] — the same
+/// assignment as [jamRecordFaceColors], for the songs' credits.
+Map<String, Color> jamRecordColorsByName(
+  JamHistoryRecord record, {
+  required String self,
+}) {
   final me = self.trim();
-  final byName = jamPeopleColors([
+  return jamPeopleColors([
     if (me.isNotEmpty) me,
     ...record.peerNames,
   ], host: record.wasHost && me.isNotEmpty ? me : null);
-  return [for (final name in record.peerNames) byName[name]!];
 }
 
 // ---------------------------------------------------------------------------
@@ -635,7 +647,7 @@ class JamHistoryRow extends StatelessWidget implements JamSelfSeparatingRow {
       ),
       child: Row(
         children: [
-          JamArtworkMosaic(
+          JamHistoryMark(
             tracks: record.tracks,
             size: mark,
             name: record.sessionName,
@@ -648,9 +660,9 @@ class JamHistoryRow extends StatelessWidget implements JamSelfSeparatingRow {
               children: [
                 Text(
                   record.sessionName,
-                  maxLines: 1,
+                  maxLines: 2,
                   overflow: TextOverflow.ellipsis,
-                  style: context.jamTitle3,
+                  style: jamRowNameStyle(context),
                 ),
                 if (peers.isNotEmpty) ...[
                   const SizedBox(height: JamSpace.xs),
@@ -822,7 +834,7 @@ class _HistoryDetailScreenState extends State<HistoryDetailScreen> {
   /// Where the name has scrolled under the bar: past the top of the header
   /// and most of the mark beside it.
   static const double _titleScrollThreshold =
-      JamSpace.lg + JamMarkSize.ended * 0.6;
+      JamSpace.sm + JamMarkSize.ended * 0.6;
 
   @override
   void initState() {
@@ -889,6 +901,8 @@ class _HistoryDetailScreenState extends State<HistoryDetailScreen> {
       color: colors.secondaryLabel,
     );
     final footnote = context.jamFootnote.copyWith(color: colors.secondaryLabel);
+    // The songs credit people by face, coloured as the jam coloured them.
+    final faces = jamRecordColorsByName(record, self: _self);
 
     // The nav bar's own tint ellipsis, like the app's other nav actions: a
     // glass circle is for the player's backdrop, and on paper it vanishes
@@ -914,10 +928,12 @@ class _HistoryDetailScreenState extends State<HistoryDetailScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          const SizedBox(height: JamSpace.lg),
+          const SizedBox(height: JamSpace.sm),
+          // One block: the mark, and beside it the jam — its name, when,
+          // and who was there.
           Row(
             children: [
-              JamArtworkMosaic(
+              JamHistoryMark(
                 tracks: tracks,
                 size: JamMarkSize.ended,
                 name: record.sessionName,
@@ -933,7 +949,7 @@ class _HistoryDetailScreenState extends State<HistoryDetailScreen> {
                       header: true,
                       child: Text(
                         record.sessionName,
-                        maxLines: 3,
+                        maxLines: 2,
                         overflow: TextOverflow.ellipsis,
                         style: context.jamTitle2,
                       ),
@@ -948,19 +964,19 @@ class _HistoryDetailScreenState extends State<HistoryDetailScreen> {
                       ),
                       style: secondary,
                     ),
+                    if (peers.isNotEmpty) ...[
+                      const SizedBox(height: JamSpace.sm),
+                      _People(
+                        names: peers,
+                        colors: jamRecordFaceColors(record, self: _self),
+                        size: JamAvatarSize.attribution,
+                      ),
+                    ],
                   ],
                 ),
               ),
             ],
           ),
-          if (peers.isNotEmpty) ...[
-            const SizedBox(height: JamSpace.lg),
-            _People(
-              names: peers,
-              colors: jamRecordFaceColors(record, self: _self),
-              size: JamAvatarSize.strip,
-            ),
-          ],
           const SizedBox(height: JamSpace.xl),
           // The page's one action, filled like every other primary.
           JamButton.filled(
@@ -1025,6 +1041,8 @@ class _HistoryDetailScreenState extends State<HistoryDetailScreen> {
             _HistoryTrackRow(
               track: tracks[i],
               separator: i < tracks.length - 1,
+              self: _self,
+              faces: faces,
             ),
         ],
       ],
@@ -1042,12 +1060,24 @@ class _HistoryDetailScreenState extends State<HistoryDetailScreen> {
   }
 }
 
-/// A queue row on the detail page, with its cover read back off disk.
+/// A queue row on the detail page, with its cover read back off disk, and
+/// who added it credited as the queue credits them: by face.
 class _HistoryTrackRow extends StatefulWidget {
-  const _HistoryTrackRow({required this.track, required this.separator});
+  const _HistoryTrackRow({
+    required this.track,
+    required this.separator,
+    required this.self,
+    required this.faces,
+  });
 
   final JamHistoryTrack track;
   final bool separator;
+
+  /// This device's name: whose face "You" wears.
+  final String self;
+
+  /// Everyone's face colour, by name ([jamRecordColorsByName]).
+  final Map<String, Color> faces;
 
   @override
   State<_HistoryTrackRow> createState() => _HistoryTrackRowState();
@@ -1076,6 +1106,9 @@ class _HistoryTrackRowState extends State<_HistoryTrackRow> {
   Widget build(BuildContext context) {
     final track = widget.track;
     final adder = track.addedByName;
+    // The store writes the literal 'You' against this device's tracks.
+    final you = adder == HistoryStrings.storedYou;
+    final me = widget.self.trim();
     final cover = _cover;
     final durationUs = track.item.durationUs;
     return JamTrackRow(
@@ -1086,8 +1119,12 @@ class _HistoryTrackRowState extends State<_HistoryTrackRow> {
           : _coverImage(context, cover, JamArtworkSize.row),
       artworkId: track.item.artworkId,
       addedByName: adder,
-      // The store writes the literal 'You' against this device's tracks.
-      addedByYou: adder == HistoryStrings.storedYou,
+      addedByYou: you,
+      // A face where the jam gave one out; the words for anyone it did not.
+      addedByColor: you
+          ? (me.isEmpty ? null : widget.faces[me])
+          : (adder == null ? null : widget.faces[adder]),
+      addedByFaceName: you && me.isNotEmpty ? me : null,
       duration: durationUs == null ? null : Duration(microseconds: durationUs),
       // Faded is the whole signal that a track has left the device.
       dimmed: !_local,

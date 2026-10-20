@@ -145,6 +145,46 @@ Future<Uint8List> cover(int index) async {
   return png;
 }
 
+/// A sleeve in one ground colour with a quiet disc and its words in [ink]:
+/// the near-black and near-white covers the backdrop has to survive.
+Future<Uint8List> plainCover(
+  Color ground,
+  Color disc,
+  Color ink,
+  String title,
+  String artist,
+) async {
+  final recorder = ui.PictureRecorder();
+  final canvas = Canvas(recorder);
+  canvas.drawColor(ground, BlendMode.src);
+  canvas.drawCircle(const Offset(256, 300), 150, Paint()..color = disc);
+  for (final (label, y, size, weight) in [
+    (artist, 34.0, 18.0, FontWeight.w500),
+    (title, 62.0, 40.0, FontWeight.w700),
+  ]) {
+    (TextPainter(
+      text: TextSpan(
+        text: label,
+        style: TextStyle(
+          fontFamily: 'Manrope',
+          fontSize: size,
+          fontWeight: weight,
+          color: ink,
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout(maxWidth: 440)).paint(canvas, Offset(34, y));
+  }
+  final picture = recorder.endRecording();
+  final image = await picture.toImage(512, 512);
+  final png = (await image.toByteData(
+    format: ui.ImageByteFormat.png,
+  ))!.buffer.asUint8List();
+  image.dispose();
+  picture.dispose();
+  return png;
+}
+
 /// A tiny MP3 whose ID3v2 tag carries [png] as its front cover — the kind
 /// of file Past Jams reads covers back out of on a device. (The fixture
 /// WAVs carry no art, and the tag reader takes no pictures from WAV.)
@@ -265,9 +305,23 @@ class Capture {
     String name, {
     String note =
         'Production widgets; fixture content and mocked native services.',
+    bool still = false,
+    bool tolerateOverflow = false,
   }) async {
-    await settle();
-    expect(tester.takeException(), isNull, reason: name);
+    if (still) {
+      await settleStill();
+    } else {
+      await settle();
+    }
+    final error = tester.takeException();
+    if (tolerateOverflow && error != null) {
+      // A stress case the layout does not handle yet: captured anyway, and
+      // said so in the gallery.
+      note = '$note Layout error at capture: ${'$error'.split('\n').first}';
+      debugPrint('Overflow in $name: $error');
+    } else {
+      expect(error, isNull, reason: name);
+    }
     (boundary.currentContext!.findRenderObject()! as RenderRepaintBoundary)
         .markNeedsPaint();
     await tester.pump();
@@ -302,6 +356,17 @@ class Capture {
     });
     // Visible progress while the capture suite runs.
     debugPrint('Captured $filename');
+  }
+
+  /// Lets reads, decodes and backdrop sampling finish while the clock
+  /// moves only half a second: a title that scrolls is still at its start.
+  Future<void> settleStill() async {
+    for (var cycle = 0; cycle < 12; cycle++) {
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 20)),
+      );
+      await tester.pump(const Duration(milliseconds: 40));
+    }
   }
 
   Future<void> dismiss() async {
@@ -812,7 +877,7 @@ void main() {
         JamSessionEndedView(
           reason: JamSessionEndReason.hostGone,
           jamName: jamName,
-          hostName: 'Bibek',
+          hostName: 'Mia',
           // As the room passes it: no way out while the rejoin runs.
           onDone: null,
           onRetry: () {},
@@ -825,7 +890,7 @@ void main() {
         JamSessionEndedView(
           reason: JamSessionEndReason.hostGone,
           jamName: jamName,
-          hostName: 'Bibek',
+          hostName: 'Mia',
           onDone: () {},
           onRetry: () {},
           onScan: () {},
@@ -888,7 +953,7 @@ void main() {
             reason: reason,
             rejectReason: reject,
             jamName: jamName,
-            hostName: 'Bibek',
+            hostName: 'Mia',
             onDone: () {},
             onRetry:
                 reason == JamSessionEndReason.hostGone ||
@@ -910,7 +975,7 @@ void main() {
           reason: JamSessionEndReason.hostEnded,
           jamName: jamName,
           covers: [MemoryImage(lastCover!)],
-          hostName: 'Bibek',
+          hostName: 'Mia',
           onDone: () {},
         ),
       );
@@ -994,6 +1059,14 @@ void main() {
       );
       await cap.snap('37-library-no-results');
       await tester.pumpWidget(const SizedBox());
+
+      // Real content is longer and fuller than the fixtures above: a jam
+      // with a long name, seven people (some with long names), a song with
+      // a long tagged title, and the covers at the backdrop's extremes —
+      // near-black and near-white — then the player at 2× text and Nearby
+      // on a narrow phone at large text.
+      await captureStress(tester, cap, dark: dark);
+      await tester.pumpWidget(const SizedBox());
       await tester.runAsync(() async {
         await session.leave();
         await session.stopBrowsing();
@@ -1002,4 +1075,239 @@ void main() {
       cap.settings.dispose();
     }, timeout: const Timeout(Duration(minutes: 4)));
   }
+}
+
+/// The jam name, people and song title real jams have, not the fixtures'.
+const stressJam = 'Rohan’s birthday road trip to Pokhara';
+const stressPeople = [
+  'Electric Mongoose Supreme',
+  'Mia',
+  'Theo',
+  'Anastasia Konstantinova',
+  'Jo',
+  'Sam',
+];
+const stressTitle = 'Kun Jaat Ko Ho Timi (feat. Bipul Chettri) [Live]';
+
+/// The stress captures (46–49): a hosted jam with six real guests joined
+/// over loopback, the songs that test the player, and Nearby, Recent and
+/// Past Jams with the names and rosters that test the rows.
+Future<void> captureStress(
+  WidgetTester tester,
+  Capture cap, {
+  required bool dark,
+}) async {
+  final session = cap.session;
+  await tester.runAsync(
+    () => session.startHost(sessionName: stressJam, discoverable: false),
+  );
+  final host = session.hostEngine!;
+  // Engines rather than controllers: each guest needs its own device id,
+  // or the host takes them for one phone reconnecting.
+  final guests = <JamGuestEngine>[];
+  final caches = <Directory>[];
+  try {
+    await tester.runAsync(() async {
+      for (final (i, name) in stressPeople.indexed) {
+        final cache = Directory.systemTemp.createTempSync('localjam_stress');
+        caches.add(cache);
+        guests.add(
+          await JamGuestEngine.join(
+            host.joinUriFor(InternetAddress.loopbackIPv4),
+            clientName: name,
+            clientId: 'stress-guest-$i',
+            mediaCacheDir: cache,
+          ),
+        );
+      }
+      final deadline = DateTime.now().add(const Duration(seconds: 10));
+      while (host.peers.length < stressPeople.length &&
+          DateTime.now().isBefore(deadline)) {
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
+      expect(host.peers, hasLength(stressPeople.length));
+    });
+    // Songs added once everyone is in, so one can be credited to a guest.
+    final mongoose = host.peers
+        .firstWhere((p) => p.clientName == stressPeople.first)
+        .peerId;
+    final paths = makeTestTracks(count: 3);
+    final items = <MediaItem>[];
+    await tester.runAsync(() async {
+      final specs = [
+        (stressTitle, 'Bipul Chettri', await cover(3), mongoose),
+        (
+          'Midnight Static',
+          'Northbound',
+          await plainCover(
+            const Color(0xFF0B0F1A),
+            const Color(0xFF161C2B),
+            const Color(0xFFC9D1DE),
+            'Midnight Static',
+            'Northbound',
+          ),
+          'host',
+        ),
+        (
+          'Paper White',
+          'Olive & June',
+          await plainCover(
+            const Color(0xFFF5F2EC),
+            const Color(0xFFE6E1D7),
+            const Color(0xFF3A3632),
+            'Paper White',
+            'Olive & June',
+          ),
+          'host',
+        ),
+      ];
+      for (final (i, (title, artist, png, addedBy)) in specs.indexed) {
+        final artId = await host.debugServer.addArtwork(png, mime: 'image/png');
+        final file = File(paths[i]);
+        final item = await JamHostServer.describeFile(
+          file,
+          kind: MediaKind.audio,
+          mime: 'audio/wav',
+          title: title,
+          artist: artist,
+          album: 'On the road',
+          durationUs: 254000000 + i * 31000000,
+          artworkId: artId,
+          addedBy: addedBy,
+        );
+        host.debugServer.addMedia(item, file);
+        items.add(item);
+      }
+      host.setMedia(items.first.mediaId);
+      host.seek(41000000);
+    });
+
+    await cap.mount(const RoomScreen());
+    await cap.snap(
+      '46-player-long-title',
+      still: true,
+      note:
+          'A long tagged title, a long jam name and seven people (host + six '
+          'guests over loopback); captured before a scrolling title moves.',
+    );
+    unawaited(
+      showRoomSheet(
+        tester.element(find.byType(RoomScreen)),
+        host,
+        selfName: 'Bibek',
+        network: lan,
+      ),
+    );
+    await cap.snap(
+      '46-people-many',
+      note: 'Seven people, two with long names.',
+    );
+    await cap.dismiss();
+    (host.lanAddresses as ValueNotifier<List<InternetAddress>>).value = [
+      InternetAddress('192.168.1.12'),
+    ];
+    (host.joinUriListenable as ValueNotifier<Uri>).value = Uri.parse(
+      'localjam://join?host=192.168.1.12&port=4242&token=preview&name=Rohan',
+    );
+    unawaited(
+      showInviteSheet(
+        tester.element(find.byType(RoomScreen)),
+        host,
+        selfName: 'Bibek',
+        network: lan,
+      ),
+    );
+    await cap.snap('46-invite-long-name', note: 'A 37-character jam name.');
+    await cap.dismiss();
+
+    for (final (label, index) in [('dark', 1), ('light', 2)]) {
+      await tester.runAsync(() async => host.setMedia(items[index].mediaId));
+      await cap.mount(const RoomScreen());
+      await cap.snap(
+        '47-player-$label-cover',
+        note: 'The backdrop from a near-$label cover.',
+      );
+    }
+
+    await tester.runAsync(() async => host.setMedia(items.first.mediaId));
+    cap.scale = 2;
+    await cap.mount(const RoomScreen());
+    await cap.snap(
+      '48-player-2x-text',
+      still: true,
+      tolerateOverflow: true,
+      note: 'Now Playing at 2× text (Android’s largest; iOS AX2 is 1.94×).',
+    );
+    cap.scale = 1;
+  } finally {
+    await tester.pumpWidget(const SizedBox());
+    await tester.runAsync(() async {
+      for (final guest in guests) {
+        await guest.close();
+      }
+      for (final cache in caches) {
+        cache.deleteSync(recursive: true);
+      }
+      await session.leave();
+    });
+  }
+
+  // Nearby, Recent and Past Jams with the same names and roster.
+  final today = DateTime.now();
+  final record = JamHistoryRecord(
+    sessionId: 'stress-preview',
+    sessionName: stressJam,
+    wasHost: false,
+    startedAt: DateTime(today.year, today.month, today.day - 2, 9),
+    updatedAt: DateTime(today.year, today.month, today.day - 2, 15),
+    peerNames: stressPeople,
+    tracks: const [],
+  );
+  (session.nearbyRooms as ValueNotifier<List<JamNearbyRoom>>).value = [
+    for (final name in [
+      stressJam,
+      'Electric Mongoose Supreme’s Jam',
+      'Kitchen',
+    ])
+      JamNearbyRoom(
+        key: name,
+        sessionName: name,
+        joinUri: Uri.parse(
+          'localjam://join?host=192.168.1.14&port=4242&token=stress&name=${Uri.encodeComponent(name)}',
+        ),
+      ),
+  ];
+  for (final (label, size, scale) in [
+    ('narrow', const Size(360, 780), 1.0),
+    ('narrow-2x-text', const Size(360, 780), 2.0),
+  ]) {
+    cap.size = size;
+    cap.scale = scale;
+    await cap.mount(
+      HomeScreen(
+        key: UniqueKey(),
+        networkReader: () async => lan,
+        loadRecords: () async => [record],
+      ),
+    );
+    await cap.snap(
+      '49-nearby-$label',
+      tolerateOverflow: true,
+      note:
+          'Long jam names and a seven-person Recent jam, '
+          '${size.width.toInt()} pt wide at ${scale.toStringAsFixed(0)}× '
+          'text.',
+    );
+  }
+  cap.size = const Size(402, 874);
+  cap.scale = 1;
+  (session.nearbyRooms as ValueNotifier<List<JamNearbyRoom>>).value = const [];
+  await cap.push(
+    HistoryScreen(
+      loadRecords: () async => [record],
+      forgetRecord: (_) async {},
+      restoreRecord: (_) async {},
+    ),
+  );
+  await cap.snap('49-history-long', note: 'A long name and seven people.');
 }

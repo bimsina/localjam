@@ -11,6 +11,7 @@ import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:localjam_app/src/design/theme.dart';
+import 'package:localjam_app/src/design/tokens.dart';
 import 'package:localjam_app/src/screens/history_screen.dart';
 import 'package:localjam_app/src/state/app_settings.dart';
 import 'package:localjam_app/src/state/session_controller.dart';
@@ -115,11 +116,13 @@ void main() {
     await pumpHistory(tester, session, records: [_barRoom()]);
 
     expect(find.text('Bar Room'), findsOneWidget);
-    // The jam's name in Manrope, like every other place a jam is named.
-    expect(
-      tester.widget<Text>(find.text('Bar Room')).style?.fontFamily,
-      'Manrope',
-    );
+    // The jam's name in Manrope, like every other place a jam is named —
+    // at row scale, as Nearby's rows: 17 bold, not a heading.
+    final name = tester.widget<Text>(find.text('Bar Room'));
+    expect(name.style?.fontFamily, 'Manrope');
+    expect(name.style?.fontSize, 17);
+    expect(name.style?.fontWeight, FontWeight.w700);
+    expect(name.maxLines, 2);
     // The "when" is held together, so "PM" never wraps onto a line alone.
     expect(
       find.text(
@@ -133,13 +136,11 @@ void main() {
     final pile = tester.widget<JamAvatarStack>(find.byType(JamAvatarStack));
     expect(pile.names, ['Neon Walrus', 'Amber Fox']);
     expect(find.byType(JamDisclosureChevron), findsOneWidget);
-    // The jam's mark, at a Past Jams row's size.
-    final mosaic = tester.widget<JamArtworkMosaic>(
-      find.byType(JamArtworkMosaic),
-    );
-    expect(mosaic.size, JamMarkSize.row);
-    expect(mosaic.name, 'Bar Room');
-    expect(find.byType(JamMark), findsOneWidget);
+    // The jam's mark, at a Past Jams row's size — with no face on it.
+    final mark = tester.widget<JamHistoryMark>(find.byType(JamHistoryMark));
+    expect(mark.size, JamMarkSize.row);
+    expect(mark.name, 'Bar Room');
+    expect(tester.widget<JamMark>(find.byType(JamMark)).hostName, isNull);
     // One node that says it all, and opens the jam.
     expect(
       find.bySemanticsLabel(
@@ -176,7 +177,7 @@ void main() {
     expect(find.text('L'), findsOneWidget);
     expect(
       find.descendant(
-        of: find.byType(JamArtworkMosaic),
+        of: find.byType(JamHistoryMark),
         matching: find.byType(JamArtworkTile),
       ),
       findsNothing,
@@ -231,14 +232,23 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.byType(HistoryDetailScreen), findsOneWidget);
-    // The jam's mark beside its name and summary, who was there, Host
-    // Again, then the songs under their own heading.
-    final mosaic = tester.widget<JamArtworkMosaic>(
-      find.byType(JamArtworkMosaic),
-    );
-    expect(mosaic.size, JamMarkSize.ended);
-    expect(mosaic.name, 'Bar Room');
+    // The jam's mark, and beside it — one block — its name, when and who
+    // was there; then Host Again, then the songs under their own heading.
+    final mark = tester.widget<JamHistoryMark>(find.byType(JamHistoryMark));
+    expect(mark.size, JamMarkSize.ended);
+    expect(mark.name, 'Bar Room');
     expect(find.text('Bar Room'), findsOneWidget);
+    final markRect = tester.getRect(find.byType(JamHistoryMark));
+    final people = tester.getRect(find.text('With Neon Walrus and Amber Fox'));
+    expect(people.left, greaterThan(markRect.right));
+    expect(
+      people.left,
+      tester.getRect(find.byType(JamAvatarStack)).right + JamSpace.sm,
+    );
+    expect(
+      tester.widget<JamAvatarStack>(find.byType(JamAvatarStack)).size,
+      JamAvatarSize.attribution,
+    );
     expect(
       find.text(
         '${HistoryStrings.youHosted} · '
@@ -262,9 +272,17 @@ void main() {
     // No rule above the first song: the one hairline left is the separator
     // between the two rows.
     expect(find.byType(JamHairline), findsOneWidget);
-    expect(find.text('Added by Neon Walrus · 3:42'), findsOneWidget);
-    await tester.scrollUntilVisible(find.text('Added by you · 3:00'), 80);
-    expect(find.text('Added by you · 3:00'), findsOneWidget);
+    // Who added each song, credited as the queue credits them: by face, in
+    // the colour the jam gave them.
+    final rows = tester
+        .widgetList<JamTrackRow>(find.byType(JamTrackRow, skipOffstage: false))
+        .toList();
+    final faces = jamRecordColorsByName(_barRoom(), self: 'Silky Puffin');
+    expect(rows[0].addedByName, 'Neon Walrus');
+    expect(rows[0].addedByColor, faces['Neon Walrus']);
+    expect(rows[1].addedByYou, isTrue);
+    expect(rows[1].addedByColor, faces['Silky Puffin']);
+    expect(rows[1].addedByFaceName, 'Silky Puffin');
   });
 
   testWidgets('a record whose files are gone cannot be re-hosted', (

@@ -5,15 +5,18 @@
 /// that is a notice's job, not this sheet's. Contextual only, never chained
 /// after onboarding.
 ///
-/// The look is a privacy primer: a [JamIconSize.hero] glyph in
+/// The look is a privacy primer: a [JamIconSize.hero] outline glyph in
 /// `secondaryLabel` (raspberry is for what can be tapped, and the glyph
-/// cannot — the same rule as every empty state), a title2 title, a body in
-/// balanced lines, two short rows — what LocalJam does with the permission
-/// and what it never does, each with its own heading — then **Continue**
-/// (filled) and **Not Now** (plain), as wide as every other sheet's buttons.
+/// cannot — the same rule as every empty state), a centred title2 title and
+/// body in balanced lines, two short left-aligned rows wrapped at their full
+/// measure — what LocalJam does with the permission and what it never does,
+/// each with its own heading — then **Continue** (filled) and **Not Now**
+/// (plain), as wide as every other sheet's buttons.
 ///
 /// All of the sheet's words live here: each says one thing once.
 library;
+
+import 'dart:math' as math;
 
 import 'package:flutter/cupertino.dart';
 
@@ -22,6 +25,7 @@ import '../design/typography.dart';
 import '../util/permissions.dart';
 import 'buttons.dart';
 import 'sheet.dart';
+import 'wifi_glyph.dart';
 
 /// One permission's case.
 ///
@@ -30,7 +34,7 @@ import 'sheet.dart';
 @immutable
 class JamPermissionRationale {
   const JamPermissionRationale({
-    required this.icon,
+    this.icon,
     required this.title,
     required this.body,
     required this.doesBullet,
@@ -41,8 +45,10 @@ class JamPermissionRationale {
     this.neverHeading = JamPermissionSheetStrings.neverHeading,
   });
 
-  /// The hero glyph, in `secondaryLabel`.
-  final IconData icon;
+  /// The hero glyph, in `secondaryLabel`. Null: the network's own glyph,
+  /// [JamWifiGlyph] — CupertinoIcons draws Wi‑Fi only as a solid wedge,
+  /// beside the outline glyphs every other primer and empty state shows.
+  final IconData? icon;
 
   /// Title Case, title2.
   final String title;
@@ -78,7 +84,6 @@ class JamPermissionRationale {
 
   /// Android 17's `ACCESS_LOCAL_NETWORK`, asked before hosting or joining.
   static const JamPermissionRationale localNetwork = JamPermissionRationale(
-    icon: CupertinoIcons.wifi,
     title: JamPermissionSheetStrings.localNetworkTitle,
     body: JamPermissionSheetStrings.localNetworkBody,
     doesHeading: _localNetworkDoesHeading,
@@ -94,7 +99,6 @@ class JamPermissionRationale {
   /// cannot stop it would be a lie.
   static const JamPermissionRationale localNetworkApple =
       JamPermissionRationale(
-        icon: CupertinoIcons.wifi,
         title: JamPermissionSheetStrings.localNetworkTitle,
         body: JamPermissionSheetStrings.localNetworkAppleBody,
         doesHeading: _localNetworkDoesHeading,
@@ -234,10 +238,14 @@ class JamPermissionSheet extends StatelessWidget {
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       ExcludeSemantics(
-                        child: Icon(
-                          rationale.icon,
-                          size: JamIconSize.hero,
-                          color: colors.secondaryLabel,
+                        child: Center(
+                          child: rationale.icon == null
+                              ? const JamWifiGlyph()
+                              : Icon(
+                                  rationale.icon,
+                                  size: JamIconSize.hero,
+                                  color: colors.secondaryLabel,
+                                ),
                         ),
                       ),
                       const SizedBox(height: JamSpace.lg),
@@ -336,9 +344,11 @@ class _Promise extends StatelessWidget {
               children: [
                 Text(heading, style: context.jamHeadline),
                 const SizedBox(height: JamSpace.xxs),
-                JamBalancedText(
+                // Wrapped at the full column, not balanced: balancing a
+                // left-aligned line under a heading only leaves a ragged
+                // half-width edge, and siblings at different measures.
+                _UnorphanedText(
                   detail,
-                  textAlign: TextAlign.start,
                   style: context.jamSubheadline.copyWith(
                     color: colors.secondaryLabel,
                   ),
@@ -349,5 +359,63 @@ class _Promise extends StatelessWidget {
         ],
       ),
     );
+  }
+}
+
+/// Left-aligned text wrapped at its full measure, except that a last line
+/// holding one word alone ("…the network you’re / on.") takes the word
+/// before it along: the line above ends one word early, and nothing else
+/// moves. CSS calls it `text-wrap: pretty`.
+class _UnorphanedText extends StatelessWidget {
+  const _UnorphanedText(this.data, {required this.style});
+
+  final String data;
+  final TextStyle style;
+
+  @override
+  Widget build(BuildContext context) {
+    final direction = Directionality.of(context);
+    final scaler = MediaQuery.textScalerOf(context);
+    return LayoutBuilder(
+      builder: (context, constraints) => Align(
+        alignment: AlignmentDirectional.topStart,
+        child: SizedBox(
+          width: _widthFor(constraints.maxWidth, direction, scaler),
+          child: Text(data, style: style),
+        ),
+      ),
+    );
+  }
+
+  double _widthFor(double max, TextDirection direction, TextScaler scaler) {
+    if (!max.isFinite) return max;
+    TextPainter laidOut(double width) => TextPainter(
+      text: TextSpan(text: data, style: style),
+      textDirection: direction,
+      textScaler: scaler,
+    )..layout(maxWidth: width);
+    // Whether the last line holds more than one word; null when there is
+    // only one line.
+    (int, bool) shape(TextPainter painter) {
+      final lines = painter.computeLineMetrics().length;
+      final last = painter.getLineBoundary(TextPosition(offset: data.length));
+      return (lines, data.substring(last.start, last.end).trim().contains(' '));
+    }
+
+    final full = laidOut(max);
+    final (lines, company) = shape(full);
+    full.dispose();
+    if (lines < 2 || company) return max;
+    // Narrow a step at a time until the last word has company, as long as
+    // the text keeps its number of lines and most of its measure.
+    final step = math.max(4.0, max / 48);
+    for (var width = max - step; width >= max * 0.6; width -= step) {
+      final painter = laidOut(width);
+      final (narrowLines, narrowCompany) = shape(painter);
+      painter.dispose();
+      if (narrowLines != lines) return max;
+      if (narrowCompany) return width;
+    }
+    return max;
   }
 }
