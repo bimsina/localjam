@@ -720,6 +720,14 @@ abstract final class JamRadius {
   /// Pull-down and context menus.
   static const double menu = 22;
 
+  /// The menu radius for a panel [height] tall: [menu], but never so round
+  /// that a one-row menu turns into a pill (D9) — the rule [sectionFor]
+  /// follows, capped at [menu].
+  static double menuFor(double height) {
+    final cap = height / 2 - 6;
+    return cap < menu ? (cap < md ? md : cap) : menu;
+  }
+
   /// Text and search fields.
   static const double field = 10;
 

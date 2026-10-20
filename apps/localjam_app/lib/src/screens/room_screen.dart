@@ -509,6 +509,9 @@ class _RoomScreenState extends State<RoomScreen>
       semanticLabel: JamRoomStrings.more,
       // Dark over the backdrop, whatever the app theme says.
       brightness: Brightness.dark,
+      // Up over the cover, never down over the scrubber and the play
+      // square it would slice (PL-24).
+      preferUp: true,
       groups: [
         [
           JamMenuItem(

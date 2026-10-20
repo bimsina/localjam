@@ -506,24 +506,77 @@ void main() {
       expect(find.text('One'), findsNothing);
     });
 
-    testWidgets('an iOS 26 menu: a 22-radius surface', (tester) async {
-      await tester.pumpWidget(
-        _host(
-          JamMenuButton(
-            groups: [
-              [JamMenuItem(title: 'Diagnostics', onPressed: () {})],
-            ],
+    testWidgets('a menu is a 22-radius surface — and one row is a soft '
+        'rectangle, never a capsule', (tester) async {
+      Future<(double radius, double height)> open(int rows) async {
+        // A fresh anchor each time: the last one's menu is still open.
+        await tester.pumpWidget(const SizedBox());
+        await tester.pumpWidget(
+          _host(
+            JamMenuButton(
+              groups: [
+                [
+                  for (var i = 0; i < rows; i++)
+                    JamMenuItem(title: 'Item $i', onPressed: () {}),
+                ],
+              ],
+            ),
           ),
-        ),
-      );
-      await tester.tap(find.byType(JamMenuButton));
-      await tester.pumpAndSettle();
-      expect(
-        tester
-            .widgetList<ClipRRect>(find.byType(ClipRRect))
-            .map((c) => c.borderRadius),
-        contains(BorderRadius.circular(JamRadius.menu)),
-      );
+        );
+        await tester.tap(find.byType(JamMenuButton));
+        await tester.pumpAndSettle();
+        final panel = find.byType(JamMenuPanel);
+        final clip = tester.widget<ClipPath>(
+          find.descendant(of: panel, matching: find.byType(ClipPath)).first,
+        );
+        expect(
+          (clip.clipper! as ShapeBorderClipper).shape,
+          isA<JamMenuBorder>(),
+        );
+        final height = tester.getSize(panel).height;
+        return (JamRadius.menuFor(height), height);
+      }
+
+      final (two, _) = await open(2);
+      expect(two, JamRadius.menu);
+      final (one, height) = await open(1);
+      expect(height, closeTo(JamMetrics.menuRow, 1));
+      expect(one, lessThan(height / 2 - 4), reason: 'not a pill');
+      expect(one, greaterThanOrEqualTo(JamRadius.md));
+    });
+
+    testWidgets('preferUp opens above the trigger where there is room, and '
+        'below where there is not', (tester) async {
+      Future<(Rect, Rect)> open(Alignment where) async {
+        await tester.pumpWidget(const SizedBox());
+        await tester.pumpWidget(
+          _app(
+            Scaffold(
+              body: Align(
+                alignment: where,
+                child: JamMenuButton(
+                  preferUp: true,
+                  groups: [
+                    [
+                      JamMenuItem(title: 'Sound Offset', onPressed: () {}),
+                      JamMenuItem(title: 'Diagnostics', onPressed: () {}),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+          ),
+        );
+        final trigger = tester.getRect(find.byType(JamMenuButton));
+        await tester.tap(find.byType(JamMenuButton));
+        await tester.pumpAndSettle();
+        return (trigger, tester.getRect(find.byType(JamMenuPanel)));
+      }
+
+      final (low, upMenu) = await open(Alignment.bottomRight);
+      expect(upMenu.bottom, lessThanOrEqualTo(low.top));
+      final (high, downMenu) = await open(Alignment.topRight);
+      expect(downMenu.top, greaterThanOrEqualTo(high.bottom));
     });
 
     testWidgets('a row-wide trigger opens against its trailing edge', (

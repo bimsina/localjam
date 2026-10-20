@@ -276,8 +276,10 @@ class _JamMenuGroupGap extends StatelessWidget {
 }
 
 /// The one menu surface: an opaque `elevatedGroupedSurface` card at
-/// [JamRadius.menu] with a hairline edge (no shadow — only artwork casts
-/// one), holding [groups] as [JamMenuRow]s.
+/// [JamRadius.menu] — held under half its height, so a one-row menu is a
+/// soft rectangle and not a capsule ([JamRadius.menuFor]) — with a hairline
+/// edge (no shadow — only artwork casts one), holding [groups] as
+/// [JamMenuRow]s.
 ///
 /// [onSelected] hands the chosen item back instead of running it — the
 /// queue's context menu pops its route with it and runs it after. Without
@@ -310,19 +312,18 @@ class JamMenuPanel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = context.jamColors;
-    final radius = BorderRadius.circular(JamRadius.menu);
-    Widget panel = ClipRRect(
-      borderRadius: radius,
+    final edge = JamMenuBorder(
+      side: BorderSide(
+        color: colors.separator,
+        width: 1 / MediaQuery.devicePixelRatioOf(context),
+      ),
+    );
+    Widget panel = ClipPath(
+      clipper: ShapeBorderClipper(shape: edge),
       child: DecoratedBox(
         decoration: ShapeDecoration(
           color: colors.elevatedGroupedSurface,
-          shape: RoundedRectangleBorder(
-            borderRadius: radius,
-            side: BorderSide(
-              color: colors.separator,
-              width: 1 / MediaQuery.devicePixelRatioOf(context),
-            ),
-          ),
+          shape: edge,
         ),
         // The panel is often drawn in the root overlay: a complete ambient
         // text style keeps its titles off the framework's fallback.
@@ -351,6 +352,47 @@ class JamMenuPanel extends StatelessWidget {
       child: panel,
     );
   }
+}
+
+/// A menu panel's outline: a rounded rectangle at [JamRadius.menuFor] its
+/// own height — [JamRadius.menu] for a menu of two rows or more, less for
+/// one, so it never reads as a capsule (D9).
+class JamMenuBorder extends OutlinedBorder {
+  const JamMenuBorder({super.side});
+
+  RoundedRectangleBorder _at(Rect rect) => RoundedRectangleBorder(
+    side: side,
+    borderRadius: BorderRadius.circular(JamRadius.menuFor(rect.height)),
+  );
+
+  @override
+  JamMenuBorder copyWith({BorderSide? side}) =>
+      JamMenuBorder(side: side ?? this.side);
+
+  @override
+  EdgeInsetsGeometry get dimensions => EdgeInsets.all(side.strokeInset);
+
+  @override
+  Path getInnerPath(Rect rect, {TextDirection? textDirection}) =>
+      _at(rect).getInnerPath(rect, textDirection: textDirection);
+
+  @override
+  Path getOuterPath(Rect rect, {TextDirection? textDirection}) =>
+      _at(rect).getOuterPath(rect, textDirection: textDirection);
+
+  @override
+  void paint(Canvas canvas, Rect rect, {TextDirection? textDirection}) =>
+      _at(rect).paint(canvas, rect, textDirection: textDirection);
+
+  @override
+  ShapeBorder scale(double t) => JamMenuBorder(side: side.scale(t));
+
+  @override
+  bool operator ==(Object other) =>
+      other is JamMenuBorder && other.side == side;
+
+  @override
+  int get hashCode => side.hashCode;
 }
 
 /// How the menu's trigger looks.
@@ -401,12 +443,18 @@ class JamMenuAnchor extends StatefulWidget {
     required this.builder,
     this.controller,
     this.alignment = JamMenuAlignment.automatic,
+    this.preferUp = false,
     this.brightness,
     this.semanticLabel = JamMenuStrings.more,
   });
 
   /// Item groups, separated by the group gap.
   final List<List<JamMenuItem>> groups;
+
+  /// Opens above the trigger whenever there is room there, rather than
+  /// below it — for a trigger with the controls that matter under it (Now
+  /// Playing's ••• over the transport). Without room above it opens down.
+  final bool preferUp;
 
   /// The trigger (or an invisible anchor). Call `controller.open()` from it.
   final Widget Function(BuildContext context, MenuController controller)
@@ -479,6 +527,7 @@ class _JamMenuAnchorState extends State<JamMenuAnchor>
         info: info,
         animation: _animation,
         alignment: widget.alignment,
+        preferUp: widget.preferUp,
         groups: widget.groups,
         semanticLabel: widget.semanticLabel,
       );
@@ -506,6 +555,7 @@ class JamMenuButton extends StatelessWidget {
     this.enabled = true,
     this.brightness,
     this.alignment = JamMenuAlignment.automatic,
+    this.preferUp = false,
     this.triggerAlignment = Alignment.center,
   });
 
@@ -536,6 +586,10 @@ class JamMenuButton extends StatelessWidget {
   /// Which edge of the trigger the menu lines up with.
   final JamMenuAlignment alignment;
 
+  /// Opens above the trigger when there is room (see
+  /// [JamMenuAnchor.preferUp]).
+  final bool preferUp;
+
   /// Where a glass trigger's circle sits in its 44 hit box (see
   /// `JamGlassButton.alignment`) — `centerRight` to put the circle's edge
   /// on the content's trailing edge.
@@ -545,6 +599,7 @@ class JamMenuButton extends StatelessWidget {
   Widget build(BuildContext context) => JamMenuAnchor(
     groups: groups,
     alignment: alignment,
+    preferUp: preferUp,
     brightness: brightness,
     semanticLabel: semanticLabel,
     builder: (context, controller) {
@@ -584,6 +639,7 @@ class _JamMenuOverlay extends StatelessWidget {
     required this.info,
     required this.animation,
     required this.alignment,
+    required this.preferUp,
     required this.groups,
     required this.semanticLabel,
   });
@@ -591,6 +647,7 @@ class _JamMenuOverlay extends StatelessWidget {
   final RawMenuOverlayInfo info;
   final Animation<double> animation;
   final JamMenuAlignment alignment;
+  final bool preferUp;
   final List<List<JamMenuItem>> groups;
   final String semanticLabel;
 
@@ -610,6 +667,7 @@ class _JamMenuOverlay extends StatelessWidget {
       safe: safe,
       width: width,
       alignment: alignment,
+      preferUp: preferUp,
     );
 
     final curved = CurvedAnimation(
@@ -675,6 +733,7 @@ _Placement _placeMenu({
   required EdgeInsets safe,
   required double width,
   required JamMenuAlignment alignment,
+  bool preferUp = false,
 }) {
   final ratio = anchor.center.dx / overlay.width;
 
@@ -706,14 +765,16 @@ _Placement _placeMenu({
   );
   growX = side.toDouble();
 
-  // Vertical: below the trigger when there is room for a typical menu,
-  // else above it.
+  // Vertical: on the preferred side (below, unless [preferUp]) when there
+  // is room there for a typical menu, else wherever there is more room.
   final belowY = anchor.bottom + _kMenuGap;
   final aboveY = anchor.top - _kMenuGap;
   final roomBelow = overlay.height - safe.bottom - belowY;
   final roomAbove = aboveY - safe.top;
   const typical = 220.0;
-  final down = roomBelow >= typical || roomBelow >= roomAbove;
+  final down = preferUp
+      ? !(roomAbove >= typical || roomAbove > roomBelow)
+      : roomBelow >= typical || roomBelow >= roomAbove;
   return _Placement(
     left: left,
     top: down ? belowY : null,
