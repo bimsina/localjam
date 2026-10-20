@@ -205,6 +205,9 @@ class _JamLibraryPickerState extends State<JamLibraryPicker> {
                   color: colors.secondaryLabel,
                 ),
                 backgroundColor: colors.fillSecondary,
+                // The same field radius as the alert's text field: one
+                // field shape in the app.
+                borderRadius: BorderRadius.circular(JamRadius.field),
                 itemColor: colors.secondaryLabel,
               ),
             ),
