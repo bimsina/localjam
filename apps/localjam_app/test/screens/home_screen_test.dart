@@ -3,6 +3,7 @@ library;
 
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart' show Icons, MaterialApp;
+import 'package:flutter/rendering.dart' show RenderParagraph;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:localjam_client/localjam_client.dart';
 import 'package:localjam_app/src/design/theme.dart';
@@ -270,6 +271,10 @@ void main() {
       greaterThanOrEqualTo(tester.getRect(find.text(name)).bottom),
     );
     expect(under.left, closeTo(tester.getRect(find.text(name)).left, 1));
+    // The name is the card's only identifier: it wraps whole, never cut at
+    // two lines (R10).
+    final text = tester.renderObject<RenderParagraph>(find.text(name));
+    expect(text.didExceedMaxLines, isFalse);
   });
 
   testWidgets('"Don’t see your jam?" keeps its line on a narrow phone at '

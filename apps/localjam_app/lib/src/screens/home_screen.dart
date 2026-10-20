@@ -124,6 +124,9 @@ const double _roomEntryOffset = 8;
 /// narrower, and Join moves under the name.
 const double _minNameWidth = 140;
 
+/// The most lines a Nearby card gives a jam's name at large text.
+const int _maxNameLinesLargeText = 5;
+
 /// The widest Start a Jam grows once the column is wider than a phone: a
 /// full-width capsule across a desktop pane would be a banner.
 const double _maxButtonWidth = 400;
@@ -717,6 +720,10 @@ class _RoomRow extends StatelessWidget {
     final side = JamSpace.pageFor(MediaQuery.sizeOf(context).width);
     // The card's corner, concentric with the mark's at the card's padding.
     final radius = BorderRadius.circular(JamRadius.section);
+    // The name is the card's only identifier: at large text it wraps to as
+    // many lines as a real name needs (R10) — capped only against a name
+    // no one would type — rather than being cut at two.
+    final largeText = MediaQuery.textScalerOf(context).scale(1) > 1.3;
 
     final body = Padding(
       padding: const EdgeInsets.all(JamSpace.md),
@@ -736,7 +743,7 @@ class _RoomRow extends StatelessWidget {
               ).scale(_minNameWidth),
               lead: Text(
                 name,
-                maxLines: 2,
+                maxLines: largeText ? _maxNameLinesLargeText : 2,
                 overflow: TextOverflow.ellipsis,
                 // A jam's name is a named thing: Manrope, at row scale.
                 style: context.jamNameRow,
