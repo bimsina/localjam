@@ -11,18 +11,19 @@ import '../design/typography.dart';
 /// the mark sits beside the name instead of overpowering it.
 const double kJamWordmarkSymbol = 20;
 
-/// The symbol and the name, in ink.
+/// The symbol in raspberry and the name in ink.
 ///
 /// Manrope 18/700, tracked in a little, so it reads as a brand rather than
-/// a toolbar label next to a 34 pt large title. Both parts are `label`:
-/// raspberry is for what you can tap (D8), and the wordmark is not a
-/// control.
+/// a toolbar label next to a 34 pt large title. The symbol is the logo, so it
+/// keeps the brand colour; the name is `label`, because raspberry elsewhere
+/// is for what you can tap.
 class JamWordmark extends StatelessWidget {
   const JamWordmark({super.key});
 
   @override
   Widget build(BuildContext context) {
-    final ink = context.jamColors.label;
+    final colors = context.jamColors;
+    final ink = colors.label;
     return Semantics(
       label: 'LocalJam',
       excludeSemantics: true,
@@ -33,7 +34,7 @@ class JamWordmark extends StatelessWidget {
             'assets/brand/logo.svg',
             width: kJamWordmarkSymbol,
             height: kJamWordmarkSymbol,
-            colorFilter: ColorFilter.mode(ink, BlendMode.srcIn),
+            colorFilter: ColorFilter.mode(colors.tint, BlendMode.srcIn),
           ),
           const SizedBox(width: 6),
           Text(
