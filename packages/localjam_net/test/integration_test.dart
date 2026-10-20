@@ -125,6 +125,31 @@ void main() {
     expect(guest.playlist.single.sha256, item.sha256);
   });
 
+  test('connect reads either join form, and neither is a FormatException '
+      'that does not echo the token', () async {
+    final host = await startHost(sessionName: 'RoadTrip');
+    final link = host.joinLinkFor(InternetAddress.loopbackIPv4);
+    final viaHttp = await JamGuestClient.connect(
+      link.toHttpUri(),
+      clientName: 'browser-shaped',
+    );
+    addTearDown(viaHttp.close);
+    expect(viaHttp.sessionName, 'RoadTrip');
+
+    await expectLater(
+      JamGuestClient.connect(
+        Uri.parse('http://127.0.0.1:${host.port}/ws#token=${host.token}'),
+      ),
+      throwsA(
+        isA<FormatException>().having(
+          (e) => e.message,
+          'message',
+          isNot(contains(host.token)),
+        ),
+      ),
+    );
+  });
+
   test('two guests see each other via peers list and peer_joined', () async {
     final host = await startHost();
     final g1 = await joinGuest(host, clientName: 'alice');

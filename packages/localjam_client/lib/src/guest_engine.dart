@@ -291,14 +291,8 @@ class JamGuestEngine extends JamEngine {
     /// roster. Defaults to the persistent [JamIdentity.clientId].
     String? clientId,
   }) async {
-    final link = JoinLink.fromUri(joinUri);
-    if (link == null) {
-      // Not echoed: a join link carries the room's token.
-      throw const FormatException('Not a LocalJam join link');
-    }
     final session = await JamGuestSession.connect(
-      // The transport speaks the `localjam://` form; both say the same.
-      link.toLocaljamUri(),
+      joinUri, // Either form; a FormatException for neither.
       clientName: clientName ?? await JamIdentity.displayName(),
       clientKind: clientKind,
       backoff: backoff,

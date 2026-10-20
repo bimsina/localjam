@@ -119,7 +119,8 @@ class JamGuestSession {
     _adopt(client);
   }
 
-  /// Connects a first [JamGuestClient] to [joinUri] and wraps it in a
+  /// Connects a first [JamGuestClient] to [joinUri] (either join form, §1)
+  /// and wraps it in a
   /// session. Errors from this initial connect ([JamRejectedException],
   /// `JamTransportException` — natively a `SocketException` — ...)
   /// propagate to the caller unchanged.
