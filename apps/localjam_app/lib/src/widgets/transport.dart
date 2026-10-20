@@ -411,11 +411,14 @@ class _JamScrubberState extends State<JamScrubber> {
     final reduced = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
     final dragging = _dragFraction != null;
     final remaining = _duration <= 0 ? null : _duration - _shownUs;
-    final times = jamTabular(context.jamCaption1).copyWith(
-      color: dragging
-          ? JamNowPlayingColors.text
-          : JamNowPlayingColors.secondary,
-    );
+    // Under a tablet's poster-sized cover, the times step up with the title.
+    final large = MediaQuery.sizeOf(context).shortestSide >= 600;
+    final times = jamTabular(large ? context.jamFootnote : context.jamCaption1)
+        .copyWith(
+          color: dragging
+              ? JamNowPlayingColors.text
+              : JamNowPlayingColors.secondary,
+        );
 
     return LayoutBuilder(
       builder: (context, constraints) {
