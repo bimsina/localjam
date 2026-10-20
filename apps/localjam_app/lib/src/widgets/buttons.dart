@@ -1,4 +1,5 @@
-/// The button family: softly squared corners, no shadows, no ripples.
+/// The button family: soft rectangles ([JamRadius.button] /
+/// [JamRadius.buttonSmall]), no shadows, no ripples, never a capsule.
 ///
 /// ```dart
 /// JamButton.filled(label: 'Start a Jam', expand: true, onPressed: _start)
@@ -20,7 +21,6 @@ import '../design/tokens.dart';
 import '../design/typography.dart';
 import 'pressable.dart';
 
-export 'list.dart' show JamSwitchRow;
 export 'switch.dart' show JamSwitch;
 
 /// The four looks.
@@ -178,7 +178,7 @@ class JamButton extends StatelessWidget {
   final JamButtonVariant variant;
   final JamButtonSize size;
 
-  /// An optional leading glyph (CupertinoIcons), 6 before the label.
+  /// An optional leading glyph (CupertinoIcons), 8 before the label.
   final IconData? icon;
 
   /// Swaps the label for a spinner without changing the button's width.
@@ -187,8 +187,8 @@ class JamButton extends StatelessWidget {
   /// Stretches to the incoming width.
   final bool expand;
 
-  /// `danger` instead of tint (fill for [JamButtonVariant.filled], label for
-  /// the rest).
+  /// Red instead of tint: a `dangerFilled` ground under white for
+  /// [JamButtonVariant.filled], a `danger` label for the rest.
   final bool destructive;
 
   /// Overrides the label colour of a plain/gray/tinted button.
@@ -210,7 +210,7 @@ class JamButton extends StatelessWidget {
     final accent = destructive ? colors.danger : colors.tint;
     final (Color? ground, Color fg) = switch (variant) {
       JamButtonVariant.filled => (
-        destructive ? colors.danger : colors.tintFilled,
+        destructive ? colors.dangerFilled : colors.tintFilled,
         colors.onTint,
       ),
       JamButtonVariant.tinted => (
@@ -234,8 +234,12 @@ class JamButton extends StatelessWidget {
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
         if (icon != null) ...[
-          Icon(icon, size: large ? 20 : 16, color: fg),
-          const SizedBox(width: 6),
+          Icon(
+            icon,
+            size: large ? JamIconSize.control : JamIconSize.inline,
+            color: fg,
+          ),
+          const SizedBox(width: JamSpace.sm),
         ],
         Flexible(
           child: Text(
@@ -273,7 +277,9 @@ class JamButton extends StatelessWidget {
           : ShapeDecoration(
               color: ground,
               shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(large ? 16 : 10),
+                borderRadius: BorderRadius.circular(
+                  large ? JamRadius.button : JamRadius.buttonSmall,
+                ),
               ),
             ),
       // Centred vertically, but hugging its label across unless [expand]:

@@ -24,6 +24,7 @@ import 'package:localjam_app/src/widgets/room_sheet.dart';
 import 'package:localjam_app/src/widgets/section.dart';
 import 'package:localjam_app/src/widgets/sheet.dart';
 import 'package:localjam_app/src/widgets/switch.dart';
+import 'package:localjam_app/src/widgets/menu.dart';
 import 'package:localjam_client/localjam_client.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
@@ -108,7 +109,7 @@ Future<JamSessionController> _hostWithGuest(
 }
 
 /// A pull-down item by its title (the toggle rows share some titles).
-Finder _menuItem(String title) => find.widgetWithText(CupertinoMenuItem, title);
+Finder _menuItem(String title) => find.widgetWithText(JamMenuRow, title);
 
 void main() {
   testWidgets('a host sees the people, what guests can do, and the way out', (

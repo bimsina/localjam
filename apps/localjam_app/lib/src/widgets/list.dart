@@ -1,4 +1,5 @@
-/// iOS list rows (DESIGN_SPEC v3 §5 "Grouped list" / "Plain list rows").
+/// List rows (DESIGN_SPEC v3 §5 "Grouped list" / "Plain list rows", in v4's
+/// colours).
 ///
 /// [JamRow] is one row: optional leading (an icon in a 30 box, an avatar, a
 /// cover), a body-sized title, an optional subheadline subtitle, and a
@@ -9,6 +10,10 @@
 ///
 /// Inside a `JamSection` the hairline is automatic (every row but the last).
 /// In a plain list, pass `separator: true` to every row but the last.
+///
+/// [JamAddSongsRow] is the app's one "Add Songs" affordance — Start a Jam's
+/// song list and the queue both use it. [JamDisclosureChevron] is the one
+/// chevron.
 library;
 
 import 'package:flutter/cupertino.dart';
@@ -18,7 +23,14 @@ import '../design/typography.dart';
 import 'artwork.dart';
 import 'avatar.dart';
 import 'pressable.dart';
+import 'progress.dart';
 import 'switch.dart';
+
+/// Strings the shared rows say.
+abstract final class JamListStrings {
+  /// [JamAddSongsRow]'s default title.
+  static const String addSongs = 'Add Songs';
+}
 
 /// Where a row sits, published by `JamSection` to each child.
 class JamRowScope extends InheritedWidget {
@@ -60,7 +72,7 @@ class JamHairline extends StatelessWidget {
 }
 
 /// A row that draws its own inset hairline inside a `JamSection` (so the
-/// section does not add one). [JamRow], [JamSwitchRow] and `JamTrackRow`
+/// section does not add one). [JamRow], [JamAddSongsRow] and `JamTrackRow`
 /// implement it; implement it on a custom row that reads [JamRowScope].
 abstract interface class JamSelfSeparatingRow implements Widget {}
 
@@ -69,6 +81,24 @@ const double kJamRowInset = JamSpace.lg;
 
 /// The gap between a row's leading widget and its title.
 const double kJamRowLeadingGap = JamSpace.md;
+
+/// The one disclosure chevron: `chevron_forward` at
+/// [JamIconSize.disclosure] in `tertiaryLabel` (or [color]) — on rows, the
+/// Now Playing footer's "With Mia and Theo", the ended mini player. A row
+/// says "this goes somewhere" exactly one way.
+class JamDisclosureChevron extends StatelessWidget {
+  const JamDisclosureChevron({super.key, this.color});
+
+  /// Overrides `tertiaryLabel` (the backdrop's secondary white, say).
+  final Color? color;
+
+  @override
+  Widget build(BuildContext context) => Icon(
+    CupertinoIcons.chevron_forward,
+    size: JamIconSize.disclosure,
+    color: color ?? context.jamColors.tertiaryLabel,
+  );
+}
 
 /// One iOS list row.
 class JamRow extends StatelessWidget implements JamSelfSeparatingRow {
@@ -148,7 +178,10 @@ class JamRow extends StatelessWidget implements JamSelfSeparatingRow {
   /// anything else.
   final double? leadingWidth;
 
-  /// A 22 glyph in a 30 box, in [iconColor] (default tint).
+  /// A 22 glyph in a 30 box, in [iconColor]. By default it follows the
+  /// title: `danger` when [destructive], tint when [tinted], and otherwise
+  /// `secondaryLabel` — raspberry is for what you tap and what is selected
+  /// (D8), and a row's icon is neither.
   final IconData? icon;
   final Color? iconColor;
 
@@ -249,7 +282,7 @@ class _JamRowBody extends StatelessWidget {
           size: JamMetrics.rowIcon,
           color: !enabled
               ? colors.tertiaryLabel
-              : row.iconColor ?? accent ?? colors.tint,
+              : row.iconColor ?? accent ?? colors.secondaryLabel,
         ),
       );
     } else if (!row.centered) {
@@ -305,7 +338,7 @@ class _JamRowBody extends StatelessWidget {
           // The heavier glyph: SF's checkmark at body weight, not a hairline.
           child: Icon(
             CupertinoIcons.checkmark_alt,
-            size: 22,
+            size: JamIconSize.row,
             color: colors.tint,
           ),
         ),
@@ -314,18 +347,14 @@ class _JamRowBody extends StatelessWidget {
           padding: const EdgeInsetsDirectional.only(start: JamSpace.sm),
           child: Icon(
             CupertinoIcons.arrow_up_right,
-            size: 15,
+            size: JamIconSize.disclosure,
             color: colors.tertiaryLabel,
           ),
         ),
       if (row.chevron)
-        Padding(
-          padding: const EdgeInsetsDirectional.only(start: JamSpace.sm),
-          child: Icon(
-            CupertinoIcons.chevron_forward,
-            size: 17,
-            color: colors.tertiaryLabel,
-          ),
+        const Padding(
+          padding: EdgeInsetsDirectional.only(start: JamSpace.sm),
+          child: JamDisclosureChevron(),
         ),
     ];
 
@@ -410,32 +439,134 @@ class _JamRowBody extends StatelessWidget {
   }
 }
 
-/// A switch row, kept for screens built before `JamRow.toggle`. Same look.
-class JamSwitchRow extends StatelessWidget implements JamSelfSeparatingRow {
-  const JamSwitchRow({
+/// "Add Songs": a plus in a cover-sized tile, then the title, both in tint —
+/// the app's single most important collaborative action, drawn one way
+/// wherever it appears (Start a Jam's songs, the queue).
+///
+/// [kJamAddSongsRowHeight] tall — a song row's height — so it sits on the
+/// songs' grid: the plus where the covers are, "Add Songs" where the titles
+/// start. On the Now Playing backdrop ([onBackdrop]) the tile is white 12%
+/// and the plus and title white, like every other control there.
+///
+/// ```dart
+/// JamAddSongsRow(onTap: _addSongs)
+/// JamAddSongsRow(onTap: _add, busy: importing, onBackdrop: true, horizontalPadding: 28)
+/// ```
+class JamAddSongsRow extends StatelessWidget implements JamSelfSeparatingRow {
+  const JamAddSongsRow({
     super.key,
-    required this.label,
-    this.detail,
-    required this.value,
-    required this.onChanged,
-    this.icon,
+    required this.onTap,
+    this.title = JamListStrings.addSongs,
+    this.busy = false,
+    this.onBackdrop = false,
+    this.horizontalPadding = kJamRowInset,
+    this.separator,
   });
 
-  final String label;
+  /// Null disables the row (dimmed, as a disabled button is).
+  final VoidCallback? onTap;
 
-  /// A subtitle under the label.
-  final String? detail;
+  /// Title Case; also what a screen reader hears.
+  final String title;
 
-  final bool value;
-  final ValueChanged<bool>? onChanged;
-  final IconData? icon;
+  /// Something is being added: a spinner replaces the plus and taps are
+  /// ignored.
+  final bool busy;
+
+  /// White on the Now Playing backdrop.
+  final bool onBackdrop;
+
+  /// The row's side insets (a section's 16, the player's margin).
+  final double horizontalPadding;
+
+  /// Forces the bottom hairline on or off; null follows [JamRowScope] like
+  /// [JamRow].
+  final bool? separator;
 
   @override
-  Widget build(BuildContext context) => JamRow.toggle(
-    title: label,
-    subtitle: detail,
-    icon: icon,
-    value: value,
-    onChanged: onChanged,
-  );
+  Widget build(BuildContext context) {
+    final colors = context.jamColors;
+    final enabled = onTap != null && !busy;
+    final accent = onBackdrop ? JamNowPlayingColors.text : colors.tint;
+    final ground = onBackdrop
+        ? JamNowPlayingColors.placeholderGround
+        : colors.fillSecondary;
+    final scope = JamRowScope.maybeOf(context);
+    final showSeparator = separator ?? (scope != null && !scope.isLast);
+
+    Widget content = SizedBox(
+      height: kJamAddSongsRowHeight,
+      child: Padding(
+        padding: EdgeInsets.symmetric(horizontal: horizontalPadding),
+        child: Row(
+          children: [
+            Container(
+              width: JamArtworkSize.row,
+              height: JamArtworkSize.row,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: ground,
+                borderRadius: BorderRadius.circular(
+                  JamRadius.artwork(JamArtworkSize.row),
+                ),
+              ),
+              child: busy
+                  ? JamSpinner(radius: 8, color: accent)
+                  : Icon(
+                      CupertinoIcons.plus,
+                      size: JamIconSize.row,
+                      color: accent,
+                    ),
+            ),
+            const SizedBox(width: kJamRowLeadingGap),
+            Expanded(
+              child: Text(
+                title,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: context.jamBody.copyWith(color: accent),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    if (showSeparator) {
+      content = Stack(
+        children: [
+          content,
+          PositionedDirectional(
+            start: horizontalPadding + JamArtworkSize.row + kJamRowLeadingGap,
+            end: 0,
+            bottom: 0,
+            child: JamHairline(
+              color: onBackdrop ? JamNowPlayingColors.separator : null,
+            ),
+          ),
+        ],
+      );
+    }
+
+    return Semantics(
+      container: true,
+      button: true,
+      enabled: enabled,
+      label: title,
+      onTap: enabled ? onTap : null,
+      excludeSemantics: true,
+      child: Opacity(
+        opacity: onTap == null ? 0.35 : 1,
+        child: JamPressable(
+          onTap: enabled ? onTap : null,
+          style: JamPressStyle.highlight,
+          highlightColor: onBackdrop ? JamNowPlayingColors.pressed : null,
+          child: content,
+        ),
+      ),
+    );
+  }
 }
+
+/// [JamAddSongsRow]'s height: a song row's (8 + cover 44 + 8).
+const double kJamAddSongsRowHeight = 60;

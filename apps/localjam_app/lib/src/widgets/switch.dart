@@ -1,5 +1,5 @@
-/// iOS controls on every platform: the switch (green when on — never
-/// raspberry) and the sliding segmented control.
+/// Two-state and choice controls on every platform: the switch (the brand
+/// fill, `tintFilled`, when on) and the sliding segmented control.
 library;
 
 import 'package:flutter/cupertino.dart';
@@ -7,7 +7,8 @@ import 'package:flutter/cupertino.dart';
 import '../design/tokens.dart';
 import '../design/typography.dart';
 
-/// The iOS switch, `success` track when on. A selection haptic on change.
+/// The switch: `tintFilled` track when on, `fill` when off, a white knob. A
+/// selection haptic on change.
 class JamSwitch extends StatelessWidget {
   const JamSwitch({
     super.key,
@@ -48,8 +49,15 @@ class JamSwitch extends StatelessWidget {
   }
 }
 
-/// iOS's sliding segmented control. [segments] maps each value to its label
+/// The sliding segmented control. [segments] maps each value to its label
 /// (Title Case). A selection haptic on change.
+///
+/// 40 tall at the default text size (iOS's is 32): it also serves touch
+/// tablets in landscape.
+/// The thumb is white on light and a warm grey
+/// ([JamFixedColors.segmentThumbDark]) on dark; on the Now Playing backdrop
+/// ([onBackdrop]) it is the backdrop's white fill with a warm-ink label, on
+/// a glass track with white labels — the selected footer circle's look.
 class JamSegmentedControl<T extends Object> extends StatelessWidget {
   const JamSegmentedControl({
     super.key,
@@ -57,6 +65,7 @@ class JamSegmentedControl<T extends Object> extends StatelessWidget {
     required this.groupValue,
     required this.onValueChanged,
     this.expand = true,
+    this.onBackdrop = false,
   });
 
   /// Value → label, in display order.
@@ -70,18 +79,30 @@ class JamSegmentedControl<T extends Object> extends StatelessWidget {
   /// Stretches to the incoming width.
   final bool expand;
 
+  /// Drawn on the Now Playing backdrop.
+  final bool onBackdrop;
+
   @override
   Widget build(BuildContext context) {
     final colors = context.jamColors;
     final style = context.jamSubheadline.copyWith(fontWeight: FontWeight.w500);
     final onChanged = onValueChanged;
-    final control = CupertinoSlidingSegmentedControl<T>(
+    Color? labelColor(T value) => !onBackdrop
+        ? null
+        : value == groupValue
+        ? JamNowPlayingColors.selectedGlyph
+        : JamNowPlayingColors.text;
+    final Widget control = CupertinoSlidingSegmentedControl<T>(
       groupValue: groupValue,
-      backgroundColor: colors.fillSecondary,
-      thumbColor: CupertinoDynamicColor.withBrightness(
-        color: JamFixedColors.white,
-        darkColor: JamFixedColors.segmentThumbDark,
-      ),
+      backgroundColor: onBackdrop
+          ? JamNowPlayingColors.glass
+          : colors.fillSecondary,
+      thumbColor: onBackdrop
+          ? JamNowPlayingColors.fill
+          : const CupertinoDynamicColor.withBrightness(
+              color: JamFixedColors.white,
+              darkColor: JamFixedColors.segmentThumbDark,
+            ),
       padding: const EdgeInsets.all(2),
       onValueChanged: (v) {
         if (v == null || onChanged == null) return;
@@ -91,12 +112,12 @@ class JamSegmentedControl<T extends Object> extends StatelessWidget {
       children: {
         for (final entry in segments.entries)
           entry.key: Padding(
-            padding: const EdgeInsets.symmetric(vertical: 6),
+            padding: const EdgeInsets.symmetric(vertical: JamSpace.sm),
             child: Text(
               entry.value,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: style,
+              style: style.copyWith(color: labelColor(entry.key)),
             ),
           ),
       },

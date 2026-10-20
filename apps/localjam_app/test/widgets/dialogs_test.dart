@@ -155,7 +155,47 @@ void main() {
     // two near-identical reds side by side.
     expect(actions.first.isDefault, isFalse);
     expect(_ground(tester, 'Cancel'), JamColors.light.fill);
-    expect(_ground(tester, 'End it'), JamColors.light.danger);
+    expect(_ground(tester, 'End it'), JamColors.light.dangerFilled);
+    // Soft rectangles, not v3's capsules.
+    final shape =
+        (tester
+                    .widget<Container>(
+                      find
+                          .descendant(
+                            of: find.widgetWithText(JamAlertButton, 'End it'),
+                            matching: find.byType(Container),
+                          )
+                          .first,
+                    )
+                    .decoration!
+                as ShapeDecoration)
+            .shape;
+    expect(
+      shape,
+      RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(JamRadius.alertButton),
+      ),
+    );
+  });
+
+  testWidgets('dark mode fills a destructive action white-on-deep-red', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      _host(
+        (context) async => JamDialogs.confirmDestructive(
+          context,
+          title: 'End the jam?',
+          confirmLabel: 'End it',
+        ),
+        theme: jamDarkTheme(),
+      ),
+    );
+    await tester.tap(find.text('Go'));
+    await tester.pumpAndSettle();
+    // Not the bright dark `danger` (2.2:1 under white).
+    expect(_ground(tester, 'End it'), JamColors.dark.dangerFilled);
+    expect(_ground(tester, 'End it'), isNot(JamColors.dark.danger));
   });
 
   testWidgets('labels too long to sit side by side stack, action on top', (
@@ -178,9 +218,8 @@ void main() {
     );
   });
 
-  testWidgets('a two-line message is balanced, not left with an orphan', (
-    tester,
-  ) async {
+  testWidgets('a leading-aligned message runs to the card edge, with a '
+      'Manrope title above it', (tester) async {
     const message =
         'The music stops for everyone and the jam ends for everyone in the jam.';
     await tester.pumpWidget(
@@ -192,11 +231,18 @@ void main() {
     await tester.tap(find.text('Go'));
     await tester.pumpAndSettle();
     final text = find.text(message);
-    final textWidth = tester.getSize(text).width;
     final lineHeight = tester.widget<Text>(text).style!.fontSize! * 1.6;
-    // Two lines, and narrower than the card's text column: rebalanced.
+    // Two lines across the whole text column: balancing a left-aligned
+    // message only leaves a ragged gutter on the right (SU-15).
     expect(tester.getSize(text).height, greaterThan(lineHeight));
-    expect(textWidth, lessThan(JamMetrics.alertWidth - 40 - 8));
+    expect(
+      tester.getSize(text).width,
+      closeTo(JamMetrics.alertWidth - 2 * JamSpace.xl, 1),
+    );
+    expect(
+      tester.widget<Text>(find.text('End Jam?')).style!.fontFamily,
+      'Manrope',
+    );
   });
 
   testWidgets('the alert field follows the app appearance', (tester) async {

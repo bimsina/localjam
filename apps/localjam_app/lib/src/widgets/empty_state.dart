@@ -1,8 +1,9 @@
 /// Nothing here yet — said once, plainly, with at most one way forward
 /// (DESIGN_SPEC v3 §5 Empty state).
 ///
-/// Centred: a 48 glyph in `secondaryLabel` (ContentUnavailableView's; the
-/// old `tertiaryLabel` all but vanished on black), a title2 title, one
+/// Centred: a [JamIconSize.hero] glyph in `secondaryLabel` — never the tint,
+/// which is for what can be tapped (D8) — or a ready-made [JamEmptyState.mark]
+/// (a `JamMark` on the session-ended page), a Manrope title2 title, one
 /// subheadline `secondaryLabel` sentence in balanced lines, and an optional
 /// action that *hugs its label* (min width [kJamEmptyStateActionMinWidth])
 /// with an optional plain secondary action under it — never a full-width
@@ -38,10 +39,10 @@ class JamEmptyState extends StatelessWidget {
     this.secondaryColor,
   });
 
-  /// A 48 CupertinoIcons glyph in `secondaryLabel`.
+  /// A [JamIconSize.hero] CupertinoIcons glyph in `secondaryLabel`.
   final IconData? icon;
 
-  /// A ready-made mark used instead of [icon].
+  /// A ready-made mark used instead of [icon] (a `JamMark`).
   final Widget? mark;
 
   /// Title Case ("No Jams Nearby").
@@ -94,7 +95,7 @@ class JamEmptyState extends StatelessWidget {
               else if (icon != null)
                 Icon(
                   icon,
-                  size: 48,
+                  size: JamIconSize.hero,
                   color: secondaryColor ?? colors.secondaryLabel,
                 ),
               if (mark != null || icon != null)

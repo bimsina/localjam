@@ -1,10 +1,10 @@
-/// iOS alerts on every platform — iOS 26's (DESIGN_SPEC v3 §5 Alerts, as
-/// amended by §10.3).
+/// Alerts on every platform (DESIGN_SPEC v3 §5 Alerts, in v4's shapes).
 ///
-/// Centred, 300 wide, radius 34, blurred: title headline and message
-/// subheadline, leading-aligned in balanced lines (no orphaned last word);
-/// capsule buttons side by side for two, stacked otherwise — the preferred
-/// action filled tint, a destructive one filled red, Cancel a grey capsule;
+/// Centred, 300 wide, radius 34, with a hairline edge so it stands off the
+/// dimmed page in dark mode too: a Manrope title3 title and a subheadline
+/// message, leading-aligned; soft-rectangle buttons ([JamRadius.alertButton])
+/// side by side for two, stacked otherwise — the preferred action filled
+/// tint, a destructive one filled `dangerFilled`, Cancel a grey `fill`;
 /// optionally one text field whose keyboard follows the app's appearance.
 ///
 /// **The lifetime rule.** A `TextEditingController` disposed the moment the
@@ -46,22 +46,22 @@ class JamAlertAction {
   /// Null disables the button.
   final VoidCallback? onPressed;
 
-  /// The preferred action: a filled tint capsule.
+  /// The preferred action: a filled tint button.
   final bool isDefault;
 
-  /// A filled red capsule.
+  /// A filled red (`dangerFilled`) button.
   final bool destructive;
 }
 
-/// An iOS 26 alert (spec §10.3): a rounded (34) card of blurred `elevated`,
-/// title and message leading-aligned in balanced lines, an optional field,
-/// and capsule buttons — side by side for two when both labels fit, stacked
+/// An alert: a rounded (34) card of `elevated` with a hairline edge, a
+/// Manrope title and a leading-aligned message, an optional field, and soft
+/// rectangle buttons — side by side for two when both labels fit, stacked
 /// otherwise (the cancelling action last, as iOS stacks it).
 ///
-/// Buttons are told apart by shape and fill, not by two near-identical
-/// reds (rev-holistic): the preferred action is a filled tint capsule, a
-/// destructive one a filled red capsule, and everything else — Cancel — a
-/// grey `fill` capsule with `label` text.
+/// Buttons are told apart by fill, not by two near-identical reds: the
+/// preferred action is filled tint, a destructive one filled
+/// `dangerFilled`, and everything else — Cancel — grey `fill` with `label`
+/// text.
 class JamAlert extends StatelessWidget {
   const JamAlert({
     super.key,
@@ -97,18 +97,20 @@ class JamAlert extends StatelessWidget {
       JamMetrics.alertWidth,
     );
 
+    // Left-aligned text runs to the card's edge: balancing it would leave
+    // a ragged empty gutter on the right.
     final text = <Widget>[
       Semantics(
         header: true,
-        child: JamBalancedText(
+        child: Text(
           title,
           textAlign: TextAlign.start,
-          style: context.jamHeadline.copyWith(color: colors.label),
+          style: context.jamTitle3.copyWith(color: colors.label),
         ),
       ),
       if (message != null) ...[
         const SizedBox(height: JamSpace.xs),
-        JamBalancedText(
+        Text(
           message,
           textAlign: TextAlign.start,
           style: context.jamSubheadline.copyWith(color: colors.label),
@@ -116,6 +118,13 @@ class JamAlert extends StatelessWidget {
       ],
     ];
 
+    final shape = RoundedRectangleBorder(
+      borderRadius: BorderRadius.circular(JamRadius.alert),
+      side: BorderSide(
+        color: colors.separator,
+        width: 1 / media.devicePixelRatio,
+      ),
+    );
     final card = ConstrainedBox(
       constraints: BoxConstraints.tightFor(width: width),
       child: ClipRRect(
@@ -125,10 +134,15 @@ class JamAlert extends StatelessWidget {
             sigmaX: JamBlur.material,
             sigmaY: JamBlur.material,
           ),
-          child: ColoredBox(
+          child: DecoratedBox(
             // Nearly opaque: an alert over the black camera page (or any
             // dark ground) must never turn into a muddy, half-legible grey.
-            color: colors.elevated.withValues(alpha: 0.96),
+            // The hairline is its edge where the dimmed page and the card
+            // are close (dark mode).
+            decoration: ShapeDecoration(
+              color: colors.elevated.withValues(alpha: 0.96),
+              shape: shape,
+            ),
             child: Padding(
               padding: const EdgeInsets.all(_padding),
               child: Column(
@@ -186,14 +200,14 @@ class JamAlert extends StatelessWidget {
   }
 }
 
-/// The alert's capsules: a row of two when both labels fit, else a stack.
+/// The alert's buttons: a row of two when both labels fit, else a stack.
 class _JamAlertButtons extends StatelessWidget {
   const _JamAlertButtons({required this.actions, required this.gap});
 
   final List<JamAlertAction> actions;
   final double gap;
 
-  /// Text inset inside a capsule.
+  /// Text inset inside a button.
   static const double _inset = JamSpace.md;
 
   bool _fitsSideBySide(BuildContext context, double width) {
@@ -242,8 +256,9 @@ class _JamAlertButtons extends StatelessWidget {
   );
 }
 
-/// One of an alert's capsules: filled tint for the preferred action, filled
-/// red for a destructive one, grey `fill` with `label` text otherwise.
+/// One of an alert's buttons, a soft rectangle: filled tint for the
+/// preferred action, filled `dangerFilled` for a destructive one, grey
+/// `fill` with `label` text otherwise.
 class JamAlertButton extends StatelessWidget {
   const JamAlertButton({super.key, required this.action});
 
@@ -254,7 +269,7 @@ class JamAlertButton extends StatelessWidget {
     final colors = context.jamColors;
     final enabled = action.onPressed != null;
     final (Color ground, Color fg, bool strong) = action.destructive
-        ? (colors.danger, colors.onTint, true)
+        ? (colors.dangerFilled, colors.onTint, true)
         : action.isDefault
         ? (colors.tintFilled, colors.onTint, true)
         : (colors.fill, colors.label, false);
@@ -278,7 +293,9 @@ class JamAlertButton extends StatelessWidget {
             ),
             decoration: ShapeDecoration(
               color: ground,
-              shape: const StadiumBorder(),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(JamRadius.alertButton),
+              ),
             ),
             child: Text(
               action.label,
@@ -296,8 +313,8 @@ class JamAlertButton extends StatelessWidget {
   }
 }
 
-/// The text field inside an alert: a filled rounded field (iOS 26), with an
-/// optional footnote under it — [errorText] in `danger` (with a hairline
+/// The text field inside an alert: a filled rounded field with a
+/// `secondaryLabel` placeholder, and an optional footnote under it — [errorText] in `danger` (with a hairline
 /// round the field), else [helperText] in `secondaryLabel`. The keyboard
 /// follows the app's appearance, not the device's.
 class JamAlertTextField extends StatelessWidget {
@@ -369,7 +386,7 @@ class JamAlertTextField extends StatelessWidget {
             clearButtonMode: OverlayVisibilityMode.editing,
             style: context.jamSubheadline.copyWith(color: colors.label),
             placeholderStyle: context.jamSubheadline.copyWith(
-              color: colors.tertiaryLabel,
+              color: colors.secondaryLabel,
             ),
             cursorColor: colors.tint,
             padding: const EdgeInsets.symmetric(
@@ -517,8 +534,8 @@ class JamConfirmDialog extends StatelessWidget {
   final String confirmLabel;
   final String cancelLabel;
 
-  /// The confirming action as a red capsule. Cancel stays the grey one —
-  /// iOS 26 tells them apart by fill, not by two shades of red.
+  /// The confirming action filled red. Cancel stays the grey one — they are
+  /// told apart by fill, not by two shades of red.
   final bool destructive;
 
   @override

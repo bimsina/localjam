@@ -1,9 +1,12 @@
 /// The one way the app says something happened: the toast / HUD.
 ///
 /// [JamSessionController.notices] is a single channel and the router shell is
-/// the single subscriber; this is the single *look* (DESIGN_SPEC v3 §5): a
-/// capsule of blurred `material` — a glyph, one line of subheadline text, at
-/// most one tint action — that dismisses itself. No full-width snackbars.
+/// the single subscriber; this is the single *look*: a soft rectangle
+/// ([JamNoticeSurface], radius [JamRadius.notice]) of `material` with a
+/// hairline edge — a glyph only when the news is good or bad, one or two
+/// lines of subheadline text, at most one tint action — that dismisses
+/// itself. No full-width snackbars, no capsules. The player's banner
+/// (`JamRoomBanner`) is the same surface on the backdrop.
 ///
 /// **Never over a control (§10.5).** Where it floats is the caller's call
 /// ([JamNoticePosition]): the router shell puts it at the *top* (under the
@@ -99,7 +102,7 @@ class JamNoticeBody extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: [
           if (tone.glyph case final glyph?) ...[
-            Icon(glyph, size: 18, color: tone.tint(colors)),
+            Icon(glyph, size: JamIconSize.control, color: tone.tint(colors)),
             const SizedBox(width: JamSpace.sm),
           ],
           Flexible(
@@ -119,7 +122,52 @@ class JamNoticeBody extends StatelessWidget {
   }
 }
 
-/// The capsule: blurred `material`, the body, and at most one tint action.
+/// The one shape for "something happened" or "this needs you": a soft
+/// rectangle at [JamRadius.notice] — `material` with a hairline edge on
+/// ordinary screens, glass ([JamNowPlayingColors.glass]) on the Now Playing
+/// backdrop ([onBackdrop]). The toast ([JamNoticeCard]) and the player's
+/// banner draw their content inside it.
+///
+/// ```dart
+/// JamNoticeSurface(onBackdrop: true, child: Padding(padding: …, child: row))
+/// ```
+class JamNoticeSurface extends StatelessWidget {
+  const JamNoticeSurface({
+    super.key,
+    required this.child,
+    this.onBackdrop = false,
+  });
+
+  final Widget child;
+
+  /// Glass over the backdrop instead of `material`.
+  final bool onBackdrop;
+
+  @override
+  Widget build(BuildContext context) {
+    final shape = RoundedRectangleBorder(
+      borderRadius: BorderRadius.circular(JamRadius.notice),
+    );
+    if (onBackdrop) {
+      return JamBlurSurface(
+        kind: JamMaterialKind.glass,
+        color: JamNowPlayingColors.glass,
+        shape: shape,
+        child: child,
+      );
+    }
+    return JamBlurSurface(
+      shape: shape,
+      border: BorderSide(
+        color: context.jamColors.separator,
+        width: 1 / MediaQuery.devicePixelRatioOf(context),
+      ),
+      child: child,
+    );
+  }
+}
+
+/// The toast: [JamNoticeSurface], the body, and at most one tint action.
 ///
 /// Separate from the overlay plumbing so a test, or a wide layout that wants
 /// it docked, can render exactly what the app shows.
@@ -139,12 +187,7 @@ class JamNoticeCard extends StatelessWidget {
     final action = onAction ?? notice.onAction;
     final hasAction = label != null && notice.onAction != null;
 
-    return JamBlurSurface(
-      shape: const StadiumBorder(),
-      border: BorderSide(
-        color: colors.separator,
-        width: 1 / MediaQuery.devicePixelRatioOf(context),
-      ),
+    return JamNoticeSurface(
       child: ConstrainedBox(
         constraints: const BoxConstraints(minHeight: JamMetrics.hitTarget),
         child: Padding(
@@ -178,7 +221,7 @@ class JamNoticeCard extends StatelessWidget {
                         minHeight: JamMetrics.hitTarget,
                       ),
                       // Both factors: a Center without a height factor
-                      // grows to the overlay's full height, and the capsule
+                      // grows to the overlay's full height, and the notice
                       // with it.
                       child: Center(
                         widthFactor: 1,
@@ -352,7 +395,7 @@ class _JamNoticeOverlayState extends State<_JamNoticeOverlay>
     // (or the status bar) itself; the caller's margin is what it keeps clear
     // *on top of* that.
     final top = widget.position == JamNoticePosition.top;
-    // Only the capsule takes touches: the space around it is the screen.
+    // Only the notice takes touches: the space around it is the screen.
     return SafeArea(
       child: Padding(
         padding: widget.margin,

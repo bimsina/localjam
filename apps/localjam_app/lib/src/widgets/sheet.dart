@@ -286,7 +286,7 @@ class JamSheetCloseButton extends StatelessWidget {
     icon: CupertinoIcons.xmark,
     semanticLabel: JamSheetStrings.close,
     visualSize: 30,
-    iconSize: 14,
+    iconSize: JamIconSize.disclosure,
     iconColor: context.jamColors.secondaryLabel,
     // iOS's sheet xmark is a flat `fill` circle: the blurred chrome
     // material is the sheet's own colour in dark mode and disappears.
@@ -757,7 +757,7 @@ class JamSheetRoute<T> extends PageRoute<T> {
   String? get barrierLabel => JamSheetStrings.dismiss;
 
   @override
-  Duration get transitionDuration => const Duration(milliseconds: 400);
+  Duration get transitionDuration => JamDuration.sheet;
 
   @override
   Duration get reverseTransitionDuration => JamDuration.base;
@@ -797,7 +797,7 @@ class JamSheetRoute<T> extends PageRoute<T> {
         Tween<Offset>(
           begin: const Offset(0, 1),
           end: Offset.zero,
-        ).chain(CurveTween(curve: Curves.fastEaseInToSlowEaseOut)),
+        ).chain(CurveTween(curve: JamCurve.emphasized)),
       ),
       child: child,
     );

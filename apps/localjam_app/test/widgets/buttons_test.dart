@@ -109,7 +109,7 @@ void main() {
         JamButton.filled(label: 'End Jam', destructive: true, onPressed: () {}),
       ),
     );
-    expect(_groundOf(tester)!.color, JamColors.light.danger);
+    expect(_groundOf(tester)!.color, JamColors.light.dangerFilled);
 
     await tester.pumpWidget(
       _host(

@@ -1,4 +1,5 @@
-/// The iOS press: no ink. Rows fill with `fillPressed`; buttons and icons dim.
+/// The press: no ink. Rows fill with `fillPressed`; buttons and icons dim;
+/// the play square squeezes ([JamPressStyle.scale]).
 ///
 /// Every tappable surface in the shared components goes through
 /// [JamPressable], so a press reads the same everywhere and nothing ripples.
@@ -17,6 +18,12 @@ enum JamPressStyle {
   /// child (rows).
   highlight,
 
+  /// Scales the child down to [JamPressable.pressedScale] over
+  /// [JamDuration.instant] and springs it back on release — for a large
+  /// filled control where dimming would turn its colour muddy (the play
+  /// square). No scale under reduced motion.
+  scale,
+
   /// Shows nothing (the caller draws its own pressed state).
   none,
 }
@@ -30,6 +37,7 @@ class JamPressable extends StatefulWidget {
     this.onLongPress,
     this.style = JamPressStyle.opacity,
     this.pressedOpacity = 0.6,
+    this.pressedScale = 0.94,
     this.highlightColor,
     this.borderRadius,
     this.onPressedChanged,
@@ -46,6 +54,9 @@ class JamPressable extends StatefulWidget {
 
   /// The child's opacity while pressed, for [JamPressStyle.opacity].
   final double pressedOpacity;
+
+  /// The child's scale while pressed, for [JamPressStyle.scale].
+  final double pressedScale;
 
   /// The highlight colour for [JamPressStyle.highlight]. Defaults to
   /// [JamColors.fillPressed].
@@ -99,6 +110,14 @@ class _JamPressableState extends State<JamPressable> {
             color: pressed ? color : JamFixedColors.clear,
             borderRadius: widget.borderRadius,
           ),
+          child: child,
+        );
+      case JamPressStyle.scale:
+        final still = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
+        child = AnimatedScale(
+          scale: pressed && !still ? widget.pressedScale : 1,
+          duration: pressed ? JamDuration.instant : JamDuration.base,
+          curve: pressed ? JamCurve.standard : JamCurve.spring,
           child: child,
         );
       case JamPressStyle.none:

@@ -1,5 +1,6 @@
-/// Translucent chrome (D1): the `material` blur behind bars, the mini player,
-/// toasts and menus, and the round glass icon buttons over artwork.
+/// Translucent chrome, kept restrained (v4 "matte surfaces"): the nearly
+/// opaque `material` behind bars, the mini player and toasts, and the round
+/// glass icon buttons over artwork. Menus are opaque (`JamMenuPanel`).
 library;
 
 import 'dart:ui' show ImageFilter;
@@ -32,8 +33,8 @@ class JamBlurSurface extends StatelessWidget {
   final Widget child;
   final JamMaterialKind kind;
 
-  /// The clip and paint shape — `StadiumBorder()` for capsules,
-  /// `CircleBorder()` for icon buttons.
+  /// The clip and paint shape — a `RoundedRectangleBorder` from
+  /// [JamRadius] for surfaces, `CircleBorder()` for icon buttons.
   final ShapeBorder shape;
 
   /// Overrides the material's colour.
@@ -90,7 +91,8 @@ class JamGlassButton extends StatelessWidget {
   final String semanticLabel;
   final VoidCallback? onPressed;
 
-  /// Glass (white 18%, white glyph) for the Now Playing backdrop and artwork.
+  /// Glass (`JamColors.glass`, white 8%, with a white glyph) for the Now
+  /// Playing backdrop and artwork.
   final bool onArtwork;
 
   /// The painted circle (34–36; 30 for the Now Playing •••).

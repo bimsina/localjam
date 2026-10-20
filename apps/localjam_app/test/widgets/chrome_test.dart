@@ -7,6 +7,7 @@ import 'dart:async';
 
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:localjam_app/src/design/theme.dart';
 import 'package:localjam_app/src/design/tokens.dart';
@@ -408,11 +409,26 @@ void main() {
       await tester.tap(find.byType(JamMenuButton));
       await tester.pumpAndSettle();
       expect(find.text('Invite People'), findsOneWidget);
-      expect(find.byType(CupertinoMenuDivider), findsOneWidget);
       final items = tester
-          .widgetList<CupertinoMenuItem>(find.byType(CupertinoMenuItem))
+          .widgetList<JamMenuRow>(find.byType(JamMenuRow))
           .toList();
-      expect(items.last.isDestructiveAction, isTrue);
+      expect(items, hasLength(2));
+      expect(items.last.item.destructive, isTrue);
+      // On LocalJam's own tokens: the warm menu ground and `danger`, not
+      // Cupertino's grey and system red.
+      expect(
+        tester.widget<Text>(find.text('End Jam')).style!.color,
+        JamColors.light.danger,
+      );
+      expect(
+        tester
+            .widgetList<DecoratedBox>(find.byType(DecoratedBox))
+            .map((b) => b.decoration)
+            .whereType<ShapeDecoration>()
+            .map((d) => d.color),
+        contains(JamColors.light.elevatedGroupedSurface),
+      );
+      expect(find.byType(CupertinoMenuItem), findsNothing);
       await tester.tap(find.text('Invite People'));
       await tester.pumpAndSettle();
       expect(invited, 1);
@@ -538,9 +554,81 @@ void main() {
       final row = tester.getRect(find.text('Guests Can'));
       await tester.tap(find.text('Guests Can'));
       await tester.pumpAndSettle();
-      final menu = tester.getRect(find.byType(CupertinoMenuItem));
+      final menu = tester.getRect(find.byType(JamMenuRow));
       expect(menu.right, closeTo(row.right - JamSpace.lg, 1));
       expect(menu.top, greaterThan(row.bottom));
+    });
+
+    testWidgets('a forced-dark menu draws on the dark tokens', (tester) async {
+      await tester.pumpWidget(
+        _host(
+          JamMenuButton(
+            brightness: Brightness.dark,
+            groups: [
+              [
+                JamMenuItem(
+                  title: 'End Jam',
+                  destructive: true,
+                  onPressed: () {},
+                ),
+              ],
+            ],
+          ),
+        ),
+      );
+      await tester.tap(find.byType(JamMenuButton));
+      await tester.pumpAndSettle();
+      expect(
+        tester.widget<Text>(find.text('End Jam')).style!.color,
+        JamColors.dark.danger,
+      );
+    });
+
+    testWidgets('JamMenuPanel hands the choice back when asked to', (
+      tester,
+    ) async {
+      final chosen = <String>[];
+      var ran = 0;
+      await tester.pumpWidget(
+        _host(
+          JamMenuPanel(
+            width: 250,
+            groups: [
+              [
+                JamMenuItem(title: 'Play Next', onPressed: () => ran++),
+                JamMenuItem(
+                  title: 'Remove',
+                  destructive: true,
+                  onPressed: () {},
+                ),
+              ],
+            ],
+            onSelected: (item) => chosen.add(item.title),
+          ),
+        ),
+      );
+      await tester.tap(find.text('Play Next'));
+      expect(chosen, ['Play Next']);
+      expect(ran, 0, reason: 'the host runs it, after closing');
+    });
+
+    testWidgets('a menu row activates from the keyboard', (tester) async {
+      var ran = 0;
+      await tester.pumpWidget(
+        _host(
+          JamMenuPanel(
+            width: 250,
+            groups: [
+              [JamMenuItem(title: 'Diagnostics', onPressed: () => ran++)],
+            ],
+          ),
+        ),
+      );
+      await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+      await tester.pump();
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.pump();
+      expect(ran, 1);
     });
 
     testWidgets('the glass trigger over artwork', (tester) async {

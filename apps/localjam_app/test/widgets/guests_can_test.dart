@@ -8,6 +8,7 @@ import 'package:localjam_app/src/design/theme.dart';
 import 'package:localjam_app/src/widgets/guests_can.dart';
 import 'package:localjam_app/src/widgets/list.dart';
 import 'package:localjam_app/src/widgets/section.dart';
+import 'package:localjam_app/src/widgets/menu.dart';
 import 'package:localjam_client/localjam_client.dart';
 
 void main() {
@@ -88,7 +89,7 @@ void main() {
     await tester.tap(find.text(JamPresetStrings.guestsCan));
     await tester.pumpAndSettle();
     final items = tester
-        .widgetList<CupertinoMenuItem>(find.byType(CupertinoMenuItem))
+        .widgetList<JamMenuRow>(find.byType(JamMenuRow))
         .toList();
     expect(items, hasLength(3));
     await tester.tap(find.text('Everything'));
@@ -139,7 +140,7 @@ void main() {
     }
 
     Rect menuRect(WidgetTester tester) {
-      final items = find.byType(CupertinoMenuItem);
+      final items = find.byType(JamMenuRow);
       return tester
           .getRect(items.first)
           .expandToInclude(tester.getRect(items.last));

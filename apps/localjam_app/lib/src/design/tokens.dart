@@ -563,10 +563,12 @@ abstract final class JamIconSize {
   /// somewhere".
   static const double disclosure = 14;
 
-  /// A glyph inside a line of text (a status line, a notice).
+  /// A glyph inside a line of footnote or subheadline text: the player's
+  /// status line and banner, a small button's icon, a menu checkmark.
   static const double inline = 15;
 
-  /// A glyph inside a control: a button's leading icon, a menu row's icon.
+  /// A glyph inside a control or a toast: a large button's icon, a menu
+  /// row's icon, a notice's tone glyph.
   static const double control = 20;
 
   /// A row's leading glyph (in a [JamMetrics.rowIconBox] box).

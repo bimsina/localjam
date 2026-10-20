@@ -315,4 +315,85 @@ void main() {
       );
     });
   });
+
+  group('one disclosure, one Add Songs', () {
+    testWidgets('a chevron row draws the one chevron', (tester) async {
+      await tester.pumpWidget(
+        _host(const JamRow(title: 'Licenses', chevron: true)),
+      );
+      final icon = tester.widget<Icon>(
+        find.descendant(
+          of: find.byType(JamDisclosureChevron),
+          matching: find.byType(Icon),
+        ),
+      );
+      expect(icon.icon, CupertinoIcons.chevron_forward);
+      expect(icon.size, JamIconSize.disclosure);
+      expect(icon.color, JamColors.light.tertiaryLabel);
+    });
+
+    testWidgets('a row icon is raspberry only when the row acts (D8)', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        _host(const JamRow(title: 'Version', icon: CupertinoIcons.info)),
+      );
+      expect(
+        tester.widget<Icon>(find.byIcon(CupertinoIcons.info)).color,
+        JamColors.light.secondaryLabel,
+      );
+      await tester.pumpWidget(
+        _host(
+          JamRow(
+            title: 'Add Songs',
+            icon: CupertinoIcons.plus,
+            tinted: true,
+            onTap: () {},
+          ),
+        ),
+      );
+      expect(
+        tester.widget<Icon>(find.byIcon(CupertinoIcons.plus)).color,
+        JamColors.light.tint,
+      );
+    });
+
+    testWidgets('JamAddSongsRow: a plus tile and a tint title, one button', (
+      tester,
+    ) async {
+      final handle = tester.ensureSemantics();
+      var taps = 0;
+      await tester.pumpWidget(_host(JamAddSongsRow(onTap: () => taps++)));
+      expect(
+        tester.getSize(find.byType(JamAddSongsRow)).height,
+        kJamAddSongsRowHeight,
+      );
+      expect(
+        tester.widget<Icon>(find.byIcon(CupertinoIcons.plus)).color,
+        JamColors.light.tint,
+      );
+      expect(
+        tester.widget<Text>(find.text(JamListStrings.addSongs)).style!.color,
+        JamColors.light.tint,
+      );
+      expect(find.bySemanticsLabel(JamListStrings.addSongs), findsOneWidget);
+      await tester.tap(find.byType(JamAddSongsRow));
+      expect(taps, 1);
+      handle.dispose();
+    });
+
+    testWidgets('on the backdrop it is white; busy swaps the plus', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        _host(JamAddSongsRow(onTap: () {}, onBackdrop: true)),
+      );
+      expect(
+        tester.widget<Icon>(find.byIcon(CupertinoIcons.plus)).color,
+        JamNowPlayingColors.text,
+      );
+      await tester.pumpWidget(_host(JamAddSongsRow(onTap: () {}, busy: true)));
+      expect(find.byIcon(CupertinoIcons.plus), findsNothing);
+    });
+  });
 }

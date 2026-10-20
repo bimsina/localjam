@@ -13,6 +13,7 @@ import 'package:localjam_app/src/widgets/buttons.dart';
 import 'package:localjam_app/src/widgets/guests_can.dart';
 import 'package:localjam_app/src/widgets/list.dart';
 import 'package:localjam_app/src/widgets/track_row.dart';
+import 'package:localjam_app/src/widgets/menu.dart';
 
 import '../harness.dart';
 
@@ -102,7 +103,7 @@ void main() {
 
     await tester.tap(find.text(JamPresetStrings.guestsCan));
     await tester.pumpAndSettle();
-    final items = find.byType(CupertinoMenuItem);
+    final items = find.byType(JamMenuRow);
     expect(items, findsNWidgets(kJamPresets.length));
     for (final preset in kJamPresets) {
       expect(
