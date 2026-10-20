@@ -36,6 +36,7 @@ import 'dart:math' as math;
 import 'package:flutter/widgets.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 
+import '../design/motion.dart';
 import '../design/tokens.dart';
 import 'avatar.dart';
 
@@ -140,7 +141,7 @@ class JamMark extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = context.jamColors;
-    final reduceMotion = MediaQuery.disableAnimationsOf(context);
+    final reduceMotion = jamReducedMotion(context);
     final shape = jamMarkShape(size, radius: radius);
     final host = hostName?.trim();
     final badge = host == null || host.isEmpty ? null : badgeSizeFor(size);

@@ -26,6 +26,7 @@ import 'dart:math' as math;
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart' show Scaffold, Theme;
 
+import '../design/motion.dart';
 import '../design/tokens.dart';
 import 'glass.dart';
 
@@ -457,7 +458,7 @@ class JamBottomBar extends StatelessWidget {
       ),
       child: child,
     );
-    final reduceMotion = MediaQuery.disableAnimationsOf(context);
+    final reduceMotion = jamReducedMotion(context);
     return Stack(
       children: [
         Positioned.fill(

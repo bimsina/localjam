@@ -5,6 +5,7 @@ library;
 
 import 'package:flutter/cupertino.dart';
 
+import '../design/motion.dart';
 import '../design/tokens.dart';
 import '../design/typography.dart';
 
@@ -141,7 +142,7 @@ class _JamSegmentedControlState<T extends Object>
     final colors = context.jamColors;
     final enabled = widget.onValueChanged != null;
     final onBackdrop = widget.onBackdrop;
-    final reduceMotion = MediaQuery.disableAnimationsOf(context);
+    final reduceMotion = jamReducedMotion(context);
     final dark = CupertinoTheme.brightnessOf(context) == Brightness.dark;
     final hairline = BorderSide(
       color: onBackdrop ? JamNowPlayingColors.clear : colors.separator,
@@ -383,7 +384,7 @@ class JamSelectionCheck extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = context.jamColors;
-    final reduceMotion = MediaQuery.disableAnimationsOf(context);
+    final reduceMotion = jamReducedMotion(context);
     final label = selected ? semanticLabel : null;
     final check = ExcludeSemantics(
       child: SizedBox.square(

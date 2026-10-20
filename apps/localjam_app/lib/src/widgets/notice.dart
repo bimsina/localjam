@@ -24,6 +24,7 @@ import 'dart:async';
 
 import 'package:flutter/cupertino.dart';
 
+import '../design/motion.dart';
 import '../design/tokens.dart';
 import '../design/typography.dart';
 import '../state/session_controller.dart';
@@ -404,7 +405,7 @@ class _JamNoticeOverlayState extends State<_JamNoticeOverlay>
     );
     // Reduce Motion: the notice fades in and out where it stands — a fade
     // is not movement — instead of rising into place.
-    if (!MediaQuery.disableAnimationsOf(context)) {
+    if (!jamReducedMotion(context)) {
       card = SlideTransition(
         position: _controller.drive(
           Tween<Offset>(

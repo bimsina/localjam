@@ -26,6 +26,7 @@ import 'package:go_router/go_router.dart';
 import 'package:localjam_client/localjam_client.dart';
 
 import '../design/breakpoints.dart';
+import '../design/motion.dart';
 import '../design/tokens.dart';
 import '../design/typography.dart';
 import '../state/session_controller.dart';
@@ -714,7 +715,7 @@ class _RoomRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = context.jamColors;
-    final still = MediaQuery.disableAnimationsOf(context);
+    final still = jamReducedMotion(context);
     final tap = enabled ? onTap : null;
     final name = room.sessionName;
     final side = JamSpace.pageFor(MediaQuery.sizeOf(context).width);

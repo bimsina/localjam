@@ -19,6 +19,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/cupertino.dart';
 
+import '../design/motion.dart';
 import '../design/tokens.dart';
 import '../design/typography.dart';
 import 'artwork.dart';
@@ -201,7 +202,7 @@ class JamTrackRow extends StatelessWidget implements JamSelfSeparatingRow {
   @override
   Widget build(BuildContext context) {
     final colors = context.jamColors;
-    final reduceMotion = MediaQuery.disableAnimationsOf(context);
+    final reduceMotion = jamReducedMotion(context);
     final primary = onBackdrop ? JamNowPlayingColors.text : colors.label;
     final secondary = onBackdrop
         ? JamNowPlayingColors.secondary

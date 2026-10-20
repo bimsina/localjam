@@ -7,6 +7,7 @@ library;
 
 import 'package:flutter/widgets.dart';
 
+import '../design/motion.dart';
 import '../design/tokens.dart';
 
 /// How a [JamPressable] shows that it is held down.
@@ -117,7 +118,7 @@ class _JamPressableState extends State<JamPressable> {
           child: child,
         );
       case JamPressStyle.scale:
-        final still = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
+        final still = jamReducedMotion(context);
         child = AnimatedScale(
           scale: pressed && !still ? widget.pressedScale : 1,
           duration: pressed ? JamDuration.instant : JamDuration.base,

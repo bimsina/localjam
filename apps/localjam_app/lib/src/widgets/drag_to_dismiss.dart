@@ -10,6 +10,7 @@ library;
 
 import 'package:flutter/widgets.dart';
 
+import '../design/motion.dart';
 import '../design/tokens.dart';
 
 class DragToDismiss extends StatefulWidget {
@@ -68,7 +69,7 @@ class _DragToDismissState extends State<DragToDismiss>
   /// Springs the page back from wherever the finger left it — or, under
   /// reduced motion, puts it straight back.
   void _springBack() {
-    if (MediaQuery.maybeDisableAnimationsOf(context) ?? false) {
+    if (jamReducedMotion(context)) {
       _settle.stop();
       setState(() => _offset = 0);
       return;

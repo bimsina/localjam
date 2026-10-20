@@ -9,6 +9,7 @@ import 'package:go_router/go_router.dart';
 import 'package:localjam_client/localjam_client.dart';
 
 import 'design/breakpoints.dart';
+import 'design/motion.dart';
 import 'design/tokens.dart';
 import 'screens/history_screen.dart';
 import 'screens/home_screen.dart';
@@ -189,7 +190,7 @@ GoRouter _buildRouter(
         transitionDuration: const Duration(milliseconds: 450),
         reverseTransitionDuration: JamDuration.slow,
         transitionsBuilder: (context, animation, secondary, child) =>
-            MediaQuery.disableAnimationsOf(context)
+            jamReducedMotion(context)
             ? FadeTransition(opacity: animation, child: child)
             : SlideTransition(
                 // Driven off the animation rather than a CurvedAnimation,

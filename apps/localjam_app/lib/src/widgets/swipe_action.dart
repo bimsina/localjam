@@ -27,6 +27,7 @@ import 'dart:async';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/semantics.dart';
 
+import '../design/motion.dart';
 import '../design/tokens.dart';
 import '../design/typography.dart';
 import 'list.dart';
@@ -137,7 +138,7 @@ class _JamSwipeActionState extends State<JamSwipeAction>
     super.dispose();
   }
 
-  bool get _still => MediaQuery.disableAnimationsOf(context);
+  bool get _still => jamReducedMotion(context);
 
   Future<void> _animateTo(double target) => _offset.animateTo(
     target,

@@ -14,6 +14,7 @@ import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 import 'package:localjam_client/localjam_client.dart';
 
+import 'design/motion.dart';
 import 'design/theme.dart';
 import 'design/tokens.dart';
 import 'design/typography.dart';
@@ -266,14 +267,19 @@ class _LocalJamAppState extends State<LocalJamApp> {
               // page's own `Material` (pull-down menus, overlays, sheets
               // built on Cupertino routes) would otherwise fall back to the
               // framework's debug style — red text, yellow underline.
+              //
+              // iOS's Reduce Motion is followed live from here
+              // ([JamReducedMotion]); MediaQuery carries only Android's.
               builder: (context, child) =>
                   AnnotatedRegion<SystemUiOverlayStyle>(
                     value: jamOverlayStyle(Theme.of(context).brightness),
-                    child: DefaultTextStyle(
-                      style: context.jamBody.copyWith(
-                        color: context.jamColors.label,
+                    child: JamReducedMotion(
+                      child: DefaultTextStyle(
+                        style: context.jamBody.copyWith(
+                          color: context.jamColors.label,
+                        ),
+                        child: child ?? const SizedBox.shrink(),
                       ),
-                      child: child ?? const SizedBox.shrink(),
                     ),
                   ),
             ),

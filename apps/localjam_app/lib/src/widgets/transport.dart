@@ -22,6 +22,7 @@ library;
 
 import 'package:flutter/cupertino.dart';
 
+import '../design/motion.dart';
 import '../design/tokens.dart';
 import '../design/typography.dart';
 import 'pressable.dart';
@@ -243,7 +244,7 @@ class _TransportButtonState extends State<_TransportButton> {
     final onPressed = widget.onPressed;
     final loading = widget.loading;
     final primary = widget.primary;
-    final reduced = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
+    final reduced = jamReducedMotion(context);
     final enabled = onPressed != null;
     // A loading button is busy, not forbidden: it keeps its full colours.
     final live = enabled || loading;
@@ -451,7 +452,7 @@ class _JamScrubberState extends State<JamScrubber> {
 
   @override
   Widget build(BuildContext context) {
-    final reduced = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
+    final reduced = jamReducedMotion(context);
     final dragging = _dragFraction != null;
     final remaining = _duration <= 0 ? null : _duration - _shownUs;
     // Under a tablet's poster-sized cover, the times step up with the title.

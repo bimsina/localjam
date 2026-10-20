@@ -19,6 +19,7 @@ import 'package:flutter/material.dart' show Scaffold, Theme;
 import 'package:flutter/services.dart';
 import 'package:localjam_client/localjam_client.dart' show JamIdentity;
 
+import '../design/motion.dart';
 import '../design/theme.dart';
 import '../design/tokens.dart';
 import '../design/typography.dart';
@@ -328,7 +329,7 @@ class _IdentityRow extends StatelessWidget {
         ),
       ),
     );
-    final reduceMotion = MediaQuery.disableAnimationsOf(context);
+    final reduceMotion = jamReducedMotion(context);
     return AnimatedOpacity(
       opacity: known ? 1 : 0,
       duration: reduceMotion ? Duration.zero : JamDuration.fast,

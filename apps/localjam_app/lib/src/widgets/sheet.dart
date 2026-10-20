@@ -49,6 +49,7 @@ import 'dart:math' as math;
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/gestures.dart';
 
+import '../design/motion.dart';
 import '../design/theme.dart';
 import '../design/tokens.dart';
 import '../design/typography.dart';
@@ -742,7 +743,7 @@ class JamSheetRoute<T> extends PageRoute<T> {
     Animation<double> secondaryAnimation,
     Widget child,
   ) {
-    if (MediaQuery.disableAnimationsOf(context)) {
+    if (jamReducedMotion(context)) {
       return FadeTransition(opacity: animation, child: child);
     }
     return SlideTransition(

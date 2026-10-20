@@ -22,6 +22,7 @@ import 'package:flutter/cupertino.dart';
 import 'package:flutter/services.dart';
 import 'package:localjam_client/localjam_client.dart';
 
+import '../design/motion.dart';
 import '../design/tokens.dart';
 import '../design/typography.dart';
 import '../state/session_controller.dart';
@@ -908,7 +909,7 @@ class _InsertRevealState extends State<_InsertReveal>
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    if (MediaQuery.disableAnimationsOf(context)) {
+    if (jamReducedMotion(context)) {
       _reveal.value = 1;
     } else if (!_reveal.isAnimating && _reveal.value == 0) {
       unawaited(_reveal.forward());
@@ -1026,7 +1027,7 @@ class _RowMenuPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final reduced = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
+    final reduced = jamReducedMotion(context);
     final padding = MediaQuery.paddingOf(context);
     void dismiss() => Navigator.of(context).pop();
 

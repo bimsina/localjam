@@ -21,6 +21,7 @@ import 'package:flutter/cupertino.dart';
 import 'package:go_router/go_router.dart';
 import 'package:localjam_client/localjam_client.dart';
 
+import '../design/motion.dart';
 import '../design/tokens.dart';
 import '../design/typography.dart';
 import '../state/session_controller.dart';
@@ -310,7 +311,7 @@ class _BarButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final reduced = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
+    final reduced = jamReducedMotion(context);
     return Semantics(
       container: true,
       button: true,

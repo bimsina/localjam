@@ -36,6 +36,7 @@ import 'dart:math' as math;
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/services.dart';
 
+import '../design/motion.dart';
 import '../design/theme.dart';
 import '../design/tokens.dart';
 import '../design/typography.dart';
@@ -513,7 +514,7 @@ class _JamMenuAnchorState extends State<JamMenuAnchor>
 
   void _onOpenRequested(Offset? position, VoidCallback showOverlay) {
     showOverlay();
-    if (MediaQuery.disableAnimationsOf(context)) {
+    if (jamReducedMotion(context)) {
       _animation.value = 1;
     } else {
       _animation.forward();
@@ -521,7 +522,7 @@ class _JamMenuAnchorState extends State<JamMenuAnchor>
   }
 
   void _onCloseRequested(VoidCallback hideOverlay) {
-    if (!mounted || MediaQuery.disableAnimationsOf(context)) {
+    if (!mounted || jamReducedMotion(context)) {
       _animation.value = 0;
       hideOverlay();
       return;

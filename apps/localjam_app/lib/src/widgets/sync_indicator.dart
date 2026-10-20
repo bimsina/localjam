@@ -18,6 +18,7 @@ import 'dart:async';
 import 'package:flutter/cupertino.dart';
 import 'package:localjam_client/localjam_client.dart';
 
+import '../design/motion.dart';
 import '../design/tokens.dart';
 import '../design/typography.dart';
 import 'progress.dart';
@@ -253,7 +254,7 @@ class _JamSyncIndicatorState extends State<JamSyncIndicator> {
     final line = widget.state == JamSyncState.syncing && fallback != null
         ? fallback
         : jamSyncStatusLine(widget.state) ?? fallback;
-    final reduced = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
+    final reduced = jamReducedMotion(context);
     final alignment = switch (widget.textAlign) {
       TextAlign.left || TextAlign.start => AlignmentDirectional.topStart,
       TextAlign.right || TextAlign.end => AlignmentDirectional.topEnd,

@@ -16,6 +16,7 @@ library;
 import 'package:flutter/cupertino.dart';
 import 'package:localjam_client/localjam_client.dart';
 
+import '../design/motion.dart';
 import '../design/tokens.dart';
 import '../design/typography.dart';
 import 'buttons.dart';
@@ -385,7 +386,7 @@ class _ResetButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final shown = ms != 0;
-    final reduced = MediaQuery.disableAnimationsOf(context);
+    final reduced = jamReducedMotion(context);
     return AnimatedSize(
       duration: reduced ? Duration.zero : JamDuration.fast,
       curve: JamCurve.standard,

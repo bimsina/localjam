@@ -13,6 +13,7 @@ import 'package:flutter/cupertino.dart';
 import 'package:localjam_client/localjam_client.dart';
 
 import '../design/artwork_tint.dart';
+import '../design/motion.dart';
 import '../design/tokens.dart';
 
 /// A pre-rendered 512×512 placeholder for the OS media card, which is drawn
@@ -79,7 +80,7 @@ class JamArtworkTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = context.jamColors;
-    final reduceMotion = MediaQuery.disableAnimationsOf(context);
+    final reduceMotion = jamReducedMotion(context);
     final r = BorderRadius.circular(radius ?? JamRadius.artwork(size));
 
     final bytes = this.bytes;
@@ -179,7 +180,7 @@ class JamArtworkHero extends StatelessWidget {
     // Under reduced motion the room fades in (the router's transition) and
     // the cover does not fly: the largest movement in the app is exactly
     // what that setting asks to go without (RB-13).
-    enabled: !(MediaQuery.maybeDisableAnimationsOf(context) ?? false),
+    enabled: !jamReducedMotion(context),
     child: Hero(
       tag: kJamNowPlayingArtworkTag,
       flightShuttleBuilder: (context, animation, direction, from, to) {
@@ -329,7 +330,7 @@ class JamBackdropView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final reduceMotion = MediaQuery.disableAnimationsOf(context);
+    final reduceMotion = jamReducedMotion(context);
     final layer = KeyedSubtree(
       key: ValueKey<Object>(backdrop.id ?? 'placeholder'),
       child: DecoratedBox(

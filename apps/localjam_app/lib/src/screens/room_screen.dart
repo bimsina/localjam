@@ -42,6 +42,7 @@ import 'package:go_router/go_router.dart';
 import 'package:localjam_client/localjam_client.dart';
 
 import '../design/breakpoints.dart';
+import '../design/motion.dart';
 import '../design/theme.dart';
 import '../design/tokens.dart';
 import '../design/typography.dart';
@@ -381,7 +382,7 @@ class _RoomScreenState extends State<RoomScreen>
       return;
     }
     final open = _queue.value < 0.5;
-    if (MediaQuery.maybeDisableAnimationsOf(context) ?? false) {
+    if (jamReducedMotion(context)) {
       _queue.value = open ? 1 : 0;
     } else if (open) {
       unawaited(_queue.forward());
@@ -1781,7 +1782,7 @@ class _Header extends StatelessWidget {
     final statusHeight = _lineHeight(context.jamFootnote, scaler);
     final nameTop = math.max(0.0, (_rowHeight - nameHeight) / 2);
     final height = math.max(_rowHeight, nameTop + nameHeight + statusHeight);
-    final reduced = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
+    final reduced = jamReducedMotion(context);
 
     return Column(
       mainAxisSize: MainAxisSize.min,
@@ -1994,7 +1995,7 @@ class _EngineNotice extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final reduced = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
+    final reduced = jamReducedMotion(context);
     Widget wrap(Widget? notice) => AnimatedSize(
       duration: reduced ? Duration.zero : JamDuration.base,
       curve: JamCurve.standard,
@@ -2092,7 +2093,7 @@ class _ArtState extends State<_Art> {
 
   @override
   Widget build(BuildContext context) {
-    final reduced = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
+    final reduced = jamReducedMotion(context);
     final t = widget.t;
     final empty = widget.item == null;
     final future = _futureFor(widget.item);
@@ -2409,7 +2410,7 @@ class _TitleBlock extends StatelessWidget {
   /// the queue opens — the rows below carry every song's credit.
   Widget _creditLine(BuildContext context, TextScaler scaler, double t) {
     final credit = this.credit;
-    final reduced = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
+    final reduced = jamReducedMotion(context);
     final style = context.jamFootnote.copyWith(
       color: JamNowPlayingColors.secondary,
     );
@@ -2645,7 +2646,7 @@ class _TransportArea extends StatelessWidget {
   Widget build(BuildContext context) {
     final canSend = session.canSendCommands;
     final roomPlaying = engine.snapshot.status == PlaybackStatus.playing;
-    final reduced = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
+    final reduced = jamReducedMotion(context);
     // While this phone's own sound is suspended (a call, another app,
     // headphones out) the room plays on without it, and the big button is
     // "Resume audio" — for everyone, since it touches only this phone. As
@@ -2727,7 +2728,7 @@ class _EmptyRoomAdd extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final reduced = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
+    final reduced = jamReducedMotion(context);
     Widget slot(bool listOpen) => AnimatedSwitcher(
       duration: reduced ? Duration.zero : JamDuration.fast,
       switchInCurve: JamCurve.standard,
@@ -2896,7 +2897,7 @@ class _FadeThrough extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final reduced = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
+    final reduced = jamReducedMotion(context);
     return AnimatedSwitcher(
       duration: reduced ? Duration.zero : JamDuration.fast,
       switchInCurve: jamFadeThroughCurve,
@@ -2951,7 +2952,7 @@ class _FacePileState extends State<_FacePile>
   @override
   void didUpdateWidget(_FacePile oldWidget) {
     super.didUpdateWidget(oldWidget);
-    final reduced = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
+    final reduced = jamReducedMotion(context);
     final joined = [
       for (final name in widget.names)
         if (!oldWidget.names.contains(name)) name,
@@ -2977,7 +2978,7 @@ class _FacePileState extends State<_FacePile>
     const size = _FacePile.size;
     const step = size * (1 - JamAvatarStack.overlap);
     final names = widget.names;
-    final reduced = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
+    final reduced = jamReducedMotion(context);
     final move = reduced ? Duration.zero : JamDuration.base;
     final width = names.isEmpty ? 0.0 : (names.length - 1) * step + size;
     final grow = CurvedAnimation(
@@ -3077,7 +3078,7 @@ class _FooterIcon extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final reduced = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
+    final reduced = jamReducedMotion(context);
     final rtl = Directionality.of(context) == TextDirection.rtl;
     return Transform.translate(
       offset: Offset(rtl ? -_overhang : _overhang, 0),

@@ -23,6 +23,7 @@ library;
 import 'package:flutter/rendering.dart';
 import 'package:flutter/widgets.dart';
 
+import '../design/motion.dart';
 import '../design/tokens.dart';
 
 /// A single line that scrolls when it overflows.
@@ -135,7 +136,7 @@ class _JamMarqueeState extends State<JamMarquee>
   Widget build(BuildContext context) {
     final style = widget.style;
     final text = widget.text;
-    final reduced = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
+    final reduced = jamReducedMotion(context);
     return LayoutBuilder(
       builder: (context, constraints) {
         final painter = TextPainter(
