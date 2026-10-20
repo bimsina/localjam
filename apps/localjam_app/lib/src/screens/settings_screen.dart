@@ -1,9 +1,11 @@
 /// Settings: who you are, how the app looks, and where it came from
-/// (DESIGN_SPEC v3 §6.8).
+/// (DESIGN_SPEC v3 §6.8, in v4's warm system).
 ///
-/// iOS Settings, inset grouped on `groupedBackground`, no icon tiles. Room
-/// behaviour (who may do what, the sound offset, diagnostics) belongs where
-/// you can see its effect — in the jam — not in a global list.
+/// The same paper and bordered blocks as Nearby — not iOS Settings' grouped
+/// grey — no icon tiles, and the look picked with one segmented control
+/// rather than a section of checkmark rows. Room behaviour (who may do
+/// what, the sound offset, diagnostics) belongs where you can see its
+/// effect — in the jam — not in a global list.
 library;
 
 import 'dart:async';
@@ -24,6 +26,7 @@ import '../widgets/list.dart';
 import '../widgets/rename_dialog.dart';
 import '../widgets/scaffold.dart';
 import '../widgets/section.dart';
+import '../widgets/switch.dart';
 import 'licenses_screen.dart';
 
 /// Every user-facing string on this screen, in one place.
@@ -150,7 +153,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     return true;
   }
 
-  /// The licence list: grouped iOS rows, no Material chrome.
+  /// The licence list: the app's own rows, no Material chrome.
   void _showLicences() => unawaited(
     Navigator.of(context).push(
       CupertinoPageRoute<void>(
@@ -177,7 +180,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
     return JamScaffold(
       title: SettingsStrings.title,
-      grouped: true,
       // A reading column sized from the pane this page sits in — not the
       // window, which beside an iPad sidebar is 260 wider — with the large
       // title on its edge. Sections bring their own side margins.
@@ -189,6 +191,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             child: JamSectionList(
               children: [
                 JamSection(
+                  bordered: true,
                   children: [
                     JamRow(
                       leading: _identity.isEmpty
@@ -210,27 +213,37 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ),
                   ],
                 ),
-                JamSection(
+                // One control for one choice: its edges on the blocks'
+                // edges, its header and footer on their text.
+                JamSection.plain(
                   header: SettingsStrings.appearance,
+                  prominentHeader: false,
                   footer: SettingsStrings.appearanceFooter,
-                  children: [
-                    for (final mode in ThemeMode.values)
-                      JamRow(
-                        title: _modeLabel(mode),
-                        checked: settings.themeMode == mode,
-                        onTap: () {
-                          if (settings.themeMode == mode) return;
-                          JamHaptics.selection();
-                          unawaited(settings.setThemeMode(mode));
-                        },
-                        semanticLabel:
-                            '${SettingsStrings.appearance}: ${_modeLabel(mode)}',
-                      ),
-                  ],
+                  margin: EdgeInsets.symmetric(
+                    horizontal: JamSpace.pageFor(
+                      MediaQuery.sizeOf(context).width,
+                    ),
+                  ),
+                  child: Semantics(
+                    container: true,
+                    label: SettingsStrings.appearance,
+                    child: JamSegmentedControl<ThemeMode>(
+                      segments: {
+                        for (final mode in ThemeMode.values)
+                          mode: _modeLabel(mode),
+                      },
+                      groupValue: settings.themeMode,
+                      onValueChanged: (mode) {
+                        if (settings.themeMode == mode) return;
+                        unawaited(settings.setThemeMode(mode));
+                      },
+                    ),
+                  ),
                 ),
                 JamSection(
                   header: SettingsStrings.about,
                   footer: SettingsStrings.aboutFooter,
+                  bordered: true,
                   children: [
                     JamRow(title: SettingsStrings.version, value: _version),
                     // Leaves the app: the external arrow, not a chevron.
@@ -245,6 +258,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                               ? SettingsStrings.linkCopied
                               : SettingsStrings.openSourceDetail,
                           external: true,
+                          // The section draws the line under this one:
+                          // the row sits inside a confirmation, so the
+                          // section cannot tell it separates itself.
+                          separator: false,
                           onTap: () => confirm(_openRepository),
                         ),
                       ),

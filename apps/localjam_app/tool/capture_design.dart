@@ -28,7 +28,6 @@ import 'package:localjam_app/src/screens/room_screen.dart';
 import 'package:localjam_app/src/screens/session_ended_view.dart';
 import 'package:localjam_app/src/screens/scan_screen.dart';
 import 'package:localjam_app/src/screens/settings_screen.dart';
-import 'package:localjam_app/src/screens/licenses_screen.dart';
 import 'package:localjam_app/src/state/app_settings.dart';
 import 'package:localjam_app/src/state/session_controller.dart';
 import 'package:localjam_app/src/util/network.dart';
@@ -142,6 +141,41 @@ Future<Uint8List> cover(int index) async {
   return png;
 }
 
+/// A tiny MP3 whose ID3v2 tag carries [png] as its front cover — the kind
+/// of file Past Jams reads covers back out of on a device. (The fixture
+/// WAVs carry no art, and the tag reader takes no pictures from WAV.)
+Uint8List mp3WithCover(Uint8List png) {
+  List<int> be32(int v) => [
+    v >> 24 & 0xFF,
+    v >> 16 & 0xFF,
+    v >> 8 & 0xFF,
+    v & 0xFF,
+  ];
+  List<int> syncsafe(int v) => [
+    v >> 21 & 0x7F,
+    v >> 14 & 0x7F,
+    v >> 7 & 0x7F,
+    v & 0x7F,
+  ];
+  final picture = [
+    0, // ISO-8859-1
+    ...ascii.encode('image/png'), 0,
+    3, // front cover
+    0, // no description
+    ...png,
+  ];
+  // Two silent MPEG-1 Layer III frames (128 kbps, 44.1 kHz) after the tag.
+  final frame = [0xFF, 0xFB, 0x90, 0x64, ...List.filled(413, 0)];
+  return Uint8List.fromList([
+    ...ascii.encode('ID3'), 3, 0, 0, // ID3v2.3, no flags
+    ...syncsafe(10 + picture.length),
+    ...ascii.encode('APIC'), ...be32(picture.length), 0, 0,
+    ...picture,
+    ...frame,
+    ...frame,
+  ]);
+}
+
 class Capture {
   Capture(this.tester, this.session, this.dark);
   final WidgetTester tester;
@@ -196,6 +230,18 @@ class Capture {
                   ),
           ),
         ),
+      ),
+    );
+    await settle();
+  }
+
+  /// Mounts [page] the way the app shows it on a phone: pushed over Nearby,
+  /// so its nav bar carries the back chevron.
+  Future<void> push(Widget page) async {
+    await mount(const SizedBox());
+    unawaited(
+      navigator.currentState!.push(
+        CupertinoPageRoute<void>(builder: (_) => page),
       ),
     );
     await settle();
@@ -281,6 +327,8 @@ void main() {
     testWidgets('capture ${dark ? 'dark' : 'light'} pages and states', (
       tester,
     ) async {
+      // Each pass reads Past Jams' covers afresh, in its own zone.
+      debugResetJamHistoryCovers();
       LicenseRegistry.reset();
       LicenseRegistry.addLicense(() async* {
         yield LicenseEntryWithLineBreaks([
@@ -362,25 +410,21 @@ void main() {
         const HostSetupScreen(initialPaths: [], initialName: 'Sunday at home'),
       );
       await cap.snap('08-start-jam-empty');
-      await cap.mount(const SettingsScreen());
+      // Settings, Licenses and Past Jams are pushed over Nearby on a phone,
+      // so they are captured pushed: back chevron and all.
+      await cap.push(const SettingsScreen());
       await cap.snap('09-settings');
       await tester.tap(find.text('Bibek'));
       await cap.snap('09-settings-rename');
       await tester.tap(find.text('Cancel'));
       await cap.settle();
-      await cap.mount(
-        const JamLicensesScreen(
-          applicationName: 'LocalJam',
-          applicationVersion: '1.0.0',
-        ),
-      );
+      // Licenses as Settings opens it: the app's icon, version and line.
+      await tester.tap(find.text(SettingsStrings.licences));
       await cap.snap('10-licenses');
       expect(find.text('Manrope'), findsOneWidget);
-      if (find.text('Manrope').evaluate().isNotEmpty) {
-        await tester.tap(find.text('Manrope'));
-        await cap.snap('10-license-detail');
-      }
-      await cap.mount(HistoryScreen(loadRecords: () async => []));
+      await tester.tap(find.text('Manrope'));
+      await cap.snap('10-license-detail');
+      await cap.push(HistoryScreen(loadRecords: () async => []));
       await cap.snap('11-history-empty');
 
       // Real engine + real queue, with native audio mocked by the test harness.
@@ -417,34 +461,69 @@ void main() {
         host.setMedia(items.first.mediaId);
         host.seek(83000000);
       });
+      // Past Jams reads covers back out of the files still on this device,
+      // so the history's files carry the fixture covers as real tags. Times
+      // are relative to today so the summaries read the same on every run.
+      final today = DateTime.now();
+      final history = <String>[];
+      for (var i = 0; i < paths.length; i++) {
+        final tagged = File(paths[i].replaceFirst('.wav', '-cover.mp3'));
+        final png = await tester.runAsync(() => cover(i));
+        tagged.writeAsBytesSync(mp3WithCover(png!));
+        history.add(tagged.path);
+      }
       final record = JamHistoryRecord(
         sessionId: 'sunday-preview',
         sessionName: 'Sunday at home',
         wasHost: true,
-        startedAt: DateTime(2026, 10, 18, 16),
-        updatedAt: DateTime(2026, 10, 18, 17),
+        startedAt: DateTime(today.year, today.month, today.day - 1, 16),
+        updatedAt: DateTime(today.year, today.month, today.day - 1, 17),
         peerNames: ['Mia', 'Theo'],
         tracks: [
           for (var i = 0; i < items.length; i++)
             JamHistoryTrack(
               item: items[i],
               addedByName: i.isEven ? 'You' : 'Mia',
-              localPath: paths[i],
+              localPath: history[i],
             ),
         ],
       );
-      await cap.mount(
+      // A jam joined on another phone: its songs never stayed here, so it
+      // is drawn by its monogram and cannot be hosted again.
+      final joined = JamHistoryRecord(
+        sessionId: 'late-shift-preview',
+        sessionName: 'The late shift',
+        wasHost: false,
+        startedAt: DateTime(today.year, today.month, today.day - 1, 0, 5),
+        updatedAt: DateTime(today.year, today.month, today.day - 1, 0, 40),
+        peerNames: ['Theo', 'Ana', 'Jo', 'Sam'],
+        tracks: [
+          for (var i = 0; i < 4; i++)
+            JamHistoryTrack(
+              item: items[i],
+              addedByName: ['Theo', 'Ana', 'You', 'Jo'][i],
+            ),
+        ],
+      );
+      await cap.push(
         HistoryScreen(
-          loadRecords: () async => [record],
+          loadRecords: () async => [record, joined],
           forgetRecord: (_) async {},
           restoreRecord: (_) async {},
         ),
       );
       await cap.snap('12-history-populated');
-      await cap.mount(
+      await cap.push(
         HistoryDetailScreen(record: record, forgetRecord: (_) async {}),
       );
       await cap.snap('13-history-detail');
+      await cap.push(
+        HistoryDetailScreen(record: joined, forgetRecord: (_) async {}),
+      );
+      await cap.snap(
+        '13-history-detail-joined',
+        note: 'A joined jam whose songs are no longer on this device.',
+      );
       await cap.mount(
         HostSetupScreen(initialName: 'Sunday at home', initialPaths: paths),
       );
@@ -650,12 +729,26 @@ void main() {
         host.setPolicy(JamPolicy.open);
       });
       await guestCap.snap('42-guest-playback-control');
-      (guest.guestEngine!.hostAway as ValueNotifier<bool>).value = true;
+      // The host says it is going to sleep (§3.5) over the real link, so the
+      // guest's engine — not just its notifier — knows: controls that would
+      // wait in a sleeping phone's socket are dimmed, and the line says when
+      // they come back.
+      Future<void> hostAway(bool away) => tester.runAsync(() async {
+        await host.debugServer.announceAway(away);
+        final deadline = DateTime.now().add(const Duration(seconds: 5));
+        while (guest.guestEngine!.canSendCommands == away &&
+            DateTime.now().isBefore(deadline)) {
+          await Future<void>.delayed(const Duration(milliseconds: 20));
+        }
+        expect(guest.guestEngine!.hostAway.value, away);
+        expect(guest.guestEngine!.canSendCommands, !away);
+      });
+      await hostAway(true);
       await guestCap.snap(
         '43-guest-host-asleep',
-        note: 'Production guest UI with deterministic host-away state.',
+        note: 'Production guest UI; the host announced it is away (§3.5).',
       );
-      (guest.guestEngine!.hostAway as ValueNotifier<bool>).value = false;
+      await hostAway(false);
       final prefetch =
           guest.guestEngine!.prefetchStates
               as ValueNotifier<Map<String, JamPrefetchState>>;
@@ -699,10 +792,17 @@ void main() {
       await cap.snap('30-player-empty');
       await tester.tap(find.bySemanticsLabel(JamRoomStrings.queue));
       await cap.snap('31-queue-empty');
+      // The ended page as the room shows it once the jam's name is wired
+      // (the room knows it from the link it joined with), with the mark's
+      // monogram. One capture adds the last cover and the host's face, one
+      // shows a jam with no name.
+      const jamName = 'Sunday at home';
       await cap.mount(
         JamSessionEndedView(
           reason: JamSessionEndReason.hostGone,
-          onDone: () {},
+          jamName: jamName,
+          // As the room passes it: no way out while the rejoin runs.
+          onDone: null,
           onRetry: () {},
           retrying: true,
         ),
@@ -711,9 +811,10 @@ void main() {
       await cap.mount(
         JamSessionEndedView(
           reason: JamSessionEndReason.hostGone,
+          jamName: jamName,
           onDone: () {},
           onRetry: () {},
-          error: 'Couldn’t get back into that jam.',
+          error: kJamRejoinFailed,
         ),
       );
       await cap.snap('32-session-retry-failed');
@@ -734,6 +835,7 @@ void main() {
           JamSessionEndedView(
             reason: reason,
             rejectReason: reject,
+            jamName: jamName,
             onDone: () {},
             onRetry:
                 reason == JamSessionEndReason.hostGone ||
@@ -744,10 +846,36 @@ void main() {
             onStartNew: reason == JamSessionEndReason.listenerFailed
                 ? () {}
                 : null,
+            onScan: () {},
           ),
         );
         await cap.snap('32-session-$label');
       }
+      final lastCover = await tester.runAsync(() => cover(0));
+      await cap.mount(
+        JamSessionEndedView(
+          reason: JamSessionEndReason.hostEnded,
+          jamName: jamName,
+          covers: [MemoryImage(lastCover!)],
+          hostName: 'Bibek',
+          onDone: () {},
+        ),
+      );
+      await cap.snap(
+        '32-session-ended-cover',
+        note: 'With the last cover and the host passed in.',
+      );
+      await cap.mount(
+        JamSessionEndedView(
+          reason: JamSessionEndReason.hostGone,
+          onDone: () {},
+          onRetry: () {},
+        ),
+      );
+      await cap.snap(
+        '32-session-host-gone-unnamed',
+        note: 'A jam whose name is not known: the reason glyph instead.',
+      );
       for (final (label, code, declined) in [
         ('denied', MobileScannerErrorCode.permissionDenied, false),
         ('declined', MobileScannerErrorCode.permissionDenied, true),

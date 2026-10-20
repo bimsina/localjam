@@ -1,7 +1,8 @@
-/// Licenses, the iOS way (DESIGN_SPEC v3 §6.8, D2): a grouped list of the
-/// packages the app ships, each opening its licence text — in place of
-/// Material's `LicensePage`, whose app bar, cards and ink were the last
-/// Material chrome in the app.
+/// Licenses (DESIGN_SPEC v3 §6.8, D2): a list of the packages the app ships,
+/// each opening its licence text — in place of Material's `LicensePage`,
+/// whose app bar, cards and ink were the last Material chrome in the app.
+/// On the same paper as Settings and its licence pages, so the ground never
+/// changes on the way in.
 ///
 /// The text comes from the same [LicenseRegistry] `LicensePage` reads, so
 /// nothing a licence requires to be shown goes missing.
@@ -60,6 +61,18 @@ bool jamLicenseIsOtherPlatform(String package, TargetPlatform platform) {
 /// licences' column padding, "Apache License  Version 2.0") collapsed.
 String jamLicenseParagraph(String text) =>
     text.replaceAll(RegExp(r' {2,}'), ' ');
+
+/// A rule drawn in characters — the OFL's lines of "-----" around its
+/// title — which reads as a hairline, not as text.
+final RegExp _kLicenseRule = RegExp(r'[-=_*~]{8,}');
+
+/// Whether a licence paragraph carries a character rule.
+bool jamLicenseHasRule(String text) => _kLicenseRule.hasMatch(text);
+
+/// A licence paragraph without its character rules, spaces collapsed: what
+/// is left is said; the rules become one hairline above it.
+String jamLicenseWithoutRules(String text) =>
+    jamLicenseParagraph(text.replaceAll(_kLicenseRule, ' ')).trim();
 
 /// The registry, grouped by package (sorted, case-insensitively), without
 /// other platforms' plugin implementations.
@@ -126,7 +139,6 @@ class _JamLicensesScreenState extends State<JamLicensesScreen> {
     final legalese = widget.applicationLegalese;
     return JamScaffold(
       title: LicensesStrings.title,
-      grouped: true,
       // The large title shares the reading column's leading edge.
       maxContentWidth: JamContentWidth.reading,
       children: [
@@ -178,6 +190,7 @@ class _JamLicensesScreenState extends State<JamLicensesScreen> {
               else
                 JamSection(
                   header: LicensesStrings.packages,
+                  bordered: true,
                   children: [
                     for (final p in packages)
                       JamRow(
@@ -218,6 +231,19 @@ class _LicenseDetail extends StatelessWidget {
         );
       }
       for (final paragraph in entries[i].paragraphs) {
+        final ruled = jamLicenseHasRule(paragraph.text);
+        if (ruled) {
+          paragraphs.add(
+            const Padding(
+              padding: EdgeInsets.only(top: JamSpace.lg, bottom: JamSpace.xs),
+              child: JamHairline(),
+            ),
+          );
+        }
+        final text = ruled
+            ? jamLicenseWithoutRules(paragraph.text)
+            : jamLicenseParagraph(paragraph.text);
+        if (text.isEmpty) continue;
         final centered = paragraph.indent == LicenseParagraph.centeredIndent;
         // One step of indent at most: deeper levels pushed the body into a
         // ragged column well right of the title.
@@ -229,9 +255,10 @@ class _LicenseDetail extends StatelessWidget {
               start: JamSpace.lg * indent,
             ),
             child: Text(
-              jamLicenseParagraph(paragraph.text),
+              text,
               textAlign: centered ? TextAlign.center : TextAlign.start,
-              style: centered
+              // A ruled-off line is the licence's own heading.
+              style: centered || ruled
                   ? body.copyWith(fontWeight: FontWeight.w600)
                   : body,
             ),

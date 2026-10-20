@@ -60,6 +60,7 @@ class JamSection extends StatelessWidget {
     this.child,
     this.margin,
     this.elevated,
+    this.bordered = false,
   }) : plain = false,
        assert(
          child != null || children != null,
@@ -79,6 +80,7 @@ class JamSection extends StatelessWidget {
     this.margin,
   }) : plain = true,
        elevated = false,
+       bordered = false,
        assert(
          child != null || children != null,
          'A JamSection needs either a child or children.',
@@ -110,6 +112,11 @@ class JamSection extends StatelessWidget {
 
   /// Forces the elevated (sheet) row surface. Null reads [JamGroupedSurface].
   final bool? elevated;
+
+  /// A 0.5 `separator` edge around the block, like Nearby's cards — for a
+  /// section on a page's `background` (paper), where the block would
+  /// otherwise have no edge in light mode.
+  final bool bordered;
 
   final bool plain;
 
@@ -159,6 +166,12 @@ class JamSection extends StatelessWidget {
           child: body,
         ),
       );
+      if (bordered) {
+        body = CustomPaint(
+          foregroundPainter: _SectionEdge(colors.separator),
+          child: body,
+        );
+      }
     }
 
     final header = this.header;
@@ -245,6 +258,33 @@ class _SectionClipper extends CustomClipper<RRect> {
 
   @override
   bool shouldReclip(_SectionClipper oldClipper) => false;
+}
+
+/// A [JamSection.bordered] block's edge, on the block's own radius.
+class _SectionEdge extends CustomPainter {
+  const _SectionEdge(this.color);
+
+  final Color color;
+
+  static const double _width = 0.5;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    const inset = _width / 2;
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(
+        (Offset.zero & size).deflate(inset),
+        Radius.circular(JamRadius.sectionFor(size.height) - inset),
+      ),
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = _width
+        ..color = color,
+    );
+  }
+
+  @override
+  bool shouldRepaint(_SectionEdge old) => old.color != color;
 }
 
 /// Stacks sections with the standard [JamSpace.section] gap.
