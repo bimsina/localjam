@@ -10,9 +10,9 @@
 ///
 /// A jam's cover is read back out of its cover song's file while that is
 /// still on this device (a host's sources, a guest's cache), off the UI
-/// isolate, at full size; failing that, the small picture its record keeps
-/// (`JamHistoryRecord.coverPath`); failing that, the jam's monogram. Reads
-/// are cached.
+/// isolate, at full size; failing that, from the small picture its record
+/// keeps (`JamHistoryRecord.coverPath`); then another song still here; then
+/// it is the jam's monogram ([JamHistoryMark]). Reads are cached.
 library;
 
 import 'dart:async';
