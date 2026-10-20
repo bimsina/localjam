@@ -1,7 +1,6 @@
 /// The presets' words, shared by Start a Jam and the People sheet.
 library;
 
-import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:localjam_app/src/design/theme.dart';
@@ -150,9 +149,7 @@ void main() {
       testWidgets('with the row at y $top', (tester) async {
         await pumpRow(tester, top: top);
         final menu = menuRect(tester);
-        final chevron = tester.getRect(
-          find.byIcon(CupertinoIcons.chevron_up_chevron_down),
-        );
+        final chevron = tester.getRect(find.byType(JamDisclosureChevron));
         // Trailing-aligned with the value, not centred on the row.
         expect((menu.right - chevron.right).abs(), lessThan(12));
         expect(menu.center.dx, greaterThan(200));

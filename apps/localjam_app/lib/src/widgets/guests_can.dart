@@ -18,7 +18,6 @@ import 'package:flutter/cupertino.dart';
 import 'package:localjam_client/localjam_client.dart';
 
 import '../design/tokens.dart';
-import '../design/typography.dart';
 import 'list.dart';
 import 'menu.dart';
 
@@ -135,7 +134,6 @@ class _JamGuestsCanRowState extends State<JamGuestsCanRow> {
 
   @override
   Widget build(BuildContext context) {
-    final colors = context.jamColors;
     final policy = widget.policy;
     final name = JamPresetStrings.name(policy);
     final controls = widget.controls;
@@ -148,23 +146,10 @@ class _JamGuestsCanRowState extends State<JamGuestsCanRow> {
         title: JamPresetStrings.guestsCan,
         separator: widget.separator,
         semanticLabel: '${JamPresetStrings.guestsCan}, $name',
-        // The value, then iOS's pop-up chevrons.
-        trailing: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(
-              name,
-              maxLines: 1,
-              style: context.jamBody.copyWith(color: colors.secondaryLabel),
-            ),
-            const SizedBox(width: JamSpace.xs),
-            Icon(
-              CupertinoIcons.chevron_up_chevron_down,
-              size: JamIconSize.disclosure,
-              color: colors.tertiaryLabel,
-            ),
-          ],
-        ),
+        // A value row like any other: the value, then the app's one
+        // disclosure chevron — not iOS's pop-up chevrons.
+        value: name,
+        chevron: true,
         onTap: _toggle,
       ),
     );
