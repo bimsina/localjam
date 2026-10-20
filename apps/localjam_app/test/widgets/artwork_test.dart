@@ -78,7 +78,7 @@ void main() {
       expect(JamRadius.artwork(56), 8);
       expect(JamRadius.artwork(64), 8);
       expect(JamRadius.artwork(120), 12);
-      // A large cover (History detail, 200) matches Now Playing's 18.
+      // A large cover (from 160) matches Now Playing's 18.
       expect(JamRadius.artwork(200), JamRadius.largeCover);
       await pumpTile(tester, const JamArtworkTile(size: 340));
       expect(

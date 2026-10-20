@@ -650,7 +650,7 @@ abstract final class JamMetrics {
 /// | Shape | Radius |
 /// |---|---|
 /// | Artwork ≤ 44 / ≤ 64 / ≤ 159 / larger | 6 / 8 / 12 / 18 ([largeCover]) |
-/// | Now Playing cover, History detail cover | 18 ([largeCover]) |
+/// | Now Playing cover | 18 ([largeCover]) |
 /// | Large button / small button | 16 ([button]) / 10 ([buttonSmall]) |
 /// | Alert button | 14 ([alertButton]) |
 /// | Toast, player banner | 16 ([notice]) |
@@ -677,7 +677,7 @@ abstract final class JamRadius {
   /// Artwork up to [largeCoverFrom].
   static const double artworkM = 12;
 
-  /// A large cover: Now Playing's, the History detail's.
+  /// A large cover: Now Playing's.
   static const double largeCover = 18;
 
   /// The edge from which artwork takes [largeCover].
@@ -767,20 +767,17 @@ abstract final class JamArtworkSize {
   /// A list row (queue, songs, people's covers).
   static const double row = 44;
 
-  /// Recent jams on Home.
+  /// A tile with no size of its own (the artwork widgets' default).
   static const double thumb = 48;
 
-  /// History rows; the queue-in-place thumbnail.
+  /// The queue-in-place thumbnail beside Now Playing's title.
   static const double list = 56;
-
-  /// The History detail header.
-  static const double detail = 200;
 }
 
 /// Shadows. There is exactly one: under large artwork.
 abstract final class JamShadow {
-  /// Under the Now Playing cover and the History detail cover. Black 25%,
-  /// blur 30, y 12.
+  /// Under the Now Playing cover and a large jam mark (a past jam's page,
+  /// the page a jam ends on). Black 25%, blur 30, y 12.
   static const List<BoxShadow> artwork = [
     BoxShadow(color: Color(0x40000000), blurRadius: 30, offset: Offset(0, 12)),
   ];

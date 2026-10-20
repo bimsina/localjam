@@ -46,11 +46,8 @@ abstract final class JamMarkSize {
   /// identity row.
   static const double row = 56;
 
-  /// The page a jam ends on.
+  /// The page a jam ends on; a past jam's own page.
   static const double ended = 88;
-
-  /// A past jam's own page (no host badge at this size).
-  static const double detail = 200;
 }
 
 /// The gap a host badge keeps from the tile it is knocked out of.

@@ -74,7 +74,7 @@ void main() {
     expect(JamRadius.notice, 16);
     expect(JamRadius.miniPlayer, 20);
     expect(JamRadius.largeCover, 18);
-    expect(JamRadius.artwork(JamArtworkSize.detail), JamRadius.largeCover);
+    expect(JamRadius.artwork(JamRadius.largeCoverFrom), JamRadius.largeCover);
     expect(JamRadius.alert, 34);
     expect(JamRadius.menu, 22);
     expect(JamRadius.sheetFloating, 38);
