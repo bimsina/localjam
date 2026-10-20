@@ -212,13 +212,14 @@ void main() {
     expect(HostSetupStrings.songCount(1), '1 song');
   });
 
-  testWidgets('the empty Songs section says who can add songs', (
-    tester,
-  ) async {
+  testWidgets('the empty Songs section says who can add songs', (tester) async {
     final session = testSession();
     await _tall(tester);
     final router = await pumpApp(tester, session);
-    router.push('/host', extra: const HostSetupArgs(paths: [], name: 'Jam'));
+    router.push(
+      '/host',
+      extra: const HostSetupArgs(paths: [], name: 'Jam'),
+    );
     await tester.pumpAndSettle();
     expect(find.text(HostSetupStrings.songsFooterGuests), findsOneWidget);
   });
