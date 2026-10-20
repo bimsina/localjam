@@ -136,5 +136,11 @@ class FakeRoom extends ChangeNotifier implements ListenerRoom {
   Future<void> resumeAudio() async => calls.add('resume');
 
   @override
+  bool retryFetch(String mediaId) {
+    calls.add('retry $mediaId');
+    return true;
+  }
+
+  @override
   Future<void> leave() async => calls.add('leave');
 }

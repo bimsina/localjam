@@ -100,10 +100,14 @@ class _PageButtonState extends State<PageButton> {
       textAlign: TextAlign.center,
       style: PageType.headline.copyWith(color: ink),
     );
+    // The label replaces the child's semantics, and with them the gesture
+    // detector's tap action: the tap is given here, or a screen reader
+    // finds a button it cannot press.
     return Semantics(
       button: true,
       enabled: enabled,
       label: widget.label,
+      onTap: enabled ? widget.onPressed : null,
       excludeSemantics: true,
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
@@ -173,10 +177,12 @@ class _PageIconButtonState extends State<PageIconButton> {
   Widget build(BuildContext context) {
     final c = colorsOf(context);
     final enabled = widget.onPressed != null;
+    // As in [PageButton]: the tap action is given with the label.
     return Semantics(
       button: true,
       enabled: enabled,
       label: widget.label,
+      onTap: widget.onPressed,
       excludeSemantics: true,
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,

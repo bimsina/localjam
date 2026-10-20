@@ -192,6 +192,9 @@ class EngineRoom extends ChangeNotifier implements ListenerRoom {
   }
 
   @override
+  bool retryFetch(String mediaId) => engine.retryFetch(mediaId);
+
+  @override
   Future<void> leave() async {
     if (_left) return;
     _left = true;
