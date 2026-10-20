@@ -81,6 +81,7 @@ void main() {
             required String sessionName,
             required int port,
             required String token,
+            String? hostName,
             List<InternetAddress> addresses = const [],
             Duration timeout = JamRoomAdvertiser.defaultTimeout,
           }) {
@@ -113,6 +114,7 @@ void main() {
             required String sessionName,
             required int port,
             required String token,
+            String? hostName,
             List<InternetAddress> addresses = const [],
             Duration timeout = JamRoomAdvertiser.defaultTimeout,
           }) async => throw StateError('no mDNS on this platform');

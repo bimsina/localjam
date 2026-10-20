@@ -226,7 +226,8 @@ class JamHostEngine extends JamEngine {
   /// in "added by" bylines. It defaults to this device's persistent
   /// [JamIdentity.displayName] ("Silky Puffin"), the same identity a guest
   /// announces, so the host is a person in the room rather than the word
-  /// "Host". Pass an empty string to host anonymously.
+  /// "Host". A discoverable room names them to people nearby too (the
+  /// `hname` TXT key, §1). Pass an empty string to host anonymously.
   ///
   /// Tracks are added afterwards: [addMediaFile] one at a time, or
   /// [importFiles] to open the room at once and fill the queue in the
@@ -346,6 +347,7 @@ class JamHostEngine extends JamEngine {
     required String sessionName,
     required int port,
     required String token,
+    String? hostName,
     List<InternetAddress> addresses,
     Duration timeout,
   })
@@ -726,12 +728,14 @@ class JamHostEngine extends JamEngine {
   }
 
   /// Advertises the room as it stands now, or null when neither responder
-  /// took it inside the budget.
+  /// took it inside the budget. The record names the host as guests see
+  /// them in the room (`hname`, §1) — nothing when hosting anonymously.
   Future<JamRoomAdvertiser?> _startAdvertiser() => _bounded<JamRoomAdvertiser?>(
     roomAdvertiserStarter(
       sessionName: sessionName,
       port: port,
       token: token,
+      hostName: _server.hostName,
       addresses: _lanAddresses.value,
       timeout: _advertiseBudget,
     ),
