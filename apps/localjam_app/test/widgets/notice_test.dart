@@ -244,6 +244,33 @@ void main() {
     expect(find.byType(JamNoticeCard), findsNothing);
   });
 
+  testWidgets('rises into place — and under Reduce Motion fades where it '
+      'stands', (tester) async {
+    Future<double> midwayOffset({required bool still}) async {
+      await tester.pumpWidget(
+        MediaQuery(
+          data: MediaQueryData(disableAnimations: still),
+          child: _host(
+            (context) => showJamNotice(context, const JamNotice('Ana joined')),
+          ),
+        ),
+      );
+      await tester.tap(find.text('Go'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 60));
+      final midway = tester.getTopLeft(find.byType(JamNoticeCard)).dy;
+      await tester.pumpAndSettle();
+      final settled = tester.getTopLeft(find.byType(JamNoticeCard)).dy;
+      // Gone before the next case.
+      await tester.pump(kJamNoticeDuration);
+      await tester.pumpAndSettle();
+      return midway - settled;
+    }
+
+    expect(await midwayOffset(still: false), greaterThan(0));
+    expect(await midwayOffset(still: true), 0);
+  });
+
   testWidgets('renders on the dark palette', (tester) async {
     await tester.pumpWidget(
       _host(

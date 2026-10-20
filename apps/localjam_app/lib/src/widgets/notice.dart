@@ -395,6 +395,26 @@ class _JamNoticeOverlayState extends State<_JamNoticeOverlay>
     // (or the status bar) itself; the caller's margin is what it keeps clear
     // *on top of* that.
     final top = widget.position == JamNoticePosition.top;
+    Widget card = JamNoticeCard(
+      notice: widget.notice,
+      onAction: () {
+        widget.notice.onAction?.call();
+        dismiss();
+      },
+    );
+    // Reduce Motion: the notice fades in and out where it stands — a fade
+    // is not movement — instead of rising into place.
+    if (!MediaQuery.disableAnimationsOf(context)) {
+      card = SlideTransition(
+        position: _controller.drive(
+          Tween<Offset>(
+            begin: Offset(0, (top ? -_kNoticeRise : _kNoticeRise) / 56),
+            end: Offset.zero,
+          ).chain(CurveTween(curve: JamCurve.standard)),
+        ),
+        child: card,
+      );
+    }
     // Only the notice takes touches: the space around it is the screen.
     return SafeArea(
       child: Padding(
@@ -403,24 +423,7 @@ class _JamNoticeOverlayState extends State<_JamNoticeOverlay>
           alignment: top ? Alignment.topCenter : Alignment.bottomCenter,
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 560),
-            child: FadeTransition(
-              opacity: _controller,
-              child: SlideTransition(
-                position: _controller.drive(
-                  Tween<Offset>(
-                    begin: Offset(0, (top ? -_kNoticeRise : _kNoticeRise) / 56),
-                    end: Offset.zero,
-                  ).chain(CurveTween(curve: JamCurve.standard)),
-                ),
-                child: JamNoticeCard(
-                  notice: widget.notice,
-                  onAction: () {
-                    widget.notice.onAction?.call();
-                    dismiss();
-                  },
-                ),
-              ),
-            ),
+            child: FadeTransition(opacity: _controller, child: card),
           ),
         ),
       ),
