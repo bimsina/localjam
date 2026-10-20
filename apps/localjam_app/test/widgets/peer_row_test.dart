@@ -197,15 +197,50 @@ void main() {
 
     test('a narrow line cuts the names, never the count', () {
       final cut = fit(eight, 300);
-      expect(cut.runs.last, (text: ' and 6 others', width: null));
+      expect(cut.runs.last, (text: ' and 6 others', cut: false));
       // The long name gives way first; the short one keeps all of itself.
-      final long = cut.runs.firstWhere(
-        (r) => r.text == 'Electric Mongoose Supreme',
+      final long = cut.runs.firstWhere((r) => r.cut);
+      expect(long.text, endsWith('…'));
+      expect(
+        'Electric Mongoose Supreme',
+        startsWith(long.text.substring(0, long.text.length - 1)),
       );
-      expect(long.width, isNotNull);
-      expect(cut.runs.firstWhere((r) => r.text == 'Theo').width, isNull);
+      expect(cut.runs.firstWhere((r) => r.text == 'Theo').cut, isFalse);
       // The spoken line is the phrase it stands for.
       expect(cut.spoken, eight.text);
+    });
+
+    test('a name cut at a space leaves no gap before its ellipsis', () {
+      // The Now Playing footer's case: "Electric " fits and "Electric M"
+      // does not — the line reads "With Electric…, Mia", not
+      // "With Electric …, Mia".
+      final four = JamPeoplePhrase.summary([
+        'Electric Mongoose Supreme',
+        'Mia',
+        'Theo',
+        'Ana',
+        'Jo',
+        'Sam',
+      ]);
+      for (var width = 120.0; width <= 260; width += 0.5) {
+        final line = fit(four, width);
+        for (final run in line.runs.where((r) => r.cut)) {
+          expect(run.text, endsWith('…'));
+          expect(run.text, isNot(contains(' …')), reason: 'at $width');
+          expect(
+            _width(line.runs.map((r) => r.text).join(), style),
+            lessThanOrEqualTo(width),
+            reason: 'at $width',
+          );
+        }
+      }
+      // And at the width where the cut lands just after "Electric ".
+      final electric = _width('With Electric …, Mia and 4 others', style);
+      final atSpace = fit(four, electric + 1);
+      expect(
+        atSpace.runs.map((r) => r.text).join(),
+        'With Electric…, Mia and 4 others',
+      );
     });
 
     test('too narrow for a letter of each name: the count alone', () {
@@ -248,16 +283,13 @@ void main() {
           ),
         ),
       );
-      final name = tester.getRect(find.text('Electric Mongoose Supreme'));
+      final shown = fit(eight, 300).runs.firstWhere((r) => r.cut).text;
+      final name = tester.getRect(find.text(shown));
       final comma = tester.getRect(find.text(', '));
       final lead = tester.getRect(find.text('With '));
       // No gap between the ellipsis and the comma after it: the name's box
-      // is what it draws, not all the width it was offered.
-      final given = fit(
-        eight,
-        300,
-      ).runs.firstWhere((r) => r.text == 'Electric Mongoose Supreme').width!;
-      expect(name.width, lessThan(given));
+      // is what it draws.
+      expect(name.width, closeTo(_width(shown, style), 0.5));
       expect(comma.left, closeTo(name.right, 0.5));
       // The words between keep their trailing space: "With " is wider
       // than "With".

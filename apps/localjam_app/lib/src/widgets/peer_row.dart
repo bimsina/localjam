@@ -174,10 +174,10 @@ class JamPeerRow extends StatelessWidget implements JamSelfSeparatingRow {
   }
 }
 
-/// How a [JamPeoplePhrase] fits one line: the runs to draw — each name at
-/// the width it was given (cut with an ellipsis when that is less than it
-/// needs) and the words between them whole — and what a screen reader says
-/// for it, which is what the line shows (RB-9).
+/// How a [JamPeoplePhrase] fits one line: the runs to draw — each name
+/// whole, or cut to the width it was given and ended with an ellipsis, and
+/// the words between them whole — and what a screen reader says for it,
+/// which is what the line shows (RB-9).
 class JamPeopleFit {
   const JamPeopleFit._(this.runs, this.spoken);
 
@@ -207,7 +207,7 @@ class JamPeopleFit {
 
     final full = phrase.text;
     if (measure(full) <= maxWidth) {
-      return JamPeopleFit._([(text: full, width: null)], full);
+      return JamPeopleFit._([(text: full, cut: false)], full);
     }
     final parts = phrase.parts;
     final names = [
@@ -217,7 +217,7 @@ class JamPeopleFit {
     final counted = phrase.counted;
     JamPeopleFit fallback() {
       final text = counted ?? full;
-      return JamPeopleFit._([(text: text, width: null)], text);
+      return JamPeopleFit._([(text: text, cut: false)], text);
     }
 
     if (names.isEmpty) return fallback();
@@ -251,17 +251,40 @@ class JamPeopleFit {
       room -= width;
     }
     if (room < -0.5) return fallback();
+    // A name cut to [width]: as many of its letters as fit before an
+    // ellipsis, with no space left between the two ("Electric…", never
+    // "Electric …"). Widths only grow with the letters kept, so the longest
+    // that fits is found by halving.
+    String cut(String name, double width) {
+      final letters = name.characters.toList();
+      String shown(int count) => '${letters.take(count).join().trimRight()}…';
+      var fits = 1;
+      var low = 2;
+      var high = letters.length - 1;
+      while (low <= high) {
+        final mid = (low + high) ~/ 2;
+        if (measure(shown(mid)) <= width) {
+          fits = mid;
+          low = mid + 1;
+        } else {
+          high = mid - 1;
+        }
+      }
+      return shown(fits);
+    }
+
     return JamPeopleFit._([
       for (var i = 0; i < parts.length; i++)
-        (
-          text: parts[i].text,
-          width: parts[i].name && given[i]! < natural[i]! ? given[i] : null,
-        ),
+        if (parts[i].name && given[i]! < natural[i]!)
+          (text: cut(parts[i].text, given[i]!), cut: true)
+        else
+          (text: parts[i].text, cut: false),
     ], full);
   }
 
-  /// What to draw, in order: a run with a width is a name cut to it.
-  final List<({String text, double? width})> runs;
+  /// What to draw, in order: a [cut] run is a name already cut to the width
+  /// it was given, its ellipsis included.
+  final List<({String text, bool cut})> runs;
 
   /// The line as a screen reader should say it.
   final String spoken;
@@ -308,31 +331,20 @@ class JamPeopleLine extends StatelessWidget {
   }
 
   Widget _runs(JamPeopleFit fit) {
-    Text text(String value, {bool cut = false}) => Text(
+    Text text(String value) => Text(
       value,
       maxLines: 1,
       softWrap: false,
       overflow: TextOverflow.ellipsis,
       style: style,
-      // A cut name is as wide as what it draws, ellipsis included — not
-      // the width it was offered — so no gap opens before the words after
-      // it ("Electri…, Mia", not "Electri…  , Mia"). Only a name: the
-      // words between keep their spaces.
-      textWidthBasis: cut ? TextWidthBasis.longestLine : TextWidthBasis.parent,
     );
     if (fit.runs.length == 1) return text(fit.runs.single.text);
+    // Every run is drawn at its own width — a cut name already ends in its
+    // ellipsis — so the words after a name follow straight on ("Electric…,
+    // Mia"), their spaces kept.
     return Row(
       mainAxisSize: MainAxisSize.min,
-      children: [
-        for (final run in fit.runs)
-          if (run.width case final width?)
-            ConstrainedBox(
-              constraints: BoxConstraints(maxWidth: width),
-              child: text(run.text, cut: true),
-            )
-          else
-            text(run.text),
-      ],
+      children: [for (final run in fit.runs) text(run.text)],
     );
   }
 }
