@@ -529,7 +529,10 @@ class _NameField extends StatelessWidget {
           padding: const EdgeInsetsDirectional.only(
             end: kJamRowInset - (kJamFieldClearHit - kJamFieldClearSize) / 2,
           ),
-          child: JamFieldClearButton(controller: controller),
+          child: JamFieldClearButton(
+            controller: controller,
+            focusNode: focusNode,
+          ),
         ),
         suffixMode: OverlayVisibilityMode.editing,
         clearButtonMode: OverlayVisibilityMode.never,

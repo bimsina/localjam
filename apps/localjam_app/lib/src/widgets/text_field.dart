@@ -40,11 +40,18 @@ class JamFieldClearButton extends StatelessWidget {
   const JamFieldClearButton({
     super.key,
     required this.controller,
+    this.focusNode,
     this.onCleared,
     this.semanticLabel = JamTextFieldStrings.clear,
   });
 
   final TextEditingController controller;
+
+  /// The field's focus, taken when it clears (N9): you clear a field to
+  /// type a new value, so the caret and the keyboard come with it. An
+  /// unfocused field used to empty and then swallow what was typed until
+  /// it was tapped a second time.
+  final FocusNode? focusNode;
 
   /// Told the text is now empty (a field's `onChanged` is not called for a
   /// programmatic change).
@@ -90,11 +97,13 @@ class JamFieldClearButton extends StatelessWidget {
   void _clear() {
     controller.clear();
     onCleared?.call('');
+    final focus = focusNode;
+    if (focus != null && !focus.hasFocus) focus.requestFocus();
   }
 }
 
 /// The app's text field. [search] puts a magnifier in front.
-class JamTextField extends StatelessWidget {
+class JamTextField extends StatefulWidget {
   const JamTextField({
     super.key,
     required this.controller,
@@ -145,7 +154,42 @@ class JamTextField extends StatelessWidget {
   final String? semanticLabel;
 
   @override
+  State<JamTextField> createState() => _JamTextFieldState();
+}
+
+class _JamTextFieldState extends State<JamTextField> {
+  /// The field's focus when the caller keeps none, so the clear button can
+  /// hand it the caret.
+  FocusNode? _ownFocus;
+  FocusNode get _focus => widget.focusNode ?? (_ownFocus ??= FocusNode());
+
+  @override
+  void dispose() {
+    _ownFocus?.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final JamTextField(
+      :controller,
+      :placeholder,
+      :search,
+      :autofocus,
+      :keyboardType,
+      :textCapitalization,
+      :textInputAction,
+      :maxLength,
+      :minLines,
+      :maxLines,
+      :autocorrect,
+      :onChanged,
+      :onSubmitted,
+      :error,
+      :style,
+      :semanticLabel,
+    ) = widget;
+    final focusNode = _focus;
     final colors = context.jamColors;
     final text = (style ?? context.jamBody).copyWith(color: colors.label);
     return Semantics(
@@ -181,6 +225,7 @@ class JamTextField extends StatelessWidget {
             : null,
         suffix: JamFieldClearButton(
           controller: controller,
+          focusNode: focusNode,
           onCleared: onChanged,
         ),
         suffixMode: OverlayVisibilityMode.editing,

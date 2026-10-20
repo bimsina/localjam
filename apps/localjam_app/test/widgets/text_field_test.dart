@@ -57,6 +57,50 @@ void main() {
     expect(find.byType(JamFieldClearButton), findsNothing);
   });
 
+  testWidgets('clearing a field focuses it, so typing goes there (N9)', (
+    tester,
+  ) async {
+    final text = TextEditingController(text: 'Sunday drive');
+    addTearDown(text.dispose);
+    // Start a jam's case: a default name, the field not focused.
+    await tester.pumpWidget(_host(JamTextField(controller: text)));
+    expect(find.byType(JamFieldClearButton), findsOneWidget);
+    final editable = find.byType(EditableText);
+    expect(tester.widget<EditableText>(editable).focusNode.hasFocus, isFalse);
+
+    await tester.tap(find.byType(JamFieldClearButton));
+    await tester.pump();
+    expect(text.text, isEmpty);
+    expect(tester.widget<EditableText>(editable).focusNode.hasFocus, isTrue);
+    // And what is typed next lands in it.
+    tester.testTextInput.enterText('Road trip');
+    await tester.pump();
+    expect(text.text, 'Road trip');
+  });
+
+  testWidgets('a field given its own focus node is the one focused', (
+    tester,
+  ) async {
+    final text = TextEditingController(text: 'Mia');
+    final focus = FocusNode();
+    addTearDown(text.dispose);
+    addTearDown(focus.dispose);
+    await tester.pumpWidget(
+      _host(
+        Row(
+          children: [
+            JamFieldClearButton(controller: text, focusNode: focus),
+            Focus(focusNode: focus, child: const SizedBox(width: 1)),
+          ],
+        ),
+      ),
+    );
+    await tester.tap(find.byType(JamFieldClearButton));
+    await tester.pump();
+    expect(text.text, isEmpty);
+    expect(focus.hasFocus, isTrue);
+  });
+
   testWidgets('a search field leads with a magnifier', (tester) async {
     final text = TextEditingController();
     addTearDown(text.dispose);
