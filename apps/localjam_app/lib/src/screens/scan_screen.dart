@@ -8,9 +8,10 @@
 /// there is nothing to scan.
 ///
 /// The camera is the one part of joining that can simply not be available —
-/// denied, missing, or busy — so this screen carries its own dead ends on
-/// the same black page: it says which one happened, offers Settings or
-/// another go where that can help, and always offers the link.
+/// denied, missing, or busy — so this screen carries its own dead ends, on
+/// the app's own dark ground rather than camera black (there is no feed to
+/// frame): it says which one happened, offers Settings or another go where
+/// that can help, and always offers the link, right under the message.
 library;
 
 import 'dart:async';
@@ -55,13 +56,13 @@ abstract final class JamScanStrings {
   /// is already where it should be, to fix a permission they never denied.
   static const String declinedTitle = 'Camera Access Needed';
   static const String declinedBody =
-      'Try Again to allow camera access, or enter a link instead.';
+      'Allow the camera to scan a jam’s code, or enter the link instead.';
   static const String unsupportedTitle = 'Camera Unavailable';
   static const String unsupportedBody =
       'This device can’t scan codes. Enter a link instead.';
   static const String failedTitle = 'The Camera Didn’t Start';
   static const String failedBody =
-      'Something else may be using it. Try again, or enter a link.';
+      'Another app may be using the camera. Try again, or enter the link.';
   static const String retry = 'Try Again';
 }
 
@@ -320,7 +321,11 @@ class _ScanScreenState extends State<ScanScreen> {
         brightness: Brightness.dark,
 
         child: Scaffold(
-          backgroundColor: JamFixedColors.black,
+          // Black frames a live feed; until there is one (the camera being
+          // asked for), the app's own dark ground.
+          backgroundColor: scanning
+              ? JamFixedColors.black
+              : JamColors.dark.background,
           // No app bar: the camera is the screen, and everything else floats.
           body: Stack(
             fit: StackFit.expand,
@@ -412,19 +417,21 @@ class _Caption extends StatelessWidget {
 }
 
 /// The floating controls over the feed: the glass xmark, the flashlight
-/// when there is one, and Enter Link at the bottom — on every scan page,
-/// live or dead end, in the same place.
+/// when there is one, and — where there is a viewfinder — Enter Link at the
+/// bottom. A dead end carries its link under its message instead.
 class _ScanChrome extends StatelessWidget {
   const _ScanChrome({
     required this.controller,
     required this.onClose,
-    required this.onLink,
+    this.onLink,
   });
 
   /// Null until the camera is running (no flashlight to offer yet).
   final MobileScannerController? controller;
   final VoidCallback onClose;
-  final VoidCallback onLink;
+
+  /// Enter Link at the bottom; null leaves it to the page.
+  final VoidCallback? onLink;
 
   @override
   Widget build(BuildContext context) {
@@ -478,14 +485,15 @@ class _ScanChrome extends StatelessWidget {
             ),
           ),
           const Spacer(),
-          Padding(
-            padding: const EdgeInsets.only(bottom: JamSpace.lg),
-            child: JamButton.plain(
-              label: JamScanStrings.enterLink,
-              color: JamNowPlayingColors.text,
-              onPressed: onLink,
+          if (onLink case final onLink?)
+            Padding(
+              padding: const EdgeInsets.only(bottom: JamSpace.lg),
+              child: JamButton.plain(
+                label: JamScanStrings.enterLink,
+                color: JamNowPlayingColors.text,
+                onPressed: onLink,
+              ),
             ),
-          ),
         ],
       ),
     );
@@ -535,13 +543,13 @@ class _ViewfinderPainter extends CustomPainter {
 /// without a camera need different sentences and only one of them can be
 /// fixed in Settings.
 ///
-/// The same black page as the viewfinder (§6.10), with the same xmark and
-/// **Enter Link always at the bottom, where the live scanner has it** — so a
-/// dead end reads as the scanner saying why, not as a different screen, and
-/// the way through never moves. The empty state carries at most one other
-/// action, the fix for this dead end, as a neutral capsule that hugs its
-/// label (a tinted fill on black read as a disabled maroon slab). It is
-/// mounted *instead of* the viewfinder stack, never inside it.
+/// The app's dark ground (there is no feed to frame, so no camera black),
+/// the viewfinder's xmark, and the way through **next to the message that
+/// explains it**: where the dead end has a fix (Settings, Try Again) that is
+/// the neutral button and **Enter Link** sits plainly under it; where it has
+/// none (no camera at all), Enter Link *is* the button. Pinned 300 pt below
+/// at the bottom, as on the live scanner, it was a caption nobody reached.
+/// It is mounted *instead of* the viewfinder stack, never inside it.
 class ScannerUnavailableView extends StatelessWidget {
   const ScannerUnavailableView({
     super.key,
@@ -589,16 +597,17 @@ class ScannerUnavailableView extends StatelessWidget {
     // The fix for this dead end, where there is one: Settings where Settings
     // can fix it, another go at the camera where that is most likely to
     // work. A device with no camera has none — the link is the way.
-    final (String? actionLabel, VoidCallback? onAction) = denied
+    final (String? fixLabel, VoidCallback? onFix) = denied
         ? (JamScanStrings.openSettings, () => unawaited(openAppSettings()))
         : canRetry
         ? (JamScanStrings.retry, onRetry)
         : (null, null);
+    void link() => unawaited(onLink());
 
     return JamForcedAppearance(
       brightness: Brightness.dark,
       child: ColoredBox(
-        color: JamFixedColors.black,
+        color: JamColors.dark.background,
         child: Stack(
           fit: StackFit.expand,
           children: [
@@ -611,11 +620,15 @@ class ScannerUnavailableView extends StatelessWidget {
                 body: body,
                 foregroundColor: JamNowPlayingColors.text,
                 secondaryColor: JamNowPlayingColors.secondary,
-                // Neutral on black: the dark `fill` capsule with a
-                // white label.
-                actionLabel: actionLabel,
-                onAction: onAction,
+                // Neutral, never tinted: the fix where there is one, else
+                // the link itself.
+                actionLabel: fixLabel ?? JamScanStrings.enterLink,
+                onAction: onFix ?? link,
                 actionVariant: JamButtonVariant.gray,
+                secondaryActionLabel: fixLabel == null
+                    ? null
+                    : JamScanStrings.enterLink,
+                onSecondaryAction: fixLabel == null ? null : link,
               ),
             ),
             _ScanChrome(
@@ -623,7 +636,6 @@ class ScannerUnavailableView extends StatelessWidget {
               onClose:
                   onClose ??
                   () => context.canPop() ? context.pop() : context.go('/'),
-              onLink: () => unawaited(onLink()),
             ),
           ],
         ),

@@ -7,6 +7,7 @@ import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:localjam_app/src/design/theme.dart';
+import 'package:localjam_app/src/design/tokens.dart';
 import 'package:localjam_app/src/screens/scan_screen.dart';
 import 'package:localjam_app/src/util/permissions.dart';
 import 'package:localjam_app/src/widgets/buttons.dart';
@@ -170,12 +171,12 @@ void main() {
     expect(asked, 1);
   });
 
-  testWidgets('Enter Link sits in the same place on every dead end', (
+  testWidgets('Enter Link sits right under the message, on every dead end', (
     tester,
   ) async {
-    Rect linkFor(MobileScannerErrorCode code, {bool declined = false}) =>
-        tester.getRect(find.text(JamScanStrings.enterLink));
-    final rects = <Rect>[];
+    // It used to be a bare caption pinned 300 pt below at the bottom, where
+    // the live scanner keeps it — on a page with no scanner, the eye
+    // stopped at the message and never reached it.
     for (final (code, declined) in [
       (MobileScannerErrorCode.permissionDenied, false),
       (MobileScannerErrorCode.permissionDenied, true),
@@ -184,9 +185,27 @@ void main() {
     ]) {
       await pumpUnavailable(tester, code, declined: declined, onRetry: () {});
       expect(find.text(JamScanStrings.enterLink), findsOneWidget);
-      rects.add(linkFor(code, declined: declined));
+      final state = tester.getRect(find.byType(JamEmptyState));
+      final link = tester.getRect(find.text(JamScanStrings.enterLink));
+      expect(state.contains(link.center), isTrue, reason: '$code $declined');
     }
-    expect(rects.toSet(), hasLength(1));
+  });
+
+  testWidgets('with no fix to offer, Enter Link is the button', (tester) async {
+    await pumpUnavailable(tester, MobileScannerErrorCode.unsupported);
+    final empty = tester.widget<JamEmptyState>(find.byType(JamEmptyState));
+    expect(empty.actionLabel, JamScanStrings.enterLink);
+    expect(empty.actionVariant, JamButtonVariant.gray);
+    expect(empty.secondaryActionLabel, isNull);
+  });
+
+  testWidgets('with a fix, the fix is the button and the link sits under it', (
+    tester,
+  ) async {
+    await pumpUnavailable(tester, MobileScannerErrorCode.permissionDenied);
+    final empty = tester.widget<JamEmptyState>(find.byType(JamEmptyState));
+    expect(empty.actionLabel, JamScanStrings.openSettings);
+    expect(empty.secondaryActionLabel, JamScanStrings.enterLink);
   });
 
   testWidgets('Join with Link from the scanner is on the dark palette, '
@@ -222,7 +241,7 @@ void main() {
     expect(kScanWindowRadius, 24);
   });
 
-  testWidgets('the dead end is the same black page, with the xmark', (
+  testWidgets('the dead end is the app’s dark ground, with the xmark', (
     tester,
   ) async {
     var closed = 0;
@@ -242,7 +261,8 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    // Black whatever the app's appearance: the camera page's own ground.
+    // Dark whatever the app's appearance — but LocalJam's warm charcoal,
+    // not camera black: there is no feed here to frame.
     final ground = tester.widget<ColoredBox>(
       find
           .descendant(
@@ -251,9 +271,10 @@ void main() {
           )
           .first,
     );
-    expect(ground.color, const Color(0xFF000000));
-    // Open Settings is a neutral capsule with a white label — a tinted fill
-    // on black read as a disabled maroon slab — and it hugs its label.
+    expect(ground.color, JamColors.dark.background);
+    // Open Settings is a neutral button with a white label — a tinted fill
+    // on the dark ground read as a disabled maroon slab — and it hugs its
+    // label.
     final settings = tester.widget<JamButton>(
       find.widgetWithText(JamButton, JamScanStrings.openSettings),
     );
