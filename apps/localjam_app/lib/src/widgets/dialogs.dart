@@ -20,7 +20,6 @@ import 'package:flutter/cupertino.dart';
 import '../design/theme.dart';
 import '../design/tokens.dart';
 import '../design/typography.dart';
-import 'buttons.dart';
 import 'pressable.dart';
 
 /// Default labels.
@@ -554,29 +553,6 @@ class JamConfirmDialog extends StatelessWidget {
         onPressed: () => Navigator.of(context).pop(true),
       ),
     ],
-  );
-}
-
-/// A confirming text action for alerts and dialogs not yet on [JamAlert]:
-/// 17 semibold tint (or `danger`).
-class JamDialogPrimaryButton extends StatelessWidget {
-  const JamDialogPrimaryButton({
-    super.key,
-    required this.label,
-    required this.onPressed,
-    this.destructive = false,
-  });
-
-  final String label;
-  final VoidCallback? onPressed;
-  final bool destructive;
-
-  @override
-  Widget build(BuildContext context) => JamTextButton(
-    label: label,
-    bold: true,
-    destructive: destructive,
-    onPressed: onPressed,
   );
 }
 

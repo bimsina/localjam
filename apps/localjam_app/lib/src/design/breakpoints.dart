@@ -51,8 +51,8 @@ abstract final class JamContentWidth {
   /// The sidebar.
   static const double sidebar = 260;
 
-  /// The room's queue/people panel.
-  static const double panel = 340;
+  /// The room's docked queue/people panel.
+  static const double panel = 360;
 
   /// The floating room bar at medium widths, where a full-bleed bar would
   /// stretch a 44 dp thumbnail across a desktop window.

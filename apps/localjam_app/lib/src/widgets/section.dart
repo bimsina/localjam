@@ -12,8 +12,9 @@
 /// ```
 ///
 /// Inset grouped by default: a rounded [JamRadius.section] block in
-/// `groupedSurface` (or `elevatedGroupedSurface` inside a grouped sheet), 16
-/// from the screen edge, rows separated by hairlines inset to their text.
+/// `groupedSurface` (or `elevatedGroupedSurface` inside a grouped sheet,
+/// whose ground is the grouped paper so the block stands off it), 16 from
+/// the screen edge, rows separated by hairlines inset to their text.
 /// [JamSection.plain] drops the block for Apple-Music-style plain lists.
 library;
 
@@ -148,7 +149,7 @@ class JamSection extends StatelessWidget {
     if (!plain) {
       final elevated = this.elevated ?? JamGroupedSurface.elevatedOf(context);
       body = ClipRRect(
-        // 26, but a block of one 44 row would be a pill at 26: the radius
+        // 20, but a block of one 44 row would be a pill at 20: the radius
         // is held under half the block's height.
         clipper: const _SectionClipper(),
         child: ColoredBox(
