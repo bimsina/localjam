@@ -358,6 +358,56 @@ void main() {
       );
     });
 
+    testWidgets('a chevron\'s stroke ends where a value does (CR-13)', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        _host(const JamRow(title: 'Appearance', value: 'System')),
+      );
+      final row = tester.getRect(find.byType(JamRow));
+      final valueEnd = tester.getRect(find.text('System')).right;
+      expect(valueEnd, closeTo(row.right - kJamRowInset, 0.5));
+
+      await tester.pumpWidget(
+        _host(const JamRow(title: 'Licenses', chevron: true)),
+      );
+      final chevron = tester.getRect(find.byType(Icon));
+      // The glyph's box overhangs by its bearing, so its stroke lands on
+      // the inset.
+      expect(
+        chevron.right,
+        closeTo(row.right - kJamRowInset + kJamChevronBearing, 0.5),
+      );
+    });
+
+    testWidgets('a plain list\'s hairline stops at the content (CR-18)', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        _host(const JamRow(title: 'Sunday', separator: true)),
+      );
+      final row = tester.getRect(find.byType(JamRow));
+      final line = tester.getRect(find.byType(JamHairline));
+      expect(line.right, closeTo(row.right - kJamRowInset, 0.5));
+
+      // Inside a section it still meets the block's edge.
+      await tester.pumpWidget(
+        _host(
+          const JamSection(
+            children: [
+              JamRow(title: 'One'),
+              JamRow(title: 'Two'),
+            ],
+          ),
+        ),
+      );
+      final first = tester.getRect(find.byType(JamRow).first);
+      expect(
+        tester.getRect(find.byType(JamHairline).first).right,
+        closeTo(first.right, 0.5),
+      );
+    });
+
     testWidgets('JamAddSongsRow: a plus tile and a tint title, one button', (
       tester,
     ) async {
