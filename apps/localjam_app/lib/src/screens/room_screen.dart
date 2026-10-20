@@ -760,6 +760,7 @@ class _Player extends StatelessWidget {
                     scrubber: scrubber,
                     transport: transport,
                     footer: footer,
+                    selfName: identity,
                     onCloseQueue: onQueue,
                   );
                 }
@@ -803,6 +804,7 @@ class _Player extends StatelessWidget {
                                 child: QueuePanel(
                                   engine: engine,
                                   horizontalPadding: margin,
+                                  selfName: identity,
                                 ),
                               ),
                             ),
@@ -1183,6 +1185,7 @@ class _SideOnStage extends StatelessWidget {
     required this.scrubber,
     required this.transport,
     required this.footer,
+    required this.selfName,
     required this.onCloseQueue,
   });
 
@@ -1200,6 +1203,7 @@ class _SideOnStage extends StatelessWidget {
   final Widget scrubber;
   final Widget transport;
   final Widget footer;
+  final String selfName;
   final VoidCallback onCloseQueue;
 
   @override
@@ -1241,6 +1245,7 @@ class _SideOnStage extends StatelessWidget {
                             engine: engine,
                             horizontalPadding: 0,
                             bottomPadding: 0,
+                            selfName: selfName,
                           ),
                         ),
                 ),
@@ -2626,6 +2631,7 @@ class _DockedPanel extends StatelessWidget {
                   _PanelView.queue => QueuePanel(
                     engine: engine,
                     showHeader: false,
+                    selfName: selfName,
                   ),
                   // On the backdrop by itself (`RoomPanel.onBackdrop`).
                   _PanelView.people => RoomPanel(
