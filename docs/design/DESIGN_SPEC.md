@@ -201,7 +201,8 @@ no status dots or connection badges, no emoji and no filler copy.
   - `JamTextField` is a filled `fillSecondary` field with radius 10, a
     `secondaryLabel` placeholder and an optional magnifier.
   - `JamFieldClearButton` is the only clear button. It sits on the trailing
-    inset.
+    inset, and clearing focuses the field so the next keystroke lands in
+    it.
   - `JamSelectionCheck` is a 22 pt `tintFilled` circle with LocalJam's own
     check mark; unselected, it is a 1.5 pt `tertiaryLabel` ring.
   - The segmented control is LocalJam's own: a soft track with a concentric
@@ -220,10 +221,17 @@ no status dots or connection badges, no emoji and no filler copy.
     detent, and become a centred form sheet on wide windows.
 - **Menus, alerts, notices.**
   - Every pull-down and the queue's context menu use one `JamMenuPanel`.
+  - A menu never covers what it belongs under: Now Playing's ••• opens past
+    the title, and a menu inside a sheet stays below the sheet's header and
+    Done, sliding back over its own trigger if it must.
   - Alerts have a Manrope title, a leading-aligned message and
     soft-rectangle buttons. A destructive action uses `dangerFilled`.
   - Toasts and the player's banner share one soft-rectangle surface and are
     never shown over a control.
+  - A toast stays up long enough to read: 4 s plus 60 ms a character, at
+    most 10 s. An error with an action ("Try again") stays until it is
+    acted on or dismissed. Any toast goes away with a tap or a flick
+    toward its edge.
 - **Empty and terminal pages.** Every empty, ended, error and denied state
   uses `JamEmptyState`: a hero glyph or a jam mark, a Manrope title, one
   balanced sentence, and at most one action plus a plain second action.
@@ -245,12 +253,16 @@ no status dots or connection badges, no emoji and no filler copy.
   - The room's chrome stops growing at 2×.
 
   Elsewhere, rows, buttons and Nearby cards grow and wrap rather than clip.
+  Headings and titles never break inside a word: at the largest sizes
+  they step down (never below their design size) until their longest word
+  fits, and a section's trailing action (See all) wraps under its header.
 - **Motion is restrained and means something.** Durations run 100–350 ms
   for controls, 400 ms for sheets, 550 ms for the pause spring and 600 ms for
   the backdrop cross-fade.
   - Motion marks events: a face growing into the pile when someone joins, a
     song entering the queue, the cover morphing into the queue thumbnail.
-  - Under reduced motion:
+  - Under reduced motion (Android's Remove animations or iOS's Reduce
+    Motion, either one):
     - Titles don't marquee; they end in an ellipsis.
     - The cover dims instead of scaling.
     - The play square deepens instead of squeezing.
