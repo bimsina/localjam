@@ -303,16 +303,15 @@ class _AsyncCoverState extends State<AsyncCover> {
       Cover(bytes: _bytes, size: widget.size, radius: widget.radius);
 }
 
-/// A flat avatar: a colour from the person's id, white initials.
+/// A flat avatar: a colour from the person's display name, white initials.
+/// The colour is the app's `identityColor` (apps/localjam_app
+/// `widgets/avatar.dart`): FNV-1a over the name's UTF-16 code units into
+/// [avatarPalette], so a person has the same face in the browser as on
+/// every phone. (The app also spreads colours apart inside one jam; the
+/// page does not.)
 class Avatar extends StatelessWidget {
-  const Avatar({
-    super.key,
-    required this.id,
-    required this.name,
-    this.size = 36,
-  });
+  const Avatar({super.key, required this.name, this.size = 36});
 
-  final String id;
   final String name;
   final double size;
 
@@ -324,9 +323,10 @@ class Avatar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    var hash = 0;
-    for (final unit in id.codeUnits) {
-      hash = (hash * 31 + unit) & 0x3fffffff;
+    var hash = 0x811c9dc5;
+    for (final unit in name.codeUnits) {
+      hash ^= unit;
+      hash = (hash * 0x01000193) & 0xFFFFFFFF;
     }
     return ExcludeSemantics(
       child: Container(

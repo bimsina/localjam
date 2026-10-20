@@ -495,22 +495,21 @@ class _RoomPageState extends State<RoomPage> {
     final hostName = hostDisplayName(host);
     final rows = <Widget>[
       PageRow(
-        leading: Avatar(id: host?.peerId ?? 'host', name: hostName),
+        leading: Avatar(name: hostName),
         title: hostName,
         subtitle: RoomPage.hostRole,
       ),
       PageRow(
-        leading: Avatar(id: room.selfPeerId, name: room.myName),
+        leading: Avatar(name: room.myName),
         title: room.myName,
         subtitle: RoomPage.youRole,
       ),
       for (final peer in room.peers)
         PageRow(
           leading: Avatar(
-            id: peer.peerId,
             name: peer.clientName.trim().isEmpty
                 ? RoomPage.guestFallback
-                : peer.clientName,
+                : peer.clientName.trim(),
           ),
           title: peer.clientName.trim().isEmpty
               ? RoomPage.guestFallback

@@ -111,8 +111,10 @@ class JamGuestClient {
   /// still fails on the honest sha256 check rather than on this one.
   static const int sizeSlackBytes = 64 * 1024;
 
-  /// Parses a `localjam://join?...` URI (§1 Discovery), tries each `host`
-  /// candidate in order, performs the §3.1 handshake, and starts the §4
+  /// Reads [joinUri] in either join form (§1 Discovery) — `localjam://join?…`
+  /// or the 1.2 `http://host:port/join#…` URL — through [JoinLink], tries
+  /// each `host` candidate in order, performs the §3.1 handshake, and starts
+  /// the §4
   /// clock-sync schedule (a burst of 8 pings [burstPingSpacing] apart, then
   /// one every [pingInterval]).
   ///
@@ -137,10 +139,10 @@ class JamGuestClient {
   /// show two terminals on one machine converging as if they were two
   /// devices. Liveness and media timeouts always run on the real clock.
   ///
-  /// Throws [JamRejectedException] if the host rejects the join (or speaks
-  /// another major protocol version), or [JamTransportException] if no
-  /// candidate host is reachable — natively a `SocketException`, as it
-  /// always was.
+  /// Throws [FormatException] if [joinUri] is neither join form,
+  /// [JamRejectedException] if the host rejects the join (or speaks another
+  /// major protocol version), or [JamTransportException] if no candidate
+  /// host is reachable — natively a `SocketException`, as it always was.
   static Future<JamGuestClient> connect(
     Uri joinUri, {
     String clientName = 'guest',
@@ -154,21 +156,12 @@ class JamGuestClient {
     Duration mediaTimeout = const Duration(seconds: 10),
     int Function()? localClockUs,
   }) async {
-    final params = joinUri.queryParameters;
-    final hostsParam = params['host'];
-    final portParam = params['port'];
-    final token = params['token'];
-    if (hostsParam == null || portParam == null || token == null) {
-      throw FormatException('Join URI is missing host/port/token: $joinUri');
+    final link = JoinLink.fromUri(joinUri);
+    if (link == null) {
+      // Not echoed: a join link carries the room's token.
+      throw const FormatException('Not a LocalJam join link');
     }
-    final port = int.parse(portParam);
-    final hosts = [
-      for (final h in hostsParam.split(','))
-        if (h.trim().isNotEmpty) h.trim(),
-    ];
-    if (hosts.isEmpty) {
-      throw FormatException('Join URI has no host candidates: $joinUri');
-    }
+    final JoinLink(:hosts, :port, :token) = link;
 
     Object? lastError;
     for (final host in hosts) {

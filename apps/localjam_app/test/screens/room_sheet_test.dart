@@ -747,6 +747,12 @@ void main() {
       InvitePanel(engine: host.engine!, network: JamNetworkStatus.offline),
     );
     expect(find.text(RoomSheetStrings.inviteInBrowser), findsOneWidget);
+    // The caption already says to scan; the line adds only the browser.
+    expect(
+      RoomSheetStrings.inviteInBrowser,
+      'No app needed: the link opens in the browser.',
+    );
+    expect(RoomSheetStrings.inviteInBrowser, isNot(contains('Scan')));
     // Under the code, after the caption.
     expect(
       tester.getTopLeft(find.text(RoomSheetStrings.inviteInBrowser)).dy,

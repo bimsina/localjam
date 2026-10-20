@@ -57,13 +57,14 @@ Future<int> runJoinCommand(ArgResults args) async {
     stderr.writeln(joinUsage);
     return 64;
   }
-  // Either form (§1): the transport speaks the localjam:// one.
+  // Either form (§1); JoinLink.parse also forgives the whitespace and <…>
+  // a pasted link can come with.
   final link = JoinLink.parse(args.rest.single);
   if (link == null) {
     stderr.writeln('join: not a LocalJam join URL: ${args.rest.single}');
     return 64;
   }
-  final joinUri = link.toLocaljamUri();
+  final joinUri = link.toHttpUri();
   final skewPpm = double.tryParse(args['skew-ppm'] as String);
   if (skewPpm == null) {
     stderr.writeln('join: --skew-ppm must be a number');

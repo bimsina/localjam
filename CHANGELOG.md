@@ -4,6 +4,36 @@ Notable changes to LocalJam. Dates are the day the work landed on `main`.
 
 ## Unreleased
 
+### Join from a browser
+
+Best-effort, and built but not yet tested on real phones (Android host,
+iPhone Safari guest): see `docs/design/WEB_GUEST.md`.
+
+- Someone without the app joins from the browser. The host phone serves a
+  small listener page (`apps/localjam_web`) from the port it already uses, so
+  it works with no internet and no install: one person hosts, everyone else
+  scans the QR or opens the link.
+- One join link: the http form (protocol 1.2, below) is what the QR, Share
+  Link, Copy Link and Nearby carry. A phone camera opens it in the browser;
+  the app, `localjam join` and deep links read the same link, and
+  `localjam://` keeps working for "Open in app".
+- A browser guest can join, listen in sync with everyone else (Web Audio,
+  started at the room's shared time, nudged by hand like the app's sync
+  nudge), see who's there and the queue, and play, pause, skip and pick songs
+  when the room's permissions let guests control playback. It cannot add
+  songs and cannot host. Keep the page open: a backgrounded or locked tab may
+  stop.
+- Safari cannot play Ogg Vorbis or Opus: those songs show "Can't play in this
+  browser" for that guest and never hold up the room. Safari also reports no
+  output latency, so Bluetooth listeners there nudge sync by hand.
+- The host's Invite says "No app needed: the link opens in the browser." only
+  while its room is actually serving the page. A build without the page
+  answers the link with a short "install the app" page.
+- The page loads nothing from the internet: fonts and CanvasKit come from the
+  host. `tool/build_web_guest.sh` builds it (through
+  `apps/localjam_web/tool/build.sh`, about 17 MB) into the app's assets; the
+  build output is never committed.
+
 ### Design
 
 - **Identity v4.1** — LocalJam's own look: Apple-inspired ease without

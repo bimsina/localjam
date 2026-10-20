@@ -148,8 +148,9 @@ abstract final class RoomSheetStrings {
   /// (PROTOCOL.md §1.1): someone without the app is not shut out. Never
   /// shown otherwise — a room with no player answers the same link with
   /// "install the app", and this would be a promise it cannot keep.
+  /// The caption above already says to scan, so this says only what is new.
   static const String inviteInBrowser =
-      'Scan to join. No app needed: it opens in the browser.';
+      'No app needed: the link opens in the browser.';
 
   static const String shareLink = 'Share link';
   static const String copyLink = 'Copy link';

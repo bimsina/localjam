@@ -1,7 +1,8 @@
 /// The listener page's slice of the LocalJam design tokens
 /// (docs/design/DESIGN_SPEC_V3.md §2–§3, with the app's current identity
 /// values from `apps/localjam_app/lib/src/design/tokens.dart`, which this
-/// page cannot depend on). Warm paper and charcoal for chrome, raspberry
+/// page cannot depend on). That file is the source of truth: a deliberate
+/// copy, so a token changed there is changed here by hand. Warm paper and charcoal for chrome, raspberry
 /// only on what you can tap, cover art for every other colour.
 ///
 /// One face: Manrope, bundled with the page. The app draws body text in the
@@ -129,17 +130,20 @@ abstract final class Metrics {
   static const double rowMinHeight = 44;
 }
 
-/// Flat avatar colours keyed by a stable id (DESIGN_SPEC_V3 D6), white
-/// initials on each.
+/// Flat avatar colours, white initials on each (D3). A copy of
+/// `JamAvatarPalette.colors` in `apps/localjam_app/lib/src/design/tokens.dart`,
+/// the source of truth, in the same order: a person's face is the colour
+/// their display name hashes to there ([Avatar]), so it must be the same
+/// list here or a browser guest sees everyone in different colours.
 const List<Color> avatarPalette = [
-  Color(0xFF2F6FD6),
-  Color(0xFF5856C9),
-  Color(0xFF9A4FC2),
-  Color(0xFFC24A78),
-  Color(0xFFC9453B),
-  Color(0xFFC46A1C),
-  Color(0xFF3C8A4E),
-  Color(0xFF2E8A8F),
+  Color(0xFFA86048), // terracotta
+  Color(0xFF157E8E), // sea
+  Color(0xFF966B27), // ochre
+  Color(0xFF4A75AD), // slate
+  Color(0xFF6D792F), // olive
+  Color(0xFF756AAC), // indigo
+  Color(0xFF2F815B), // pine
+  Color(0xFF956197), // plum
 ];
 
 /// The page's theme for [brightness].

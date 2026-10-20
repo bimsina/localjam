@@ -95,7 +95,10 @@ class StaticSite {
 
   static const String _octetStream = 'application/octet-stream';
 
-  /// What a Flutter web build contains, plus the usual web suspects.
+  /// What a Flutter web build contains, plus the usual web suspects. Files
+  /// of a page only: a playlist item's MIME is not read from here but from
+  /// `mimeForPath` (localjam_client's `media_mime.dart`, the CLI's `tui.dart`),
+  /// which hosts must agree on because it is part of what an item describes.
   static const Map<String, String> _mimeByExtension = {
     'html': 'text/html; charset=utf-8',
     'htm': 'text/html; charset=utf-8',
