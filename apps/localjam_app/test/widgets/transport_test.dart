@@ -52,8 +52,8 @@ void main() {
       expect(find.bySemanticsLabel('Previous'), findsOneWidget);
 
       await tester.tap(find.byIcon(CupertinoIcons.play_fill));
-      await tester.tap(find.byIcon(CupertinoIcons.forward_fill));
-      await tester.tap(find.byIcon(CupertinoIcons.backward_fill));
+      await tester.tap(find.byIcon(CupertinoIcons.forward_end_fill));
+      await tester.tap(find.byIcon(CupertinoIcons.backward_end_fill));
       expect([play, next, previous], [1, 1, 1]);
     });
 
@@ -226,7 +226,7 @@ void main() {
         ),
       );
       await tester.tap(
-        find.byIcon(CupertinoIcons.forward_fill),
+        find.byIcon(CupertinoIcons.forward_end_fill),
         warnIfMissed: false,
       );
       await tester.tap(find.byIcon(CupertinoIcons.play_fill));

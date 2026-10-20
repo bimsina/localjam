@@ -269,7 +269,7 @@ class JamRoomBar extends StatelessWidget {
                     ),
                   if (next != null && !narrow)
                     _BarButton(
-                      icon: CupertinoIcons.forward_fill,
+                      icon: CupertinoIcons.forward_end_fill,
                       label: JamRoomBarStrings.next,
                       onPressed: () {
                         JamHaptics.skip();

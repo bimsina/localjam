@@ -65,7 +65,9 @@ const Key jamScrubberTrackKey = Key('jam.scrubber.track');
 /// The transparent 44 pt touch area over a [JamScrubber]'s track.
 const Key jamScrubberHitKey = Key('jam.scrubber.hit');
 
-/// The skip glyphs' touch boxes — generous, the way the Music app's are.
+/// The skip glyphs are "previous / next song" (a bar and a triangle), never
+/// the double chevrons of a seek: these buttons change the song. Their
+/// touch boxes are generous, the way the Music app's are.
 const double _kSkipHit = 64;
 
 /// How far the play triangle sits right of the square's centre: its visual
@@ -117,7 +119,7 @@ class JamTransport extends StatelessWidget {
       mainAxisAlignment: MainAxisAlignment.spaceEvenly,
       children: [
         _TransportButton(
-          icon: CupertinoIcons.backward_fill,
+          icon: CupertinoIcons.backward_end_fill,
           hit: _kSkipHit,
           label: JamTransportStrings.previous,
           onPressed: enabled && onPrevious != null
@@ -147,7 +149,7 @@ class JamTransport extends StatelessWidget {
               : null,
         ),
         _TransportButton(
-          icon: CupertinoIcons.forward_fill,
+          icon: CupertinoIcons.forward_end_fill,
           hit: _kSkipHit,
           label: JamTransportStrings.next,
           onPressed: enabled && onNext != null
