@@ -20,6 +20,12 @@ audible seeks. On macOS a joining device settled at **−0.4 ms**.
   link are an ordinary `http://…/join#…` URL; `localjam://join?…` works
   too). Every device carries a persistent, quirky identity ("Silky Puffin")
   so the room knows who is who across sessions.
+- **Join from a browser, no app needed.** The host phone serves a small
+  listener page on the same port, so a phone camera that opens the join link
+  lands in a browser that joins, listens in sync and — when the room allows —
+  controls playback. Browsers are guests only: they cannot add songs or host.
+  Best-effort until it has been tested on real phones; Safari cannot play
+  Ogg Vorbis/Opus. See [`docs/design/WEB_GUEST.md`](docs/design/WEB_GUEST.md).
 - **Permissions that read like a decision, not a form.** Three presets —
   **Open**, **Jam**, **Listen-only** — over a per-capability policy, plus
   co-host promotion, per-peer overrides, and kick. The host validates every
@@ -53,6 +59,7 @@ audible seeks. On macOS a joining device settled at **−0.4 ms**.
 | **Android** | Live-verified on a Pixel 9 Pro emulator (API 36): MediaStore library, foreground-service media card with a working pause round-trip, background playback, process-death recovery. |
 | **macOS** | Live-verified — the app joined a session at −0.4 ms drift. Full format support via `AVAudioEngine`. |
 | **Linux** | **Build-verified** in an Ubuntu 24.04 (arm64) container; plugin glue compiles clean under `-Wall -Werror`. Runtime audio (PulseAudio/ALSA) has not been exercised on real hardware. |
+| **Browser (guest only)** | **Built, pending device testing.** The page the host serves at `/join` (`apps/localjam_web`), checked in headless Chrome against a CLI host. Not yet tried as an iPhone Safari guest of an Android host. |
 | **Windows** | **Build-unverified.** Shares the miniaudio core measured at ≤0.01 ms start error on CoreAudio; the Windows plugin glue has never been compiled. First task on a Windows machine is `flutter build windows`. |
 
 Desktop v1 decodes mp3 / flac / wav / ogg. `m4a`/AAC returns
@@ -96,6 +103,8 @@ apps/
   localjam_cli         headless demo client (simulated playback, telemetry)
   localjam_app         Flutter app (iOS/Android/macOS/Windows/Linux) — thin
                        UI over localjam_client
+  localjam_web         the browser listener page a host serves to guests
+                       without the app (Flutter web, guest only)
 ```
 
 The sync model in one line: the host broadcasts an **anchor**
@@ -157,6 +166,7 @@ cd packages/localjam_client && flutter test   #  91 tests — engines, discovery
 cd packages/localjam_audio  && flutter test   #  13 tests — plugin surface
 cd apps/localjam_cli        && dart test      #  12 tests — headless sync smoke
 cd apps/localjam_app        && flutter test   # 251 tests — screens, widgets, state
+cd apps/localjam_web        && flutter test   #  30 tests — the browser listener page
 ```
 
 607 tests in total, all green, no network required.
@@ -176,6 +186,14 @@ flutter run -d linux
 ```
 
 Two devices on the same network are the point: host on one, join on the other.
+
+The browser listener page is built into the app's assets, never committed:
+
+```sh
+tool/build_web_guest.sh          # before building the app for release
+# or serve it from the CLI host:
+dart run apps/localjam_cli/bin/localjam.dart host --web-dir apps/localjam_app/assets/web <files...>
+```
 
 Regenerating the app icon and launch screen after touching `assets/brand/`:
 
