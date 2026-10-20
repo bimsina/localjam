@@ -9,15 +9,19 @@
 ///   *floats*: inset [JamRadius.sheetFloatingInset] from the window's sides
 ///   and bottom, all four corners [JamRadius.sheetFloating];
 /// - at the **large** detent it is edge-attached with its top corners at
-///   [JamRadius.sheet] (the device's corner) and the page behind *recedes* —
-///   scales back under the status bar, the way a page sheet stacks;
+///   [JamRadius.sheet] (the device's corner);
 /// - on a **wide** window (both sides ≥ [kJamFormSheetBreakpoint]) it is a
 ///   centred *form sheet*, at most [kJamFormSheetMaxSize], all corners
-///   rounded, no grabber, nothing receding.
+///   rounded, no grabber.
 ///
-/// Start a Jam is a task flow, not a content sheet: on phones it is an iOS
-/// page sheet (`CupertinoSheetRoute`, the same recede); on wide windows it
-/// is the same centred form sheet as everything else ([JamFormSheetPage]).
+/// At every detent the page behind stays where it is, dimmed by the
+/// `scrim` — never iOS's card stack, which scaled it back onto a black band
+/// (a black band in light mode too).
+///
+/// Start a Jam is a task flow, not a content sheet: on phones it is a page
+/// sheet (`CupertinoSheetRoute`'s drag and scroll hand-off, over the same
+/// still, dimmed page); on wide windows it is the same centred form sheet
+/// as everything else ([JamFormSheetPage]).
 ///
 /// **The header rule (§10.2).** The leading slot holds *Cancel* — only when
 /// the sheet edits something — or nothing. The trailing slot holds the
@@ -44,8 +48,6 @@ import 'dart:math' as math;
 
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/gestures.dart';
-import 'package:flutter/scheduler.dart';
-import 'package:flutter/services.dart';
 
 import '../design/theme.dart';
 import '../design/tokens.dart';
@@ -117,7 +119,6 @@ class _JamSheetGeometry extends InheritedWidget {
   const _JamSheetGeometry({
     required this.form,
     required this.available,
-    required this.onLargeness,
     required super.child,
   });
 
@@ -127,9 +128,6 @@ class _JamSheetGeometry extends InheritedWidget {
   /// The height a sheet may grow to: under the status bar on a phone, the
   /// form sheet's own height on a wide window.
   final double available;
-
-  /// Told how far between the medium and large detents the sheet is (0–1).
-  final ValueChanged<double>? onLargeness;
 
   static _JamSheetGeometry? maybeOf(BuildContext context) =>
       context.dependOnInheritedWidgetOfExactType<_JamSheetGeometry>();
@@ -625,12 +623,6 @@ class JamSheetSurface extends StatelessWidget {
         final largeness = constraints.hasTightHeight
             ? _largeness(constraints.maxHeight, geometry.available)
             : 0.0;
-        final report = geometry.onLargeness;
-        if (report != null) {
-          SchedulerBinding.instance.addPostFrameCallback(
-            (_) => report(largeness),
-          );
-        }
         final inset = JamRadius.sheetFloatingInset * (1 - largeness);
         final bottomRadius = JamRadius.sheetFloating * (1 - largeness);
         final media = MediaQuery.of(context);
@@ -671,12 +663,9 @@ class JamSheetSurface extends StatelessWidget {
 }
 
 /// The route every LocalJam sheet is presented with (see the library
-/// comment): detents and a floating medium shape on phones, the page behind
-/// receding at the large detent, a centred form sheet on wide windows, drag
-/// to dismiss, the `scrim` barrier.
-///
-/// A [PageRoute] rather than a popup so that the page under it — a go_router
-/// page, the room — takes its [delegatedTransition] and recedes.
+/// comment): detents and a floating medium shape on phones, a centred form
+/// sheet on wide windows, drag to dismiss, the `scrim` barrier over a page
+/// that stays where it is.
 class JamSheetRoute<T> extends PageRoute<T> {
   JamSheetRoute({
     required this.builder,
@@ -699,10 +688,6 @@ class JamSheetRoute<T> extends PageRoute<T> {
 
   final Color _barrierColor;
   final bool _isDismissible;
-
-  /// How far the page behind has receded, 0–1: the sheet's largeness, less
-  /// whatever a dismissing drag has taken back.
-  final ValueNotifier<double> _recede = ValueNotifier<double>(0);
 
   @override
   bool get opaque => false;
@@ -740,7 +725,6 @@ class JamSheetRoute<T> extends PageRoute<T> {
   @override
   void dispose() {
     jamOpenSheets.value = math.max(0, jamOpenSheets.value - 1);
-    _recede.dispose();
     super.dispose();
   }
 
@@ -771,80 +755,6 @@ class JamSheetRoute<T> extends PageRoute<T> {
       child: child,
     );
   }
-
-  @override
-  DelegatedTransitionBuilder? get delegatedTransition =>
-      formSheet ? null : _recedeBehind;
-
-  /// What the page (or sheet) under a large sheet does: scale back under
-  /// the status bar on black, its corners rounding — iOS's card stack.
-  Widget? _recedeBehind(
-    BuildContext context,
-    Animation<double> animation,
-    Animation<double> secondaryAnimation,
-    bool allowSnapshotting,
-    Widget? child,
-  ) {
-    if (child == null) return null;
-    final belowIsSheet = ModalRoute.of(context) is JamSheetRoute;
-    final media = MediaQuery.of(context);
-    final topInset = media.padding.top;
-    final cornerFrom = media.viewPadding.top * 0.9 > 20
-        ? media.viewPadding.top * 0.9
-        : 0.0;
-    return AnimatedBuilder(
-      animation: Listenable.merge([secondaryAnimation, _recede]),
-      child: child,
-      builder: (context, child) {
-        final t =
-            Curves.easeOut.transform(secondaryAnimation.value.clamp(0.0, 1.0)) *
-            _recede.value;
-        if (t <= 0.001) return child!;
-        if (belowIsSheet) {
-          // A sheet under a sheet steps back and peeks out above it.
-          return Transform(
-            alignment: Alignment.topCenter,
-            transform: Matrix4.translationValues(0, -kJamSheetTopInset * t, 0)
-              ..scaleByDouble(1 - 0.06 * t, 1 - 0.06 * t, 1, 1),
-            child: child,
-          );
-        }
-        final radius = cornerFrom + (12 - cornerFrom) * t;
-        final page = Transform(
-          alignment: Alignment.topCenter,
-          transform: Matrix4.translationValues(0, topInset * 0.6 * t, 0)
-            ..scaleByDouble(1 - 0.08 * t, 1 - 0.08 * t, 1, 1),
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(radius),
-            child: child,
-          ),
-        );
-        return Stack(
-          children: [
-            const Positioned.fill(
-              child: ColoredBox(color: JamFixedColors.black),
-            ),
-            page,
-            // The status bar now sits on black, whatever the theme says.
-            if (t > 0.5)
-              Positioned(
-                top: 0,
-                left: 0,
-                right: 0,
-                height: topInset,
-                child: AnnotatedRegion<SystemUiOverlayStyle>(
-                  value: const SystemUiOverlayStyle(
-                    statusBarBrightness: Brightness.dark,
-                    statusBarIconBrightness: Brightness.light,
-                  ),
-                  child: const SizedBox.expand(),
-                ),
-              ),
-          ],
-        );
-      },
-    );
-  }
 }
 
 class _JamSheetPage<T> extends StatefulWidget {
@@ -862,7 +772,6 @@ class _JamSheetPageState<T> extends State<_JamSheetPage<T>>
   double _drag = 0;
   double _dragFrom = 0;
   double _height = 1;
-  double _largeness = 0;
   bool _popped = false;
 
   late final AnimationController _settle = AnimationController(
@@ -884,18 +793,6 @@ class _JamSheetPageState<T> extends State<_JamSheetPage<T>>
 
   void _onSettle() {
     setState(() => _drag = _dragFrom * (1 - _settle.value));
-    _updateRecede();
-  }
-
-  void _onLargeness(double value) {
-    if (!mounted || (value - _largeness).abs() < 0.001) return;
-    _largeness = value;
-    _updateRecede();
-  }
-
-  void _updateRecede() {
-    final pulled = (_drag / math.max(_height, 1)).clamp(0.0, 1.0);
-    widget.route._recede.value = _largeness * (1 - pulled);
   }
 
   void _pop() {
@@ -908,7 +805,6 @@ class _JamSheetPageState<T> extends State<_JamSheetPage<T>>
     if (_popped) return;
     _settle.stop();
     setState(() => _drag = math.max(0, _drag + (details.primaryDelta ?? 0)));
-    _updateRecede();
   }
 
   void _onDragEnd(DragEndDetails details) {
@@ -961,7 +857,6 @@ class _JamSheetPageState<T> extends State<_JamSheetPage<T>>
               child: _JamSheetGeometry(
                 form: true,
                 available: height,
-                onLargeness: null,
                 child: MediaQuery.removePadding(
                   context: context,
                   removeLeft: true,
@@ -989,7 +884,6 @@ class _JamSheetPageState<T> extends State<_JamSheetPage<T>>
               return _JamSheetGeometry(
                 form: false,
                 available: constraints.maxHeight,
-                onLargeness: _onLargeness,
                 child: NotificationListener<DraggableScrollableNotification>(
                   onNotification: _onExtent,
                   child: Transform.translate(

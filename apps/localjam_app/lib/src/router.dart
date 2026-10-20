@@ -208,7 +208,7 @@ GoRouter _buildRouter(
     GoRoute(
       path: '/host',
       // Start a Jam is a task flow (§10.4): on a phone a page sheet that
-      // rises over home while home recedes behind it, with Cancel and Start
+      // rises over home, dimmed and still behind it, with Cancel and Start
       // in its own header; on a wide window (iPad, desktop) a centred form
       // sheet over the dimmed app — never a full-window page with Cancel
       // and Start a thousand points apart.
@@ -247,10 +247,11 @@ GoRouter _buildRouter(
   ],
 );
 
-/// A go_router page that presents its route as an iOS page sheet
-/// ([CupertinoSheetRoute]): the page under it scales back, the sheet keeps a
-/// gap at the top, and a downward drag — on the sheet or on its scroll view
-/// at rest — dismisses it.
+/// A go_router page that presents its route as a page sheet: the sheet
+/// keeps a gap at the top, and a downward drag — on the sheet or on its
+/// scroll view at rest — dismisses it ([CupertinoSheetRoute]'s). The page
+/// under it stays where it is, dimmed by the `scrim` like under every other
+/// sheet ([_JamPageSheetRoute]).
 class _JamSheetPage<T> extends Page<T> {
   const _JamSheetPage({super.key, required this.builder});
 
@@ -260,8 +261,30 @@ class _JamSheetPage<T> extends Page<T> {
   builder;
 
   @override
-  Route<T> createRoute(BuildContext context) =>
-      CupertinoSheetRoute<T>(settings: this, scrollableBuilder: builder);
+  Route<T> createRoute(BuildContext context) => _JamPageSheetRoute<T>(
+    settings: this,
+    scrollableBuilder: builder,
+    scrim: context.jamColors.scrim,
+  );
+}
+
+/// [CupertinoSheetRoute] without iOS's card stack: the page behind is not
+/// scaled back onto a black band (black in light mode too) but stays put
+/// under the app's `scrim`.
+class _JamPageSheetRoute<T> extends CupertinoSheetRoute<T> {
+  _JamPageSheetRoute({
+    super.settings,
+    required super.scrollableBuilder,
+    required this.scrim,
+  });
+
+  final Color scrim;
+
+  @override
+  Color? get barrierColor => scrim;
+
+  @override
+  DelegatedTransitionBuilder? get delegatedTransition => null;
 }
 
 /// The gap between the mini player and a notice floating above it.

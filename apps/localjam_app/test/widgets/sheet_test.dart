@@ -301,12 +301,24 @@ void main() {
         ),
       ),
     );
+    final opener = tester.getRect(find.text('Open'));
     await tester.tap(find.text('Open'));
     await tester.pumpAndSettle();
     final radius = surfaceClip(tester).borderRadius as BorderRadius;
     expect(radius.bottomLeft.x, closeTo(0, 0.1));
     expect(radius.topLeft.x, JamRadius.sheet);
     expect(tester.getRect(find.byType(JamSheetHeader)).left, 0);
+    // The page behind stays where it was, under the scrim — not iOS's card
+    // stack, scaled back onto a black band (in light mode too).
+    expect(tester.getRect(find.text('Open')), opener);
+    expect(
+      find.byWidgetPredicate(
+        (w) => w is ColoredBox && w.color == JamFixedColors.black,
+      ),
+      findsNothing,
+    );
+    final barrier = tester.widget<ModalBarrier>(find.byType(ModalBarrier).last);
+    expect(barrier.color, JamColors.light.scrim);
   });
 
   testWidgets('on a wide window a sheet is a centred form sheet', (
