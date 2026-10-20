@@ -138,7 +138,14 @@ class JamColors extends ThemeExtension<JamColors> {
   Color get tintFilled => _tintFilled ?? tint;
   final Color? _tintFilled;
 
-  /// Warm paper and ink, with raspberry reserved for interaction.
+  /// Warm paper and warm ink (R ≥ G > B, hue 24–28° — the dark theme's
+  /// temperature, R7), with raspberry reserved for interaction.
+  ///
+  /// | Ink | On `background` | On `groupedBackground` | On `fill` |
+  /// |---|---|---|---|
+  /// | label `2A2420` | 14.44 (was 14.38) | 13.36 (13.30) | 12.01 (11.96) |
+  /// | secondaryLabel `6F6761` | 5.23 (5.08) | 4.84 (4.69) | 4.35 (4.22) |
+  /// | tertiaryLabel `82786F` | 4.07 (3.89) | 3.77 (3.60) | 3.39 (3.23) |
   static const JamColors light = JamColors(
     background: Color(0xFFFAF8F5),
     groupedBackground: Color(0xFFF2EFEB),
@@ -148,11 +155,11 @@ class JamColors extends ThemeExtension<JamColors> {
     elevatedGroupedSurface: Color(0xFFFFFEFC),
     fill: Color(0xFFE8E3DE),
     fillSecondary: Color(0xFFF0EBE6),
-    fillPressed: Color(0x102C2529),
-    separator: Color(0x242C2529),
-    label: Color(0xFF292428),
-    secondaryLabel: Color(0xFF71686D),
-    tertiaryLabel: Color(0xFF857A80),
+    fillPressed: Color(0x102A2420),
+    separator: Color(0x242A2420),
+    label: Color(0xFF2A2420),
+    secondaryLabel: Color(0xFF6F6761),
+    tertiaryLabel: Color(0xFF82786F),
     tint: Color(0xFFB82F59),
     tintPressed: Color(0xFF922343),
     tintFill: Color(0xFFF6E3E8),
@@ -160,7 +167,7 @@ class JamColors extends ThemeExtension<JamColors> {
     success: Color(0xFF3E8068),
     warning: Color(0xFFA54C20),
     danger: Color(0xFFB5343A),
-    scrim: Color(0x66211C20),
+    scrim: Color(0x66201C19),
     material: Color(0xF5FAF8F5),
     glass: Color(0x14FFFFFF),
     tintFilled: Color(0xFFB82F59),
@@ -203,9 +210,9 @@ class JamColors extends ThemeExtension<JamColors> {
   /// 50%, the tint and the reds deeper. Every pair is at or above the
   /// normal palette's.
   static final JamColors lightHighContrast = light.copyWith(
-    secondaryLabel: const Color(0xFF5E565B),
-    tertiaryLabel: const Color(0xFF72686E),
-    separator: const Color(0x80292428),
+    secondaryLabel: const Color(0xFF5C544F),
+    tertiaryLabel: const Color(0xFF6F665F),
+    separator: const Color(0x802A2420),
     tint: const Color(0xFFA82450),
     tintPressed: const Color(0xFF8A1D41),
     tintFilled: const Color(0xFFA82450),
