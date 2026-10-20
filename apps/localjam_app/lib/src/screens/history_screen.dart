@@ -392,16 +392,22 @@ class _JamHistoryMarkState extends State<JamHistoryMark> {
 }
 
 /// [record]'s people (everyone but this device) in the one people order
-/// (N7): by name. A record does not say who hosted a jam you joined, so
-/// there is no host to put first; on a jam you hosted, the host is you.
+/// (N7), as the room listed them: the host first — on a jam you joined, the
+/// one its record names ([JamHistoryRecord.hostName]) — then by name. On a
+/// jam you hosted the host is you, so it is name order; so is a joined
+/// jam's record that names no host (an older one, or a host with no name).
 List<String> jamRecordPeople(JamHistoryRecord record) =>
-    jamPeopleInOrder(record.peerNames);
+    jamPeopleInOrder(record.peerNames, host: _recordHost(record));
+
+/// The host among [record]'s people: null on a jam this device hosted.
+String? _recordHost(JamHistoryRecord record) =>
+    record.wasHost ? null : record.hostName;
 
 /// The faces of [record]'s people, coloured as the jam coloured them (D3):
 /// this device ([self]) and everyone the record names, through
-/// [jamPeopleColors] — with this device as the host when it hosted. A
-/// joined jam's record does not say who hosted, so there everyone is in
-/// name order. Parallel to [jamRecordPeople].
+/// [jamPeopleColors] with the jam's host first — this device when it
+/// hosted, else the host the record names — so each face keeps the colour
+/// and the place it had in the room. Parallel to [jamRecordPeople].
 List<Color> jamRecordFaceColors(
   JamHistoryRecord record, {
   required String self,
@@ -420,7 +426,7 @@ Map<String, Color> jamRecordColorsByName(
   return jamPeopleColors([
     if (me.isNotEmpty) me,
     ...record.peerNames,
-  ], host: record.wasHost && me.isNotEmpty ? me : null);
+  ], host: record.wasHost ? (me.isEmpty ? null : me) : record.hostName);
 }
 
 // ---------------------------------------------------------------------------

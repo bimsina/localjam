@@ -13,8 +13,10 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:localjam_app/src/design/theme.dart';
 import 'package:localjam_app/src/design/tokens.dart';
 import 'package:localjam_app/src/screens/history_screen.dart';
+import 'package:localjam_app/src/screens/home_screen.dart';
 import 'package:localjam_app/src/state/app_settings.dart';
 import 'package:localjam_app/src/state/session_controller.dart';
+import 'package:localjam_app/src/util/network.dart';
 import 'package:localjam_app/src/widgets/artwork.dart';
 import 'package:localjam_app/src/widgets/avatar.dart';
 import 'package:localjam_app/src/widgets/buttons.dart';
@@ -44,6 +46,7 @@ JamHistoryRecord _record({
   List<JamHistoryTrack> tracks = const [],
   List<String> peers = const [],
   bool wasHost = true,
+  String? host,
   DateTime? at,
 }) => JamHistoryRecord(
   sessionId: 's_$name',
@@ -52,6 +55,7 @@ JamHistoryRecord _record({
   startedAt: at ?? DateTime.now(),
   updatedAt: at ?? DateTime.now(),
   peerNames: peers,
+  hostName: host,
   tracks: tracks,
 );
 
@@ -252,17 +256,123 @@ void main() {
       room['Mia'],
       room['Theo'],
     ]);
-    // Joined: the record does not say who hosted, so name order alone —
-    // with this device still counted.
+    // Joined: the record names who hosted, so the faces are given out as
+    // the room gave them — the host first, keeping its colour, and first in
+    // the row as in the room.
     final joined = _record(
+      name: 'Van Jam',
+      peers: ['Theo', 'Mia', 'Zoe'],
+      wasHost: false,
+      host: 'Zoe',
+    );
+    final joinedRoom = jamPeopleColors([
+      'Bibek',
+      'Zoe',
+      'Theo',
+      'Mia',
+    ], host: 'Zoe');
+    expect(jamRecordPeople(joined), ['Zoe', 'Mia', 'Theo']);
+    expect(jamRecordFaceColors(joined, self: 'Bibek'), [
+      joinedRoom['Zoe'],
+      joinedRoom['Mia'],
+      joinedRoom['Theo'],
+    ]);
+    expect(jamRecordColorsByName(joined, self: 'Bibek'), joinedRoom);
+    // An older record names no host: name order alone — with this device
+    // still counted.
+    final older = _record(
       name: 'Van Jam',
       peers: ['Theo', 'Mia'],
       wasHost: false,
     );
     final named = jamPeopleColors(['Mia', 'Theo', 'Bibek']);
-    expect(jamRecordFaceColors(joined, self: 'Bibek'), [
+    expect(jamRecordPeople(older), ['Mia', 'Theo']);
+    expect(jamRecordFaceColors(older, self: 'Bibek'), [
       named['Mia'],
       named['Theo'],
+    ]);
+  });
+
+  testWidgets('a jam you joined lists its host first, in the colour the '
+      'room gave them — in Past jams and on its page', (tester) async {
+    final session = testSession();
+    final joined = _record(
+      name: 'Late Shift',
+      peers: ['Mia', 'Amber Fox', 'Zed'],
+      wasHost: false,
+      host: 'Zed',
+    );
+    await pumpHistory(tester, session, records: [joined]);
+
+    final room = jamRecordColorsByName(joined, self: 'Silky Puffin');
+    expect(
+      room,
+      jamPeopleColors(['Silky Puffin', 'Zed', 'Amber Fox', 'Mia'], host: 'Zed'),
+    );
+    void expectHostFirst() {
+      expect(find.text('With Zed, Amber Fox and Mia'), findsOneWidget);
+      final pile = tester.widget<JamAvatarStack>(find.byType(JamAvatarStack));
+      expect(pile.names, ['Zed', 'Amber Fox', 'Mia']);
+      expect(pile.colors, [room['Zed'], room['Amber Fox'], room['Mia']]);
+    }
+
+    expectHostFirst();
+    await tester.tap(find.text('Late Shift'));
+    await tester.pumpAndSettle();
+    expect(find.byType(HistoryDetailScreen), findsOneWidget);
+    expectHostFirst();
+  });
+
+  testWidgets('a jam you hosted lists the others by name: the host was you', (
+    tester,
+  ) async {
+    final session = testSession();
+    await pumpHistory(
+      tester,
+      session,
+      records: [
+        _record(
+          name: 'Our Jam',
+          peers: ['Mia', 'Amber Fox', 'Zed'],
+          // Even a stray host name on a hosted record puts nobody first.
+          host: 'Zed',
+        ),
+      ],
+    );
+    expect(find.text('With Amber Fox, Mia and Zed'), findsOneWidget);
+  });
+
+  testWidgets('Home\'s Recent puts the host first too', (tester) async {
+    final session = testSession();
+    await tester.pumpWidget(
+      JamSession(
+        controller: session,
+        child: MaterialApp(
+          theme: jamLightTheme(),
+          home: HomeScreen(
+            networkReader: () async => const JamNetworkStatus(
+              addresses: ['192.168.1.20'],
+              interface: 'en0',
+            ),
+            loadRecords: () async => [
+              _record(
+                name: 'Late Shift',
+                peers: ['Mia', 'Amber Fox', 'Zed'],
+                wasHost: false,
+                host: 'Zed',
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.byType(JamHistoryRow), findsOneWidget);
+    expect(find.text('With Zed, Amber Fox and Mia'), findsOneWidget);
+    expect(tester.widget<JamAvatarStack>(find.byType(JamAvatarStack)).names, [
+      'Zed',
+      'Amber Fox',
+      'Mia',
     ]);
   });
 

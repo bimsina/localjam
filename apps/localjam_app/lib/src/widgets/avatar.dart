@@ -84,9 +84,9 @@ List<Color> jamAvatarColors(List<String> keys) {
 /// colour on every phone in the jam and on every screen of each. The host
 /// is never the one who moves.
 ///
-/// Without a [host] (a past jam this phone joined: its record does not say
-/// who hosted) everyone is in name order, which differs from the jam only
-/// where the host would have moved someone.
+/// Without a [host] (a past jam whose record names none: an older record,
+/// or a host who shared no name) everyone is in name order, which differs
+/// from the jam only where the host would have moved someone.
 Map<String, Color> jamPeopleColors(Iterable<String> people, {String? host}) {
   final others = {
     for (final name in people)
