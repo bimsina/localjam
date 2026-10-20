@@ -31,13 +31,17 @@ import 'package:localjam_app/src/screens/settings_screen.dart';
 import 'package:localjam_app/src/state/app_settings.dart';
 import 'package:localjam_app/src/state/session_controller.dart';
 import 'package:localjam_app/src/util/network.dart';
+import 'package:localjam_app/src/design/tokens.dart';
 import 'package:localjam_app/src/widgets/diagnostics_sheet.dart';
 import 'package:localjam_app/src/widgets/artwork.dart';
 import 'package:localjam_app/src/widgets/dialogs.dart';
 import 'package:localjam_app/src/widgets/join_link_dialog.dart';
 import 'package:localjam_app/src/widgets/library_sheet.dart';
+import 'package:localjam_app/src/widgets/menu.dart';
+import 'package:localjam_app/src/widgets/notice.dart';
 import 'package:localjam_app/src/widgets/permission_sheet.dart';
 import 'package:localjam_app/src/widgets/room_sheet.dart';
+import 'package:localjam_app/src/widgets/scaffold.dart' show jamBottomBarInset;
 import 'package:localjam_client/localjam_client.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
@@ -517,6 +521,13 @@ void main() {
         HistoryDetailScreen(record: record, forgetRecord: (_) async {}),
       );
       await cap.snap('13-history-detail');
+      await tester.tap(find.byType(JamMenuButton));
+      await cap.snap(
+        '13-history-detail-menu',
+        note: 'A one-row menu: a soft rectangle, never a capsule.',
+      );
+      await tester.tapAt(const Offset(20, 600));
+      await cap.settle();
       await cap.push(
         HistoryDetailScreen(record: joined, forgetRecord: (_) async {}),
       );
@@ -792,18 +803,20 @@ void main() {
       await cap.snap('30-player-empty');
       await tester.tap(find.bySemanticsLabel(JamRoomStrings.queue));
       await cap.snap('31-queue-empty');
-      // The ended page as the room shows it once the jam's name is wired
-      // (the room knows it from the link it joined with), with the mark's
-      // monogram. One capture adds the last cover and the host's face, one
-      // shows a jam with no name.
+      // The ended page as the room shows it: the jam's name and its host's
+      // face (kept by the controller as the jam ended), with the mark's
+      // monogram where no cover was playing. One capture adds the last
+      // cover, one shows a jam with no name.
       const jamName = 'Sunday at home';
       await cap.mount(
         JamSessionEndedView(
           reason: JamSessionEndReason.hostGone,
           jamName: jamName,
+          hostName: 'Bibek',
           // As the room passes it: no way out while the rejoin runs.
           onDone: null,
           onRetry: () {},
+          onScan: () {},
           retrying: true,
         ),
       );
@@ -812,14 +825,53 @@ void main() {
         JamSessionEndedView(
           reason: JamSessionEndReason.hostGone,
           jamName: jamName,
+          hostName: 'Bibek',
           onDone: () {},
           onRetry: () {},
+          onScan: () {},
           error: kJamRejoinFailed,
         ),
       );
       await cap.snap('32-session-retry-failed');
       await tester.pumpWidget(const SizedBox());
       await tester.runAsync(session.leave);
+
+      // Nearby with the jams this phone has been in: Recent draws each one
+      // as Past Jams does — mark, name, people, when.
+      (session.nearbyRooms as ValueNotifier<List<JamNearbyRoom>>).value = [
+        for (final name in ['Mia’s Jam'])
+          JamNearbyRoom(
+            key: name,
+            sessionName: name,
+            joinUri: Uri.parse(
+              'localjam://join?host=192.168.1.14&port=4242&token=recent&name=${Uri.encodeComponent(name)}',
+            ),
+          ),
+      ];
+      await cap.mount(
+        HomeScreen(
+          key: UniqueKey(),
+          networkReader: () async => lan,
+          loadRecords: () async => [record, joined],
+        ),
+      );
+      await cap.snap(
+        '05-nearby-recent',
+        note: 'Recent rows are the Past Jams row.',
+      );
+      // Where the app shell puts a notice on Home: above Start a Jam.
+      final toast = showJamNotice(
+        cap.context,
+        const JamNotice(HomeStrings.badCode, tone: JamNoticeTone.error),
+        margin: const EdgeInsets.all(JamSpace.lg).copyWith(
+          bottom: jamBottomBarInset(0) + JamMetrics.buttonHeight + JamSpace.xxl,
+        ),
+      );
+      await cap.snap('05-nearby-toast', note: 'A notice over Nearby.');
+      toast?.close();
+      await cap.settle();
+      (session.nearbyRooms as ValueNotifier<List<JamNearbyRoom>>).value =
+          const [];
 
       for (final (label, reason, reject) in [
         ('ended', JamSessionEndReason.hostEnded, null),
@@ -836,6 +888,7 @@ void main() {
             reason: reason,
             rejectReason: reject,
             jamName: jamName,
+            hostName: 'Bibek',
             onDone: () {},
             onRetry:
                 reason == JamSessionEndReason.hostGone ||
