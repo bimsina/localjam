@@ -37,7 +37,20 @@
 /// `setMuted` — so the page's "Tap to listen" handler must call one of them
 /// (e.g. `outputLatencyUs()`) inside the gesture. Once running, the context
 /// and the element are never paused by this plugin (later starts come from
-/// the network, with no gesture to unlock them again).
+/// the network, with no gesture to unlock them again), and they live as
+/// long as the page: `dispose` releases the buffer and the node but keeps
+/// both, so a page that leaves one jam and joins another ("Try Again")
+/// plays without a second gesture — iOS Safari would refuse a context
+/// created outside one. Only the browser closing the context (`closed`)
+/// makes the next call build a new one.
+///
+/// Suspension: a context that is suspended or interrupted (iOS: a call, Siri,
+/// another app's audio; the page's "Tap to Resume") comes back with its
+/// clock where it stopped while `performance.now()` ran on, so the output
+/// timestamp's offset jumps by the whole suspension. Every state change
+/// therefore forgets the offset, and the next `playAt` waits (≤ 1 s) for a
+/// freshly confirmed one rather than mapping through the stale one — which
+/// would start the schedule late by the suspension, playing silence.
 library;
 
 import 'dart:async';
@@ -73,18 +86,30 @@ class _Segment {
 /// `currentRouteId`, `dispose`) plus one web-only method, `setMuted
 /// {muted: bool}`, which native sides do not implement (callers catch
 /// `MissingPluginException`). Web-specific behaviour:
-///  * `load {path}` / `probeDuration {path}`: `path` is a URL the page can
-///    `fetch` — a `blob:` URL of bytes it already holds, or a same-origin
-///    `http(s):` URL. Fetch failure or a non-2xx answer → `load_failed`; bytes
-///    the browser cannot decode (Ogg/Opus on Safari) → `unsupported_format`.
+///  * `load {path}` / `probeDuration {path, keep?}`: `path` is a URL the
+///    page can `fetch` — a `blob:` URL of bytes it already holds, or a
+///    same-origin `http(s):` URL. Fetch failure or a non-2xx answer →
+///    `load_failed`; bytes the browser cannot decode (Ogg/Opus on Safari) →
+///    `unsupported_format`; a decode that failed for another reason (the
+///    context closed under it, an allocation failure) → `engine_error`,
+///    which says nothing about the bytes and is worth retrying.
 ///    `probeDuration` decodes the whole file too (the browser offers no
 ///    header-only probe), so it costs a full decode's CPU and transient
-///    memory; it never touches the loaded buffer or playback, and answers
-///    null on any failure. Durations are of the buffer as decoded, i.e.
+///    memory; it never touches the loaded buffer or playback. It answers
+///    null only for bytes `load` would refuse (undecodable, empty, no
+///    frames) and throws the `load_failed`/`engine_error` above when it
+///    could not tell, so a caller can tell "never" from "try again". With
+///    `keep: true` (web-only; native sides ignore it) the decoded buffer is
+///    kept for a `load` of the same URL, which takes it instead of decoding
+///    again: the current track decodes once, not twice, before it plays.
+///    At most one buffer is kept; any `load`, a later kept probe and
+///    `dispose` drop it. Durations are of the buffer as decoded, i.e.
 ///    resampled to the context's rate (within a frame of the file's).
-///  * `playAt`: a past anchor (or one less than [_minLeadSec] ahead of the
-///    render clock) starts [_minLeadSec] ahead with the position advanced
-///    at ×rate, like native's late join. If the context cannot be brought to
+///  * `playAt`: a past anchor (or one less than the minimum lead —
+///    [_minLeadSec], or twice the context's `baseLatency` where that is
+///    longer — ahead of the render clock) starts that far ahead with the
+///    position advanced at ×rate, like native's late join. If the context
+///    cannot be brought to
 ///    `running` within 1 s (no user gesture yet, or iOS refused the audio
 ///    element), it completes WITHOUT playing and emits `interruptionBegan`,
 ///    as native does when the OS refuses audio; `interruptionEnded` follows
@@ -92,7 +117,11 @@ class _Segment {
 ///  * `setRate` changes the live node's `playbackRate` (a resample: pitch
 ///    shifts ~9 cents at the ±0.5 % §5.4 slews, as on desktop).
 ///  * `pause` stops the node (native keeps a paused node; here `playAt`
-///    re-anchors either way). `positionUs` is null unless playing/scheduled.
+///    re-anchors either way). `positionUs` is null unless playing/scheduled;
+///    before a scheduled start it reads the schedule's timeline extrapolated
+///    back to now, clamped at 0 (a start at 10 s due in 2 s reads 8 s).
+///  * `dispose` stops output and drops the buffer (and any kept probe
+///    buffer) but keeps the context and the iOS element (see Autoplay).
 ///  * `outputLatencyUs` = `outputLatency + baseLatency` where reported, else
 ///    0. `currentRouteId` is always null: browsers expose no output identity.
 ///  * Events: `playbackFinished` (the buffer ran out), `interruptionBegan`/
@@ -147,8 +176,18 @@ class LocaljamAudioWeb {
   /// How far ahead of the render clock a start must be scheduled so that
   /// `start(when)` is honoured exactly even when the main thread's view of
   /// `currentTime` is a callback stale (Chrome: ~10 ms; 'playback' latency
-  /// hint and phones: more).
+  /// hint and phones: more). See [_minLead].
   static const double _minLeadSec = 0.05;
+
+  /// The lead for [ctx]: [_minLeadSec], or two render quanta of its
+  /// `baseLatency` where that is longer — Android Chrome's 'playback'
+  /// buffers can exceed 25 ms, and a start inside the renderer's own lead
+  /// lands late with no error to show for it.
+  static double _minLead(web.AudioContext ctx) {
+    final base = _number(ctx, 'baseLatency');
+    if (base == null || !base.isFinite || base <= 0) return _minLeadSec;
+    return math.max(_minLeadSec, 2 * base);
+  }
 
   final StreamController<Object?> _events;
 
@@ -162,6 +201,11 @@ class LocaljamAudioWeb {
 
   web.AudioBuffer? _buffer;
   int _durationUs = 0;
+
+  /// The URL and decode of the latest `probeDuration {keep: true}`, which a
+  /// `load` of that URL takes instead of decoding again.
+  String? _keptUrl;
+  Future<(web.AudioBuffer, int)>? _kept;
   _State _state = _State.idle;
   web.AudioBufferSourceNode? _source;
 
@@ -186,6 +230,11 @@ class LocaljamAudioWeb {
 
   /// Whether this context already had its one wait for a first offset.
   bool _tsWaited = false;
+
+  /// The last offset a mapping went through: what a schedule mapped through
+  /// timestamps falls back on while [_tsOffsetSec] is being re-confirmed
+  /// after a state change.
+  double? _tsLastUsedSec;
 
   /// Whether the current schedule maps through [_tsOffsetSec] (else through
   /// `currentTime`). Fixed per schedule, so the mapping never flips under it.
@@ -325,7 +374,10 @@ class LocaljamAudioWeb {
   }) {
     if (timestamps) {
       _refreshTimestamp(ctx); // Keeps the last good offset when stale.
-      return _tsOffsetSec! + (perfMs + latencyMs) / 1000;
+      // Null only between a state change and the next confirmed reading.
+      final offset = _tsOffsetSec ?? _tsLastUsedSec ?? 0;
+      _tsLastUsedSec = offset;
+      return offset + (perfMs + latencyMs) / 1000;
     }
     return ctx.currentTime + (perfMs - _perfNowMs()) / 1000;
   }
@@ -449,6 +501,12 @@ class LocaljamAudioWeb {
 
   void _onStateChange(web.AudioContext ctx) {
     if (!identical(ctx, _ctx)) return; // A disposed context closing.
+    // Whatever the change, the clock mapping may have moved under it: a
+    // suspension stops the context clock while performance time runs on.
+    // (The state is read now, not per event, so a quick suspend → resume
+    // can arrive as two `running`s: forget on every change, not only on
+    // `suspended`.) The next schedule waits for a fresh offset.
+    _forgetTimestamps();
     switch (ctx.state) {
       case 'running':
         _contextWasRunning = true;
@@ -514,9 +572,18 @@ class LocaljamAudioWeb {
   }
 
   void _resetTimestamps() {
+    _forgetTimestamps();
+    _tsLastContextTime = 0;
+    _tsLastUsedSec = null;
+  }
+
+  /// Drops the offset (and its candidate) and re-arms the one wait for a
+  /// confirmed one, but keeps [_tsLastContextTime]: readings of a context
+  /// clock that has not moved since — a suspended context answers with its
+  /// frozen time — never count.
+  void _forgetTimestamps() {
     _tsOffsetSec = null;
     _tsCandidateSec = null;
-    _tsLastContextTime = 0;
     _tsAcceptedAtMs = 0;
     _tsWaited = false;
   }
@@ -570,24 +637,56 @@ class LocaljamAudioWeb {
       );
     }
     if ((_number(bytes, 'byteLength') ?? 0) <= 0) {
-      throw PlatformException(code: 'load_failed', message: '$url is empty');
+      throw PlatformException(
+        code: 'load_failed',
+        message: '$url is empty',
+        details: _badBytes,
+      );
     }
     final web.AudioBuffer buffer;
     try {
       buffer = await ctx.decodeAudioData(bytes).toDart;
     } catch (error) {
+      if (_isFormatError(ctx, error)) {
+        throw PlatformException(
+          code: 'unsupported_format',
+          message: 'This browser cannot decode $url: $error',
+        );
+      }
       throw PlatformException(
-        code: 'unsupported_format',
-        message: 'This browser cannot decode $url: $error',
+        code: 'engine_error',
+        message: 'Decoding $url failed (not a format problem): $error',
       );
     }
     if (buffer.length <= 0 || !(buffer.sampleRate > 0)) {
       throw PlatformException(
         code: 'load_failed',
         message: '$url contains no audio frames',
+        details: _badBytes,
       );
     }
     return (buffer, (buffer.length * 1e6 / buffer.sampleRate).round());
+  }
+
+  /// `details` of a `load_failed` that is about the bytes themselves (empty,
+  /// no frames): as final as `unsupported_format`.
+  static const String _badBytes = 'bad_bytes';
+
+  /// Whether a `decodeAudioData` rejection says the BYTES cannot be decoded
+  /// here: an `EncodingError` (the spec's answer for undecodable data) or a
+  /// `NotSupportedError`, or a rejection with no error object (older
+  /// Safari). Anything else — an `InvalidStateError` from a context closed
+  /// under the decode, a `RangeError` or another allocation failure, any
+  /// error once the context is closed — says nothing about the format.
+  ///
+  /// Read from the error's text (`"EncodingError: Unable to decode audio
+  /// data"` in Chrome, the same name in Safari and Firefox): a caught
+  /// rejection is an opaque JS value here.
+  static bool _isFormatError(web.AudioContext ctx, Object error) {
+    if (ctx.state == 'closed') return false;
+    if (error is NullRejectionException) return true;
+    final text = '$error';
+    return text.contains('EncodingError') || text.contains('NotSupportedError');
   }
 
   Future<Object?> _load(Object? args) async {
@@ -605,7 +704,9 @@ class LocaljamAudioWeb {
     _durationUs = 0;
     _state = _State.idle;
     _setMediaSessionState('paused');
-    final (buffer, durationUs) = await _fetchAndDecode(_context(), path);
+    final kept = _keptUrl == path ? _kept : null;
+    _dropKept();
+    final (buffer, durationUs) = await _takeKept(kept, path);
     _buffer = buffer;
     _durationUs = durationUs;
     _state = _State.loaded;
@@ -620,12 +721,47 @@ class LocaljamAudioWeb {
         message: 'probeDuration requires {path: String}',
       );
     }
-    try {
-      // Decoding needs a context but not a running one: no unlock here.
-      return (await _fetchAndDecode(_context(), path)).$2;
-    } catch (_) {
-      return null; // Unknown, as on native: a file `load` would refuse.
+    final keep = args is Map && args['keep'] == true;
+    // Decoding needs a context but not a running one: no unlock here.
+    final decode = _fetchAndDecode(_context(), path);
+    if (keep) {
+      _keptUrl = path;
+      _kept = decode;
     }
+    try {
+      return (await decode).$2;
+    } on PlatformException catch (e) {
+      if (identical(_kept, decode)) _dropKept();
+      // As on native, null means a file `load` would refuse; "could not
+      // tell" stays an error.
+      if (_saysBadBytes(e)) return null;
+      rethrow;
+    }
+  }
+
+  /// The kept probe's decode when it succeeded, else one fresh decode of
+  /// [path] — unless the kept one already found the bytes undecodable.
+  Future<(web.AudioBuffer, int)> _takeKept(
+    Future<(web.AudioBuffer, int)>? kept,
+    String path,
+  ) async {
+    if (kept != null) {
+      try {
+        return await kept;
+      } on PlatformException catch (e) {
+        if (_saysBadBytes(e)) rethrow;
+        // A failure that says nothing about the bytes: decode again.
+      }
+    }
+    return _fetchAndDecode(_context(), path);
+  }
+
+  static bool _saysBadBytes(PlatformException e) =>
+      e.code == 'unsupported_format' || e.details == _badBytes;
+
+  void _dropKept() {
+    _keptUrl = null;
+    _kept = null;
   }
 
   Future<Object?> _playAt(Object? args) async {
@@ -688,7 +824,7 @@ class LocaljamAudioWeb {
       timestamps: timestamps,
     );
     var startSec = positionUs / 1e6;
-    final earliest = ctx.currentTime + _minLeadSec;
+    final earliest = ctx.currentTime + _minLead(ctx);
     if (!(when >= earliest)) {
       startSec += (earliest - when) * rate;
       when = earliest;
@@ -761,7 +897,9 @@ class LocaljamAudioWeb {
   /// The media position of the frame due now (µs, clamped to the file),
   /// read from the context clock each call — so a sound card running fast
   /// or slow against `performance.now()` shows up as drift (§5.4). Before a
-  /// scheduled start it reads 0, as on native.
+  /// scheduled start it reads the schedule's timeline extrapolated back to
+  /// now, clamped at 0: a start at 10 s due in 2 s reads 8 s, a start at 0
+  /// reads 0.
   Object? _positionUs() {
     final ctx = _ctx;
     if (_state != _State.playing || ctx == null || _segments.isEmpty) {
@@ -801,7 +939,7 @@ class LocaljamAudioWeb {
     // "now" would land up to a callback after the stale main-thread
     // `currentTime`, misplacing the piece.)
     final last = _segments.last;
-    final at = math.max(ctx.currentTime + _minLeadSec, last.ctxTime);
+    final at = math.max(ctx.currentTime + _minLead(ctx), last.ctxTime);
     source.playbackRate.setValueAtTime(rate.toDouble(), at);
     _segments = [
       // [positionUs] reads "now", which trails the render clock by up to
@@ -830,18 +968,31 @@ class LocaljamAudioWeb {
     return null;
   }
 
+  /// Releases the buffer (its PCM, D7), any kept probe buffer and the node,
+  /// and keeps the context and the iOS element: a user gesture unlocked
+  /// them, and the next engine on this page — a "Try Again", another jam —
+  /// has none to give (see the library docs).
   Object? _dispose() {
     _stopOutput();
     _buffer = null;
     _durationUs = 0;
+    _dropKept();
     _state = _State.idle;
     _interrupted = false;
-    final ctx = _ctx;
-    _dropContext();
-    if (ctx != null) {
-      unawaited(ctx.close().toDart.then((_) {}, onError: (Object _) {}));
-    }
     _setMediaSessionState('none');
     return null;
   }
+
+  /// [_dispose], then closes the context and removes the iOS element, as
+  /// only the browser does otherwise: tests start each case from a fresh
+  /// graph with it.
+  @visibleForTesting
+  Future<void> debugCloseContext() => _serial(() async {
+    _dispose();
+    final ctx = _ctx;
+    _dropContext();
+    if (ctx != null) {
+      await ctx.close().toDart.then((_) {}, onError: (Object _) {});
+    }
+  });
 }

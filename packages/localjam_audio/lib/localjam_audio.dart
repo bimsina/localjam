@@ -284,9 +284,23 @@ class LocaljamAudio {
   /// Does not touch the playback engine, the loaded file, the play state or
   /// the audio session, so it is safe while playing and concurrently. Runs
   /// off the platform's UI thread (header parsing can be O(file) for mp3).
-  Future<int?> probeDurationUs(String filePath) async {
+  ///
+  /// Web: the browser has no header-only probe, so this decodes the whole
+  /// file. Null there means only "bytes [load] would refuse"; a probe that
+  /// could not tell (fetch failed, the decode failed for a reason that is
+  /// not the format) throws `PlatformException` (`load_failed`,
+  /// `engine_error`) instead, so a caller can retry. [keepForLoad] keeps
+  /// the decoded buffer for a following [load] of the same URL, which then
+  /// does not decode again (one buffer kept at most; native ignores it).
+  Future<int?> probeDurationUs(
+    String filePath, {
+    bool keepForLoad = false,
+  }) async {
     try {
-      return await _ch.invokeMethod<int>('probeDuration', {'path': filePath});
+      return await _ch.invokeMethod<int>('probeDuration', {
+        'path': filePath,
+        if (keepForLoad) 'keep': true,
+      });
     } on MissingPluginException {
       return null; // A native side without the method: duration unknown.
     }
@@ -373,7 +387,8 @@ class LocaljamAudio {
   Future<int> outputLatencyUs() async =>
       (await _ch.invokeMethod<int>('outputLatencyUs')) ?? 0;
 
-  /// Releases the native engine.
+  /// Releases the native engine. Web: releases the buffer and the node but
+  /// keeps the page's gesture-unlocked `AudioContext` for the next engine.
   Future<void> dispose() => _ch.invokeMethod<void>('dispose');
 }
 
