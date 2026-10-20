@@ -17,8 +17,10 @@
 /// The join URI never appears as text: `http://…/join#token=…` is machine
 /// text on a page about people. The QR, Share Link and Copy Link all carry
 /// the http form (PROTOCOL.md §1, 1.2) — a phone camera opens it with no app
-/// installed, and the room serves its browser player there — even when this
-/// device joined from a `localjam://` link.
+/// installed, and the room serves its browser player there (§1.1) — even
+/// when this device joined from a `localjam://` link. The host's Invite says
+/// so in a line under the code, and only while its room really has the
+/// player to serve.
 library;
 
 import 'dart:async';
@@ -141,6 +143,13 @@ abstract final class RoomSheetStrings {
   static const String inviteOnHotspot =
       'People join your hotspot first, then scan to join.';
   static String qrLabel(String room) => 'Code to join $room';
+
+  /// Under the host's code while the room serves the browser player
+  /// (PROTOCOL.md §1.1): someone without the app is not shut out. Never
+  /// shown otherwise — a room with no player answers the same link with
+  /// "install the app", and this would be a promise it cannot keep.
+  static const String inviteInBrowser =
+      'Scan to join. No app needed: it opens in the browser.';
 
   static const String shareLink = 'Share link';
   static const String copyLink = 'Copy link';
@@ -993,6 +1002,12 @@ class InvitePanel extends StatelessWidget {
                     ? RoomSheetStrings.inviteOnHotspot
                     : RoomSheetStrings.inviteOnNetwork,
                 roomName: roomName,
+                // Looked up, not required: an Invite pumped on its own
+                // (a test, a capture) just never makes the promise.
+                servesWebPlayer: context
+                    .getInheritedWidgetOfExactType<JamSession>()
+                    ?.notifier
+                    ?.servesWebPlayer,
               ),
             ),
     );
@@ -1044,6 +1059,7 @@ class _Invite extends StatelessWidget {
     required this.joinUri,
     required this.caption,
     required this.roomName,
+    this.servesWebPlayer,
   });
 
   final JamEngine engine;
@@ -1051,6 +1067,11 @@ class _Invite extends StatelessWidget {
   final Uri joinUri;
   final String caption;
   final String roomName;
+
+  /// The host's: whether the room serves the browser player, for the line
+  /// that says so ([RoomSheetStrings.inviteInBrowser]). Null on a guest's
+  /// Invite — a guest cannot know what the host's room serves.
+  final ValueListenable<bool>? servesWebPlayer;
 
   Future<void> _share(BuildContext context) async {
     final session = JamSession.read(context);
@@ -1138,6 +1159,22 @@ class _Invite extends StatelessWidget {
               color: colors.secondaryLabel,
             ),
           ),
+          if (servesWebPlayer case final serves?)
+            ValueListenableBuilder<bool>(
+              valueListenable: serves,
+              builder: (context, serving, _) => !serving
+                  ? const SizedBox.shrink()
+                  : Padding(
+                      padding: const EdgeInsets.only(top: JamSpace.xs),
+                      child: Text(
+                        RoomSheetStrings.inviteInBrowser,
+                        textAlign: TextAlign.center,
+                        style: context.jamFootnote.copyWith(
+                          color: colors.secondaryLabel,
+                        ),
+                      ),
+                    ),
+            ),
           const SizedBox(height: JamSpace.xxl),
           JamButton.filled(
             label: RoomSheetStrings.shareLink,

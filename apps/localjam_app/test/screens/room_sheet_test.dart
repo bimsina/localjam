@@ -14,6 +14,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:localjam_app/src/design/theme.dart';
 import 'package:localjam_app/src/design/tokens.dart';
 import 'package:localjam_app/src/state/session_controller.dart';
+import 'package:localjam_app/src/state/web_guest_bundle.dart';
 import 'package:localjam_app/src/util/format.dart';
 import 'package:localjam_app/src/util/network.dart';
 import 'package:localjam_app/src/widgets/avatar.dart';
@@ -713,6 +714,60 @@ void main() {
     await tester.runAsync(host.leave);
   });
 
+  testWidgets('the host\'s Invite promises a browser player only while the '
+      'room serves one', (tester) async {
+    fakeLan([
+      FakeInterface('en0', ['192.168.77.10']),
+    ]);
+    final player = StaticSite({
+      'index.html': StaticFile.text('<p>', 'text/html; charset=utf-8'),
+    });
+
+    // A build without the player: its rooms answer the link with "install
+    // the app", so the sheet says nothing about a browser.
+    final plain = testSession();
+    await tester.runAsync(
+      () => plain.startHost(sessionName: 'Van Jam', discoverable: false),
+    );
+    await _pump(
+      tester,
+      plain,
+      InvitePanel(engine: plain.engine!, network: JamNetworkStatus.offline),
+    );
+    expect(find.text(RoomSheetStrings.inviteOnNetwork), findsOneWidget);
+    expect(find.text(RoomSheetStrings.inviteInBrowser), findsNothing);
+    await tester.runAsync(plain.leave);
+
+    final host = testSession(webGuest: WebGuestBundle.loaded(player));
+    final guest = await _hostWithGuest(tester, host);
+    expect(host.servesWebPlayer.value, isTrue);
+    await _pump(
+      tester,
+      host,
+      InvitePanel(engine: host.engine!, network: JamNetworkStatus.offline),
+    );
+    expect(find.text(RoomSheetStrings.inviteInBrowser), findsOneWidget);
+    // Under the code, after the caption.
+    expect(
+      tester.getTopLeft(find.text(RoomSheetStrings.inviteInBrowser)).dy,
+      greaterThan(
+        tester.getBottomLeft(find.text(RoomSheetStrings.inviteOnNetwork)).dy,
+      ),
+    );
+
+    // A guest cannot know what the host's room serves: no promise.
+    await _pump(
+      tester,
+      guest,
+      InvitePanel(engine: guest.engine!, network: JamNetworkStatus.offline),
+    );
+    expect(find.text(RoomSheetStrings.inviteOnNetwork), findsOneWidget);
+    expect(find.text(RoomSheetStrings.inviteInBrowser), findsNothing);
+
+    await tester.runAsync(guest.leave);
+    await tester.runAsync(host.leave);
+  });
+
   testWidgets('the Invite sheet shows the jam: its mark with the host\'s '
       'face, its name once, and who else is in it, host first', (tester) async {
     fakeLan([
@@ -951,7 +1006,14 @@ void main() {
     fakeLan([
       FakeInterface('en0', ['192.168.77.10']),
     ]);
-    final host = testSession();
+    // With the browser player, so its line under the code is laid out too.
+    final host = testSession(
+      webGuest: WebGuestBundle.loaded(
+        StaticSite({
+          'index.html': StaticFile.text('<p>', 'text/html; charset=utf-8'),
+        }),
+      ),
+    );
     final guest = await _hostWithGuest(
       tester,
       host,
