@@ -237,10 +237,20 @@ class Capture {
       ? jamDarkTheme(platform: TargetPlatform.iOS)
       : jamLightTheme(platform: TargetPlatform.iOS);
 
+  /// A phone's screen: two physical pixels to the point, so images decode
+  /// at the resolution a device decodes them at, not stretched up from one.
+  static const double pixelRatio = 2;
+
+  /// Sets the window to [size] points at [pixelRatio].
+  void resize(Size size) {
+    this.size = size;
+    tester.view.devicePixelRatio = pixelRatio;
+    tester.view.physicalSize = size * pixelRatio;
+  }
+
   Future<void> mount(Widget page, {bool routed = false}) async {
     await tester.pumpWidget(const SizedBox());
-    tester.view.devicePixelRatio = 1;
-    tester.view.physicalSize = size;
+    resize(size);
     Widget builder(BuildContext context, Widget? child) => MediaQuery(
       data: MediaQuery.of(context).copyWith(
         padding: const EdgeInsets.only(top: 24, bottom: 24),
@@ -340,7 +350,7 @@ class Capture {
     await tester.runAsync(() async {
       final render =
           boundary.currentContext!.findRenderObject()! as RenderRepaintBoundary;
-      final image = await render.toImage(pixelRatio: 2);
+      final image = await render.toImage(pixelRatio: Capture.pixelRatio);
       final data = await image.toByteData(format: ui.ImageByteFormat.png);
       await File(
         '${output.path}/$filename',
@@ -711,7 +721,7 @@ void main() {
       render.markNeedsPaint();
       await tester.pump();
       await tester.runAsync(() async {
-        final image = await render.toImage(pixelRatio: 2);
+        final image = await render.toImage(pixelRatio: Capture.pixelRatio);
         final data = await image.toByteData(format: ui.ImageByteFormat.png);
         final name = '${dark ? 'dark' : 'light'}-22-invite-copied.png';
         await File(
@@ -754,14 +764,11 @@ void main() {
       await cap.snap('25-nearby-mini-player');
       cap.router!.push('/room');
       await cap.settle();
-      cap.size = const Size(1280, 900);
-      tester.view.physicalSize = cap.size;
+      cap.resize(const Size(1280, 900));
       await cap.snap('26-desktop-player');
-      cap.size = const Size(834, 1194);
-      tester.view.physicalSize = cap.size;
+      cap.resize(const Size(834, 1194));
       await cap.snap('27-tablet-player');
-      cap.size = const Size(874, 402);
-      tester.view.physicalSize = cap.size;
+      cap.resize(const Size(874, 402));
       await cap.snap('28-landscape-player');
       cap.size = const Size(375, 812);
       cap.scale = 1.3;
