@@ -19,6 +19,7 @@ import 'package:localjam_app/src/screens/room_screen.dart';
 import 'package:localjam_app/src/screens/session_ended_view.dart';
 import 'package:localjam_app/src/state/session_controller.dart';
 import 'package:localjam_app/src/widgets/buttons.dart';
+import 'package:localjam_app/src/widgets/notice.dart';
 import 'package:localjam_app/src/widgets/nudge_slider.dart';
 import 'package:localjam_app/src/widgets/room_banner.dart';
 import 'package:localjam_app/src/widgets/session_gate.dart';
@@ -721,6 +722,11 @@ void main() {
       final expected = [tracks[0], tracks[2], unimported];
       expect(host.restartArgs?.paths, expected);
 
+      // The notice the failed reopen raised sits over the bottom of this
+      // 600-tall window — over the button, now that the ended page keeps
+      // its mark in one place — until it times out.
+      await tester.pump(kJamNoticeDuration);
+      await tester.pump(const Duration(seconds: 1));
       await tester.tap(find.text(JamRoomStrings.startNew));
       for (var i = 0; i < 10; i++) {
         await _settleReal(tester, 30);
