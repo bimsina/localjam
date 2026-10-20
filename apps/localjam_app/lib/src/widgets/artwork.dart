@@ -315,7 +315,8 @@ class _JamBackdropBuilderState extends State<JamBackdropBuilder> {
 }
 
 /// Paints a [JamBackdrop]: a matte wash from its base colour into charcoal,
-/// cross-fading over [JamDuration.crossfade] when the cover changes.
+/// cross-fading over [JamDuration.crossfade] when the cover changes. It is
+/// opaque throughout, the cross-fade included.
 ///
 /// Paints only. Every colour decision — the representative hue, the
 /// saturation band, the lightness solved for secondary text — is made once,
@@ -357,6 +358,10 @@ class JamBackdropView extends StatelessWidget {
     return Stack(
       fit: StackFit.expand,
       children: [
+        // An opaque floor under the cross-fade. Mid-fade the two washes are
+        // each part-transparent, and together they let the page under the
+        // room — Home's title, its Recent rows — show through (N4).
+        const ColoredBox(color: JamNowPlayingColors.backdropPlaceholder),
         AnimatedSwitcher(
           duration: reduceMotion ? Duration.zero : JamDuration.crossfade,
           switchInCurve: JamCurve.standard,

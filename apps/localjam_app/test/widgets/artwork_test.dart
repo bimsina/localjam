@@ -177,6 +177,37 @@ void main() {
       );
       expect(find.byType(ImageFiltered), findsNothing);
     });
+
+    testWidgets('mid cross-fade it stays opaque: the page under the room '
+        'never shows through (N4)', (tester) async {
+      Future<void> show(String id, Color base) => pumpTile(
+        tester,
+        SizedBox(
+          width: 200,
+          height: 200,
+          child: JamBackdropView(
+            backdrop: JamBackdrop(id: id, base: base),
+          ),
+        ),
+      );
+      await show('a', const Color(0xFF223344));
+      await show('b', const Color(0xFF884422));
+      await tester.pump(const Duration(milliseconds: 300));
+      // Both washes are part-transparent now; an opaque floor sits under
+      // them.
+      expect(find.byType(FadeTransition), findsNWidgets(2));
+      final floor = tester.widget<ColoredBox>(
+        find
+            .descendant(
+              of: find.byType(JamBackdropView),
+              matching: find.byType(ColoredBox),
+            )
+            .first,
+      );
+      expect(floor.color, JamNowPlayingColors.backdropPlaceholder);
+      expect(floor.color.a, 1);
+      await tester.pumpAndSettle();
+    });
   });
 
   testWidgets('under reduced motion the cover does not fly between the mini '
