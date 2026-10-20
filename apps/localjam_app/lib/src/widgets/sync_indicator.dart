@@ -287,8 +287,11 @@ class _JamSyncIndicatorState extends State<JamSyncIndicator> {
   }
 }
 
-/// The words in white, led by a glyph in the tone's colour (trouble only)
-/// or a filling ring (a download).
+/// The words, led by a glyph in the tone's colour (trouble only) or a
+/// filling ring (a download). Routine news ("Getting this song… 35%") is
+/// quiet — the backdrop's secondary white, regular weight — so it does not
+/// compete with the room's name above it; only trouble steps forward in
+/// full white (IR-7).
 class _StatusLineText extends StatelessWidget {
   const _StatusLineText({required this.line, required this.alignment});
 
@@ -298,8 +301,9 @@ class _StatusLineText extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final calm = line.tone == JamStatusTone.calm;
+    final ink = calm ? JamNowPlayingColors.secondary : JamNowPlayingColors.text;
     final style = context.jamFootnote.copyWith(
-      color: JamNowPlayingColors.text,
+      color: ink,
       fontWeight: calm ? FontWeight.w400 : FontWeight.w600,
     );
     final scaler = MediaQuery.textScalerOf(context);
@@ -309,7 +313,7 @@ class _StatusLineText extends StatelessWidget {
         ? CupertinoActivityIndicator.partiallyRevealed(
             radius: scaler.scale(JamIconSize.inline) / 2 - 1,
             progress: progress.clamp(0.0, 1.0),
-            color: JamNowPlayingColors.text,
+            color: ink,
           )
         : icon == null
         ? null

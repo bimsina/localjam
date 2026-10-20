@@ -72,9 +72,8 @@ void main() {
     );
   });
 
-  testWidgets('the words are always white; the glyph carries the tone', (
-    tester,
-  ) async {
+  testWidgets('trouble is white and its glyph carries the tone; routine '
+      'news is quiet', (tester) async {
     await tester.pumpWidget(_host(JamSyncState.catchingUp));
     await tester.pumpAndSettle();
     expect(find.text(JamSyncStrings.catchingUp), findsOneWidget);
@@ -92,12 +91,14 @@ void main() {
     );
     expect(_glyphColor(tester), JamNowPlayingColors.warning);
 
-    // A calm line is words alone: a glyph at this size reads as a dot.
+    // A calm line is words alone (a glyph at this size reads as a dot),
+    // in the backdrop's secondary white: it does not compete with the
+    // room's name above it (IR-7).
     await tester.pumpWidget(_host(JamSyncState.hostAway));
     await tester.pumpAndSettle();
     expect(
       _colorOf(tester, JamSyncStrings.hostAsleep),
-      JamNowPlayingColors.text,
+      JamNowPlayingColors.secondary,
     );
     expect(
       find.descendant(

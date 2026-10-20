@@ -96,8 +96,11 @@ class JamOutputBanner extends StatelessWidget {
 /// One notice: a glyph (or a spinner), a sentence, at most one action.
 ///
 /// White on glass, for the Now Playing backdrop; the action is a small
-/// ivory button, the backdrop's "you can press this". The sentence is never
-/// cut short — it is the whole point — so the notice wraps to a second line
+/// ivory button, the backdrop's "you can press this". It spans the width it
+/// is given — the player's column — with the sentence leading and the
+/// action trailing, so its edges are the cover's and the title's rather
+/// than wherever its words happen to end (CR-15). The sentence is never cut
+/// short — it is the whole point — so the notice wraps to a second line
 /// rather than ellipsising, and at large text sizes the action moves under
 /// it ([kJamBannerStackAboveScale]).
 class JamRoomBanner extends StatelessWidget {
@@ -196,10 +199,9 @@ class JamRoomBanner extends StatelessWidget {
     final Widget content;
     if (!stacked) {
       content = Row(
-        mainAxisSize: MainAxisSize.min,
         children: [
           if (glyph != null) ...[glyph, const SizedBox(width: JamSpace.sm)],
-          Flexible(
+          Expanded(
             child: Padding(
               padding: const EdgeInsets.symmetric(vertical: JamSpace.md),
               child: sentence,
