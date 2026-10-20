@@ -8,10 +8,11 @@
 /// for the jam's page: the mark beside its name, when and who, **Host
 /// Again**, and the songs with who added what — as faces, as in the queue.
 ///
-/// History records carry no artwork bytes — a `JamHistoryTrack` is a
-/// `MediaItem` and a path — so covers are read back out of the files that are
+/// A jam's cover is read back out of its cover song's file while that is
 /// still on this device (a host's sources, a guest's cache), off the UI
-/// isolate, and cached by `artworkId`.
+/// isolate, at full size; failing that, the small picture its record keeps
+/// (`JamHistoryRecord.coverPath`); failing that, the jam's monogram. Reads
+/// are cached.
 library;
 
 import 'dart:async';
@@ -208,11 +209,13 @@ const String kJamNoBreakSpace = '\u00A0';
 // Covers
 // ---------------------------------------------------------------------------
 
-/// Covers read back out of files still on this device, by `artworkId`.
+/// Covers read back out of files still on this device, by `artworkId`, and
+/// the pictures records keep, by path.
 ///
-/// Reads run in `readAudioTags`' short-lived isolate, two at a time, and the
-/// newest [_capacity] results (including "no cover") are kept, so scrolling
-/// back up a long list never reads a file twice.
+/// Song reads run in `readAudioTags`' short-lived isolate; at most two reads
+/// of either kind run at a time, and the newest [_capacity] results
+/// (including "no cover") are kept, so scrolling back up a long list never
+/// reads a file twice.
 abstract final class _HistoryCovers {
   static final LinkedHashMap<String, Future<Uint8List?>> _cache =
       LinkedHashMap<String, Future<Uint8List?>>();
@@ -283,6 +286,33 @@ abstract final class _HistoryCovers {
     return tags.hasArtwork ? tags.artworkBytes : null;
   }
 
+  /// The picture a record keeps at [path] (showing the song [mediaId]), or
+  /// null when it is gone. Keyed by both, so a picture remade for another
+  /// song is read afresh.
+  static Future<Uint8List?> loadStored(String path, String? mediaId) {
+    final key = 'stored:$path#${mediaId ?? ''}';
+    final hit = _cache.remove(key);
+    if (hit != null) {
+      _cache[key] = hit;
+      return hit;
+    }
+    final read = _limited(() => _readStored(path));
+    _cache[key] = read;
+    while (_cache.length > _capacity) {
+      _cache.remove(_cache.keys.first);
+    }
+    return read;
+  }
+
+  static Future<Uint8List?> _readStored(String path) async {
+    try {
+      final bytes = await File(path).readAsBytes();
+      return bytes.isEmpty ? null : bytes;
+    } catch (_) {
+      return null;
+    }
+  }
+
   static Future<T> _limited<T>(Future<T> Function() task) async {
     while (_running >= _parallel) {
       final turn = Completer<void>();
@@ -310,11 +340,16 @@ ImageProvider _coverImage(BuildContext context, Uint8List bytes, double size) {
   return ResizeImage(MemoryImage(bytes), width: px, height: px);
 }
 
-/// A past jam's mark (`JamMark`, D4): the cover of its first song whose
-/// cover is still on this device — one cover, as the jam is drawn on the
-/// Invite sheet and the page it ended on — and with none here, the jam's
-/// monogram rather than a music note (a note is a *song* without art; this
-/// is a jam).
+/// A past jam's mark (`JamMark`, D4): one cover, as the jam is drawn on the
+/// Invite sheet and the page it ended on — its first song with art. Drawn
+/// from the best of, in order:
+///
+/// 1. that song's own file, still on this device (full size);
+/// 2. the small picture the record keeps of it ([coverPath]);
+/// 3. the first other song still here whose file has a cover — what a
+///    record without a picture (an older one) has always shown;
+/// 4. the jam's monogram, rather than a music note (a note is a *song*
+///    without art; this is a jam).
 ///
 /// Used by every past-jam row (Past Jams, Home's Recent) and the detail
 /// page.
@@ -324,11 +359,38 @@ class JamHistoryMark extends StatefulWidget {
     required this.tracks,
     required this.size,
     required this.name,
+    this.coverPath,
+    this.coverMediaId,
     this.semanticLabel,
     this.shadow = false,
   });
 
+  /// The mark of [record]: its songs, name and kept cover.
+  JamHistoryMark.of(
+    JamHistoryRecord record, {
+    Key? key,
+    required double size,
+    String? semanticLabel,
+    bool shadow = false,
+  }) : this(
+         key: key,
+         tracks: record.tracks,
+         size: size,
+         name: record.sessionName,
+         coverPath: record.coverPath,
+         coverMediaId: record.coverMediaId,
+         semanticLabel: semanticLabel,
+         shadow: shadow,
+       );
+
   final List<JamHistoryTrack> tracks;
+
+  /// The picture the record keeps of its cover
+  /// ([JamHistoryRecord.coverPath]), if any.
+  final String? coverPath;
+
+  /// The song that is the jam's cover ([JamHistoryRecord.coverMediaId]).
+  final String? coverMediaId;
 
   /// Edge length of the tile.
   final double size;
@@ -360,15 +422,43 @@ class _JamHistoryMarkState extends State<JamHistoryMark> {
   @override
   void didUpdateWidget(JamHistoryMark old) {
     super.didUpdateWidget(old);
-    if (!identical(old.tracks, widget.tracks)) unawaited(_load());
+    if (!identical(old.tracks, widget.tracks) ||
+        old.coverPath != widget.coverPath ||
+        old.coverMediaId != widget.coverMediaId) {
+      unawaited(_load());
+    }
+  }
+
+  /// Where the cover can come from, best first (see [JamHistoryMark]).
+  Iterable<Future<Uint8List?> Function()> _sources() sync* {
+    final coverId = widget.coverMediaId;
+    final stored = widget.coverPath;
+    JamHistoryTrack? coverSong;
+    if (coverId != null) {
+      for (final track in widget.tracks) {
+        if (track.item.mediaId == coverId) {
+          coverSong = track;
+          break;
+        }
+      }
+    }
+    final song = coverSong;
+    if (song != null && song.item.artworkId != null && song.existsLocally) {
+      yield () => _HistoryCovers.load(song);
+    }
+    if (stored != null) yield () => _HistoryCovers.loadStored(stored, coverId);
+    // In queue order; a file whose tag turns out to hold none hands over
+    // to the next.
+    for (final track in _HistoryCovers.distinct(widget.tracks)) {
+      if (identical(track, song)) continue;
+      yield () => _HistoryCovers.load(track);
+    }
   }
 
   Future<void> _load() async {
     final token = _token = Object();
-    // The first song with a cover, in queue order; a file whose tag turns
-    // out to hold none hands over to the next.
-    for (final track in _HistoryCovers.distinct(widget.tracks)) {
-      final bytes = await _HistoryCovers.load(track);
+    for (final source in _sources()) {
+      final bytes = await source();
       if (!mounted || token != _token) return;
       if (bytes != null && bytes.isNotEmpty) {
         setState(() => _cover = bytes);
@@ -651,11 +741,7 @@ class JamHistoryRow extends StatelessWidget implements JamSelfSeparatingRow {
       ),
       child: Row(
         children: [
-          JamHistoryMark(
-            tracks: record.tracks,
-            size: mark,
-            name: record.sessionName,
-          ),
+          JamHistoryMark.of(record, size: mark),
           const SizedBox(width: kJamRowLeadingGap),
           Expanded(
             child: Column(
@@ -938,10 +1024,9 @@ class _HistoryDetailScreenState extends State<HistoryDetailScreen> {
           // and who was there.
           Row(
             children: [
-              JamHistoryMark(
-                tracks: tracks,
+              JamHistoryMark.of(
+                record,
                 size: JamMarkSize.ended,
-                name: record.sessionName,
                 shadow: true,
                 semanticLabel: HistoryStrings.cover(record.sessionName),
               ),

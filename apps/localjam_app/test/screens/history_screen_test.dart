@@ -7,6 +7,10 @@
 /// is what [HistoryScreen.loadRecords] exists for.
 library;
 
+import 'dart:convert' show ascii;
+import 'dart:io';
+import 'dart:typed_data';
+
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -693,6 +697,125 @@ void main() {
     );
   });
 
+  group('a past jam\'s cover', () {
+    late Directory dir;
+    setUp(() {
+      debugResetJamHistoryCovers();
+      dir = Directory.systemTemp.createTempSync('history_cover');
+    });
+    tearDown(() => dir.deleteSync(recursive: true));
+
+    /// A song file with [cover] as its embedded art.
+    String song(String name, Uint8List cover) {
+      final file = File('${dir.path}/$name.mp3')
+        ..writeAsBytesSync(_mp3WithCover(cover));
+      return file.path;
+    }
+
+    /// The picture a record keeps.
+    String kept(Uint8List cover) {
+      final file = File('${dir.path}/s_jam.cover.png')..writeAsBytesSync(cover);
+      return file.path;
+    }
+
+    JamHistoryRecord jam(List<JamHistoryTrack> tracks, {String? coverPath}) =>
+        JamHistoryRecord(
+          sessionId: 's_jam',
+          sessionName: 'Cover Jam',
+          wasHost: true,
+          startedAt: DateTime.now(),
+          updatedAt: DateTime.now(),
+          tracks: tracks,
+          coverFile: coverPath == null ? null : 's_jam.cover.png',
+          coverMediaId: coverPath == null ? null : 'm_first',
+          coverPath: coverPath,
+        );
+
+    JamHistoryTrack track(String id, {String? art, String? path}) =>
+        JamHistoryTrack(
+          item: MediaItem(
+            mediaId: 'm_$id',
+            kind: MediaKind.audio,
+            name: '$id.mp3',
+            mime: 'audio/mpeg',
+            sizeBytes: 1024,
+            sha256: 'abc',
+            title: id,
+            artworkId: art,
+          ),
+          localPath: path,
+        );
+
+    /// The bytes the row's mark shows once the reads (real file I/O) are
+    /// done, or null for the monogram.
+    Future<Uint8List?> shown(WidgetTester tester) async {
+      for (var i = 0; i < 40; i++) {
+        await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 10)),
+        );
+        await tester.pump();
+        if (tester.widget<JamMark>(find.byType(JamMark)).cover != null) break;
+      }
+      final cover = tester.widget<JamMark>(find.byType(JamMark)).cover;
+      if (cover == null) return null;
+      return ((cover as ResizeImage).imageProvider as MemoryImage).bytes;
+    }
+
+    testWidgets('its first song\'s own file comes first', (tester) async {
+      final record = jam([
+        track('first', art: 'a_1', path: song('first', _png(1))),
+      ], coverPath: kept(_png(2)));
+      await pumpHistory(tester, testSession(), records: [record]);
+      expect(await shown(tester), _png(1));
+    });
+
+    testWidgets('with that song gone, the picture its record kept — not a '
+        'later song\'s', (tester) async {
+      final record = jam([
+        track('first', art: 'a_1', path: '${dir.path}/gone.mp3'),
+        track('later', art: 'a_3', path: song('later', _png(3))),
+      ], coverPath: kept(_png(2)));
+      await pumpHistory(tester, testSession(), records: [record]);
+      expect(await shown(tester), _png(2));
+    });
+
+    testWidgets('with no picture kept, the first song still here with a '
+        'cover, as before', (tester) async {
+      final record = jam([
+        track('first', art: 'a_1', path: '${dir.path}/gone.mp3'),
+        track('later', art: 'a_3', path: song('later', _png(3))),
+      ], coverPath: '${dir.path}/s_jam.cover.png');
+      await pumpHistory(tester, testSession(), records: [record]);
+      expect(await shown(tester), _png(3));
+    });
+
+    testWidgets('with nothing left at all, its monogram', (tester) async {
+      final record = jam([
+        track('first', art: 'a_1', path: '${dir.path}/gone.mp3'),
+      ], coverPath: '${dir.path}/s_jam.cover.png');
+      await pumpHistory(tester, testSession(), records: [record]);
+      expect(await shown(tester), isNull);
+      expect(find.text('C'), findsOneWidget);
+    });
+
+    testWidgets('the jam\'s page draws the kept picture '
+        'too', (tester) async {
+      final record = jam([
+        track('first', art: 'a_1', path: '${dir.path}/gone.mp3'),
+      ], coverPath: kept(_png(2)));
+      await pumpHistory(tester, testSession(), records: [record]);
+      expect(await shown(tester), _png(2));
+      await tester.tap(find.text('Cover Jam'));
+      await tester.pumpAndSettle();
+      final page = find.descendant(
+        of: find.byType(HistoryDetailScreen),
+        matching: find.byType(JamMark),
+      );
+      final cover = tester.widget<JamMark>(page).cover! as ResizeImage;
+      expect((cover.imageProvider as MemoryImage).bytes, _png(2));
+    });
+  });
+
   // Keeps the Cupertino import honest: the detail page is pushed with a
   // Cupertino route (edge swipe back on every platform).
   testWidgets('the detail page is a Cupertino route', (tester) async {
@@ -706,4 +829,42 @@ void main() {
     expect(route, isA<CupertinoPageRoute<bool>>());
     await tester.pumpAndSettle();
   });
+}
+
+/// A 1×1 PNG, told apart by [n] bytes after its end (decoders ignore them).
+Uint8List _png(int n) => Uint8List.fromList([
+  0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, //
+  0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, //
+  0x08, 0x02, 0x00, 0x00, 0x00, 0x90, 0x77, 0x53, 0xDE, 0x00, 0x00, 0x00, //
+  0x0C, 0x49, 0x44, 0x41, 0x54, 0x08, 0xD7, 0x63, 0xF8, 0xCF, 0xC0, 0x00, //
+  0x00, 0x00, 0x03, 0x00, 0x01, 0x9E, 0xDE, 0x81, 0x4A, 0x00, 0x00, 0x00, //
+  0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82, //
+  ...List<int>.filled(n, n),
+]);
+
+/// A minimal MP3 (ID3v2.3 with [cover] as its front cover, then two silent
+/// frames) — what a song file with art looks like to `readAudioTags`.
+Uint8List _mp3WithCover(Uint8List cover) {
+  List<int> be32(int v) => [
+    v >> 24 & 0xFF,
+    v >> 16 & 0xFF,
+    v >> 8 & 0xFF,
+    v & 0xFF,
+  ];
+  List<int> syncsafe(int v) => [
+    v >> 21 & 0x7F,
+    v >> 14 & 0x7F,
+    v >> 7 & 0x7F,
+    v & 0x7F,
+  ];
+  final picture = [0, ...ascii.encode('image/png'), 0, 3, 0, ...cover];
+  final frame = [0xFF, 0xFB, 0x90, 0x64, ...List.filled(413, 0)];
+  return Uint8List.fromList([
+    ...ascii.encode('ID3'), 3, 0, 0, //
+    ...syncsafe(10 + picture.length),
+    ...ascii.encode('APIC'), ...be32(picture.length), 0, 0,
+    ...picture,
+    ...frame,
+    ...frame,
+  ]);
 }
