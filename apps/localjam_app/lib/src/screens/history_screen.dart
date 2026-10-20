@@ -384,7 +384,7 @@ class _JamHistoryMarkState extends State<JamHistoryMark> {
     return JamMark(
       name: widget.name,
       size: widget.size,
-      covers: [if (cover != null) _coverImage(context, cover, widget.size)],
+      cover: cover == null ? null : _coverImage(context, cover, widget.size),
       semanticLabel: widget.semanticLabel,
       shadow: widget.shadow && cover != null,
     );

@@ -173,7 +173,7 @@ void main() {
     // No cover on this device: the jam's own letter, not four ghosts and
     // not the placeholder a song without art gets.
     final mark = tester.widget<JamMark>(find.byType(JamMark));
-    expect(mark.covers, isEmpty);
+    expect(mark.cover, isNull);
     expect(find.text('L'), findsOneWidget);
     expect(
       find.descendant(
@@ -201,9 +201,7 @@ void main() {
     expect(find.text('With Mia, Theo and 2 others'), findsOneWidget);
   });
 
-  testWidgets('a long name is cut before the count is (RB-7)', (
-    tester,
-  ) async {
+  testWidgets('a long name is cut before the count is (RB-7)', (tester) async {
     final session = testSession();
     await pumpHistory(
       tester,

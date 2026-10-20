@@ -38,7 +38,6 @@ import 'package:flutter/material.dart'
         ThemeData;
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter_svg/flutter_svg.dart';
 import 'package:go_router/go_router.dart';
 import 'package:localjam_client/localjam_client.dart';
 
@@ -57,7 +56,7 @@ import '../widgets/buttons.dart';
 import '../widgets/diagnostics_sheet.dart';
 import '../widgets/dialogs.dart';
 import '../widgets/drag_to_dismiss.dart';
-import '../widgets/jam_mark.dart' show JamMark, JamMarkSize;
+import '../widgets/jam_mark.dart' show JamMark, JamMarkSize, jamMarkShape;
 import '../widgets/list.dart' show JamDisclosureChevron;
 import '../widgets/marquee.dart';
 import '../widgets/menu.dart';
@@ -179,6 +178,12 @@ const double _kPausedScale = 0.96;
 
 /// How far the paused cover dims instead, under reduced motion (RB-18).
 const double _kPausedDim = 0.72;
+
+/// The hairline on the Now Playing cover's edge (RB-23).
+const BorderSide _kCoverEdge = BorderSide(
+  color: JamNowPlayingColors.separator,
+  width: 0.5,
+);
 
 class RoomScreen extends StatefulWidget {
   const RoomScreen({super.key});
@@ -497,10 +502,9 @@ class _RoomScreenState extends State<RoomScreen>
             session.restartArgs?.name ??
             (link == null ? null : joinUriName(link)),
         hostName: ended?.hostName,
-        covers: [
-          if (cover != null)
-            ResizeImage(MemoryImage(cover), width: coverPx, height: coverPx),
-        ],
+        cover: cover == null
+            ? null
+            : ResizeImage(MemoryImage(cover), width: coverPx, height: coverPx),
         retrying: rejoining,
         // Only a failed "Try Again" leaves an error behind on this screen;
         // anything older was cleared when the session started.
@@ -2058,24 +2062,27 @@ class _ArtState extends State<_Art> {
           boxShadow: shadow,
         ),
         // A hairline on the cover's edge, so a dark sleeve on its own dark
-        // wash still has one (RB-23).
+        // wash still has one (RB-23) — on the mark's own outline when the
+        // room is empty.
         child: DecoratedBox(
           position: DecorationPosition.foreground,
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(radius),
-            border: Border.all(
-              color: JamNowPlayingColors.separator,
-              width: 0.5,
-            ),
-          ),
+          decoration: empty
+              ? ShapeDecoration(
+                  shape: jamMarkShape(size, radius: radius, side: _kCoverEdge),
+                )
+              : BoxDecoration(
+                  borderRadius: BorderRadius.circular(radius),
+                  border: Border.fromBorderSide(_kCoverEdge),
+                ),
           // Nothing playing: not a song without art (a music note) but the
-          // jam itself — its letter, quietly, on the same see-through ground
+          // jam itself — its mark, quietly, on the same see-through ground
           // as a song with no cover (IR-1).
           child: empty
-              ? _EmptyCover(
+              ? JamMark(
                   name: widget.engine.sessionName,
                   size: size,
                   radius: radius,
+                  onBackdrop: true,
                 )
               : JamArtworkTile(
                   bytes: bytes,
@@ -2127,65 +2134,6 @@ class _ArtState extends State<_Art> {
       selected: true,
       onTap: onTap,
       child: JamPressable(onTap: onTap, child: art),
-    );
-  }
-}
-
-/// The empty room's cover (IR-1): the jam's letter, small and quiet, on the
-/// see-through ground a song without a cover has — the backdrop's own
-/// material rather than an opaque tile, and "ready for music" rather than a
-/// contact card.
-class _EmptyCover extends StatelessWidget {
-  const _EmptyCover({
-    required this.name,
-    required this.size,
-    required this.radius,
-  });
-
-  final String name;
-  final double size;
-  final double radius;
-
-  @override
-  Widget build(BuildContext context) {
-    final letter = JamMark.monogramOf(name);
-    // A mark's proportion up to row size; past it the letter stops growing,
-    // so a phone-wide tile holds a 66 pt letter, not a 150 pt one.
-    final glyph = size <= 96 ? size * 0.46 : (size * 0.2).clamp(44.0, 72.0);
-    return DecoratedBox(
-      // The same ground and corner as a song without a cover.
-      decoration: BoxDecoration(
-        color: JamNowPlayingColors.placeholderGround,
-        borderRadius: BorderRadius.circular(radius),
-      ),
-      child: SizedBox.square(
-        dimension: size,
-        child: Center(
-          child: letter == null
-              ? SvgPicture.asset(
-                  'assets/brand/logo.svg',
-                  width: glyph,
-                  height: glyph,
-                  colorFilter: const ColorFilter.mode(
-                    JamNowPlayingColors.placeholderGlyph,
-                    BlendMode.srcIn,
-                  ),
-                )
-              : Text(
-                  letter,
-                  maxLines: 1,
-                  textScaler: TextScaler.noScaling,
-                  style: TextStyle(
-                    fontFamily: 'Manrope',
-                    fontSize: glyph,
-                    fontWeight: FontWeight.w700,
-                    height: 1,
-                    color: JamNowPlayingColors.placeholderGlyph,
-                    decoration: TextDecoration.none,
-                  ),
-                ),
-        ),
-      ),
     );
   }
 }

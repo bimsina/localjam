@@ -166,7 +166,7 @@ class JamSessionEndedView extends StatelessWidget {
     this.retrying = false,
     this.error,
     this.jamName,
-    this.covers = const [],
+    this.cover,
     this.hostName,
   });
 
@@ -205,8 +205,9 @@ class JamSessionEndedView extends StatelessWidget {
   /// the unnamed copy and a glyph for the reason.
   final String? jamName;
 
-  /// Covers for the jam's mark — the last song's, say. Empty: its monogram.
-  final List<ImageProvider> covers;
+  /// The cover for the jam's mark — the last song's, say. Null: its
+  /// monogram.
+  final ImageProvider? cover;
 
   /// The host's display name, when known: a face on the mark's corner.
   final String? hostName;
@@ -368,9 +369,9 @@ class JamSessionEndedView extends StatelessWidget {
         : JamMark(
             name: jam,
             size: JamMarkSize.ended,
-            covers: covers,
+            cover: cover,
             hostName: hostName,
-            shadow: covers.isNotEmpty,
+            shadow: cover != null,
           );
 
     return AnnotatedRegion<SystemUiOverlayStyle>(

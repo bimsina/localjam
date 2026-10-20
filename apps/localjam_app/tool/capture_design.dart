@@ -974,7 +974,7 @@ void main() {
         JamSessionEndedView(
           reason: JamSessionEndReason.hostEnded,
           jamName: jamName,
-          covers: [MemoryImage(lastCover!)],
+          cover: MemoryImage(lastCover!),
           hostName: 'Mia',
           onDone: () {},
         ),

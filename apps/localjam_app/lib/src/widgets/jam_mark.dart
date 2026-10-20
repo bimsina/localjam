@@ -24,10 +24,10 @@
 /// then.
 ///
 /// ```dart
-/// JamMark(name: room.name, size: JamMarkSize.nearby)                         // Nearby: monogram only
-/// JamMark(name: record.sessionName, size: JamMarkSize.row, covers: [cover])  // Past Jams
-/// JamMark(name: jam, size: JamMarkSize.row, covers: [cover], hostName: host) // Invite, as a guest
-/// JamMark(name: jam, size: 332, onBackdrop: true)                            // the empty room
+/// JamMark(name: room.name, size: JamMarkSize.nearby)                      // Nearby: monogram only
+/// JamMark(name: record.sessionName, size: JamMarkSize.row, cover: cover)  // Past Jams
+/// JamMark(name: jam, size: JamMarkSize.row, cover: cover, hostName: host) // Invite, as a guest
+/// JamMark(name: jam, size: 332, onBackdrop: true)                         // the empty room
 /// ```
 library;
 
@@ -56,13 +56,26 @@ abstract final class JamMarkSize {
 /// The gap a host badge keeps from the tile it is knocked out of.
 const double kJamMarkBadgeGap = 2;
 
+/// A jam mark's outline at [size] — continuous corners at
+/// [JamRadius.artwork] of it, or [radius] — for anything drawn on its edge
+/// (a hairline over the empty room's mark).
+RoundedSuperellipseBorder jamMarkShape(
+  double size, {
+  double? radius,
+  BorderSide side = BorderSide.none,
+}) => RoundedSuperellipseBorder(
+  side: side,
+  borderRadius: BorderRadius.circular(radius ?? JamRadius.artwork(size)),
+);
+
 /// A jam: its cover, or its monogram, with an optional host face.
 class JamMark extends StatelessWidget {
   const JamMark({
     super.key,
     required this.name,
     this.size = JamMarkSize.nearby,
-    this.covers = const [],
+    this.cover,
+    this.radius,
     this.hostName,
     this.hostColor,
     this.semanticLabel,
@@ -77,9 +90,14 @@ class JamMark extends StatelessWidget {
   /// The tile's edge — see [JamMarkSize].
   final double size;
 
-  /// The jam's covers, in queue order: the first is the one shown (R4).
-  /// Empty: the monogram.
-  final List<ImageProvider> covers;
+  /// The jam's one cover (R4): its first song with art. Null: the
+  /// monogram.
+  final ImageProvider? cover;
+
+  /// Overrides the corner radius ([JamRadius.artwork] of [size]) — for a
+  /// mark that morphs with a cover beside it (the empty room's, as the
+  /// queue opens).
+  final double? radius;
 
   /// The host's display name — only for a jam hosted by someone other than
   /// you, on the Invite identity row or the page a jam ends on (R5). Null:
@@ -125,9 +143,7 @@ class JamMark extends StatelessWidget {
   Widget build(BuildContext context) {
     final colors = context.jamColors;
     final reduceMotion = MediaQuery.disableAnimationsOf(context);
-    final shape = RoundedSuperellipseBorder(
-      borderRadius: BorderRadius.circular(JamRadius.artwork(size)),
-    );
+    final shape = jamMarkShape(size, radius: radius);
     final host = hostName?.trim();
     final badge = host == null || host.isEmpty ? null : badgeSizeFor(size);
     final inset = size * 0.08;
@@ -138,22 +154,19 @@ class JamMark extends StatelessWidget {
         ? JamNowPlayingColors.placeholderGround
         : ground ?? colors.fill;
 
-    final Widget content;
-    final Object contentKey;
-    if (covers.isEmpty) {
-      content = _Monogram(name: name, size: size, ink: ink);
-      contentKey = 'monogram';
-    } else {
-      content = Image(
-        image: covers.first,
-        width: size,
-        height: size,
-        fit: BoxFit.cover,
-        gaplessPlayback: true,
-        errorBuilder: (_, _, _) => _Monogram(name: name, size: size, ink: ink),
-      );
-      contentKey = covers.first;
-    }
+    final image = cover;
+    final Widget content = image == null
+        ? _Monogram(name: name, size: size, ink: ink)
+        : Image(
+            image: image,
+            width: size,
+            height: size,
+            fit: BoxFit.cover,
+            gaplessPlayback: true,
+            errorBuilder: (_, _, _) =>
+                _Monogram(name: name, size: size, ink: ink),
+          );
+    final Object contentKey = image ?? 'monogram';
 
     // The badge's knock-out, gap included: cut from the tile and from the
     // shadow under it.

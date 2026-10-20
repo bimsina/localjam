@@ -16,6 +16,7 @@ import 'package:localjam_app/src/widgets/artwork.dart';
 import 'package:localjam_app/src/widgets/buttons.dart';
 import 'package:localjam_app/src/widgets/drag_to_dismiss.dart';
 import 'package:localjam_app/src/widgets/empty_state.dart';
+import 'package:localjam_app/src/widgets/jam_mark.dart';
 import 'package:localjam_app/src/widgets/queue_sheet.dart';
 import 'package:localjam_app/src/widgets/room_sheet.dart';
 import 'package:localjam_app/src/widgets/sheet.dart';
@@ -63,6 +64,17 @@ void main() {
       findsOneWidget,
     );
     expect(find.text(JamRoomStrings.nothingToPlay), findsNothing);
+    // The cover's place holds the jam itself: its one mark, in the
+    // backdrop's quiet see-through material (IR-1).
+    final mark = tester.widget<JamMark>(
+      find.descendant(
+        of: find.byType(RoomScreen),
+        matching: find.byType(JamMark),
+      ),
+    );
+    expect(mark.onBackdrop, isTrue);
+    expect(mark.name, 'Van Jam');
+    expect(mark.cover, isNull);
     // "Nothing Playing" alone, and Add Songs where play will be: on the
     // play square's line (IR-1), the ivory object always the next step.
     expect(find.text(JamRoomStrings.nothingQueuedBody), findsNothing);

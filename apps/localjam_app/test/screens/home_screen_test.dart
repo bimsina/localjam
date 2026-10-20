@@ -216,7 +216,7 @@ void main() {
       findsNothing,
     );
     // No cover travels over mDNS: the monogram, never a guessed picture.
-    expect(marks.every((m) => m.covers.isEmpty), isTrue);
+    expect(marks.every((m) => m.cover == null), isTrue);
     // On the card's surface the mark takes `fill`, which still reads there.
     final colors = tester.element(find.byType(JamMark).first).jamColors;
     expect(marks.every((m) => m.ground == colors.fill), isTrue);
@@ -383,7 +383,7 @@ void main() {
     final mark = tester.widget<JamMark>(find.byType(JamMark));
     expect(mark.name, 'Van Jam');
     expect(mark.size, JamMarkSize.row);
-    expect(mark.covers, isEmpty);
+    expect(mark.cover, isNull);
     expect(find.byIcon(CupertinoIcons.music_note), findsNothing);
     // The jam's name in Manrope, as on Past Jams.
     expect(

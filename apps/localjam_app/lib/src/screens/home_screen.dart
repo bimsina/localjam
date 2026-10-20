@@ -682,10 +682,9 @@ class _LiveJamMarkState extends State<_LiveJamMark> {
     return JamMark(
       name: widget.engine.sessionName,
       size: size,
-      covers: [
-        if (cover != null)
-          ResizeImage(MemoryImage(cover), width: px, height: px),
-      ],
+      cover: cover == null
+          ? null
+          : ResizeImage(MemoryImage(cover), width: px, height: px),
     );
   }
 }

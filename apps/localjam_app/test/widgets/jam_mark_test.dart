@@ -42,7 +42,7 @@ ShapeDecoration _ground(WidgetTester tester) => tester
 
 void main() {
   group('JamMark', () {
-    testWidgets('without covers: a neutral Manrope monogram, a square', (
+    testWidgets('without a cover: a neutral Manrope monogram, a square', (
       tester,
     ) async {
       for (final dark in [false, true]) {
@@ -88,17 +88,13 @@ void main() {
     testWidgets('one cover fills the tile — never a mosaic (R4)', (
       tester,
     ) async {
-      await _pump(tester, JamMark(name: 'Van Jam', covers: [_pixel]));
+      await _pump(tester, JamMark(name: 'Van Jam', cover: _pixel));
       expect(find.byType(Image), findsOneWidget);
       expect(find.text('V'), findsNothing);
 
       await _pump(
         tester,
-        JamMark(
-          name: 'Van Jam',
-          size: JamMarkSize.row,
-          covers: [_pixel, _pixel, _pixel, _pixel],
-        ),
+        JamMark(name: 'Van Jam', size: JamMarkSize.row, cover: _pixel),
       );
       expect(find.byType(Image), findsOneWidget);
       expect(

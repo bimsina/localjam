@@ -1233,7 +1233,7 @@ class _InviteIdentityState extends State<_InviteIdentity> {
     Widget mark(Uint8List? cover) => JamMark(
       name: engine.sessionName,
       size: JamMarkSize.row,
-      covers: [if (cover != null && cover.isNotEmpty) MemoryImage(cover)],
+      cover: cover == null || cover.isEmpty ? null : MemoryImage(cover),
       hostName: guest ? names[1] : null,
       hostColor: guest ? faces[hostId] : null,
     );
