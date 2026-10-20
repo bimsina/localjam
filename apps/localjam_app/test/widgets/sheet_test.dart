@@ -2,6 +2,7 @@
 /// reorder drag from dismissing the sheet out from under the finger.
 library;
 
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:localjam_app/src/design/theme.dart';
@@ -336,7 +337,7 @@ void main() {
     expect(find.byType(JamSheetGrabber), findsNothing);
   });
 
-  testWidgets('the header rule: Cancel + verb, or Done, or one xmark', (
+  testWidgets('the header rule: Cancel + verb, or one trailing Done', (
     tester,
   ) async {
     tester.view.physicalSize = const Size(390, 844);
@@ -380,13 +381,21 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Sheet'), findsNothing);
 
+    // A sheet that only shows something closes the way every other sheet
+    // does (CR-24): one trailing Done, never an xmark.
     await open(const JamSheetActions.close());
     expect(find.byType(JamSheetCloseButton), findsOneWidget);
-    expect(find.text(JamSheetStrings.done), findsNothing);
+    expect(find.text(JamSheetStrings.done), findsOneWidget);
+    expect(find.byIcon(CupertinoIcons.xmark), findsNothing);
     expect(find.text(JamSheetStrings.cancel), findsNothing);
+    final done = tester.getRect(find.text(JamSheetStrings.done));
     await tester.tap(find.byType(JamSheetCloseButton));
     await tester.pumpAndSettle();
     expect(find.text('Sheet'), findsNothing);
+
+    // …in the same place, in the same weight, as a live sheet's Done.
+    await open(const JamSheetActions.done());
+    expect(tester.getRect(find.text(JamSheetStrings.done)), done);
   });
 
   testWidgets('dragging the sheet down dismisses it', (tester) async {
@@ -407,7 +416,7 @@ void main() {
     expect(find.text('People'), findsNothing);
   });
 
-  testWidgets('the glass close button pops the sheet', (tester) async {
+  testWidgets('the closing Done pops the sheet', (tester) async {
     await tester.pumpWidget(
       _host(
         (context) => showJamSheet<void>(
