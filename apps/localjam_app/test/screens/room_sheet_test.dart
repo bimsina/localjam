@@ -788,14 +788,14 @@ void main() {
   });
 
   test('who else is in the jam, said as every screen says it', () {
-    expect(RoomSheetStrings.everyone(const []), 'Just you');
-    expect(RoomSheetStrings.everyone(['Bibek']), 'With Bibek');
+    expect(jamPeopleSummary(const []), 'Just you');
+    expect(jamPeopleSummary(['Bibek']), 'With Bibek');
     expect(
-      RoomSheetStrings.everyone(['Bibek', 'Mia', 'Theo']),
+      jamPeopleSummary(['Bibek', 'Mia', 'Theo']),
       'With Bibek, Mia and Theo',
     );
     expect(
-      RoomSheetStrings.everyone(['Bibek', 'Mia', 'Theo', 'Ana', 'Okon']),
+      jamPeopleSummary(['Bibek', 'Mia', 'Theo', 'Ana', 'Okon']),
       'With Bibek, Mia and 3 others',
     );
   });

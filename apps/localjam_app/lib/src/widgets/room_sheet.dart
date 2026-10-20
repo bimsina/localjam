@@ -138,11 +138,6 @@ abstract final class RoomSheetStrings {
       'People join your hotspot first, then scan to join.';
   static String qrLabel(String room) => 'Code to join $room';
 
-  /// Who else is in the jam, under its name on the Invite sheet — said as
-  /// the room's footer says it, the host first: "Just you", "With Bibek",
-  /// "With Bibek and Mia", "With Bibek, Mia and 3 others" (R9).
-  static String everyone(List<String> others) => jamPeopleSummary(others);
-
   static const String shareLink = 'Share Link';
   static const String copyLink = 'Copy Link';
 
