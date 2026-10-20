@@ -207,6 +207,11 @@ void main() {
         expect(res.headers['cache-control'], 'no-store');
         expect(res.headers['connection'], 'close');
       }
+      // The page is never stored at its bundle path either.
+      final direct = await raw(host, 'GET', '/web/index.html');
+      expect(direct.status, HttpStatus.ok);
+      expect(direct.text, _indexHtml);
+      expect(direct.headers['cache-control'], 'no-store');
     });
 
     test('/web/<path> serves the exact key with its MIME, no-cache and its '
@@ -251,7 +256,29 @@ void main() {
         expect(res.body, isEmpty);
         expect(res.headers['etag'], etag);
         expect(res.headers['cache-control'], 'no-cache');
+        expect(res.headers['connection'], 'close');
       }
+      // A 304 is a head alone (RFC 9110 §15.4.5): no Content-Type (dart:io's
+      // default is text/plain) and no framing, on GET and on HEAD.
+      for (final method in ['GET', 'HEAD']) {
+        final res = await raw(
+          host,
+          method,
+          '/web/main.dart.js',
+          headers: {'If-None-Match': etag},
+        );
+        expect(res.status, HttpStatus.notModified, reason: method);
+        expect(res.body, isEmpty, reason: method);
+        expect(res.headers, isNot(contains('content-type')), reason: method);
+        expect(res.headers, isNot(contains('content-length')), reason: method);
+        expect(
+          res.headers,
+          isNot(contains('transfer-encoding')),
+          reason: method,
+        );
+        expect(res.headers['etag'], etag, reason: method);
+      }
+      await waitFor(() => host.debugOpenConnections == 0, reason: 'released');
       final stale = await raw(
         host,
         'GET',
@@ -434,6 +461,45 @@ void main() {
       await waitFor(() => host.debugOpenConnections == 2, reason: 'held');
       final res = await raw(host, 'GET', '/join');
       expect(res.status, HttpStatus.serviceUnavailable);
+    });
+
+    test('a page response nobody reads loses its connection at the send '
+        'deadline, and the slot with it', () async {
+      // Bigger than every socket buffer between here and the host, so the
+      // host's write cannot finish while the client reads nothing.
+      final big = Uint8List(24 * 1024 * 1024);
+      final host = JamHostServer(
+        sessionName: 'Web',
+        staticSite: StaticSite({
+          'index.html': StaticFile.text(_indexHtml, 'text/html'),
+          'big.js': StaticFile(big, 'text/javascript'),
+        }),
+        maxConnectionsPerRemote: 6,
+        minPageSendTime: const Duration(seconds: 1),
+        minPageBytesPerSecond: 1 << 40, // The floor alone sets the deadline.
+      );
+      await host.start(address: InternetAddress.loopbackIPv4);
+      addTearDown(host.close);
+      for (var i = 0; i < 6; i++) {
+        final s = await Socket.connect(InternetAddress.loopbackIPv4, host.port);
+        addTearDown(s.destroy);
+        // Subscribed but paused: the kernel's buffers fill and stay full.
+        s.listen((_) {}, onError: (Object _) {}).pause();
+        s.add(ascii.encode('GET /web/big.js HTTP/1.1\r\nHost: x\r\n\r\n'));
+        await s.flush();
+      }
+      await waitFor(() => host.debugOpenConnections == 6, reason: 'held');
+      // At the cap: a real guest is refused while they hold their slots.
+      expect(
+        (await raw(host, 'GET', '/join')).status,
+        HttpStatus.serviceUnavailable,
+      );
+      await waitFor(
+        () => host.debugOpenConnections == 0,
+        timeout: const Duration(seconds: 5),
+        reason: 'every stalled response destroyed at its deadline',
+      );
+      expect((await raw(host, 'GET', '/join')).status, HttpStatus.ok);
     });
 
     test('a POST that declares a huge body is answered 405 at once', () async {
