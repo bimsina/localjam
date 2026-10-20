@@ -44,8 +44,7 @@ import '../widgets/scaffold.dart';
 import '../widgets/section.dart';
 import '../widgets/session_gate.dart';
 import '../widgets/wifi_glyph.dart';
-import 'history_screen.dart'
-    show JamHistoryRow, jamRowNameStyle, showJamHistoryDetail;
+import 'history_screen.dart' show JamHistoryRow, showJamHistoryDetail;
 
 /// Every user-facing string on this screen, in one place.
 abstract final class HomeStrings {
@@ -751,7 +750,7 @@ class _RoomRow extends StatelessWidget {
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
                 // A jam's name is a named thing: Manrope, at row scale.
-                style: jamRowNameStyle(context),
+                style: context.jamNameRow,
               ),
               trailing: JamButton.tinted(
                 label: HomeStrings.join,

@@ -45,6 +45,7 @@ import 'avatar.dart';
 import 'peer_row.dart';
 import 'section.dart';
 import 'sheet.dart';
+import 'wifi_glyph.dart';
 
 /// Everything these sheets say out loud.
 abstract final class RoomSheetStrings {
@@ -1021,7 +1022,8 @@ class _NoNetworkInvite extends StatelessWidget {
         Semantics(
           liveRegion: true,
           child: const JamEmptyState(
-            icon: CupertinoIcons.wifi_slash,
+            // The outline Wi‑Fi every other "not on a network" page draws.
+            mark: JamWifiGlyph(slashed: true),
             title: RoomSheetStrings.noNetworkTitle,
             body: RoomSheetStrings.noNetworkDetail,
           ),

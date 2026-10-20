@@ -202,16 +202,6 @@ String jamHistorySummary(
 /// U+00A0: a space a line never breaks at.
 const String kJamNoBreakSpace = '\u00A0';
 
-/// A jam's name in a list row — Nearby, Recent, Past Jams: Manrope 17/22
-/// bold. A named thing at row scale, level with the row's 17 pt text and
-/// its Join; larger Manrope is for page and sheet titles.
-TextStyle jamRowNameStyle(BuildContext context) => context.jamTitle3.copyWith(
-  fontSize: 17,
-  height: 22 / 17,
-  fontWeight: FontWeight.w700,
-  letterSpacing: -0.2,
-);
-
 // ---------------------------------------------------------------------------
 // Covers
 // ---------------------------------------------------------------------------
@@ -662,7 +652,7 @@ class JamHistoryRow extends StatelessWidget implements JamSelfSeparatingRow {
                   record.sessionName,
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
-                  style: jamRowNameStyle(context),
+                  style: context.jamNameRow,
                 ),
                 if (peers.isNotEmpty) ...[
                   const SizedBox(height: JamSpace.xs),
