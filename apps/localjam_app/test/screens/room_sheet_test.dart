@@ -18,6 +18,7 @@ import 'package:localjam_app/src/util/format.dart';
 import 'package:localjam_app/src/util/network.dart';
 import 'package:localjam_app/src/widgets/avatar.dart';
 import 'package:localjam_app/src/widgets/guests_can.dart';
+import 'package:localjam_app/src/widgets/jam_mark.dart';
 import 'package:localjam_app/src/widgets/list.dart';
 import 'package:localjam_app/src/widgets/peer_row.dart';
 import 'package:localjam_app/src/widgets/room_sheet.dart';
@@ -701,6 +702,44 @@ void main() {
     expect(find.text(RoomSheetStrings.copied), findsNothing);
 
     await tester.runAsync(host.leave);
+  });
+
+  testWidgets('the Invite sheet shows the jam: its mark with the host\'s '
+      'face, its name once, and who is in it, host first', (tester) async {
+    fakeLan([
+      FakeInterface('en0', ['192.168.77.10']),
+    ]);
+    final host = testSession();
+    final guest = await _hostWithGuest(tester, host);
+    await _pump(
+      tester,
+      guest,
+      InvitePanel(
+        engine: guest.engine!,
+        network: JamNetworkStatus.offline,
+        selfName: 'Ana',
+      ),
+    );
+    final mark = tester.widget<JamMark>(find.byType(JamMark));
+    expect(mark.name, 'Van Jam');
+    expect(mark.hostName, 'Silky Puffin');
+    expect(find.text('Van Jam'), findsOneWidget);
+    expect(find.text('Silky Puffin and Ana'), findsOneWidget);
+
+    await tester.runAsync(guest.leave);
+    await tester.runAsync(host.leave);
+  });
+
+  test('who is in the jam, said briefly', () {
+    expect(RoomSheetStrings.everyone(['Bibek']), 'Bibek');
+    expect(
+      RoomSheetStrings.everyone(['Bibek', 'Mia', 'Theo']),
+      'Bibek, Mia and Theo',
+    );
+    expect(
+      RoomSheetStrings.everyone(['Bibek', 'Mia', 'Theo', 'Ana', 'Okon']),
+      'Bibek, Mia and 3 others',
+    );
   });
 
   testWidgets('no network, no code — and the code turns up by itself', (

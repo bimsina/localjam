@@ -6,8 +6,9 @@
 ///   People, who is here (with the host's per-guest "•••"), anyone removed,
 ///   what guests can do, the host's Show to People Nearby switch, and the
 ///   way out in its own last section.
-/// * **Invite** ([showInviteSheet], [InvitePanel]) — the QR on a white
-///   plate, the jam's name, Share Link and Copy Link. With no network
+/// * **Invite** ([showInviteSheet], [InvitePanel]) — the jam itself (its
+///   mark: the cover playing and the host's face; its name; who is in it),
+///   the QR on a white plate, Share Link and Copy Link. With no network
 ///   there is no code to show, and the sheet says what would make one.
 ///
 /// Header rule (§10.2): People closes with **Done**; Invite, which edits
@@ -37,6 +38,7 @@ import 'buttons.dart';
 import 'dialogs.dart';
 import 'empty_state.dart';
 import 'guests_can.dart';
+import 'jam_mark.dart';
 import 'list.dart';
 import 'menu.dart';
 import 'avatar.dart';
@@ -132,6 +134,19 @@ abstract final class RoomSheetStrings {
   static const String inviteOnHotspot =
       'People join your hotspot first, then scan to join.';
   static String qrLabel(String room) => 'Code to join $room';
+
+  /// Who is in the jam, under its name on the Invite sheet — the host
+  /// first: "Bibek", "Bibek and Mia", "Bibek, Mia and Theo", "Bibek, Mia
+  /// and 3 others".
+  static String everyone(List<String> names) {
+    if (names.isEmpty) return '';
+    if (names.length == 1) return names.single;
+    if (names.length == 2) return '${names[0]} and ${names[1]}';
+    if (names.length == 3) return '${names[0]}, ${names[1]} and ${names[2]}';
+    final others = names.length - 2;
+    return '${names[0]}, ${names[1]} and $others others';
+  }
+
   static const String shareLink = 'Share Link';
   static const String copyLink = 'Copy Link';
 
@@ -196,7 +211,7 @@ Future<void> showInviteSheet(
   // at large text sizes, where it scrolls rather than clips.
   scrollable: false,
   builder: (_) => SingleChildScrollView(
-    child: InvitePanel(engine: engine, network: network),
+    child: InvitePanel(engine: engine, network: network, selfName: selfName),
   ),
 );
 
@@ -886,10 +901,18 @@ class _LeaveSection extends StatelessWidget {
 ///
 /// A guest invites with the link they joined by: same room, same token.
 class InvitePanel extends StatelessWidget {
-  const InvitePanel({super.key, required this.engine, required this.network});
+  const InvitePanel({
+    super.key,
+    required this.engine,
+    required this.network,
+    this.selfName = '',
+  });
 
   final JamEngine engine;
   final JamNetworkStatus network;
+
+  /// This device's display name: how it is named among the jam's people.
+  final String selfName;
 
   @override
   Widget build(BuildContext context) {
@@ -897,6 +920,8 @@ class InvitePanel extends StatelessWidget {
     final roomName = engine.sessionName;
     if (engine is JamGuestEngine) {
       return _Invite(
+        engine: engine,
+        selfName: selfName,
         joinUri: engine.joinUri,
         caption: RoomSheetStrings.inviteOnNetwork,
         roomName: roomName,
@@ -912,6 +937,8 @@ class InvitePanel extends StatelessWidget {
               host,
               host.joinUriListenable,
               (context, joinUri) => _Invite(
+                engine: host,
+                selfName: selfName,
                 joinUri: joinUri,
                 caption: network.isHotspotHost
                     ? RoomSheetStrings.inviteOnHotspot
@@ -946,14 +973,18 @@ class _NoNetworkInvite extends StatelessWidget {
   );
 }
 
-/// The code, the room's name, and the two ways to send the link.
+/// The jam, the code, and the two ways to send the link.
 class _Invite extends StatelessWidget {
   const _Invite({
+    required this.engine,
+    required this.selfName,
     required this.joinUri,
     required this.caption,
     required this.roomName,
   });
 
+  final JamEngine engine;
+  final String selfName;
   final Uri joinUri;
   final String caption;
   final String roomName;
@@ -994,6 +1025,15 @@ class _Invite extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
+          // What is being shared, as the jam looks everywhere else (D4):
+          // on the code's own width, so the two read as one card's worth.
+          Center(
+            child: SizedBox(
+              width: _qrSize + _platePadding * 2,
+              child: _InviteIdentity(engine: engine, selfName: selfName),
+            ),
+          ),
+          const SizedBox(height: JamSpace.xl),
           Center(
             child: Semantics(
               image: true,
@@ -1031,15 +1071,7 @@ class _Invite extends StatelessWidget {
               ),
             ),
           ),
-          const SizedBox(height: JamSpace.xl),
-          Text(
-            roomName,
-            textAlign: TextAlign.center,
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-            style: context.jamHeadline,
-          ),
-          const SizedBox(height: JamSpace.xs),
+          const SizedBox(height: JamSpace.md),
           Text(
             caption,
             textAlign: TextAlign.center,
@@ -1069,6 +1101,125 @@ class _Invite extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// The jam on the Invite sheet: its mark (the cover that is playing, the
+/// host's face on its corner), its name in Manrope, and who is in it — the
+/// same object a guest saw on Nearby and will see in Past Jams.
+///
+/// Follows the room while it lives — a new song, someone who just scanned
+/// in — and reads it once, without subscribing, after it ended.
+class _InviteIdentity extends StatefulWidget {
+  const _InviteIdentity({required this.engine, required this.selfName});
+
+  final JamEngine engine;
+  final String selfName;
+
+  @override
+  State<_InviteIdentity> createState() => _InviteIdentityState();
+}
+
+class _InviteIdentityState extends State<_InviteIdentity> {
+  final List<StreamSubscription<Object?>> _subs = [];
+  String? _coverId;
+  Future<Uint8List?>? _cover;
+
+  @override
+  void initState() {
+    super.initState();
+    final engine = widget.engine;
+    if (engine.sessionEnded.value != null) return;
+    void refresh(Object? _) {
+      if (mounted) setState(() {});
+    }
+
+    _subs.add(engine.states.listen(refresh));
+    if (engine is JamGuestEngine) {
+      _subs.add(engine.peerEvents.listen(refresh));
+    } else if (engine is JamHostEngine) {
+      _subs.add(engine.events.listen(refresh));
+    }
+  }
+
+  @override
+  void dispose() {
+    for (final sub in _subs) {
+      unawaited(sub.cancel());
+    }
+    super.dispose();
+  }
+
+  Future<Uint8List?>? _coverFor(MediaItem? item) {
+    final id = item?.artworkId;
+    if (id != _coverId) {
+      _coverId = id;
+      _cover = id == null ? null : widget.engine.artworkFor(item!);
+    }
+    return _cover;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final engine = widget.engine;
+    final colors = context.jamColors;
+    final names = jamRosterNames(engine, selfName: widget.selfName);
+    final faces = jamRosterColors(engine, selfName: widget.selfName);
+    final guest = engine is JamGuestEngine;
+    final hostName = names[guest ? 1 : 0];
+    final hostId = guest
+        ? (engine.hostPeer?.peerId ?? JamPermissions.hostPeerId)
+        : engine.selfPeerId;
+    // The host first: it is their jam a guest is being asked into.
+    final people = [
+      hostName,
+      for (final n in names)
+        if (n != hostName) n,
+    ];
+
+    Widget mark(Uint8List? cover) => JamMark(
+      name: engine.sessionName,
+      size: JamMarkSize.row,
+      covers: [if (cover != null && cover.isNotEmpty) MemoryImage(cover)],
+      hostName: hostName,
+      hostColor: faces[hostId],
+    );
+    final future = _coverFor(engine.currentItem);
+
+    return Row(
+      children: [
+        if (future == null)
+          mark(null)
+        else
+          FutureBuilder<Uint8List?>(
+            future: future,
+            builder: (context, snapshot) => mark(snapshot.data),
+          ),
+        const SizedBox(width: JamSpace.md),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                engine.sessionName,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: context.jamTitle3,
+              ),
+              Text(
+                RoomSheetStrings.everyone(people),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: context.jamSubheadline.copyWith(
+                  color: colors.secondaryLabel,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
     );
   }
 }
