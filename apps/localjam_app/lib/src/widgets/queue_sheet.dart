@@ -5,9 +5,9 @@
 /// One implementation for host and guest, capability-gated: "Add Songs"
 /// only with `addTracks`, drag handles only with `editQueue`, swipe-to-remove
 /// and the long-press menu (Play Next, Remove) per what the room allows.
-/// Every row says who put it on — their face and name, "● Mia · 3:42" —
-/// because that is most of what makes a shared queue feel like a room
-/// rather than a playlist.
+/// A friend's song wears their face at the row's end (R3) — never your own
+/// on yours — because that is most of what makes a shared queue feel like a
+/// room rather than a playlist.
 ///
 /// It lives on the immersive backdrop, so it paints in the fixed
 /// [JamNowPlayingColors] whatever the app theme.
@@ -31,7 +31,7 @@ import 'list.dart' show JamAddSongsRow;
 import 'menu.dart';
 import 'pressable.dart';
 import 'progress.dart';
-import 'room_sheet.dart' show jamRosterColors;
+import 'room_sheet.dart' show jamRosterColors, jamRosterNamesById;
 import 'swipe_action.dart';
 import 'track_row.dart';
 
@@ -242,8 +242,10 @@ class _QueuePanelState extends State<QueuePanel> {
     final currentId = _engine.snapshot.mediaId;
     final guest = _engine is JamGuestEngine ? _engine as JamGuestEngine : null;
     final pad = widget.horizontalPadding;
-    // Each credit wears its adder's face, in the jam's colours (D3).
+    // Each credit wears its adder's face, in the jam's colours (D3), and
+    // their name as the roster says it (two Sams told apart).
     final faces = jamRosterColors(_engine, selfName: widget.selfName);
+    final names = jamRosterNamesById(_engine, selfName: widget.selfName);
 
     // Up Next is the order the room will play, not the order the queue is
     // stored in: once the room has wrapped (skipping and the end policy
@@ -265,7 +267,7 @@ class _QueuePanelState extends State<QueuePanel> {
         engine: _engine,
         item: item,
         faces: faces,
-        selfName: widget.selfName,
+        names: names,
         horizontalPadding: pad,
         animateIn: fresh.contains(item.mediaId),
         dragIndex: dragIndex,
@@ -321,22 +323,22 @@ class _QueuePanelState extends State<QueuePanel> {
         if (widget.showHeader)
           Padding(
             padding: EdgeInsets.fromLTRB(pad, 0, pad, JamSpace.xs),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.baseline,
-              textBaseline: TextBaseline.alphabetic,
+            // The count beside the heading, or under it when the text is
+            // too large for both on one line — never the heading cut to
+            // "Up…" to make room for it.
+            child: Wrap(
+              alignment: WrapAlignment.spaceBetween,
+              crossAxisAlignment: WrapCrossAlignment.end,
+              spacing: JamSpace.sm,
               children: [
-                Expanded(
-                  child: Semantics(
-                    header: true,
-                    // A list's heading, in the heading face — the same as
-                    // every prominent section header in the app (SY-8).
-                    child: Text(
-                      QueueSheetStrings.title,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: context.jamTitle3.copyWith(
-                        color: JamNowPlayingColors.text,
-                      ),
+                Semantics(
+                  header: true,
+                  // A list's heading, in the heading face — the same as
+                  // every prominent section header in the app (SY-8).
+                  child: Text(
+                    QueueSheetStrings.title,
+                    style: context.jamTitle3.copyWith(
+                      color: JamNowPlayingColors.text,
                     ),
                   ),
                 ),
@@ -591,7 +593,7 @@ class _QueueRow extends StatelessWidget {
     required this.engine,
     required this.item,
     required this.faces,
-    required this.selfName,
+    required this.names,
     required this.artwork,
     required this.horizontalPadding,
     required this.animateIn,
@@ -608,7 +610,9 @@ class _QueueRow extends StatelessWidget {
 
   /// The jam's face colours by peer id.
   final Map<String, Color> faces;
-  final String selfName;
+
+  /// Everyone in the jam by peer id, as the roster names them.
+  final Map<String, String> names;
   final Future<Uint8List?>? artwork;
   final double horizontalPadding;
   final bool animateIn;
@@ -656,13 +660,14 @@ class _QueueRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final addedBy = jamAddedByLabel(engine, item);
+    final label = jamAddedByLabel(engine, item);
     final adderId = item.addedBy;
-    // A face only for someone with a name: "Guest" stays in words.
-    final face =
-        addedBy == null || addedBy == kJamUnnamedPeer || adderId == null
-        ? null
-        : faces[adderId];
+    final mine = adderId != null && adderId == engine.selfPeerId;
+    // A face only for someone else with a name (R3): "Guest" is not a face,
+    // and your own songs carry no credit.
+    final named = label != null && label != kJamUnnamedPeer && !mine;
+    final addedBy = named ? (names[adderId] ?? label) : label;
+    final face = named ? faces[adderId] : null;
     final guest = engine is JamGuestEngine ? engine as JamGuestEngine : null;
     final prefetch = guest?.prefetchStates.value[item.mediaId];
     final fetching = prefetch?.phase == JamPrefetchPhase.fetching;
@@ -713,9 +718,10 @@ class _QueueRow extends StatelessWidget {
             item.artworkId != null &&
             snapshot.connectionState != ConnectionState.done,
         addedByName: addedBy,
-        addedByYou: adderId != null && adderId == engine.selfPeerId,
+        addedByYou: mine,
         addedByColor: face,
-        addedByFaceName: adderId == engine.selfPeerId ? selfName : null,
+        // Faces in one column down the list, whoever added what.
+        reserveCredit: true,
         duration: item.durationUs == null
             ? null
             : Duration(microseconds: item.durationUs!),

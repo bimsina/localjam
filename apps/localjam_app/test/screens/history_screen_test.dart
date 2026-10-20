@@ -262,9 +262,11 @@ void main() {
     // No rule above the first song: the one hairline left is the separator
     // between the two rows.
     expect(find.byType(JamHairline), findsOneWidget);
-    expect(find.text('Added by Neon Walrus · 3:42'), findsOneWidget);
-    await tester.scrollUntilVisible(find.text('Added by you · 3:00'), 80);
-    expect(find.text('Added by you · 3:00'), findsOneWidget);
+    // Song rows are two lines (R3): the artist and the length; a credit is
+    // a face, and only for someone else's song.
+    expect(find.text('Perla · 3:42'), findsOneWidget);
+    await tester.scrollUntilVisible(find.text('3:00'), 80);
+    expect(find.text('3:00'), findsOneWidget);
   });
 
   testWidgets('a record whose files are gone cannot be re-hosted', (
