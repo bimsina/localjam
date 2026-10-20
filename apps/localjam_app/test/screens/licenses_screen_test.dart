@@ -37,6 +37,22 @@ void main() {
     );
   });
 
+  test('a rule drawn in dashes becomes a hairline, and its title stays', () {
+    const ofl =
+        '------------------------------------------------------------ '
+        'SIL OPEN FONT LICENSE Version 1.1 - 26 February 2007 '
+        '------------------------------------------------------------';
+    expect(jamLicenseHasRule(ofl), isTrue);
+    expect(
+      jamLicenseWithoutRules(ofl),
+      'SIL OPEN FONT LICENSE Version 1.1 - 26 February 2007',
+    );
+    expect(jamLicenseWithoutRules('=========='), isEmpty);
+    // A dash in running text is text.
+    expect(jamLicenseHasRule('Version 1.1 - 26 February 2007'), isFalse);
+    expect(jamLicenseHasRule('in part or in whole -- any of'), isFalse);
+  });
+
   test('the section header is sentence case', () {
     expect(LicensesStrings.packages, 'Open-source software');
   });

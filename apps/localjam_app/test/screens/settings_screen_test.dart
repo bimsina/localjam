@@ -1,5 +1,5 @@
-/// Settings is three inset groups and nothing else: who you are, how it
-/// looks, and where it came from.
+/// Settings is three groups and nothing else: who you are, how it looks,
+/// and where it came from — on the same paper as Nearby.
 library;
 
 import 'package:flutter/cupertino.dart';
@@ -13,6 +13,9 @@ import 'package:localjam_app/src/state/app_settings.dart';
 import 'package:localjam_app/src/state/session_controller.dart';
 import 'package:localjam_app/src/widgets/avatar.dart';
 import 'package:localjam_app/src/widgets/list.dart';
+import 'package:localjam_app/src/widgets/scaffold.dart';
+import 'package:localjam_app/src/widgets/section.dart';
+import 'package:localjam_app/src/widgets/switch.dart';
 
 import '../harness.dart';
 
@@ -69,7 +72,7 @@ void main() {
     final pane = tester.getRect(find.byType(SettingsScreen));
     final row = tester.getRect(
       find.ancestor(
-        of: find.text(SettingsStrings.system),
+        of: find.text(SettingsStrings.version),
         matching: find.byType(JamRow),
       ),
     );
@@ -118,10 +121,12 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('appearance is three plain checkmark rows', (tester) async {
+  testWidgets('appearance is one segmented control, not a section of '
+      'checkmark rows', (tester) async {
     final session = testSession();
     final settings = await pumpSettings(tester, session);
 
+    expect(find.byType(JamSegmentedControl<ThemeMode>), findsOneWidget);
     for (final label in [
       SettingsStrings.system,
       SettingsStrings.light,
@@ -129,19 +134,60 @@ void main() {
     ]) {
       expect(find.text(label), findsOneWidget);
     }
-    // No preview thumbnails, no radio circles: one checkmark on the choice.
-    bool checked(String label) =>
-        tester.widget<JamRow>(find.widgetWithText(JamRow, label)).checked;
+    // No checkmark rows left over.
+    expect(find.byIcon(CupertinoIcons.checkmark_alt), findsNothing);
+    ThemeMode? selected() => tester
+        .widget<JamSegmentedControl<ThemeMode>>(
+          find.byType(JamSegmentedControl<ThemeMode>),
+        )
+        .groupValue;
     expect(settings.themeMode, ThemeMode.system);
-    expect(checked(SettingsStrings.system), isTrue);
-    expect(find.byIcon(CupertinoIcons.checkmark_alt), findsOneWidget);
+    expect(selected(), ThemeMode.system);
+    // Each choice is announced as a selectable button inside "Appearance".
+    expect(
+      tester.getSemantics(find.text(SettingsStrings.system)),
+      matchesSemantics(
+        label: SettingsStrings.system,
+        isButton: true,
+        hasSelectedState: true,
+        isSelected: true,
+        isInMutuallyExclusiveGroup: true,
+        hasTapAction: true,
+        hasFocusAction: true,
+        isFocusable: true,
+      ),
+    );
 
     await tester.tap(find.text(SettingsStrings.dark));
     await tester.pumpAndSettle();
     expect(settings.themeMode, ThemeMode.dark);
-    expect(checked(SettingsStrings.dark), isTrue);
-    expect(checked(SettingsStrings.system), isFalse);
-    expect(find.byIcon(CupertinoIcons.checkmark_alt), findsOneWidget);
+    expect(selected(), ThemeMode.dark);
+  });
+
+  testWidgets('Source Code has one line under it, not two', (tester) async {
+    // SU-4: the row sits inside an in-place confirmation, so the section
+    // draws the line under it — and the row used to draw a second.
+    final session = testSession();
+    await pumpSettings(tester, session);
+    final row = find.ancestor(
+      of: find.text(SettingsStrings.openSource),
+      matching: find.byType(JamRow),
+    );
+    expect(tester.widget<JamRow>(row).separator, isFalse);
+    expect(
+      find.descendant(of: row, matching: find.byType(JamHairline)),
+      findsNothing,
+    );
+  });
+
+  testWidgets('the blocks sit on the page’s paper, edged like Nearby’s '
+      'cards', (tester) async {
+    final session = testSession();
+    await pumpSettings(tester, session);
+    final scaffold = tester.widget<JamScaffold>(find.byType(JamScaffold));
+    expect(scaffold.grouped, isFalse);
+    final sections = tester.widgetList<JamSection>(find.byType(JamSection));
+    expect(sections.where((s) => s.bordered), hasLength(2));
   });
 
   testWidgets('the licences page opens', (tester) async {
