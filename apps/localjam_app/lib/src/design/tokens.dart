@@ -655,7 +655,7 @@ abstract final class JamMetrics {
 /// | Toast, player banner | 16 ([notice]) |
 /// | Mini player | 20 ([miniPlayer]) |
 /// | Play square (continuous corners) | 28 ([playSquare]) |
-/// | Inset-grouped section | 20 (never more than half a lone row: see [sectionFor]) |
+/// | Inset-grouped section | 20 (a lone row: 12 — see [sectionFor]) |
 /// | Sheet, edge-attached / floating | 38 |
 /// | Alert | 34 |
 /// | Pull-down menu | 22 |
@@ -707,11 +707,20 @@ abstract final class JamRadius {
   static const double section = 20;
 
   /// The section radius for a block [height] tall: [section], but never
-  /// so round that a single 44 row turns into a pill.
-  static double sectionFor(double height) {
-    final cap = height / 2 - 6;
-    return cap < section ? (cap < md ? md : cap) : section;
+  /// so round that a single row reads as a pill (CR-17) — held 10 under
+  /// half its height, so a lone 44 row is a soft rectangle at [md].
+  static double sectionFor(double height) => _softFor(height, section);
+
+  /// [max], held [_kSoftMargin] under half of [height] and never under [md]:
+  /// the one rule that keeps a short block from turning into a capsule
+  /// (D9).
+  static double _softFor(double height, double max) {
+    final cap = height / 2 - _kSoftMargin;
+    return cap < max ? (cap < md ? md : cap) : max;
   }
+
+  /// How far under half its height a short block's corner stays.
+  static const double _kSoftMargin = 10;
 
   /// A sheet's top corners when attached to the bottom edge (the large
   /// detent): follows the device's own corner, approximated here.
@@ -733,10 +742,7 @@ abstract final class JamRadius {
   /// The menu radius for a panel [height] tall: [menu], but never so round
   /// that a one-row menu turns into a pill (D9) — the rule [sectionFor]
   /// follows, capped at [menu].
-  static double menuFor(double height) {
-    final cap = height / 2 - 6;
-    return cap < menu ? (cap < md ? md : cap) : menu;
-  }
+  static double menuFor(double height) => _softFor(height, menu);
 
   /// Text and search fields.
   static const double field = 10;

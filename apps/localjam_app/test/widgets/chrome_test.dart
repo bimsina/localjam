@@ -545,6 +545,34 @@ void main() {
       expect(one, greaterThanOrEqualTo(JamRadius.md));
     });
 
+    testWidgets('the menu\'s hairline edge is drawn in front of its rows', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        _host(
+          JamMenuButton(
+            groups: [
+              [JamMenuItem(title: 'One', onPressed: () {})],
+              [JamMenuItem(title: 'Two', onPressed: () {})],
+            ],
+          ),
+        ),
+      );
+      await tester.tap(find.byType(JamMenuButton));
+      await tester.pumpAndSettle();
+      final edges = tester
+          .widgetList<DecoratedBox>(
+            find.descendant(
+              of: find.byType(JamMenuPanel),
+              matching: find.byType(DecoratedBox),
+            ),
+          )
+          .where((b) => b.position == DecorationPosition.foreground);
+      expect(edges, hasLength(1));
+      final shape = (edges.single.decoration as ShapeDecoration).shape;
+      expect((shape as JamMenuBorder).side.style, BorderStyle.solid);
+    });
+
     testWidgets('preferUp opens above the trigger where there is room, and '
         'below where there is not', (tester) async {
       Future<(Rect, Rect)> open(Alignment where) async {
@@ -806,6 +834,40 @@ void main() {
         tester.widget<AnimatedOpacity>(find.byType(AnimatedOpacity)).opacity,
         1,
       );
+    });
+
+    testWidgets('a squeezing control dims under reduced motion instead '
+        '(RB-18)', (tester) async {
+      await tester.pumpWidget(
+        MediaQuery(
+          data: const MediaQueryData(disableAnimations: true),
+          child: _host(
+            JamPressable(
+              style: JamPressStyle.scale,
+              onTap: () {},
+              child: const SizedBox(width: 76, height: 76),
+            ),
+          ),
+        ),
+      );
+      double opacity() => tester
+          .widget<Opacity>(
+            find.descendant(
+              of: find.byType(JamPressable),
+              matching: find.byType(Opacity),
+            ),
+          )
+          .opacity;
+      expect(opacity(), 1);
+      final g = await tester.startGesture(
+        tester.getCenter(find.byType(JamPressable)),
+      );
+      await tester.pump();
+      expect(opacity(), lessThan(1));
+      expect(tester.widget<AnimatedScale>(find.byType(AnimatedScale)).scale, 1);
+      await g.up();
+      await tester.pump();
+      expect(opacity(), 1);
     });
 
     testWidgets('progress is one ring — filling or turning — and a bar', (

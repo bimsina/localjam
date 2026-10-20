@@ -312,6 +312,7 @@ class JamMenuPanel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = context.jamColors;
+    const shape = JamMenuBorder();
     final edge = JamMenuBorder(
       side: BorderSide(
         color: colors.separator,
@@ -319,11 +320,11 @@ class JamMenuPanel extends StatelessWidget {
       ),
     );
     Widget panel = ClipPath(
-      clipper: ShapeBorderClipper(shape: edge),
+      clipper: const ShapeBorderClipper(shape: shape),
       child: DecoratedBox(
         decoration: ShapeDecoration(
           color: colors.elevatedGroupedSurface,
-          shape: edge,
+          shape: shape,
         ),
         // The panel is often drawn in the root overlay: a complete ambient
         // text style keeps its titles off the framework's fallback.
@@ -341,6 +342,13 @@ class JamMenuPanel extends StatelessWidget {
           ),
         ),
       ),
+    );
+    // The hairline edge is drawn in front of the rows, so a group's gap
+    // band cannot paint over it (CR-12).
+    panel = DecoratedBox(
+      position: DecorationPosition.foreground,
+      decoration: ShapeDecoration(shape: edge),
+      child: panel,
     );
     final w = width;
     if (w != null) panel = SizedBox(width: w, child: panel);

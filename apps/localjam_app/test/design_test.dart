@@ -80,7 +80,8 @@ void main() {
     expect(JamRadius.sheetFloating, 38);
     expect(JamRadius.section, 20);
     // A lone 44 row is not a pill; a taller block keeps the full 26.
-    expect(JamRadius.sectionFor(44), lessThan(22));
+    expect(JamRadius.sectionFor(44), JamRadius.md);
+    expect(JamRadius.menuFor(44), JamRadius.md);
     expect(JamRadius.sectionFor(120), JamRadius.section);
     // Filled tint holds white at AA in both themes.
     double contrast(Color a, Color b) {
