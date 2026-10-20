@@ -1,5 +1,7 @@
-/// Full-screen QR scanner for `localjam://join?...` codes. Pops with the
-/// scanned URI string, or null when dismissed (DESIGN_SPEC v3 §6.10).
+/// Full-screen QR scanner for join codes — the `http://…/join#…` a host
+/// shows since 1.2, or an older `localjam://join?…` (PROTOCOL.md §1). Pops
+/// with the scanned URI string, or null when dismissed (DESIGN_SPEC v3
+/// §6.10).
 ///
 /// Camera-first, like the system Code Scanner: the feed fills the screen on
 /// black, a rounded white viewfinder outline sits in the middle with the

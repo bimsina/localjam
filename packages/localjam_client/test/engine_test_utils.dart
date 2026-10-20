@@ -12,6 +12,7 @@ import 'dart:typed_data' show BytesBuilder, Uint8List;
 import 'package:audio_metadata_reader/audio_metadata_reader.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:localjam_net/localjam_net.dart' show JoinLink;
 
 const audioChannel = MethodChannel('localjam_audio');
 
@@ -254,14 +255,14 @@ class PongMutingProxy {
     return proxy;
   }
 
-  /// [joinUri] (the host's own), pointed at this proxy instead.
-  Uri joinUriFor(Uri joinUri) => joinUri.replace(
-    queryParameters: {
-      ...joinUri.queryParameters,
-      'host': InternetAddress.loopbackIPv4.address,
-      'port': '${_server.port}',
-    },
-  );
+  /// [joinUri] (the host's own, either form), pointed at this proxy
+  /// instead.
+  Uri joinUriFor(Uri joinUri) => JoinLink.fromUri(joinUri)!
+      .copyWith(
+        hosts: [InternetAddress.loopbackIPv4.address],
+        port: _server.port,
+      )
+      .toLocaljamUri();
 
   Future<void> _onClient(Socket client) async {
     final Socket upstream;

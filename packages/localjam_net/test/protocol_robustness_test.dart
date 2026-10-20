@@ -771,12 +771,18 @@ void main() {
         '/media/',
         '/media/${'x' * 5000}',
         '/media/%00%01%02',
-        '/media/../',
       ]) {
         final res = await request('GET', path);
         expect(res.statusCode, anyOf(404, 400), reason: path);
         await res.drain<void>().timeout(const Duration(seconds: 5));
       }
+      // Dot segments are removed before routing (RFC 3986 §5.2.4): this is
+      // `GET /`, which since 1.2 is the web guest's page (§1.1) — html, not
+      // a media file.
+      final up = await request('GET', '/media/../');
+      expect(up.statusCode, 200);
+      expect(up.headers.contentType?.mimeType, 'text/html');
+      await up.drain<void>().timeout(const Duration(seconds: 5));
       await assertHostStillHealthy(host, guest, mediaId);
     });
 

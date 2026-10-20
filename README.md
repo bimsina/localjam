@@ -16,9 +16,10 @@ audible seeks. On macOS a joining device settled at **−0.4 ms**.
 ## What it does
 
 - **Rooms.** Host a named jam; guests join three ways — nearby-room discovery
-  (mDNS), a QR scan, or a `localjam://join?…` link shared from anywhere. Every
-  device carries a persistent, quirky identity ("Silky Puffin") so the room
-  knows who is who across sessions.
+  (mDNS), a QR scan, or a join link shared from anywhere (the QR and the
+  link are an ordinary `http://…/join#…` URL; `localjam://join?…` works
+  too). Every device carries a persistent, quirky identity ("Silky Puffin")
+  so the room knows who is who across sessions.
 - **Permissions that read like a decision, not a form.** Three presets —
   **Open**, **Jam**, **Listen-only** — over a per-capability policy, plus
   co-host promotion, per-peer overrides, and kick. The host validates every
@@ -138,8 +139,11 @@ living room, not a coffee shop. In full: [`PROTOCOL.md` §9](PROTOCOL.md).
   the LAN. On Android, `allowBackup="false"` plus backup rules keep the media
   cache, artwork, history and identity out of cloud backup and device transfer.
 
-Traffic is plaintext in v1. TLS with a self-signed cert pinned via the QR is the
-documented upgrade path, required before any future browser guest.
+Traffic is plaintext, by decision — for browser guests too: listening in a
+browser needs no secure context, and a self-signed certificate on a LAN IP
+would put a warning page in front of every guest with nothing a browser could
+pin. TLS stays a possible hardening option for hostile networks, not a
+prerequisite (`PROTOCOL.md` §9).
 
 ## Development
 

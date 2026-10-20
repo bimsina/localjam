@@ -1,6 +1,7 @@
-/// LocalJam host: serves the control plane (WebSocket `/ws`) and the media
-/// plane (HTTP `/media/{mediaId}`) on one TCP port (PROTOCOL.md §1), and
-/// drives a [HostSession] as the single authoritative state writer (§5).
+/// LocalJam host: serves the control plane (WebSocket `/ws`), the media
+/// plane (HTTP `/media/{mediaId}`) and the web guest's page (`/`, `/join`,
+/// `/web/…`, §1.1) on one TCP port (PROTOCOL.md §1), and drives a
+/// [HostSession] as the single authoritative state writer (§5).
 library;
 
 import 'dart:async';
@@ -16,6 +17,9 @@ import 'package:meta/meta.dart';
 import 'connection_guard.dart';
 import 'media_metadata.dart';
 import 'monotonic.dart';
+import 'static_site.dart';
+
+export 'static_site.dart';
 
 /// What a [JamHostServer] does when the current item reaches its end
 /// (PROTOCOL.md §5.5). End of media is only detectable for items whose
@@ -215,6 +219,9 @@ class JamHostServer {
   /// [readinessWait] is the §6.3 readiness gate: how long starting a newly
   /// selected track may wait for guests that are mid-transfer of it (zero
   /// disables the gate).
+  ///
+  /// [staticSite] is the browser player served to web guests (§1.1); see
+  /// [staticSite] — it can also be set (or replaced) after [start].
   JamHostServer({
     required this.sessionName,
     this.hostName = '',
@@ -245,6 +252,7 @@ class JamHostServer {
     this.minUploadBytesPerSecond = 32 * 1024,
     this.maxUploadsPerPeer = 2,
     this.admitLocalAddress,
+    this.staticSite,
   }) : token = token ?? _randomHex(16),
        sessionId = 's_${_randomHex(4)}',
        _permissions = JamPermissions.initial(policy: policy),
@@ -422,6 +430,17 @@ class JamHostServer {
   /// Called once per connection: it must be synchronous and cheap (a
   /// lookup in a set the embedder refreshes as interfaces change).
   final bool Function(InternetAddress local)? admitLocalAddress;
+
+  /// The web guest's page and its bundle (§1.1), served from memory and
+  /// without a token: `GET /` and `GET /join` answer with its `index.html`,
+  /// `GET /web/<path>` with the file keyed exactly `<path>`. Null (or a site
+  /// without `index.html`) serves [builtInNoPlayerPage] at `/` and `/join`
+  /// and `404` under `/web/`.
+  ///
+  /// Settable at any time — an embedder that loads its bundle in the
+  /// background can start the room first. A request already being answered
+  /// keeps the site it started with.
+  StaticSite? staticSite;
 
   /// Whether requests from non-LAN remote addresses are refused with 403
   /// (§9: off-LAN remotes are refused on both planes). Binding a single LAN
@@ -1206,19 +1225,20 @@ class JamHostServer {
     }
   }
 
+  /// The join parameters (§1 Discovery) for [iface], which should be one of
+  /// the addresses this server is reachable on. [JoinLink.toHttpUri] is what
+  /// a QR code carries since 1.2; [joinUriFor] is the `localjam://` form.
+  JoinLink joinLinkFor(InternetAddress iface) => JoinLink(
+    v: MessageCodec.protocolVersion,
+    token: token,
+    name: sessionName,
+    hosts: [iface.address],
+    port: port,
+  );
+
   /// The `localjam://join?...` URI (§1 Discovery) for [iface], which should
   /// be one of the addresses this server is reachable on.
-  Uri joinUriFor(InternetAddress iface) => Uri(
-    scheme: 'localjam',
-    host: 'join',
-    queryParameters: {
-      'v': '${MessageCodec.protocolVersion}',
-      'host': iface.address,
-      'port': '$port',
-      'token': token,
-      'name': sessionName,
-    },
-  );
+  Uri joinUriFor(InternetAddress iface) => joinLinkFor(iface).toLocaljamUri();
 
   /// Stops timers, closes every guest socket and the server.
   ///
@@ -1307,6 +1327,10 @@ class JamHostServer {
       }
       if (path == '/ws') {
         await _handleWsUpgrade(req);
+      } else if (path == '/' || path == '/join') {
+        await _serveIndex(req);
+      } else if (path.startsWith(_webPrefix)) {
+        await _serveWebFile(req, path.substring(_webPrefix.length));
       } else if (path == '/media') {
         await _handleUpload(req);
       } else if (path.startsWith('/media/')) {
@@ -1324,6 +1348,103 @@ class JamHostServer {
     } finally {
       unawaited(body?.cancel());
     }
+  }
+
+  // --- Web guest page (§1.1) ---------------------------------------------------
+
+  static const String _webPrefix = '/web/';
+
+  /// The page's own caching: never stored, so a phone that scanned last
+  /// week's room never runs last week's player against this week's host.
+  static const String _indexCacheControl = 'no-store';
+
+  /// Bundle files: revalidated on every load (`no-cache`), and the `ETag`
+  /// makes that a `304` with no body unless the host's bundle changed.
+  static const String _webCacheControl = 'no-cache';
+
+  /// `GET /` and `GET /join` (§1.1): the page, unauthenticated — the token
+  /// rides the URL fragment, which no request carries, and is needed to do
+  /// anything with the page.
+  Future<void> _serveIndex(HttpRequest req) async {
+    final res = req.response;
+    if (await _refusedMethod(req)) return;
+    final index = staticSite?.index;
+    final bytes = index?.bytes ?? _builtInPageBytes;
+    res.statusCode = HttpStatus.ok;
+    res.headers
+      ..contentType = ContentType
+          .html // text/html; charset=utf-8
+      ..set(HttpHeaders.cacheControlHeader, _indexCacheControl);
+    res.contentLength = bytes.length;
+    res.add(bytes);
+    await res.close();
+  }
+
+  static final Uint8List _builtInPageBytes = Uint8List.fromList(
+    utf8.encode(builtInNoPlayerPage),
+  );
+
+  /// `GET /web/<path>` (§1.1): the bundle file keyed exactly [rawPath]
+  /// (percent-decoded), with its MIME, `Cache-Control: no-cache` and its
+  /// `ETag`, or `304` when `If-None-Match` already names that `ETag`. Only
+  /// keys of [staticSite] are ever served — there is no filesystem behind
+  /// this — so anything else, traversal attempts included, is `404`.
+  Future<void> _serveWebFile(HttpRequest req, String rawPath) async {
+    final res = req.response;
+    if (await _refusedMethod(req)) return;
+    String? path;
+    try {
+      path = Uri.decodeComponent(rawPath);
+    } catch (_) {
+      path = null; // Malformed escape: names no file.
+    }
+    final file = path == null ? null : staticSite?.files[path];
+    if (file == null) {
+      res.statusCode = HttpStatus.notFound;
+      await res.close();
+      return;
+    }
+    res.headers
+      ..set(HttpHeaders.cacheControlHeader, _webCacheControl)
+      ..set(HttpHeaders.etagHeader, file.etag);
+    if (_etagMatches(req.headers[HttpHeaders.ifNoneMatchHeader], file.etag)) {
+      res.statusCode = HttpStatus.notModified;
+      await res.close();
+      return;
+    }
+    res.statusCode = HttpStatus.ok;
+    try {
+      res.headers.contentType = ContentType.parse(file.mime);
+    } catch (_) {
+      res.headers.contentType = ContentType.binary;
+    }
+    res.contentLength = file.length;
+    res.add(file.bytes);
+    await res.close();
+  }
+
+  /// `GET` (and `HEAD`, which `dart:io` answers with the same headers and
+  /// no body) only; anything else is answered `405` here, and true says so.
+  Future<bool> _refusedMethod(HttpRequest req) async {
+    if (req.method == 'GET' || req.method == 'HEAD') return false;
+    final res = req.response;
+    res.statusCode = HttpStatus.methodNotAllowed;
+    res.headers.set(HttpHeaders.allowHeader, 'GET, HEAD');
+    await res.close();
+    return true;
+  }
+
+  /// RFC 9110 §13.1.2: `*`, or any listed tag equal under weak comparison.
+  static bool _etagMatches(List<String>? headers, String etag) {
+    if (headers == null) return false;
+    String strip(String tag) => tag.startsWith('W/') ? tag.substring(2) : tag;
+    for (final header in headers) {
+      for (final candidate in header.split(',')) {
+        final tag = candidate.trim();
+        if (tag == '*' || strip(tag) == etag) return true;
+      }
+    }
+    return false;
   }
 
   Future<void> _handleWsUpgrade(HttpRequest req) async {

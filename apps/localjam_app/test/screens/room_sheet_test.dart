@@ -89,6 +89,7 @@ Future<JamSessionController> _hostWithGuest(
   JamSessionController host, {
   String name = 'Ana',
   JamPolicy policy = JamPolicy.jam,
+  bool viaDeepLink = false,
 }) async {
   final guest = testSession();
   final cache = _tempCache();
@@ -98,8 +99,9 @@ Future<JamSessionController> _hostWithGuest(
       policy: policy,
       discoverable: false,
     );
+    final link = viaDeepLink ? host.hostEngine!.localjamUri : host.joinUri!;
     expect(
-      await guest.join(host.joinUri!, clientName: name, mediaCacheDir: cache),
+      await guest.join(link, clientName: name, mediaCacheDir: cache),
       isTrue,
     );
     expect(await _waitFor(() => host.engine!.peers.isNotEmpty), isTrue);
@@ -689,6 +691,10 @@ void main() {
     expect(find.text(RoomSheetStrings.shareLink), findsOneWidget);
     expect(find.text(RoomSheetStrings.copyLink), findsOneWidget);
     expect(find.textContaining('localjam://'), findsNothing);
+    expect(find.textContaining('http://'), findsNothing);
+    // The code is the http form (§1, 1.2): a camera opens it with no app.
+    expect(find.byKey(ValueKey('${host.joinUri}')), findsOneWidget);
+    expect('${host.joinUri}', startsWith('http://'));
 
     await tester.tap(find.text(RoomSheetStrings.copyLink));
     await tester.pump();
@@ -848,6 +854,24 @@ void main() {
     expect(find.byKey(ValueKey('${engine.joinUri}')), findsOneWidget);
     expect(find.byType(QrImageView), findsOneWidget);
 
+    await tester.runAsync(host.leave);
+  });
+
+  testWidgets('a guest who came in by a localjam:// link passes on the '
+      'http form', (tester) async {
+    final host = testSession();
+    final guest = await _hostWithGuest(tester, host, viaDeepLink: true);
+    expect(guest.guestEngine!.joinUri.scheme, 'localjam');
+    await _pump(
+      tester,
+      guest,
+      InvitePanel(engine: guest.engine!, network: JamNetworkStatus.offline),
+    );
+    final http = JoinLink.fromUri(guest.guestEngine!.joinUri)!.toHttpUri();
+    expect(http.scheme, 'http');
+    expect(find.byKey(ValueKey('$http')), findsOneWidget);
+
+    await tester.runAsync(guest.leave);
     await tester.runAsync(host.leave);
   });
 

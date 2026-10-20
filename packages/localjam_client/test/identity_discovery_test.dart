@@ -66,22 +66,30 @@ void main() {
     test('a resolved record becomes a joinable URI', () {
       final room = parse(hosts: ['192.168.1.7', '10.0.0.3'])!;
       expect(room.sessionName, 'RoadTrip');
-      final params = room.joinUri.queryParameters;
-      expect(room.joinUri.scheme, 'localjam');
-      expect(params['host'], '192.168.1.7,10.0.0.3');
-      expect(params['port'], '44100');
-      expect(params['token'], 'cafe');
-      expect(params['v'], '1');
+      // The http form (§1, 1.2), like the host's own QR.
+      expect(room.joinUri.scheme, 'http');
+      expect(room.joinUri.host, '192.168.1.7');
+      final link = room.link!;
+      expect(link.hosts, ['192.168.1.7', '10.0.0.3']);
+      expect(link.port, 44100);
+      expect(link.token, 'cafe');
+      expect(link.v, 1);
+      expect(room.token, 'cafe');
+      expect(room.candidates, [
+        (host: '192.168.1.7', port: 44100),
+        (host: '10.0.0.3', port: 44100),
+      ]);
     });
 
     test('IPv4 candidates come before IPv6 (zone-id URIs burn timeouts)', () {
       final room = parse(
         hosts: ['fe80::145a:142%en0', '192.168.1.7', 'fd00::5'],
       )!;
-      expect(
-        room.joinUri.queryParameters['host'],
-        '192.168.1.7,fe80::145a:142%en0,fd00::5',
-      );
+      expect(room.link!.hosts, [
+        '192.168.1.7',
+        'fe80::145a:142%en0',
+        'fd00::5',
+      ]);
     });
 
     test('a hostname is never a candidate, however it resolved', () {
@@ -99,7 +107,7 @@ void main() {
       expect(parse(hosts: const ['8.8.8.8']), isNull);
       expect(parse(hosts: const ['2606:4700::1111']), isNull);
       final room = parse(hosts: const ['8.8.8.8', '192.168.1.7'])!;
-      expect(room.joinUri.queryParameters['host'], '192.168.1.7');
+      expect(room.link!.hosts, ['192.168.1.7']);
     });
 
     test('records without a token or any address are unjoinable', () {

@@ -145,8 +145,9 @@ class JamHostEngine extends JamEngine {
        _lanAddresses = EngineValueNotifier<List<InternetAddress>>(
          List.unmodifiable(lan),
        ),
+       _joinLink = _buildJoinLink(_server, lan),
        _joinUri = EngineValueNotifier<Uri>(
-         _buildCombinedJoinUri(_server, lan),
+         _buildJoinLink(_server, lan).toHttpUri(),
        ) {
     sync = AudioSyncController(
       player: player,
@@ -232,6 +233,11 @@ class JamHostEngine extends JamEngine {
   /// Tracks are added afterwards: [addMediaFile] one at a time, or
   /// [importFiles] to open the room at once and fill the queue in the
   /// background.
+  ///
+  /// [staticSite] is the browser player web guests load from this room's
+  /// join URL (§1.1); without one they get the server's built-in "install
+  /// the app" page. It can be set later too ([staticSite] setter), so an
+  /// embedder loading a bundle from its assets need not hold up the room.
   static Future<JamHostEngine> start({
     required String sessionName,
     String? hostName,
@@ -244,6 +250,7 @@ class JamHostEngine extends JamEngine {
     int maxUploadBytes = JamHostServer.defaultMaxUploadBytes,
     int uploadBudgetBytes = JamHostServer.defaultUploadBudgetBytes,
     int maxPlaylistLength = JamHostServer.defaultMaxPlaylistLength,
+    StaticSite? staticSite,
   }) async {
     // Nothing on the way to a room may be unbounded: every step below either
     // finishes inside its own budget or is abandoned for a working fallback,
@@ -271,6 +278,7 @@ class JamHostEngine extends JamEngine {
       maxUploadBytes: maxUploadBytes,
       uploadBudgetBytes: uploadBudgetBytes,
       maxPlaylistLength: maxPlaylistLength,
+      staticSite: staticSite,
       admitLocalAddress: (local) =>
           !nonLanLocals.contains(localAddressSeen(local).address),
     );
@@ -544,29 +552,24 @@ class JamHostEngine extends JamEngine {
     return JamHostServer.isLanAddress(bound) ? [bound] : const [];
   }
 
-  /// One `localjam://join?...` URI carrying every candidate a guest may try,
-  /// comma-joined (§1: guests try them in order): the LAN addresses first,
-  /// then loopback, which is the only path that works for a guest running on
-  /// this same machine (two simulators, two emulators, the CLI beside the
-  /// app). Off-machine guests spend nothing on it — a connect to their own
-  /// loopback is refused at once.
-  static Uri _buildCombinedJoinUri(
+  /// One set of join parameters carrying every candidate a guest may try,
+  /// in order (§1): the LAN addresses first — the first of them is the http
+  /// form's own host — then loopback, which is the only path that works for
+  /// a guest running on this same machine (two simulators, two emulators,
+  /// the CLI beside the app). Off-machine guests spend nothing on it — a
+  /// connect to their own loopback is refused at once.
+  static JoinLink _buildJoinLink(
     JamHostServer server,
     List<InternetAddress> lan,
-  ) {
-    final addresses = [...lan, InternetAddress.loopbackIPv4];
-    return Uri(
-      scheme: 'localjam',
-      host: 'join',
-      queryParameters: {
-        'v': '${MessageCodec.protocolVersion}',
-        'host': addresses.map((a) => a.address).join(','),
-        'port': '${server.port}',
-        'token': server.token,
-        'name': server.sessionName,
-      },
-    );
-  }
+  ) => JoinLink(
+    v: MessageCodec.protocolVersion,
+    token: server.token,
+    name: server.sessionName,
+    hosts: [
+      for (final a in [...lan, InternetAddress.loopbackIPv4]) a.address,
+    ],
+    port: server.port,
+  );
 
   final JamHostServer _server;
   final InternetAddress _boundAddress;
@@ -586,13 +589,24 @@ class JamHostEngine extends JamEngine {
   final Set<String> _nonLanLocals;
   final ValueNotifier<List<InternetAddress>> _lanAddresses;
   final ValueNotifier<Uri> _joinUri;
+  JoinLink _joinLink;
 
-  /// The combined multi-interface join URI for QR codes and copy/paste:
+  /// The combined multi-interface join URL for QR codes, share text and
+  /// copy/paste, in the http form (§1, 1.2: a phone camera opens it with no
+  /// app installed, and this room serves its browser player there, §1.1):
   /// the LAN candidates guests can reach right now, then loopback. Changes
   /// when the device's networks do — listen on [joinUriListenable] and
   /// rebuild the QR. While [hasLanAddress] is false it names loopback only
   /// and must not be presented as a way in.
   Uri get joinUri => _joinUri.value;
+
+  /// [joinUri]'s parameters ([JoinLink]), for anything that needs the token
+  /// or the candidates rather than a URL.
+  JoinLink get joinLink => _joinLink;
+
+  /// The same room as a `localjam://join?...` deep link — "Open in app",
+  /// and the form a pre-1.2 joiner understands.
+  Uri get localjamUri => _joinLink.toLocaljamUri();
 
   /// [joinUri], listenable: updated after a network change (re-scanned every
   /// [addressRefreshInterval] and on resume).
@@ -803,8 +817,15 @@ class JamHostEngine extends JamEngine {
   /// Session token gating both planes (§9).
   String get token => _server.token;
 
-  /// The join URI for one specific interface (e.g. loopback in tests).
+  /// The `localjam://` join URI for one specific interface (e.g. loopback
+  /// in tests).
   Uri joinUriFor(InternetAddress iface) => _server.joinUriFor(iface);
+
+  /// The browser player this room serves web guests (§1.1), or null for the
+  /// server's built-in "install the app" page. Settable while the room runs:
+  /// pages already loaded keep what they loaded.
+  StaticSite? get staticSite => _server.staticSite;
+  set staticSite(StaticSite? site) => _server.staticSite = site;
 
   @override
   PlaybackSnapshot get snapshot => _server.snapshot;
@@ -1517,7 +1538,8 @@ class JamHostEngine extends JamEngine {
     final changed = !setEquals(before, after);
     if (changed) {
       _lanAddresses.value = List.unmodifiable(reachable);
-      _joinUri.value = _buildCombinedJoinUri(_server, reachable);
+      _joinLink = _buildJoinLink(_server, reachable);
+      _joinUri.value = _joinLink.toHttpUri();
     }
     if (changed || _readvertisePending) await _readvertise();
   }

@@ -93,9 +93,14 @@ class JamNearbyRoom {
   /// or to key anything by — and it is not part of [joinUri].
   final String? hostName;
 
-  /// Ready-to-join `localjam://join?...` URI built from the resolved
-  /// addresses and TXT attributes.
+  /// Ready-to-join URI built from the resolved addresses and TXT
+  /// attributes — the http form (§1, 1.2), like the host's own QR; any
+  /// joiner reads it through [JoinLink], and [link] already has.
   final Uri joinUri;
+
+  /// [joinUri]'s parameters, or null if it is not a join link (only a
+  /// hand-built room can be that).
+  JoinLink? get link => JoinLink.fromUri(joinUri);
 
   /// When this room was last *confirmed* — an announcement, a resolve, or a
   /// PTR answer to one of [JamRoomBrowser]'s re-queries. Not when it was
@@ -106,19 +111,13 @@ class JamNearbyRoom {
   /// The session token from the join URI — the room's identity across
   /// interfaces and across restarts of the browse (a host on Wi-Fi and a
   /// hotspot publishes two address lists and one token).
-  String? get token {
-    final token = joinUri.queryParameters['token'];
-    return (token == null || token.isEmpty) ? null : token;
-  }
+  String? get token => link?.token;
 
   /// The `host:port` candidates a join would try, in order (§1).
   List<({String host, int port})> get candidates {
-    final port = int.tryParse(joinUri.queryParameters['port'] ?? '');
-    if (port == null) return const [];
-    return [
-      for (final host in (joinUri.queryParameters['host'] ?? '').split(','))
-        if (host.isNotEmpty) (host: host, port: port),
-    ];
+    final link = this.link;
+    if (link == null) return const [];
+    return [for (final host in link.hosts) (host: host, port: link.port)];
   }
 
   JamNearbyRoom withLastSeen(DateTime at) => JamNearbyRoom(
@@ -1032,7 +1031,15 @@ class JamRoomBrowser {
           a, // …then IPv6, each keeping resolved order.
     ];
     if (token == null || token.isEmpty || hosts.isEmpty) return null;
+    if (service.port < 1 || service.port > 65535) return null;
     final sessionName = service.attributes['name'] ?? service.name;
+    // The record's major version, passed on as the join link's `v` (§1: a
+    // joiner MAY flag rooms it cannot join). Absent means this one's; one
+    // that is not a version is left out rather than guessed at.
+    final vText = service.attributes['v'];
+    final v = vText == null
+        ? MessageCodec.protocolVersion
+        : int.tryParse(vText);
     return JamNearbyRoom(
       key: service.name,
       sessionName: sessionName,
@@ -1040,17 +1047,13 @@ class JamRoomBrowser {
       // every other key this browser does not know is ignored.
       hostName: jamTxtHostName(service.attributes[jamHostNameTxtKey]),
       lastSeen: seenAt,
-      joinUri: Uri(
-        scheme: 'localjam',
-        host: 'join',
-        queryParameters: {
-          'v': service.attributes['v'] ?? '${MessageCodec.protocolVersion}',
-          'host': hosts.join(','),
-          'port': '${service.port}',
-          'token': token,
-          'name': sessionName,
-        },
-      ),
+      joinUri: JoinLink(
+        v: (v == null || v < 1) ? null : v,
+        token: token,
+        name: sessionName,
+        hosts: hosts,
+        port: service.port,
+      ).toHttpUri(),
     );
   }
 

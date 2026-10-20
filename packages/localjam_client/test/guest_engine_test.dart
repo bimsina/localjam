@@ -60,6 +60,30 @@ void main() {
     return engine;
   }
 
+  test('joins from either join form (§1): the 1.2 http URL a QR carries '
+      'and the localjam:// deep link', () async {
+    mockAudioChannel();
+    final host = await startHost(sessionName: 'Both Forms');
+    final link = host.joinLinkFor(InternetAddress.loopbackIPv4);
+    for (final uri in [link.toHttpUri(), link.toLocaljamUri()]) {
+      final engine = await JamGuestEngine.join(
+        uri,
+        clientName: 'form-guest',
+        mediaCacheDir: await makeTempDir(),
+      );
+      expect(engine.sessionName, 'Both Forms', reason: '$uri');
+      expect(engine.joinUri, uri, reason: 'kept as given, for rejoin');
+      await engine.close();
+    }
+    await expectLater(
+      JamGuestEngine.join(
+        Uri.parse('https://example.com/join#token=t'),
+        mediaCacheDir: await makeTempDir(),
+      ),
+      throwsFormatException,
+    );
+  });
+
   test('a relaunched guest rejoins as one peer, not two (§3.3)', () async {
     mockAudioChannel();
     JamIdentity.resetCacheForTesting();

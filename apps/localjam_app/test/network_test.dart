@@ -216,6 +216,53 @@ void main() {
         'Road Trip',
       );
       expect(joinUriName(Uri.parse('localjam://join?host=10.0.0.1')), isNull);
+      expect(
+        joinUriName(
+          Uri.parse('http://10.0.0.1:1/join#token=t&name=Road%20Trip'),
+        ),
+        'Road Trip',
+      );
+    });
+
+    test('the http form (§1, 1.2) is held to the same on-LAN rule, every '
+        'candidate of it', () async {
+      Uri link(String authority, [String? hosts]) => Uri.parse(
+        'http://$authority/join#v=1&token=abc&name=Trip'
+        '${hosts == null ? '' : '&host=$hosts'}',
+      );
+      // No `host`: the URL's own host is the one candidate.
+      expect(joinUriHosts(link('192.168.1.5:44100')), ['192.168.1.5']);
+      expect(joinUriIsLocalOnly(link('192.168.1.5:44100')), isTrue);
+      expect(joinUriIsLocalOnly(link('8.8.8.8:44100')), isFalse);
+      expect(joinUriIsLocalOnly(link('[fe80::1%25en0]:44100')), isTrue);
+      // With `host`: that list is every candidate, and every one is judged —
+      // a local authority does not vouch for a public candidate behind it.
+      expect(joinUriHosts(link('192.168.1.5:44100', '192.168.1.5,10.0.0.4')), [
+        '192.168.1.5',
+        '10.0.0.4',
+      ]);
+      expect(
+        joinUriIsLocalOnly(link('192.168.1.5:44100', '192.168.1.5,8.8.8.8')),
+        isFalse,
+      );
+      expect(
+        await joinUriIsLocalOnlyResolved(
+          link('192.168.1.5:44100', '192.168.1.5,8.8.8.8'),
+        ),
+        isFalse,
+      );
+      expect(
+        await joinUriIsLocalOnlyResolved(link('example.com:44100')),
+        isFalse,
+        reason: 'a name that is not .local is never vouched for',
+      );
+      expect(
+        await joinUriIsLocalOnlyResolved(
+          link('phone.local:44100'),
+          lookup: (_) async => [InternetAddress('8.8.8.8')],
+        ),
+        isFalse,
+      );
     });
   });
 
@@ -235,11 +282,30 @@ void main() {
       );
     });
 
+    test('takes the http form a host QR carries (§1, 1.2), and keeps it', () {
+      final uri = parseJoinUri(
+        ' <http://192.168.1.5:44100/join#v=1&token=abc&name=Van'
+        '&host=192.168.1.5,127.0.0.1> ',
+      );
+      expect(uri, isNotNull);
+      expect(uri!.scheme, 'http');
+      expect(joinUriHosts(uri), ['192.168.1.5', '127.0.0.1']);
+      expect(joinUriName(uri), 'Van');
+      expect(
+        parseJoinUri('localjam://join?host=10.0.0.1&port=80&token=t')!.scheme,
+        'localjam',
+      );
+    });
+
     test('refuses garbage rather than letting it reach the socket', () {
       for (final text in [
         '',
         'hello',
         'https://example.com',
+        'http://192.168.1.5:44100/', // the page, not a join link
+        'http://192.168.1.5:44100/join', // no token
+        'http://192.168.1.5:44100/join?token=t', // token not in the fragment
+        'https://192.168.1.5:44100/join#token=t',
         'localjam://join', // no host/port/token
         'localjam://join?host=10.0.0.1', // no port or token
         'localjam://join?port=80&token=t', // no host

@@ -56,6 +56,26 @@ Notable changes to LocalJam. Dates are the day the work landed on `main`.
 
 ### Engine / protocol
 
+- **PROTOCOL 1.2** (additive; no frame changes): the groundwork for joining
+  from a browser.
+  - The join URL has an http form, `http://host:port/join#v=1&token=…&name=…&host=…`
+    — the `localjam://` query's keys in the fragment, so the token never
+    travels in a request (§1). The host's QR, Share Link and Copy Link carry
+    it, and so do nearby rooms; scanning, pasting and deep links accept both
+    forms through one parser (`JoinLink` in `localjam_core`), and every
+    candidate of either form passes the same on-LAN check (§9). Caveat: a
+    1.0/1.1 app cannot read an http QR; the `localjam://` form still works.
+  - The host serves a browser guest's page without a token (§1.1): `GET /`
+    and `/join` answer with the page (`no-store`), `GET /web/<path>` with its
+    bundle from memory (`no-cache`, sha256 `ETag`, `304`), under the same
+    LAN-only rule and §9.1 limits as everything else. With no bundle, a small
+    built-in page says to install the app. `localjam host --web-dir <path>`
+    serves a directory.
+  - Plaintext is the decision for every client, browsers included: listening
+    needs no secure context, and a self-signed certificate on a LAN IP buys
+    a browser warning and nothing to pin. TLS is no longer described as a
+    prerequisite for a web guest — only as a possible hardening option for
+    hostile networks (§9, §11).
 - **PROTOCOL 1.1** (additive; 1.0 joiners ignore it): an optional `hname`
   TXT key carries the host's display name — trimmed, at most 63 bytes,
   display-only and unauthenticated (§1, §9).

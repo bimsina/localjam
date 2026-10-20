@@ -54,8 +54,7 @@ void main() {
     return engine;
   }
 
-  List<String> hosts(JamHostEngine engine) =>
-      engine.joinUri.queryParameters['host']!.split(',');
+  List<String> hosts(JamHostEngine engine) => engine.joinLink.hosts;
 
   group('a room with no LAN yet (§9)', () {
     test(

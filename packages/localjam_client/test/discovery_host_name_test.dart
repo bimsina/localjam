@@ -185,7 +185,8 @@ void main() {
       expect(withName.token, without.token);
       expect(withName.key, without.key);
       expect(withName.candidates, without.candidates);
-      expect(withName.joinUri.queryParameters.keys, isNot(contains('hname')));
+      expect('${withName.joinUri}', isNot(contains('hname')));
+      expect('${withName.joinUri}', isNot(contains('Silky')));
       // The record a 1.x host advertises, as a 1.0 browser decodes it off
       // the wire, still holds every 1.0 key exactly.
       final wire = decodeTxt(

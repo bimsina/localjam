@@ -140,7 +140,7 @@ void main() {
         discoverable: false,
       );
       addTearDown(engine.close);
-      final hosts = engine.joinUri.queryParameters['host']!.split(',');
+      final hosts = engine.joinLink.hosts;
       // Loopback is always the last candidate: a guest on this same machine
       // (a second simulator, the CLI) has no other path in.
       expect(hosts.last, InternetAddress.loopbackIPv4.address);
