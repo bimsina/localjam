@@ -2,6 +2,7 @@ import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:localjam_app/src/design/theme.dart';
+import 'package:localjam_app/src/design/tokens.dart';
 import 'package:localjam_app/src/widgets/transport.dart';
 
 const int _minute = 60000000;
@@ -15,6 +16,19 @@ Widget _host(Widget child, {bool dark = false, double width = 300}) =>
         ),
       ),
     );
+
+/// The play square's ground.
+Color? _squareColor(WidgetTester tester) =>
+    (tester
+                .widget<AnimatedContainer>(
+                  find.descendant(
+                    of: find.byType(JamTransport),
+                    matching: find.byType(AnimatedContainer),
+                  ),
+                )
+                .decoration!
+            as ShapeDecoration)
+        .color;
 
 void main() {
   group('JamTransport', () {
@@ -38,8 +52,8 @@ void main() {
       expect(find.bySemanticsLabel('Previous'), findsOneWidget);
 
       await tester.tap(find.byIcon(CupertinoIcons.play_fill));
-      await tester.tap(find.byIcon(CupertinoIcons.forward_fill));
-      await tester.tap(find.byIcon(CupertinoIcons.backward_fill));
+      await tester.tap(find.byIcon(CupertinoIcons.forward_end_fill));
+      await tester.tap(find.byIcon(CupertinoIcons.backward_end_fill));
       expect([play, next, previous], [1, 1, 1]);
     });
 
@@ -101,17 +115,32 @@ void main() {
       );
 
       expect(find.text(jamHostControlsPlayback), findsOneWidget);
-      // All three glyphs at 30% (§6.3).
-      final opacities = tester
-          .widgetList<Opacity>(
+      // Quiet, not a dimmed slab: no opacity over the controls; every glyph
+      // in the backdrop's tertiary white and the square as glass.
+      expect(
+        find.descendant(
+          of: find.byType(JamTransport),
+          matching: find.byType(Opacity),
+        ),
+        findsNothing,
+      );
+      final glyphs = tester
+          .widgetList<Icon>(
             find.descendant(
               of: find.byType(JamTransport),
-              matching: find.byType(Opacity),
+              matching: find.byType(Icon),
             ),
           )
-          .map((o) => o.opacity);
-      expect(opacities, everyElement(0.3));
-      expect(opacities, hasLength(3));
+          .map((i) => i.color);
+      expect(glyphs, hasLength(3));
+      expect(glyphs, everyElement(JamNowPlayingColors.tertiary));
+      expect(_squareColor(tester), JamNowPlayingColors.glass);
+      // Its reason sits clear of the square, not against it.
+      expect(
+        tester.getTopLeft(find.text(jamHostControlsPlayback)).dy -
+            tester.getBottomLeft(find.byType(AnimatedContainer)).dy,
+        greaterThanOrEqualTo(8),
+      );
       // Never hidden — visible, and inert.
       expect(find.byIcon(CupertinoIcons.play_fill), findsOneWidget);
       await tester.tap(
@@ -119,6 +148,69 @@ void main() {
         warnIfMissed: false,
       );
       expect(play, 0);
+    });
+
+    testWidgets('the play square: ivory, warm ink, continuous corners', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        _host(JamTransport(state: JamPlaybackState.paused, onPlayPause: () {})),
+      );
+      expect(_squareColor(tester), JamNowPlayingColors.playSurface);
+      final square = tester.widget<AnimatedContainer>(
+        find.descendant(
+          of: find.byType(JamTransport),
+          matching: find.byType(AnimatedContainer),
+        ),
+      );
+      final shape = (square.decoration! as ShapeDecoration).shape;
+      expect(shape, isA<RoundedSuperellipseBorder>());
+      expect(
+        tester.getSize(find.byType(AnimatedContainer)),
+        const Size.square(JamMetrics.playSquare),
+      );
+      expect(
+        tester.widget<Icon>(find.byIcon(CupertinoIcons.play_fill)).color,
+        JamNowPlayingColors.playGlyph,
+      );
+    });
+
+    testWidgets('the play square squeezes under a finger, and not under '
+        'reduced motion', (tester) async {
+      await tester.pumpWidget(
+        _host(JamTransport(state: JamPlaybackState.paused, onPlayPause: () {})),
+      );
+      double scale() => tester
+          .widget<AnimatedScale>(
+            find.descendant(
+              of: find.byType(JamTransport),
+              matching: find.byType(AnimatedScale),
+            ),
+          )
+          .scale;
+      final gesture = await tester.startGesture(
+        tester.getCenter(find.byIcon(CupertinoIcons.play_fill)),
+      );
+      await tester.pump();
+      expect(scale(), lessThan(1));
+      await gesture.up();
+      await tester.pumpAndSettle();
+      expect(scale(), 1);
+
+      await tester.pumpWidget(
+        MediaQuery(
+          data: const MediaQueryData(disableAnimations: true),
+          child: _host(
+            JamTransport(state: JamPlaybackState.paused, onPlayPause: () {}),
+          ),
+        ),
+      );
+      final still = await tester.startGesture(
+        tester.getCenter(find.byIcon(CupertinoIcons.play_fill)),
+      );
+      await tester.pump();
+      expect(scale(), 1);
+      await still.up();
     });
 
     testWidgets('a missing next callback disables that glyph only', (
@@ -134,7 +226,7 @@ void main() {
         ),
       );
       await tester.tap(
-        find.byIcon(CupertinoIcons.forward_fill),
+        find.byIcon(CupertinoIcons.forward_end_fill),
         warnIfMissed: false,
       );
       await tester.tap(find.byIcon(CupertinoIcons.play_fill));

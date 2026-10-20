@@ -1,7 +1,8 @@
 /// The mini player (DESIGN_SPEC v3 §6.4): a floating capsule that keeps a
 /// live jam one tap away wherever you are in the app.
 ///
-/// 64 tall, 12 from the window's sides and 8 above the home indicator, on
+/// 64 tall, on the page's own side margin ([JamSpace.pageFor]) so its edges
+/// line up with everything above it, and 8 above the home indicator, on
 /// the translucent `material` blur with a 0.5 pt edge. Cover 40, title and
 /// the room's name (or, when there is one, the problem), play/pause and —
 /// when the room lets you — next. No progress line, no faces.
@@ -26,6 +27,7 @@ import '../state/session_controller.dart';
 import '../util/format.dart';
 import 'artwork.dart';
 import 'glass.dart';
+import 'list.dart' show JamDisclosureChevron;
 import 'pressable.dart';
 import 'room_banner.dart';
 import 'scaffold.dart' show jamBottomBarInset;
@@ -40,13 +42,14 @@ abstract final class JamRoomBarStrings {
   static const String play = 'Play';
   static const String pause = 'Pause';
   static const String next = 'Next';
+
+  /// Line two while the jam has nothing queued: line one is already the
+  /// jam's name.
+  static const String nothingPlaying = 'Nothing Playing';
 }
 
 /// The capsule's own height (§6.4), above the margin under it.
 const double kJamRoomBarHeight = JamMetrics.miniPlayerHeight;
-
-/// The capsule's distance from the window's sides.
-const double kJamRoomBarSideMargin = 12;
 
 /// The capsule's distance above the home indicator.
 const double kJamRoomBarBottomMargin = JamSpace.sm;
@@ -186,9 +189,9 @@ class JamRoomBar extends StatelessWidget {
         if (velocity < -_openVelocity) open?.call();
       },
       child: JamBlurSurface(
-        shape: radius == null
-            ? RoundedRectangleBorder(borderRadius: BorderRadius.circular(20))
-            : RoundedRectangleBorder(borderRadius: radius),
+        shape: RoundedRectangleBorder(
+          borderRadius: radius ?? BorderRadius.circular(JamRadius.miniPlayer),
+        ),
         border: BorderSide(color: colors.separator, width: 0.5),
         child: SizedBox(
           height: kJamRoomBarHeight,
@@ -266,7 +269,7 @@ class JamRoomBar extends StatelessWidget {
                     ),
                   if (next != null && !narrow)
                     _BarButton(
-                      icon: CupertinoIcons.forward_fill,
+                      icon: CupertinoIcons.forward_end_fill,
                       label: JamRoomBarStrings.next,
                       onPressed: () {
                         JamHaptics.skip();
@@ -344,8 +347,8 @@ class _BarButton extends StatelessWidget {
 
 /// The session-bound mini player the shell mounts.
 ///
-/// By default it paints its own margins — 12 from the sides, 8 above the
-/// home indicator — so the shell only has to stack it at the bottom. A
+/// By default it paints its own margins — the page's side margin, 8 above
+/// the home indicator — so the shell only has to stack it at the bottom. A
 /// caller that places it itself (a [floating] pill in a centred column, the
 /// sidebar dock with its [borderRadius]) gets the bare capsule.
 class RoomBar extends StatefulWidget {
@@ -403,11 +406,14 @@ class _RoomBarState extends State<RoomBar> {
 
   Widget _place(Widget capsule) {
     if (widget.floating || widget.borderRadius != null) return capsule;
+    // The page's margin, not a capsule's own: its edges continue the
+    // column of everything above it (Nearby's cards, Start a Jam).
+    final side = JamSpace.pageFor(MediaQuery.sizeOf(context).width);
     return Padding(
       padding: EdgeInsets.fromLTRB(
-        kJamRoomBarSideMargin,
+        side,
         0,
-        kJamRoomBarSideMargin,
+        side,
         jamRoomBarBottomOffset(MediaQuery.paddingOf(context).bottom),
       ),
       child: capsule,
@@ -466,7 +472,9 @@ class _RoomBarState extends State<RoomBar> {
     return _place(
       JamRoomBar(
         title: item == null ? engine.sessionName : jamDisplayTitle(item),
-        subtitle: engine.sessionName,
+        subtitle: item == null
+            ? JamRoomBarStrings.nothingPlaying
+            : engine.sessionName,
         artwork: JamArtworkHero(
           child: JamArtwork(engine: engine, item: item, size: _kArt),
         ),
@@ -512,9 +520,9 @@ class _EndedBar extends StatelessWidget {
         onTap: open,
         pressedOpacity: 0.7,
         child: JamBlurSurface(
-          shape: radius == null
-              ? RoundedRectangleBorder(borderRadius: BorderRadius.circular(20))
-              : RoundedRectangleBorder(borderRadius: radius),
+          shape: RoundedRectangleBorder(
+            borderRadius: radius ?? BorderRadius.circular(JamRadius.miniPlayer),
+          ),
           border: BorderSide(color: colors.separator, width: 0.5),
           child: SizedBox(
             height: kJamRoomBarHeight,
@@ -542,11 +550,7 @@ class _EndedBar extends StatelessWidget {
                         ),
                       ),
                       const SizedBox(width: JamSpace.xs),
-                      Icon(
-                        CupertinoIcons.chevron_right,
-                        size: 14,
-                        color: colors.tertiaryLabel,
-                      ),
+                      const JamDisclosureChevron(),
                     ] else
                       const CupertinoActivityIndicator(radius: 8),
                   ],

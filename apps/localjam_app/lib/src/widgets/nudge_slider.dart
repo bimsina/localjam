@@ -151,25 +151,31 @@ class _NudgeSliderState extends State<NudgeSlider> {
               borderRadius: BorderRadius.circular(_zeroTickWidth),
             ),
           ),
-          CupertinoSlider(
-            value: _ms.toDouble(),
-            min: -_maxMs.toDouble(),
-            max: _maxMs.toDouble(),
-            divisions: (2 * _maxMs) ~/ _stepMs,
-            // Zero sits in the middle: a fill from the left end would
-            // read as an amount, so the track stays neutral.
-            activeColor: colors.fill,
-            onChanged: _drag,
-            onChangeEnd: (_) => widget.engine.setNudgeUs(_ms * 1000),
+          // Tight, so the track fills the room between the step buttons
+          // rather than stopping at the slider's own 176 pt.
+          SizedBox(
+            width: double.infinity,
+            child: CupertinoSlider(
+              value: _ms.toDouble(),
+              min: -_maxMs.toDouble(),
+              max: _maxMs.toDouble(),
+              divisions: (2 * _maxMs) ~/ _stepMs,
+              // Zero sits in the middle: a fill from the left end would
+              // read as an amount, so the track stays neutral.
+              activeColor: colors.fill,
+              onChanged: _drag,
+              onChangeEnd: (_) => widget.engine.setNudgeUs(_ms * 1000),
+            ),
           ),
         ],
       ),
     );
 
-    // The ends say which way is which, as Balance's L and R do.
+    // The ends say which way is which, as Balance's L and R do — each
+    // under its end of the track (the slider's own 8 pt inset).
     final ends = ExcludeSemantics(
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: JamSpace.xs),
+        padding: const EdgeInsets.symmetric(horizontal: JamSpace.sm),
         child: Row(
           children: [
             Text(
@@ -281,7 +287,6 @@ class _NudgeSliderState extends State<NudgeSlider> {
             ),
             const SizedBox(height: JamSpace.lg),
             slider,
-            const SizedBox(height: JamSpace.sm),
             _ResetButton(ms: _ms, onReset: () => _step(-_ms)),
           ],
         );
@@ -325,11 +330,12 @@ class SoundOffsetPanel extends StatelessWidget {
               borderRadius: BorderRadius.circular(JamRadius.section),
             ),
             child: Padding(
+              // Reset's 44 pt slot is the bottom's air; no more under it.
               padding: const EdgeInsets.fromLTRB(
                 JamSpace.xs,
                 JamSpace.xxl,
                 JamSpace.xs,
-                JamSpace.md,
+                JamSpace.xs,
               ),
               child: NudgeSlider(engine: engine, style: NudgeSliderStyle.hero),
             ),

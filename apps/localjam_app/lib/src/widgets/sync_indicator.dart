@@ -101,50 +101,56 @@ JamSyncState jamSyncState({
 /// white: orange or red 13 pt text over an arbitrary cover is unreadable on
 /// half of them (spec §10.7).
 enum JamStatusTone {
-  /// A wait that needs nothing from anyone: a white glyph.
+  /// A wait that needs nothing from anyone: words alone, no glyph — a calm
+  /// glyph at this size reads as a status dot (SY-14).
   calm,
 
-  /// Recoverable trouble: the glyph in the warning orange.
+  /// Recoverable trouble: the glyph in the backdrop's amber.
   warning,
 
-  /// Broken: the glyph in red.
+  /// Broken: the glyph in the backdrop's red.
   danger,
 }
 
-/// One footnote line under the room's name: a small leading glyph and white
-/// words.
+/// One footnote line under the room's name: white words, led by a glyph
+/// when the line is trouble, or by a filling ring when it is a download.
 @immutable
 class JamStatusLine {
-  const JamStatusLine(this.text, {this.tone = JamStatusTone.calm, this.icon});
+  const JamStatusLine(
+    this.text, {
+    this.tone = JamStatusTone.calm,
+    this.icon,
+    this.progress,
+  });
 
   final String text;
   final JamStatusTone tone;
 
-  /// The leading glyph. Null takes [tone]'s default ([jamStatusToneIcon]).
+  /// A warning or danger line's glyph. Null takes [tone]'s default
+  /// ([jamStatusToneIcon]); a calm line draws none.
   final IconData? icon;
+
+  /// Something on its way, 0–1: the line leads with the same filling ring a
+  /// queue row shows for its download.
+  final double? progress;
 
   @override
   bool operator ==(Object other) =>
       other is JamStatusLine &&
       other.text == text &&
       other.tone == tone &&
-      other.icon == icon;
+      other.icon == icon &&
+      other.progress == progress;
 
   @override
-  int get hashCode => Object.hash(text, tone, icon);
+  int get hashCode => Object.hash(text, tone, icon, progress);
 }
 
 /// The line [state] puts on screen, or null when sync has nothing to say.
 JamStatusLine? jamSyncStatusLine(JamSyncState state) => switch (state) {
   JamSyncState.idle || JamSyncState.inSync => null,
-  JamSyncState.syncing => const JamStatusLine(
-    JamSyncStrings.syncing,
-    icon: CupertinoIcons.arrow_2_circlepath,
-  ),
-  JamSyncState.hostAway => const JamStatusLine(
-    JamSyncStrings.hostAsleep,
-    icon: CupertinoIcons.moon_zzz_fill,
-  ),
+  JamSyncState.syncing => const JamStatusLine(JamSyncStrings.syncing),
+  JamSyncState.hostAway => const JamStatusLine(JamSyncStrings.hostAsleep),
   JamSyncState.reconnecting => const JamStatusLine(
     JamSyncStrings.reconnecting,
     tone: JamStatusTone.warning,
@@ -161,16 +167,18 @@ JamStatusLine? jamSyncStatusLine(JamSyncState state) => switch (state) {
 };
 
 /// The colour of [tone]'s glyph on the Now Playing backdrop, which is the
-/// same in both themes (D4) — so these are the dark palette's values, fixed.
+/// same in both themes (D4): the backdrop's own amber and red, which hold
+/// 4.5:1 on its brightest ground.
 Color jamStatusToneColor(JamStatusTone tone) => switch (tone) {
   JamStatusTone.calm => JamNowPlayingColors.text,
-  JamStatusTone.warning => JamColors.dark.warning,
-  JamStatusTone.danger => JamColors.dark.danger,
+  JamStatusTone.warning => JamNowPlayingColors.warning,
+  JamStatusTone.danger => JamNowPlayingColors.destructive,
 };
 
-/// The glyph a line of [tone] gets when it names none of its own.
-IconData jamStatusToneIcon(JamStatusTone tone) => switch (tone) {
-  JamStatusTone.calm => CupertinoIcons.info_circle_fill,
+/// The glyph a line of [tone] gets when it names none of its own; null for
+/// a calm line, which has none.
+IconData? jamStatusToneIcon(JamStatusTone tone) => switch (tone) {
+  JamStatusTone.calm => null,
   JamStatusTone.warning => CupertinoIcons.exclamationmark_triangle_fill,
   JamStatusTone.danger => CupertinoIcons.exclamationmark_octagon_fill,
 };
@@ -279,7 +287,8 @@ class _JamSyncIndicatorState extends State<JamSyncIndicator> {
   }
 }
 
-/// A glyph in the tone's colour, then the words in white.
+/// The words in white, led by a glyph in the tone's colour (trouble only)
+/// or a filling ring (a download).
 class _StatusLineText extends StatelessWidget {
   const _StatusLineText({required this.line, required this.alignment});
 
@@ -288,13 +297,27 @@ class _StatusLineText extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final calm = line.tone == JamStatusTone.calm;
     final style = context.jamFootnote.copyWith(
       color: JamNowPlayingColors.text,
-      fontWeight: line.tone == JamStatusTone.calm
-          ? FontWeight.w400
-          : FontWeight.w600,
+      fontWeight: calm ? FontWeight.w400 : FontWeight.w600,
     );
-    final glyphSize = MediaQuery.textScalerOf(context).scale(12);
+    final scaler = MediaQuery.textScalerOf(context);
+    final progress = line.progress;
+    final icon = calm ? null : (line.icon ?? jamStatusToneIcon(line.tone));
+    final Widget? lead = progress != null
+        ? CupertinoActivityIndicator.partiallyRevealed(
+            radius: scaler.scale(JamIconSize.inline) / 2 - 1,
+            progress: progress.clamp(0.0, 1.0),
+            color: JamNowPlayingColors.text,
+          )
+        : icon == null
+        ? null
+        : Icon(
+            icon,
+            size: scaler.scale(JamIconSize.inline),
+            color: jamStatusToneColor(line.tone),
+          );
     return Align(
       alignment: alignment,
       widthFactor: 1,
@@ -302,14 +325,10 @@ class _StatusLineText extends StatelessWidget {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          ExcludeSemantics(
-            child: Icon(
-              line.icon ?? jamStatusToneIcon(line.tone),
-              size: glyphSize,
-              color: jamStatusToneColor(line.tone),
-            ),
-          ),
-          const SizedBox(width: JamSpace.xs),
+          if (lead != null) ...[
+            ExcludeSemantics(child: lead),
+            const SizedBox(width: JamSpace.xs + JamSpace.xxs),
+          ],
           Flexible(
             child: Text(
               line.text,

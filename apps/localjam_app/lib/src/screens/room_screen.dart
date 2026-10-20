@@ -4,17 +4,20 @@
 /// `engine.can(JamCapability…)`, so a host and a guest render the same screen
 /// and the difference is what you may touch.
 ///
-/// Immersive in both themes (D4): the current cover, blurred, fills the
-/// window behind white text — the only gradient-like surface in the app. The
-/// subtree is themed dark so every shared component on it (menus, glass
-/// buttons, the docked People panel) resolves its dark, white-on-colour
-/// variant whatever the app's appearance. The queue opens in place (D5): the
-/// cover shrinks into a thumbnail beside the title and the list takes the
-/// middle of the page, with the scrubber and transport pinned.
+/// Immersive in both themes (D4): a matte wash of the cover's colour that
+/// falls into warm charcoal fills the window behind white text. The subtree
+/// is themed dark so every shared component on it (menus, the docked People
+/// panel through `JamOnBackdrop`) resolves its dark, white-on-colour variant
+/// whatever the app's appearance. The song is the focus — cover, title,
+/// artist, timeline, the ivory play square; the people are one line in the
+/// footer and, when someone else put the song on, one quiet credit. The
+/// queue opens in place (D5): the cover shrinks into a thumbnail beside the
+/// title and the list takes the middle of the page, with the scrubber and
+/// transport pinned.
 ///
 /// Quiet when correct: nothing says "in sync". A problem is one footnote
-/// under the room's name; a state that wants something done is a glass
-/// capsule under the header with its one action.
+/// under the room's name; a state that wants something done is a notice
+/// above the cover with its one action.
 ///
 /// Leaving is explicit. The chevron (and the drag down) minimises back to
 /// Home with the session still running; ending or leaving is in the •••
@@ -33,6 +36,7 @@ import 'package:flutter/material.dart'
         MaterialType,
         Theme,
         ThemeData;
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 import 'package:localjam_client/localjam_client.dart';
@@ -48,11 +52,12 @@ import '../util/network.dart';
 import 'session_ended_view.dart';
 import '../widgets/artwork.dart';
 import '../widgets/avatar.dart';
-import '../widgets/peer_row.dart';
 import '../widgets/buttons.dart';
 import '../widgets/diagnostics_sheet.dart';
 import '../widgets/dialogs.dart';
 import '../widgets/drag_to_dismiss.dart';
+import '../widgets/jam_mark.dart';
+import '../widgets/list.dart' show JamDisclosureChevron;
 import '../widgets/menu.dart';
 import '../widgets/nudge_slider.dart';
 import '../widgets/pressable.dart';
@@ -73,6 +78,13 @@ abstract final class JamRoomStrings {
   static const String soundOffset = 'Sound Offset';
   static const String queue = 'Up Next';
   static const String more = 'More';
+
+  /// The footer names who you are listening with, from your side.
+  static const String justYou = 'Just you';
+  static String withOne(String name) => 'With $name';
+  static String withTwo(String a, String b) => 'With $a and $b';
+  static String withMany(String name, int others) =>
+      'With $name and $others ${others == 1 ? 'other' : 'others'}';
 
   // The ••• menu (spec §10.1): only what has no control of its own.
   static const String diagnostics = 'Diagnostics';
@@ -157,13 +169,13 @@ abstract final class JamRoomStrings {
   static const String panelRoom = 'People';
 }
 
+/// The footer's faces: the people in the room, as a pile.
+const Key kJamRoomFacesKey = Key('jam.room.faces');
+
 /// Below this page height the vertical player cannot hold its own shape, so
 /// the room turns side-on: cover left, controls right. Landscape phones live
 /// here, and so does a short desktop window.
 const double kRoomShortHeight = 560;
-
-/// The cover's side margin on a phone (§6.3: 28–32).
-const double _kArtMargin = 28;
 
 /// The cover's side margin in a tablet or desktop pane, where the cover
 /// grows with the space (§10.12) rather than stopping at a phone's size.
@@ -184,12 +196,6 @@ const double _kThumbGap = 12;
 
 /// How far the paused cover springs back (§6.3).
 const double _kPausedScale = 0.96;
-
-/// The paused spring's length — long enough for its settle to read.
-const Duration _kPauseSpring = Duration(milliseconds: 550);
-
-/// The docked panel's width on wide windows.
-const double _kPanelWidth = 360;
 
 class RoomScreen extends StatefulWidget {
   const RoomScreen({super.key});
@@ -413,19 +419,17 @@ class _RoomScreenState extends State<RoomScreen>
     if (mounted) context.go('/');
   }
 
-  /// The host holds the reserved peer id "host" and is never in `peers`, so
-  /// a guest has to add it back or the room looks a person short.
-  List<String> _roster(JamEngine engine) => <String>[
-    _identity.isNotEmpty ? _identity : JamPeerRowStrings.you,
-    if (engine is JamGuestEngine) _hostName(engine),
-    for (final peer in engine.peers) jamPeerName(peer),
-  ];
-
-  /// The host, by name: the one the welcome frame carried, and the role
-  /// word only when they shared none.
-  String _hostName(JamEngine engine) {
-    final name = engine.hostPeer?.clientName.trim() ?? '';
-    return name.isEmpty ? JamRoomStrings.host : name;
+  /// Who put the playing song on, when it was not this device (D6): Now
+  /// Playing's one quiet credit. Their face only when they shared a name.
+  _Credit? _creditFor(JamEngine engine, Map<String, Color> faces) {
+    final item = engine.currentItem;
+    final adder = item?.addedBy;
+    if (item == null || adder == null || adder == engine.selfPeerId) {
+      return null;
+    }
+    final name = jamAddedByLabel(engine, item);
+    if (name == null) return null;
+    return (name: name, color: name == kJamUnnamedPeer ? null : faces[adder]);
   }
 
   @override
@@ -479,9 +483,13 @@ class _RoomScreenState extends State<RoomScreen>
     final wide = _wide;
     final guest = engine is JamGuestEngine ? engine : null;
     final isHost = engine is JamHostEngine;
-    final roster = _roster(engine);
-    // Parallel to [roster]: the ids its faces are coloured over (§10.10).
-    final rosterKeys = jamRosterPeerIds(engine);
+    // Everyone, this device first, and their faces' colours (D3).
+    final roster = jamRosterNames(engine, selfName: _identity);
+    final faces = jamRosterColors(engine, selfName: _identity);
+    final rosterColors = [
+      for (final id in jamRosterPeerIds(engine))
+        faces[id] ?? JamNowPlayingColors.tertiary,
+    ];
     final canAdd = engine.can(JamCapability.addTracks);
     // A sheet over the player (People, Sound Offset) brings its own grabber;
     // two stacked bars read as one broken one.
@@ -535,8 +543,8 @@ class _RoomScreenState extends State<RoomScreen>
       stageMemo: _stageMemo,
       menu: menu,
       roster: roster,
-      rosterKeys: rosterKeys,
-      queueSelected: wide && _panel == _PanelView.queue,
+      rosterColors: rosterColors,
+      credit: _creditFor(engine, faces),
       peopleSelected: wide && _panel == _PanelView.people,
       onClose: _minimise,
       onInvite: () => _openInvite(engine),
@@ -607,8 +615,9 @@ class _RoomScreenState extends State<RoomScreen>
   }
 }
 
-/// The player: header, engine capsule, and the stage (cover, title, queue,
-/// scrubber, transport, footer) in whichever shape the window can hold.
+/// The player: header, then the stage (an engine notice, cover, title,
+/// queue, scrubber, transport, footer) in whichever shape the window can
+/// hold.
 class _Player extends StatelessWidget {
   const _Player({
     required this.engine,
@@ -622,8 +631,8 @@ class _Player extends StatelessWidget {
     required this.stageMemo,
     required this.menu,
     required this.roster,
-    required this.rosterKeys,
-    required this.queueSelected,
+    required this.rosterColors,
+    required this.credit,
     required this.peopleSelected,
     required this.onClose,
     required this.onInvite,
@@ -647,11 +656,13 @@ class _Player extends StatelessWidget {
   final Widget menu;
   final List<String> roster;
 
-  /// [roster]'s colour keys (peer ids), parallel to it.
-  final List<String> rosterKeys;
+  /// [roster]'s face colours, parallel to it.
+  final List<Color> rosterColors;
 
-  /// Wide only: which docked view the footer's buttons are showing.
-  final bool queueSelected;
+  /// Who added the song that is playing, when it was not this device.
+  final _Credit? credit;
+
+  /// Wide only: the docked panel is showing People.
   final bool peopleSelected;
 
   final VoidCallback onClose;
@@ -669,11 +680,17 @@ class _Player extends StatelessWidget {
     // the link is down): seeking is as dead as the transport, and says so.
     final canSend = session.canSendCommands;
     final paused = engine.snapshot.status != PlaybackStatus.playing;
+    // A phone's cover spans the width; a tablet's grows with the pane
+    // (§10.12) up to a poster's size, and the height left after the controls
+    // caps both.
+    final phone = context.jamBreakpoint == JamBreakpoint.compact;
+    final margin = phone ? JamSpace.player : _kArtMarginWide;
 
     final header = _Header(
       engine: engine,
       guest: guest,
       session: session,
+      margin: margin,
       showGrabber: showGrabber,
       grabberVisible: grabberVisible,
       onClose: onClose,
@@ -690,6 +707,16 @@ class _Player extends StatelessWidget {
       onAdd: onAdd,
       menu: menu,
       queue: queue,
+      credit: credit,
+      // Kept while anyone else's song is in the queue, so the line coming
+      // and going between songs never moves the controls — and a host
+      // playing only their own music never carries an empty line.
+      reserveCredit: engine.playlist.any(
+        (song) =>
+            song.addedBy != null &&
+            song.addedBy != engine.selfPeerId &&
+            jamAddedByLabel(engine, song) != null,
+      ),
     );
 
     final scrubber = _Scrubber(
@@ -707,12 +734,17 @@ class _Player extends StatelessWidget {
 
     final footer = _Footer(
       roster: roster,
-      rosterKeys: rosterKeys,
-      queueSelected: queueSelected,
+      colors: rosterColors,
       peopleSelected: peopleSelected,
       queue: wide ? null : queue,
       onPeople: onPeople,
       onQueue: onQueue,
+    );
+
+    final notice = _EngineNotice(
+      engine: engine,
+      guest: guest,
+      session: session,
     );
 
     return SafeArea(
@@ -721,7 +753,6 @@ class _Player extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           header,
-          _EngineCapsule(engine: engine, guest: guest, session: session),
           Expanded(
             child: LayoutBuilder(
               builder: (context, constraints) {
@@ -734,11 +765,14 @@ class _Player extends StatelessWidget {
                     item: item,
                     paused: paused,
                     queue: queue,
+                    margin: margin,
                     bottomInset: bottomInset,
+                    notice: notice,
                     title: title,
                     scrubber: scrubber,
                     transport: transport,
                     footer: footer,
+                    selfName: identity,
                     onCloseQueue: onQueue,
                   );
                 }
@@ -747,29 +781,18 @@ class _Player extends StatelessWidget {
                   builder: (context, _) {
                     final t = JamCurve.standard.transform(queue.value);
                     final open = queue.value > 0;
-                    // A phone's cover spans the width; a tablet's grows with
-                    // the pane (§10.12) up to a poster's size, and the height
-                    // left after the controls caps both.
-                    final phone =
-                        context.jamBreakpoint == JamBreakpoint.compact;
-                    final margin = phone ? _kArtMargin : _kArtMarginWide;
-                    final maxContent = phone ? double.infinity : _kArtMaxWide;
-                    // The list lines up with the cover it replaces.
-                    final listPad = math.max(
-                      margin,
-                      (constraints.maxWidth - maxContent) / 2,
-                    );
-                    return CustomMultiChildLayout(
-                      delegate: _StageLayout(
-                        t: t,
-                        margin: margin,
-                        maxContent: maxContent,
-                        bottomInset: bottomInset,
-                        memo: stageMemo,
-                      ),
+                    return _Stage(
+                      t: t,
+                      margin: margin,
+                      maxContent: phone ? double.infinity : _kArtMaxWide,
+                      bottomInset: bottomInset,
+                      memo: stageMemo,
                       children: [
-                        LayoutId(
-                          id: _Slot.art,
+                        // First, so a screen reader meets it where it is
+                        // drawn: under the header.
+                        _StageSlot(slot: _Slot.notice, child: notice),
+                        _StageSlot(
+                          slot: _Slot.art,
                           child: _Art(
                             engine: engine,
                             item: item,
@@ -778,24 +801,29 @@ class _Player extends StatelessWidget {
                             onTap: queue.value == 1 ? onQueue : null,
                           ),
                         ),
-                        LayoutId(id: _Slot.title, child: title),
+                        _StageSlot(slot: _Slot.title, child: title),
                         if (open)
-                          LayoutId(
-                            id: _Slot.queue,
+                          _StageSlot(
+                            slot: _Slot.queue,
                             child: IgnorePointer(
                               ignoring: queue.value < 1,
                               child: Opacity(
-                                opacity: Curves.easeIn.transform(queue.value),
+                                opacity: JamCurve.exit.transform(queue.value),
+                                // The stage gives the list the column plus
+                                // a margin each side: its rows line up with
+                                // the cover it replaces, and their press
+                                // highlight reaches past them.
                                 child: QueuePanel(
                                   engine: engine,
-                                  horizontalPadding: listPad,
+                                  horizontalPadding: margin,
+                                  selfName: identity,
                                 ),
                               ),
                             ),
                           ),
-                        LayoutId(id: _Slot.scrubber, child: scrubber),
-                        LayoutId(id: _Slot.transport, child: transport),
-                        LayoutId(id: _Slot.footer, child: footer),
+                        _StageSlot(slot: _Slot.scrubber, child: scrubber),
+                        _StageSlot(slot: _Slot.transport, child: transport),
+                        _StageSlot(slot: _Slot.footer, child: footer),
                       ],
                     );
                   },
@@ -809,83 +837,248 @@ class _Player extends StatelessWidget {
   }
 }
 
-enum _Slot { art, title, queue, scrubber, transport, footer }
+enum _Slot { notice, art, title, queue, scrubber, transport, footer }
 
-/// The vertical stage. Lays the controls out at their own heights, gives
-/// the cover what is left (never more than the width allows), and spreads
-/// the slack the way the Music app does — most of it around the transport.
+/// Below this the stage stops narrowing its column to a height-capped
+/// cover: the transport and the title need the room more than they need to
+/// share the cover's edges.
+const double _kMinColumn = 320;
+
+/// The vertical stage (§6.3, §10.12).
+///
+/// Lays the controls out at their own heights, gives the cover what is left
+/// (never more than the width allows), and spreads the slack the way the
+/// Music app does — most of it around the transport. When the height, not
+/// the width, caps the cover (a desktop window, an empty room on a short
+/// phone), the column comes in to the cover: the title, the timeline, the
+/// transport and the footer are laid out again at the cover's width, so
+/// every row shares its edges.
+///
 /// [t] runs the queue in place: the cover into a 56 thumbnail at top-left,
-/// the title beside it, the list in the middle, the controls pinned low.
-class _StageLayout extends MultiChildLayoutDelegate {
-  _StageLayout({
+/// the title beside it, the list in the middle, the controls pinned low. An
+/// engine notice takes its height out of the cover alone — the controls
+/// never move for it.
+///
+/// A render object rather than a layout delegate because of that second
+/// pass: a delegate may lay each child out only once.
+class _Stage extends MultiChildRenderObjectWidget {
+  const _Stage({
     required this.t,
     required this.margin,
     required this.maxContent,
     required this.bottomInset,
     required this.memo,
+    required super.children,
   });
 
   final double t;
   final double margin;
   final double maxContent;
   final double bottomInset;
+  final _StageMemo memo;
+
+  @override
+  _RenderStage createRenderObject(BuildContext context) => _RenderStage(
+    t: t,
+    margin: margin,
+    maxContent: maxContent,
+    bottomInset: bottomInset,
+    memo: memo,
+  );
+
+  @override
+  void updateRenderObject(BuildContext context, _RenderStage renderObject) {
+    renderObject
+      ..t = t
+      ..margin = margin
+      ..maxContent = maxContent
+      ..bottomInset = bottomInset
+      ..memo = memo;
+  }
+}
+
+/// Which part of the stage a child is.
+class _StageSlot extends ParentDataWidget<_StageParentData> {
+  _StageSlot({required this.slot, required super.child})
+    : super(key: ValueKey<_Slot>(slot));
+
+  final _Slot slot;
+
+  @override
+  void applyParentData(RenderObject renderObject) {
+    final data = renderObject.parentData! as _StageParentData;
+    if (data.slot == slot) return;
+    data.slot = slot;
+    renderObject.parent?.markNeedsLayout();
+  }
+
+  @override
+  Type get debugTypicalAncestorWidgetClass => _Stage;
+}
+
+class _StageParentData extends ContainerBoxParentData<RenderBox> {
+  _Slot? slot;
+}
+
+class _RenderStage extends RenderBox
+    with
+        ContainerRenderObjectMixin<RenderBox, _StageParentData>,
+        RenderBoxContainerDefaultsMixin<RenderBox, _StageParentData> {
+  _RenderStage({
+    required this._t,
+    required this._margin,
+    required this._maxContent,
+    required this._bottomInset,
+    required this.memo,
+  });
+
+  double get t => _t;
+  double _t;
+  set t(double value) {
+    if (value == _t) return;
+    _t = value;
+    markNeedsLayout();
+  }
+
+  double get margin => _margin;
+  double _margin;
+  set margin(double value) {
+    if (value == _margin) return;
+    _margin = value;
+    markNeedsLayout();
+  }
+
+  double get maxContent => _maxContent;
+  double _maxContent;
+  set maxContent(double value) {
+    if (value == _maxContent) return;
+    _maxContent = value;
+    markNeedsLayout();
+  }
+
+  double get bottomInset => _bottomInset;
+  double _bottomInset;
+  set bottomInset(double value) {
+    if (value == _bottomInset) return;
+    _bottomInset = value;
+    markNeedsLayout();
+  }
 
   /// The big layout's title height, kept across the queue's morph: the
   /// title shrinks as the queue opens, and the controls placed under the
   /// big title must not follow it.
-  final _StageMemo memo;
+  _StageMemo memo;
 
   @override
-  void performLayout(Size size) {
+  void setupParentData(RenderBox child) {
+    if (child.parentData is! _StageParentData) {
+      child.parentData = _StageParentData();
+    }
+  }
+
+  @override
+  Size computeDryLayout(BoxConstraints constraints) => constraints.biggest;
+
+  Map<_Slot, RenderBox> _slots() {
+    final slots = <_Slot, RenderBox>{};
+    var child = firstChild;
+    while (child != null) {
+      final data = child.parentData! as _StageParentData;
+      final slot = data.slot;
+      if (slot != null) slots[slot] = child;
+      child = data.nextSibling;
+    }
+    return slots;
+  }
+
+  static double _layout(RenderBox? child, BoxConstraints constraints) {
+    if (child == null) return 0;
+    child.layout(constraints, parentUsesSize: true);
+    return child.size.height;
+  }
+
+  static void _place(RenderBox? child, Offset offset) {
+    if (child == null) return;
+    (child.parentData! as _StageParentData).offset = offset;
+  }
+
+  @override
+  void performLayout() {
+    size = constraints.biggest;
     final w = size.width;
     final h = size.height;
-    final cw = math.max(0.0, math.min(w - margin * 2, maxContent));
-    final left = (w - cw) / 2;
+    final t = this.t;
+    final slots = _slots();
     final bottomPad = bottomInset + JamSpace.sm;
+    final widest = math.max(0.0, math.min(w - margin * 2, maxContent));
 
-    final footerH = layoutChild(
-      _Slot.footer,
-      BoxConstraints.tightFor(width: cw),
-    ).height;
-    final transportH = layoutChild(
-      _Slot.transport,
-      BoxConstraints.tightFor(width: cw),
-    ).height;
-    final scrubH = layoutChild(
-      _Slot.scrubber,
-      BoxConstraints.tightFor(width: cw),
-    ).height;
-    final titleW = lerpDouble(cw, cw - _kThumb - _kThumbGap, t)!;
-    final titleH = layoutChild(
-      _Slot.title,
-      BoxConstraints.tightFor(width: math.max(0, titleW)),
-    ).height;
-    if (t == 0) memo.bigTitleH = titleH;
-    final bigTitleH = memo.bigTitleH ?? titleH;
+    // The notice hugs its sentence, up to the widest the column gets.
+    final notice = slots[_Slot.notice];
+    final noticeH = _layout(notice, BoxConstraints(maxWidth: widest));
 
-    // The big cover.
     const minTop = JamSpace.sm;
     const minArtTitle = JamSpace.xl;
     const minTitleScrub = JamSpace.md;
-    const minScrubTransport = 0.0;
-    const minTransportFooter = 0.0;
-    final fixed = footerH + transportH + scrubH + bigTitleH + bottomPad;
-    final avail =
-        h -
-        fixed -
-        minTop -
-        minArtTitle -
-        minTitleScrub -
-        minScrubTransport -
-        minTransportFooter;
-    final art = math.max(0.0, math.min(cw, avail));
+    const minScrubTransport = JamSpace.lg;
+    const minTransportFooter = JamSpace.md;
+
+    var footerH = 0.0;
+    var transportH = 0.0;
+    var scrubH = 0.0;
+    var titleH = 0.0;
+    void measure(double cw) {
+      footerH = _layout(
+        slots[_Slot.footer],
+        BoxConstraints.tightFor(width: cw),
+      );
+      transportH = _layout(
+        slots[_Slot.transport],
+        BoxConstraints.tightFor(width: cw),
+      );
+      scrubH = _layout(
+        slots[_Slot.scrubber],
+        BoxConstraints.tightFor(width: cw),
+      );
+      final titleW = lerpDouble(cw, cw - _kThumb - _kThumbGap, t)!;
+      titleH = _layout(
+        slots[_Slot.title],
+        BoxConstraints.tightFor(width: math.max(0, titleW)),
+      );
+    }
+
+    double avail() {
+      final bigTitleH = t == 0 ? titleH : (memo.bigTitleH ?? titleH);
+      final fixed = footerH + transportH + scrubH + bigTitleH + bottomPad;
+      return h -
+          fixed -
+          minTop -
+          minArtTitle -
+          minTitleScrub -
+          minScrubTransport -
+          minTransportFooter;
+    }
+
+    var cw = widest;
+    measure(cw);
+    var art = math.max(0.0, math.min(cw, avail()));
+    if (art < cw - 0.5) {
+      // The height holds the cover below the width it was offered: bring the
+      // column in to it, and measure again (a line may wrap).
+      cw = math.max(art, math.min(widest, _kMinColumn));
+      measure(cw);
+      art = math.max(0.0, math.min(cw, avail()));
+    }
+    if (t == 0) memo.bigTitleH = titleH;
+    final bigTitleH = memo.bigTitleH ?? titleH;
+    final left = (w - cw) / 2;
+
     // What the cover leaves, spread over the gaps in Music's proportions
     // (art → title → scrubber → transport → footer) rather than most of it
     // landing between the scrubber and the transport on a tall phone. Each
     // inner gap stops growing at a ceiling, so a tall window whose cover is
     // capped (a tablet) keeps the controls together and centres the group
     // instead of pulling it apart.
-    final slack = math.max(0.0, avail - art);
+    final slack = math.max(0.0, avail() - art);
     double grow(double share, double cap) => math.min(slack * share, cap);
     final addArtTitle = grow(0.14, 28);
     final addTitleScrub = grow(0.10, 24);
@@ -910,67 +1103,76 @@ class _StageLayout extends MultiChildLayoutDelegate {
     final bigTransportY = bigScrubY + scrubH + gScrubTransport;
     final bigFooterY = h - bottomPad - footerH - excess / 2;
 
+    // The notice sits under the header and takes its room out of the cover
+    // only: the cover starts below it and shrinks (about its centre line)
+    // to fit, and nothing under the cover moves.
+    const noticeY = JamSpace.xs;
+    final noticeBottom = noticeH > 0 ? noticeY + noticeH : 0.0;
+    final shownArtY = math.max(bigArtY, noticeBottom);
+    final shownArt = math.max(
+      0.0,
+      math.min(art, bigTitleY - gArtTitle - shownArtY),
+    );
+    if (notice != null) {
+      _place(notice, Offset((w - notice.size.width) / 2, noticeY));
+    }
+
     // The queue in place: only the cover and the title move. The scrubber,
     // the transport and the footer stay exactly where they were (Music
     // keeps them fixed), so a toggle never moves a control under a thumb.
-    final qFooterY = bigFooterY;
-    final qTransportY = bigTransportY;
-    final qScrubY = bigScrubY;
-    const qThumbY = JamSpace.sm;
+    final qThumbY = math.max(JamSpace.sm, noticeBottom);
     final qTitleY = math.max(qThumbY, qThumbY + (_kThumb - titleH) / 2);
     final rowBottom = math.max(qThumbY + _kThumb, qTitleY + titleH);
 
-    final artSize = lerpDouble(art, _kThumb, t)!;
-    positionChild(
-      _Slot.art,
+    final artSize = lerpDouble(shownArt, _kThumb, t)!;
+    final artBox = slots[_Slot.art];
+    _layout(artBox, BoxConstraints.tight(Size.square(artSize)));
+    _place(
+      artBox,
       Offset(
-        lerpDouble(left + (cw - art) / 2, left, t)!,
-        lerpDouble(bigArtY, qThumbY, t)!,
+        lerpDouble(left + (cw - shownArt) / 2, left, t)!,
+        lerpDouble(shownArtY, qThumbY, t)!,
       ),
     );
-    layoutChild(_Slot.art, BoxConstraints.tight(Size.square(artSize)));
 
-    positionChild(
-      _Slot.title,
+    _place(
+      slots[_Slot.title],
       Offset(
         lerpDouble(left, left + _kThumb + _kThumbGap, t)!,
         lerpDouble(bigTitleY, qTitleY, t)!,
       ),
     );
 
-    if (hasChild(_Slot.queue)) {
-      final top = rowBottom + JamSpace.md;
-      final bottom = qScrubY - JamSpace.xs;
-      layoutChild(
-        _Slot.queue,
-        BoxConstraints.tight(Size(w, math.max(0, bottom - top))),
+    final queue = slots[_Slot.queue];
+    if (queue != null) {
+      // Clear of the now-playing row by more than the rows are from each
+      // other, so the song and "Up Next" read as two things.
+      final top = rowBottom + JamSpace.xl;
+      final bottom = bigScrubY - JamSpace.xs;
+      _layout(
+        queue,
+        BoxConstraints.tight(
+          Size(math.min(w, cw + margin * 2), math.max(0, bottom - top)),
+        ),
       );
-      positionChild(_Slot.queue, Offset(0, top));
+      _place(queue, Offset(math.max(0, left - margin), top));
     }
 
-    positionChild(
-      _Slot.scrubber,
-      Offset(left, lerpDouble(bigScrubY, qScrubY, t)!),
-    );
-    positionChild(
-      _Slot.transport,
-      Offset(left, lerpDouble(bigTransportY, qTransportY, t)!),
-    );
-    positionChild(
-      _Slot.footer,
-      Offset(left, lerpDouble(bigFooterY, qFooterY, t)!),
-    );
+    _place(slots[_Slot.scrubber], Offset(left, bigScrubY));
+    _place(slots[_Slot.transport], Offset(left, bigTransportY));
+    _place(slots[_Slot.footer], Offset(left, bigFooterY));
   }
 
   @override
-  bool shouldRelayout(_StageLayout old) =>
-      old.t != t ||
-      old.margin != margin ||
-      old.maxContent != maxContent ||
-      old.bottomInset != bottomInset;
+  void paint(PaintingContext context, Offset offset) =>
+      defaultPaint(context, offset);
+
+  @override
+  bool hitTestChildren(BoxHitTestResult result, {required Offset position}) =>
+      defaultHitTestChildren(result, position: position);
 }
 
-/// What [_StageLayout] remembers between frames.
+/// What [_RenderStage] remembers between frames.
 class _StageMemo {
   double? bigTitleH;
 }
@@ -988,11 +1190,14 @@ class _SideOnStage extends StatelessWidget {
     required this.item,
     required this.paused,
     required this.queue,
+    required this.margin,
     required this.bottomInset,
+    required this.notice,
     required this.title,
     required this.scrubber,
     required this.transport,
     required this.footer,
+    required this.selfName,
     required this.onCloseQueue,
   });
 
@@ -1000,19 +1205,23 @@ class _SideOnStage extends StatelessWidget {
   final MediaItem? item;
   final bool paused;
   final AnimationController queue;
+
+  /// The player's side margin, the header's too: the cover's edge and the
+  /// chevron's line up.
+  final double margin;
   final double bottomInset;
+  final Widget notice;
   final Widget title;
   final Widget scrubber;
   final Widget transport;
   final Widget footer;
+  final String selfName;
   final VoidCallback onCloseQueue;
 
   @override
   Widget build(BuildContext context) {
-    final padding = MediaQuery.paddingOf(context);
     return LayoutBuilder(
       builder: (context, constraints) {
-        final side = math.max(padding.left, padding.right);
         final art = math.max(
           0.0,
           math.min(
@@ -1022,9 +1231,9 @@ class _SideOnStage extends StatelessWidget {
         );
         return Padding(
           padding: EdgeInsets.fromLTRB(
-            math.max(JamSpace.xxl, side),
+            margin,
             0,
-            math.max(JamSpace.xxl, side),
+            margin,
             math.max(JamSpace.sm, bottomInset),
           ),
           child: Row(
@@ -1048,6 +1257,7 @@ class _SideOnStage extends StatelessWidget {
                             engine: engine,
                             horizontalPadding: 0,
                             bottomPadding: 0,
+                            selfName: selfName,
                           ),
                         ),
                 ),
@@ -1064,10 +1274,16 @@ class _SideOnStage extends StatelessWidget {
                           mainAxisSize: MainAxisSize.min,
                           crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [
+                            notice,
                             title,
                             const SizedBox(height: JamSpace.md),
                             scrubber,
+                            // The same rhythm as the vertical stage's
+                            // minimum gaps: the times clear of the play
+                            // square, the square clear of the faces.
+                            const SizedBox(height: JamSpace.lg),
                             transport,
+                            const SizedBox(height: JamSpace.md),
                             footer,
                           ],
                         ),
@@ -1084,13 +1300,14 @@ class _SideOnStage extends StatelessWidget {
   }
 }
 
-/// Grabber, then: glass chevron · room name (and its one problem line) ·
-/// glass invite.
+/// Grabber, then: chevron · room name (and its one problem line) · invite,
+/// the glyphs on the player's margin.
 class _Header extends StatelessWidget {
   const _Header({
     required this.engine,
     required this.guest,
     required this.session,
+    required this.margin,
     required this.showGrabber,
     required this.grabberVisible,
     required this.onClose,
@@ -1101,6 +1318,9 @@ class _Header extends StatelessWidget {
   final JamEngine engine;
   final JamGuestEngine? guest;
   final JamSessionController session;
+
+  /// The player's side margin: the buttons' glyphs land on it.
+  final double margin;
   final bool showGrabber;
   final bool grabberVisible;
   final VoidCallback onClose;
@@ -1110,9 +1330,9 @@ class _Header extends StatelessWidget {
   /// The button row: a 44 target plus a little air.
   static const double _rowHeight = JamMetrics.hitTarget + JamSpace.xs * 2;
 
-  /// The glass circles' inset inside their 44 targets.
-  static const double _glassInset =
-      (JamMetrics.hitTarget - JamMetrics.glassButton) / 2;
+  /// A nav glyph's inset inside its 44 target.
+  static const double _glyphInset =
+      (JamMetrics.hitTarget - JamMetrics.navIcon) / 2;
 
   @override
   Widget build(BuildContext context) {
@@ -1154,9 +1374,9 @@ class _Header extends StatelessWidget {
         else
           const SizedBox(height: JamSpace.sm),
         Padding(
-          // The glass circles' visible edges land on the page margin.
-          padding: const EdgeInsets.symmetric(
-            horizontal: JamSpace.page - _glassInset,
+          // The glyphs' edges land on the player's margin, the cover's.
+          padding: EdgeInsets.symmetric(
+            horizontal: math.max(0, margin - _glyphInset),
           ),
           // A floor, not a fixed height: the name's real line box decides
           // the rest, so no text size can make it overflow.
@@ -1270,7 +1490,12 @@ class _StatusLine extends StatelessWidget {
             return line(null);
           }
           final percent = (state!.progress.clamp(0.0, 1.0) * 100).round();
-          return line(JamStatusLine(JamRoomStrings.fetching(percent)));
+          return line(
+            JamStatusLine(
+              JamRoomStrings.fetching(percent),
+              progress: state.progress,
+            ),
+          );
         },
       );
     }
@@ -1316,11 +1541,12 @@ class _StatusLine extends StatelessWidget {
   }
 }
 
-/// The glass capsule under the header, for a state that wants something
+/// The engine notice above the cover, for a state that wants something
 /// done: this phone's sound suspended ("Resume Audio"), or a song it could
-/// not get ("Try Again"). Empty otherwise.
-class _EngineCapsule extends StatelessWidget {
-  const _EngineCapsule({
+/// not get ("Try Again"). Nothing (and no height) otherwise; the stage takes
+/// its room out of the cover alone, so no control moves when it comes.
+class _EngineNotice extends StatelessWidget {
+  const _EngineNotice({
     required this.engine,
     required this.guest,
     required this.session,
@@ -1333,20 +1559,15 @@ class _EngineCapsule extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final reduced = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
-    Widget wrap(Widget? capsule) => AnimatedSize(
+    Widget wrap(Widget? notice) => AnimatedSize(
       duration: reduced ? Duration.zero : JamDuration.base,
       curve: JamCurve.standard,
       alignment: Alignment.topCenter,
-      child: capsule == null
+      child: notice == null
           ? const SizedBox(width: double.infinity)
           : Padding(
-              padding: const EdgeInsets.fromLTRB(
-                JamSpace.page,
-                JamSpace.xs,
-                JamSpace.page,
-                JamSpace.xs,
-              ),
-              child: Center(child: capsule),
+              padding: const EdgeInsets.only(bottom: JamSpace.md),
+              child: Center(child: notice),
             ),
     );
 
@@ -1389,8 +1610,9 @@ class _EngineCapsule extends StatelessWidget {
   }
 }
 
-/// The cover: square, radius 12, the one shadow; springs to 0.86 while the
-/// room is paused (§6.3), and shrinks into the 56 thumbnail as [t] runs.
+/// The cover: square, the large-cover radius, the one shadow; springs to
+/// 0.96 while the room is paused (§6.3), and shrinks into the 56 thumbnail
+/// as [t] runs.
 class _Art extends StatefulWidget {
   const _Art({
     required this.engine,
@@ -1437,7 +1659,7 @@ class _ArtState extends State<_Art> {
       const <BoxShadow>[],
       t,
     );
-    final radius = lerpDouble(JamRadius.nowPlaying, JamRadius.artworkS, t)!;
+    final radius = lerpDouble(JamRadius.largeCover, JamRadius.artworkS, t)!;
 
     // The mini player's cover grows into this one (and back).
     Widget tile(double size, Uint8List? bytes) => JamArtworkHero(
@@ -1446,13 +1668,18 @@ class _ArtState extends State<_Art> {
           borderRadius: BorderRadius.circular(radius),
           boxShadow: shadow,
         ),
-        child: JamArtworkTile(
-          bytes: bytes,
-          imageKey: _artworkId,
-          size: size,
-          radius: radius,
-          onBackdrop: true,
-        ),
+        // Nothing playing: not a song without art (a music note) but the
+        // jam itself — its mark, the same object as on Nearby and in Past
+        // Jams, at the cover's size.
+        child: widget.item == null
+            ? JamMark(name: widget.engine.sessionName, size: size)
+            : JamArtworkTile(
+                bytes: bytes,
+                imageKey: _artworkId,
+                size: size,
+                radius: radius,
+                onBackdrop: true,
+              ),
       ),
     );
 
@@ -1467,7 +1694,7 @@ class _ArtState extends State<_Art> {
               );
         return TweenAnimationBuilder<double>(
           tween: Tween<double>(end: widget.paused ? _kPausedScale : 1),
-          duration: reduced ? Duration.zero : _kPauseSpring,
+          duration: reduced ? Duration.zero : JamDuration.spring,
           curve: JamCurve.spring,
           builder: (context, scale, child) =>
               Transform.scale(scale: lerpDouble(scale, 1, t)!, child: child),
@@ -1488,9 +1715,17 @@ class _ArtState extends State<_Art> {
   }
 }
 
-/// Title (title3, white) over "Added by Mia" (title3 regular, white 60%),
-/// with the glass ••• on the right. Shrinks toward headline/subheadline as
-/// the queue opens, beside the thumbnail.
+/// Who added the song that is playing, when it was someone else (D6): their
+/// name, and their face's colour when they shared a name.
+typedef _Credit = ({String name, Color? color});
+
+/// The song's title (Manrope, white) over its artist (white 70%), and — when
+/// someone else put it on — one quiet "Added by Mia" with their face; the
+/// glass ••• on the right. The title scales down toward 17 beside the
+/// thumbnail as the queue opens, in the same face all the way (SY-8: a lerp
+/// across families snaps halfway).
+///
+/// An empty room puts its one way forward here: a large ivory Add Songs.
 class _TitleBlock extends StatelessWidget {
   const _TitleBlock({
     required this.engine,
@@ -1499,6 +1734,8 @@ class _TitleBlock extends StatelessWidget {
     required this.onAdd,
     required this.menu,
     required this.queue,
+    required this.credit,
+    required this.reserveCredit,
   });
 
   final JamEngine engine;
@@ -1514,19 +1751,44 @@ class _TitleBlock extends StatelessWidget {
   final Widget menu;
   final Animation<double> queue;
 
+  /// Someone else's song: who added it. Null for your own (or theirs, once
+  /// they left).
+  final _Credit? credit;
+
+  /// Keep the credit's line even when there is none to show (someone else's
+  /// song is queued), so their song starting never moves the controls under
+  /// the title.
+  final bool reserveCredit;
+
   @override
   Widget build(BuildContext context) {
+    // A poster-sized cover wants a title that is not a caption under it
+    // (§10.12): one step up on tablets and desktops — not on a phone turned
+    // sideways, whose window is wide but whose cover is not.
+    final wideType = MediaQuery.sizeOf(context).shortestSide >= 600;
+    final scaler = MediaQuery.textScalerOf(context);
+    final bigTitle = wideType ? context.jamLargeTitle : context.jamTitle1;
+    final smallTitle = bigTitle.copyWith(
+      fontSize: 17,
+      height: 22 / 17,
+      letterSpacing: -0.3,
+      fontWeight: FontWeight.w700,
+    );
+    final bigArtist = wideType
+        ? context.jamBody.copyWith(fontSize: 20, height: 25 / 20)
+        : context.jamBody;
+
     return AnimatedBuilder(
       animation: queue,
       builder: (context, _) {
         final t = JamCurve.standard.transform(queue.value);
         final titleStyle = TextStyle.lerp(
-          context.jamTitle1,
-          context.jamHeadline,
+          bigTitle,
+          smallTitle,
           t,
         )!.copyWith(color: JamNowPlayingColors.text);
         final subtitleStyle = TextStyle.lerp(
-          context.jamBody,
+          bigArtist,
           context.jamSubheadline,
           t,
         )!.copyWith(color: JamNowPlayingColors.secondary);
@@ -1534,6 +1796,10 @@ class _TitleBlock extends StatelessWidget {
         final current = item;
         final String title;
         Widget? subtitle;
+        Widget? creditLine;
+        // The empty room's big button is not part of the title's line: the
+        // ••• stays on the title, not centred between the two.
+        var menuOnTitle = false;
         if (current == null) {
           title = importing
               ? JamRoomStrings.importing
@@ -1545,29 +1811,17 @@ class _TitleBlock extends StatelessWidget {
             // The list right below opens with its own Add Songs row.
             subtitle = null;
           } else if (add != null) {
-            // The one call to action of an empty room: a real button, not a
-            // tinted link where the artist would go, and nothing else on
-            // the page repeats it.
+            // The one call to action of an empty room, and the one strong
+            // object on it: the transport has nothing to play and steps
+            // back (see [_TransportArea]).
             subtitle = Padding(
-              padding: const EdgeInsets.only(top: JamSpace.md),
-              // A Row, so the capsule hugs its label rather than filling
-              // the width a loose box would hand it.
+              padding: const EdgeInsets.only(top: JamSpace.lg),
               child: Row(
                 mainAxisSize: MainAxisSize.min,
-                children: [
-                  JamButton(
-                    label: JamRoomStrings.addSongs,
-                    icon: CupertinoIcons.plus,
-                    variant: JamButtonVariant.gray,
-                    size: JamButtonSize.small,
-                    // White on the glass-grey ground, like every other control
-                    // on the backdrop.
-                    color: JamNowPlayingColors.text,
-                    onPressed: add,
-                  ),
-                ],
+                children: [_AddSongsButton(onPressed: add)],
               ),
             );
+            menuOnTitle = true;
           } else {
             subtitle = Text(
               JamRoomStrings.nothingQueuedBody,
@@ -1578,7 +1832,7 @@ class _TitleBlock extends StatelessWidget {
           }
         } else {
           title = jamDisplayTitle(current);
-          // Artist is the song's identity. Contributions live in the queue.
+          // Artist is the song's identity.
           final artist = current.artist?.trim();
           final byline = artist != null && artist.isNotEmpty
               ? artist
@@ -1586,7 +1840,7 @@ class _TitleBlock extends StatelessWidget {
           subtitle = byline == null
               ? null
               : Padding(
-                  padding: const EdgeInsets.only(top: 4),
+                  padding: const EdgeInsets.only(top: JamSpace.xs),
                   child: Text(
                     byline,
                     maxLines: 1,
@@ -1594,9 +1848,17 @@ class _TitleBlock extends StatelessWidget {
                     style: subtitleStyle,
                   ),
                 );
+          if (credit != null || reserveCredit) {
+            creditLine = _creditLine(context, scaler, t);
+          }
         }
 
+        final titleLine =
+            (titleStyle.height ?? 1) * scaler.scale(titleStyle.fontSize ?? 17);
         return Row(
+          crossAxisAlignment: menuOnTitle
+              ? CrossAxisAlignment.start
+              : CrossAxisAlignment.center,
           children: [
             Expanded(
               child: Semantics(
@@ -1613,6 +1875,7 @@ class _TitleBlock extends StatelessWidget {
                       style: titleStyle,
                     ),
                     ?subtitle,
+                    ?creditLine,
                   ],
                 ),
               ),
@@ -1621,10 +1884,109 @@ class _TitleBlock extends StatelessWidget {
             // The menu's 30 circle sits at the end of its 44 target
             // (`triggerAlignment`), so the circle's edge lines up with the
             // cover's.
-            menu,
+            if (menuOnTitle)
+              Transform.translate(
+                offset: Offset(0, (titleLine - JamMetrics.hitTarget) / 2),
+                child: menu,
+              )
+            else
+              menu,
           ],
         );
       },
+    );
+  }
+
+  /// "Added by Mia" with Mia's 16 pt face, a footnote under the artist. It
+  /// fades through when the next song is someone else's, and folds away as
+  /// the queue opens — the rows below carry every song's credit.
+  Widget _creditLine(BuildContext context, TextScaler scaler, double t) {
+    final credit = this.credit;
+    final reduced = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
+    final line = credit == null
+        ? const SizedBox.shrink(key: ValueKey<String>('none'))
+        : Row(
+            key: ValueKey<String>(credit.name),
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (credit.color != null) ...[
+                ExcludeSemantics(
+                  child: JamAvatar(
+                    name: credit.name,
+                    color: credit.color,
+                    size: JamAvatarSize.credit,
+                  ),
+                ),
+                const SizedBox(width: JamSpace.xs + JamSpace.xxs),
+              ],
+              Flexible(
+                child: Text(
+                  JamRoomStrings.addedBy(credit.name),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: context.jamFootnote.copyWith(
+                    color: JamNowPlayingColors.secondary,
+                  ),
+                ),
+              ),
+            ],
+          );
+    return ClipRect(
+      child: Align(
+        alignment: AlignmentDirectional.topStart,
+        heightFactor: 1 - t,
+        child: Opacity(
+          opacity: 1 - t,
+          child: Padding(
+            padding: const EdgeInsets.only(top: JamSpace.xs + JamSpace.xxs),
+            child: SizedBox(
+              height: math.max(JamAvatarSize.credit, scaler.scale(18)),
+              child: AnimatedSwitcher(
+                duration: reduced ? Duration.zero : JamDuration.fast,
+                switchInCurve: jamFadeThroughCurve,
+                switchOutCurve: jamFadeThroughCurve,
+                layoutBuilder: (current, previous) => Stack(
+                  alignment: AlignmentDirectional.centerStart,
+                  children: [...previous, ?current],
+                ),
+                child: line,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// The empty room's Add Songs: a large ivory button, the backdrop's "press
+/// this" — the same ground as the play square it stands in for, on the
+/// app's soft-rectangle button shape.
+class _AddSongsButton extends StatelessWidget {
+  const _AddSongsButton({required this.onPressed});
+
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colors = context.jamColors.copyWith(
+      tintFilled: JamNowPlayingColors.playSurface,
+      onTint: JamNowPlayingColors.playGlyph,
+    );
+    return Theme(
+      data: theme.copyWith(
+        extensions: [
+          for (final extension in theme.extensions.values)
+            if (extension is! JamColors) extension,
+          colors,
+        ],
+      ),
+      child: JamButton.filled(
+        label: JamRoomStrings.addSongs,
+        icon: CupertinoIcons.plus,
+        onPressed: onPressed,
+      ),
     );
   }
 }
@@ -1742,7 +2104,7 @@ class _TransportArea extends StatelessWidget {
     final playing = roomPlaying && !suspended;
     final controls = canControl && canSend && hasQueue;
 
-    return JamTransport(
+    final transport = JamTransport(
       state: playing ? JamPlaybackState.playing : JamPlaybackState.paused,
       enabled: suspended || controls,
       playLabel: suspended ? JamRoomBannerStrings.resume : null,
@@ -1773,130 +2135,416 @@ class _TransportArea extends StatelessWidget {
           ? () => unawaited(session.act((e) => e.transportNext()))
           : null,
     );
+    // An empty room has nothing to play: the transport steps back so Add
+    // Songs is the one strong object on the page — its place kept, so
+    // nothing moves when the first song lands.
+    return Visibility(
+      visible: hasQueue || suspended,
+      maintainSize: true,
+      maintainAnimation: true,
+      maintainState: true,
+      child: transport,
+    );
   }
 }
 
-/// Apple Music's three footer icons, LocalJam's way: the people in the room
-/// (their faces) → People; Sound Offset; Up Next → the queue in place.
+/// The footer: who you are listening with → People, and Up Next → the queue
+/// in place. Apple Music's footer, LocalJam's way: the people are named, not
+/// just counted.
 class _Footer extends StatelessWidget {
   const _Footer({
     required this.roster,
-    required this.rosterKeys,
-    required this.queueSelected,
+    required this.colors,
     required this.peopleSelected,
     required this.queue,
     required this.onPeople,
     required this.onQueue,
   });
 
+  /// Everyone in the jam by name, this device first ([jamRosterNames]).
   final List<String> roster;
 
-  /// [roster]'s colour keys (peer ids), parallel to it.
-  final List<String> rosterKeys;
+  /// Their faces' colours, parallel to [roster].
+  final List<Color> colors;
 
-  /// Wide windows: the docked panel's view. Phones follow [queue] instead.
-  final bool queueSelected;
+  /// Wide windows: the docked panel is showing People.
   final bool peopleSelected;
 
-  /// The queue-in-place animation, on phones.
+  /// The queue-in-place animation, on phones. Null on wide windows, where
+  /// the docked panel's own switch picks Up Next and the footer does not
+  /// repeat it.
   final Animation<double>? queue;
 
   final VoidCallback onPeople;
   final VoidCallback onQueue;
 
+  /// The label's candidates, longest first: the footer shows the first that
+  /// fits ("With Mia and Theo", then "With Mia and 1 other").
+  List<String> _labels() {
+    final others = roster.skip(1).toList();
+    if (others.isEmpty) return const [JamRoomStrings.justYou];
+    final first = others.first;
+    if (others.length == 1) return [JamRoomStrings.withOne(first)];
+    return [
+      if (others.length == 2) JamRoomStrings.withTwo(first, others[1]),
+      JamRoomStrings.withMany(first, others.length - 1),
+    ];
+  }
+
   @override
   Widget build(BuildContext context) {
     final count = roster.length;
-    final reduced = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
-    // The faces are the count (§10.1): no number beside a lone avatar, and
-    // past three the pile's own "+N".
-    final people = Semantics(
-      container: true,
-      button: true,
-      selected: peopleSelected,
-      label: '${JamRoomStrings.people}, $count',
-      onTap: onPeople,
-      excludeSemantics: true,
-      child: JamPressable(
-        onTap: onPeople,
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(minHeight: JamMetrics.hitTarget),
-          child: Center(
-            widthFactor: 1,
-            child: AnimatedContainer(
-              duration: reduced ? Duration.zero : JamDuration.fast,
-              curve: JamCurve.standard,
-              padding: const EdgeInsets.symmetric(
-                horizontal: JamSpace.sm,
-                vertical: JamSpace.xs,
-              ),
-              // Wide windows: the docked panel is showing People.
-              decoration: ShapeDecoration(
-                color: peopleSelected
-                    ? JamNowPlayingColors.placeholderGround
-                    : JamNowPlayingColors.clear,
-                shape: const StadiumBorder(),
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  JamAvatarStack(
-                    names: roster,
-                    colorKeys: rosterKeys,
-                    size: JamAvatarSize.strip,
-                    maxVisible: 3,
-                    overflowColor: JamNowPlayingColors.secondary,
-                  ),
-                  const SizedBox(width: 10),
-                  Text(
-                    'Your jam',
-                    style: context.jamFootnote.copyWith(
-                      color: JamNowPlayingColors.secondary,
-                    ),
-                  ),
-                  const SizedBox(width: 4),
-                  const Icon(
-                    CupertinoIcons.chevron_right,
-                    size: 12,
-                    color: JamNowPlayingColors.secondary,
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ),
-      ),
+    // Up to three of the *others* — you know you are here — and your own
+    // face only when you are alone.
+    final faces = count <= 1
+        ? (roster, colors)
+        : (roster.skip(1).take(3).toList(), colors.skip(1).take(3).toList());
+    final style = context.jamFootnote.copyWith(
+      color: JamNowPlayingColors.secondary,
     );
-
-    Widget queueButton(bool selected) => _FooterIcon(
-      icon: CupertinoIcons.list_bullet,
-      semanticLabel: JamRoomStrings.queue,
-      selected: selected,
-      onPressed: onQueue,
-    );
-
     final animation = queue;
+
     return SizedBox(
       height: JamMetrics.hitTarget,
-      child: Row(
-        children: [
-          people,
-          const Spacer(),
-          if (animation == null)
-            queueButton(queueSelected)
-          else
-            AnimatedBuilder(
-              animation: animation,
-              builder: (context, _) => queueButton(animation.value >= 0.5),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final pileWidth =
+              (faces.$1.length - 1) *
+                  JamAvatarSize.strip *
+                  (1 - JamAvatarStack.overlap) +
+              JamAvatarSize.strip;
+          final room =
+              constraints.maxWidth -
+              pileWidth -
+              JamSpace.sm -
+              JamSpace.xs -
+              JamIconSize.disclosure -
+              (animation == null ? 0 : JamMetrics.hitTarget + JamSpace.sm);
+          final label = _fitting(context, _labels(), style, room);
+
+          final people = Semantics(
+            container: true,
+            button: true,
+            selected: peopleSelected,
+            label: '${JamRoomStrings.people}, $count',
+            onTap: onPeople,
+            excludeSemantics: true,
+            child: JamPressable(
+              onTap: onPeople,
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(
+                  minHeight: JamMetrics.hitTarget,
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    _FacePile(
+                      key: kJamRoomFacesKey,
+                      names: faces.$1,
+                      colors: faces.$2,
+                      people: count,
+                    ),
+                    const SizedBox(width: JamSpace.sm),
+                    Flexible(
+                      child: _FadeThroughText(text: label, style: style),
+                    ),
+                    const SizedBox(width: JamSpace.xs),
+                    const JamDisclosureChevron(
+                      color: JamNowPlayingColors.secondary,
+                    ),
+                  ],
+                ),
+              ),
             ),
-        ],
+          );
+
+          return Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Flexible(child: people),
+              if (animation != null) ...[
+                AnimatedBuilder(
+                  animation: animation,
+                  builder: (context, _) => _FooterIcon(
+                    icon: CupertinoIcons.list_bullet,
+                    semanticLabel: JamRoomStrings.queue,
+                    selected: animation.value >= 0.5,
+                    onPressed: onQueue,
+                  ),
+                ),
+              ],
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  /// The first of [labels] that fits [width] in [style], else the last.
+  static String _fitting(
+    BuildContext context,
+    List<String> labels,
+    TextStyle style,
+    double width,
+  ) {
+    final scaler = MediaQuery.textScalerOf(context);
+    final direction = Directionality.of(context);
+    for (final label in labels) {
+      final painter = TextPainter(
+        text: TextSpan(text: label, style: style),
+        textDirection: direction,
+        textScaler: scaler,
+        maxLines: 1,
+      )..layout();
+      final fits = painter.width <= width;
+      painter.dispose();
+      if (fits) return label;
+    }
+    return labels.last;
+  }
+}
+
+/// One line of footnote text that fades through when it changes, so a new
+/// name in the footer reads as the room changing, not a glitch.
+class _FadeThroughText extends StatelessWidget {
+  const _FadeThroughText({required this.text, required this.style});
+
+  final String text;
+  final TextStyle style;
+
+  @override
+  Widget build(BuildContext context) {
+    final reduced = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
+    return AnimatedSwitcher(
+      duration: reduced ? Duration.zero : JamDuration.fast,
+      switchInCurve: jamFadeThroughCurve,
+      switchOutCurve: jamFadeThroughCurve,
+      layoutBuilder: (current, previous) => Stack(
+        alignment: AlignmentDirectional.centerStart,
+        children: [...previous, ?current],
+      ),
+      child: Text(
+        text,
+        key: ValueKey<String>(text),
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: style,
       ),
     );
   }
 }
 
-/// A bare footer glyph (white 60%), or — selected — a white circle behind a
-/// dark glyph.
+/// The footer's faces: [JamAvatarStack]'s pile — 25% overlap, each face
+/// knocked out of the one it covers — that shows a person arriving. When
+/// one name joins, the pile widens, the faces make room, and the new face
+/// grows in (0.6 → 1, fading up) on the spring a beat later. Several at once
+/// (a reconnect replaying the roster), a renamed face and reduced motion
+/// just appear.
+class _FacePile extends StatefulWidget {
+  const _FacePile({
+    super.key,
+    required this.names,
+    required this.colors,
+    required this.people,
+  });
+
+  final List<String> names;
+  final List<Color> colors;
+
+  /// Everyone in the room: an arrival is this growing by one, so a name
+  /// that only changed (yours, once it loads) never plays as one.
+  final int people;
+
+  static const double size = JamAvatarSize.strip;
+
+  @override
+  State<_FacePile> createState() => _FacePileState();
+}
+
+class _FacePileState extends State<_FacePile>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _arrival = AnimationController(
+    vsync: this,
+    duration: _kArrivalDelay + JamDuration.slow,
+    value: 1,
+  );
+
+  /// The face growing in, while it does.
+  String? _arriving;
+
+  @override
+  void didUpdateWidget(_FacePile oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final reduced = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
+    final joined = [
+      for (final name in widget.names)
+        if (!oldWidget.names.contains(name)) name,
+    ];
+    final arrival = widget.people == oldWidget.people + 1 && joined.length == 1;
+    if (!arrival || reduced) return;
+    _arriving = joined.single;
+    unawaited(
+      _arrival.forward(from: 0).whenComplete(() {
+        if (mounted) setState(() => _arriving = null);
+      }),
+    );
+  }
+
+  @override
+  void dispose() {
+    _arrival.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    const size = _FacePile.size;
+    const step = size * (1 - JamAvatarStack.overlap);
+    final names = widget.names;
+    final reduced = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
+    final move = reduced ? Duration.zero : JamDuration.base;
+    final width = names.isEmpty ? 0.0 : (names.length - 1) * step + size;
+    final grow = CurvedAnimation(
+      parent: _arrival,
+      curve: Interval(
+        _kArrivalDelay.inMilliseconds / _arrival.duration!.inMilliseconds,
+        1,
+        curve: JamCurve.spring,
+      ),
+    );
+
+    Widget face(int i) {
+      final name = names[i];
+      final color = i < widget.colors.length
+          ? widget.colors[i]
+          : identityColor(name);
+      final last = i == names.length - 1;
+      Widget face = _PileFace(
+        name: name,
+        color: color,
+        // A covered face's letter moves into the part still showing.
+        shift: last ? 0 : (step - JamAvatarStack.cutout) / 2 - size / 2,
+      );
+      if (!last) {
+        face = ClipPath(
+          clipper: const _PileKnockout(
+            offset: step,
+            gap: JamAvatarStack.cutout,
+          ),
+          child: face,
+        );
+      }
+      if (name == _arriving) {
+        face = FadeTransition(
+          opacity: grow,
+          child: ScaleTransition(
+            scale: Tween<double>(begin: 0.6, end: 1).animate(grow),
+            child: face,
+          ),
+        );
+      }
+      return AnimatedPositioned(
+        key: ValueKey<String>('$i:$name'),
+        duration: move,
+        curve: JamCurve.standard,
+        left: i * step,
+        top: 0,
+        width: size,
+        height: size,
+        child: face,
+      );
+    }
+
+    return Semantics(
+      label: names.join(', '),
+      image: true,
+      child: ExcludeSemantics(
+        child: TweenAnimationBuilder<double>(
+          tween: Tween<double>(end: width),
+          duration: move,
+          curve: JamCurve.standard,
+          builder: (context, w, child) =>
+              SizedBox(width: w, height: size, child: child),
+          child: Stack(
+            clipBehavior: Clip.none,
+            children: [for (var i = 0; i < names.length; i++) face(i)],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// How long a new face waits before it grows in: the pile makes room first.
+const Duration _kArrivalDelay = Duration(milliseconds: 80);
+
+/// One face in [_FacePile]: [JamAvatar]'s face (the colour, one white
+/// Manrope initial), its letter moved by [shift].
+class _PileFace extends StatelessWidget {
+  const _PileFace({
+    required this.name,
+    required this.color,
+    required this.shift,
+  });
+
+  final String name;
+  final Color color;
+  final double shift;
+
+  @override
+  Widget build(BuildContext context) {
+    const size = _FacePile.size;
+    return DecoratedBox(
+      decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+      child: Center(
+        child: Transform.translate(
+          offset: Offset(shift, 0),
+          child: Text(
+            identityInitials(name).characters.first,
+            maxLines: 1,
+            textScaler: TextScaler.noScaling,
+            style: context.jamBody.copyWith(
+              fontFamily: 'Manrope',
+              fontSize: size * 0.45,
+              fontWeight: FontWeight.w700,
+              color: JamAvatarPalette.initials,
+              height: 1,
+              letterSpacing: 0,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// A face minus the next one ([offset] to the right), grown by [gap]: the
+/// pile's knock-out, a real hole rather than a painted ring.
+class _PileKnockout extends CustomClipper<Path> {
+  const _PileKnockout({required this.offset, required this.gap});
+
+  final double offset;
+  final double gap;
+
+  @override
+  Path getClip(Size size) {
+    final own = Path()..addOval(Offset.zero & size);
+    final r = size.width / 2;
+    final next = Path()
+      ..addOval(
+        Rect.fromCircle(center: Offset(offset + r, r), radius: r + gap),
+      );
+    return Path.combine(PathOperation.difference, own, next);
+  }
+
+  @override
+  bool shouldReclip(_PileKnockout oldClipper) =>
+      oldClipper.offset != offset || oldClipper.gap != gap;
+}
+
+/// A bare footer glyph (white 70%), or — selected — ivory behind a dark
+/// glyph, on the same soft rectangle as the app's small buttons. Its glyph's
+/// trailing edge lands on the column's.
 class _FooterIcon extends StatelessWidget {
   const _FooterIcon({
     required this.icon,
@@ -1910,38 +2558,50 @@ class _FooterIcon extends StatelessWidget {
   final VoidCallback onPressed;
   final bool selected;
 
+  /// The glyph's inset inside its 44 box: how far the box overhangs the
+  /// column so the glyph does not.
+  static const double _overhang = (JamMetrics.hitTarget - JamIconSize.row) / 2;
+
   @override
   Widget build(BuildContext context) {
     final reduced = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
-    return Semantics(
-      container: true,
-      button: true,
-      selected: selected,
-      label: semanticLabel,
-      onTap: onPressed,
-      excludeSemantics: true,
-      child: JamPressable(
+    final rtl = Directionality.of(context) == TextDirection.rtl;
+    return Transform.translate(
+      offset: Offset(rtl ? -_overhang : _overhang, 0),
+      child: Semantics(
+        container: true,
+        button: true,
+        selected: selected,
+        label: semanticLabel,
         onTap: onPressed,
-        child: SizedBox.square(
-          dimension: JamMetrics.hitTarget,
-          child: Center(
-            child: AnimatedContainer(
-              duration: reduced ? Duration.zero : JamDuration.fast,
-              curve: JamCurve.standard,
-              width: 34,
-              height: 34,
-              decoration: ShapeDecoration(
-                color: selected
-                    ? JamNowPlayingColors.fill
-                    : JamNowPlayingColors.clear,
-                shape: const CircleBorder(),
-              ),
-              child: Icon(
-                icon,
-                size: 22,
-                color: selected
-                    ? JamNowPlayingColors.selectedGlyph
-                    : JamNowPlayingColors.secondary,
+        excludeSemantics: true,
+        child: JamPressable(
+          onTap: onPressed,
+          child: SizedBox.square(
+            dimension: JamMetrics.hitTarget,
+            child: Center(
+              child: AnimatedContainer(
+                duration: reduced ? Duration.zero : JamDuration.fast,
+                curve: JamCurve.standard,
+                width: 34,
+                height: 34,
+                decoration: ShapeDecoration(
+                  color: selected
+                      ? JamNowPlayingColors.fill
+                      : JamNowPlayingColors.clear,
+                  shape: const RoundedRectangleBorder(
+                    borderRadius: BorderRadius.all(
+                      Radius.circular(JamRadius.buttonSmall),
+                    ),
+                  ),
+                ),
+                child: Icon(
+                  icon,
+                  size: JamIconSize.row,
+                  color: selected
+                      ? JamNowPlayingColors.selectedGlyph
+                      : JamNowPlayingColors.secondary,
+                ),
               ),
             ),
           ),
@@ -1972,7 +2632,7 @@ class _DockedPanel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return SizedBox(
-      width: _kPanelWidth,
+      width: JamContentWidth.panel,
       child: ColoredBox(
         // A shade of the backdrop, not a card: just enough to set the
         // panel apart from the player.
@@ -1996,6 +2656,7 @@ class _DockedPanel extends StatelessWidget {
                   },
                   groupValue: view,
                   onValueChanged: onView,
+                  onBackdrop: true,
                 ),
               ),
               Expanded(
@@ -2003,13 +2664,13 @@ class _DockedPanel extends StatelessWidget {
                   _PanelView.queue => QueuePanel(
                     engine: engine,
                     showHeader: false,
+                    selfName: selfName,
                   ),
-                  _PanelView.people => _OnBackdrop(
-                    child: RoomPanel(
-                      engine: engine,
-                      selfName: selfName,
-                      network: network,
-                    ),
+                  // On the backdrop by itself (`RoomPanel.onBackdrop`).
+                  _PanelView.people => RoomPanel(
+                    engine: engine,
+                    selfName: selfName,
+                    network: network,
                   ),
                 },
               ),
@@ -2017,49 +2678,6 @@ class _DockedPanel extends StatelessWidget {
           ),
         ),
       ),
-    );
-  }
-}
-
-/// The docked People panel's content on the immersive backdrop (wide
-/// windows): its grouped rows become translucent white over the cover's
-/// colours instead of opaque dark cards pasted onto it, with the backdrop's
-/// own secondary and hairline colours — and white, not raspberry, for what
-/// can be tapped, like every other control on Now Playing.
-class _OnBackdrop extends StatelessWidget {
-  const _OnBackdrop({required this.child});
-
-  final Widget child;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final colors = context.jamColors;
-    final onBackdrop = colors.copyWith(
-      background: JamNowPlayingColors.clear,
-      groupedBackground: JamNowPlayingColors.clear,
-      elevatedGroupedBackground: JamNowPlayingColors.clear,
-      groupedSurface: JamNowPlayingColors.groupedRow,
-      elevatedGroupedSurface: JamNowPlayingColors.groupedRow,
-      separator: JamNowPlayingColors.separator,
-      label: JamNowPlayingColors.text,
-      secondaryLabel: JamNowPlayingColors.secondary,
-      tertiaryLabel: JamNowPlayingColors.tertiary,
-      fillPressed: JamNowPlayingColors.pressed,
-      tint: JamNowPlayingColors.text,
-      tintPressed: JamNowPlayingColors.secondary,
-      danger: JamNowPlayingColors.destructive,
-      warning: JamNowPlayingColors.warning,
-    );
-    return Theme(
-      data: theme.copyWith(
-        extensions: [
-          for (final extension in theme.extensions.values)
-            if (extension is! JamColors) extension,
-          onBackdrop,
-        ],
-      ),
-      child: child,
     );
   }
 }

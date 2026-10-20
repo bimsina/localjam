@@ -18,6 +18,7 @@ import 'package:localjam_app/src/util/format.dart';
 import 'package:localjam_app/src/util/network.dart';
 import 'package:localjam_app/src/widgets/avatar.dart';
 import 'package:localjam_app/src/widgets/guests_can.dart';
+import 'package:localjam_app/src/widgets/jam_mark.dart';
 import 'package:localjam_app/src/widgets/list.dart';
 import 'package:localjam_app/src/widgets/peer_row.dart';
 import 'package:localjam_app/src/widgets/room_sheet.dart';
@@ -297,34 +298,46 @@ void main() {
     await tester.runAsync(host.leave);
   });
 
-  testWidgets('faces are coloured by peer id, the same on every device', (
+  testWidgets('faces are coloured by name, the same on every device (D3)', (
     tester,
   ) async {
     final host = testSession();
-    final guest = await _hostWithGuest(tester, host);
-    final guestId = host.engine!.peers.single.peerId;
+    // A guest whose own colour differs from the host's, so nobody is moved
+    // off theirs.
+    final name = [
+      'Ana',
+      'Mia',
+      'Theo',
+      'Okon',
+      'Bea',
+    ].firstWhere((n) => identityColor(n) != identityColor('Silky Puffin'));
+    final guest = await _hostWithGuest(tester, host, name: name);
 
-    Map<String, String?> keys() => {
+    Map<String, Color?> colors() => {
       for (final row in tester.widgetList<JamPeerRow>(find.byType(JamPeerRow)))
-        row.name: row.colorKey,
+        row.name: row.color,
     };
 
     await _pump(tester, host, _panel(host));
-    final fromHost = keys();
-    expect(fromHost['Silky Puffin'], JamPermissions.hostPeerId);
-    expect(fromHost['Ana'], guestId);
-    // The key reaches the face.
+    final fromHost = colors();
+    expect(fromHost['Silky Puffin'], identityColor('Silky Puffin'));
+    expect(fromHost[name], identityColor(name));
+    // The colour reaches the face.
     expect(
       tester
           .widgetList<JamAvatar>(find.byType(JamAvatar))
-          .map((a) => a.colorKey),
-      containsAll(<String>[JamPermissions.hostPeerId, guestId]),
+          .map((a) => a.resolvedColor),
+      containsAll(<Color>[identityColor('Silky Puffin'), identityColor(name)]),
     );
 
-    await _pump(tester, guest, _panel(guest, self: 'Ana'));
-    final fromGuest = keys();
-    expect(fromGuest['Ana'], guestId);
-    expect(fromGuest.values, contains(JamPermissions.hostPeerId));
+    await _pump(tester, guest, _panel(guest, self: name));
+    final fromGuest = colors();
+    expect(fromGuest[name], fromHost[name]);
+    expect(
+      fromGuest.entries.where((e) => e.key != name).single.value,
+      fromHost['Silky Puffin'],
+      reason: 'the host is the same colour from the guest\'s side',
+    );
 
     await tester.runAsync(guest.leave);
     await tester.runAsync(host.leave);
@@ -689,6 +702,44 @@ void main() {
     expect(find.text(RoomSheetStrings.copied), findsNothing);
 
     await tester.runAsync(host.leave);
+  });
+
+  testWidgets('the Invite sheet shows the jam: its mark with the host\'s '
+      'face, its name once, and who is in it, host first', (tester) async {
+    fakeLan([
+      FakeInterface('en0', ['192.168.77.10']),
+    ]);
+    final host = testSession();
+    final guest = await _hostWithGuest(tester, host);
+    await _pump(
+      tester,
+      guest,
+      InvitePanel(
+        engine: guest.engine!,
+        network: JamNetworkStatus.offline,
+        selfName: 'Ana',
+      ),
+    );
+    final mark = tester.widget<JamMark>(find.byType(JamMark));
+    expect(mark.name, 'Van Jam');
+    expect(mark.hostName, 'Silky Puffin');
+    expect(find.text('Van Jam'), findsOneWidget);
+    expect(find.text('Silky Puffin and Ana'), findsOneWidget);
+
+    await tester.runAsync(guest.leave);
+    await tester.runAsync(host.leave);
+  });
+
+  test('who is in the jam, said briefly', () {
+    expect(RoomSheetStrings.everyone(['Bibek']), 'Bibek');
+    expect(
+      RoomSheetStrings.everyone(['Bibek', 'Mia', 'Theo']),
+      'Bibek, Mia and Theo',
+    );
+    expect(
+      RoomSheetStrings.everyone(['Bibek', 'Mia', 'Theo', 'Ana', 'Okon']),
+      'Bibek, Mia and 3 others',
+    );
   });
 
   testWidgets('no network, no code — and the code turns up by itself', (

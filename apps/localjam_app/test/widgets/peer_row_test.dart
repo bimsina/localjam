@@ -140,14 +140,22 @@ void main() {
       expect(tapped, 1);
     });
 
-    testWidgets('passes its colour key to the face', (tester) async {
+    testWidgets("passes the jam's colour to the face, else the name's", (
+      tester,
+    ) async {
+      const assigned = Color(0xFF123456);
       await pumpRow(
         tester,
-        const JamPeerRow(name: 'Silky Puffin', colorKey: 'peer-7'),
+        const JamPeerRow(name: 'Silky Puffin', color: assigned),
       );
       expect(
-        tester.widget<JamAvatar>(find.byType(JamAvatar)).colorKey,
-        'peer-7',
+        tester.widget<JamAvatar>(find.byType(JamAvatar)).resolvedColor,
+        assigned,
+      );
+      await pumpRow(tester, const JamPeerRow(name: 'Silky Puffin'));
+      expect(
+        tester.widget<JamAvatar>(find.byType(JamAvatar)).resolvedColor,
+        identityColor('Silky Puffin'),
       );
     });
 

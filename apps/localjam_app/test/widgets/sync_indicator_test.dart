@@ -82,7 +82,7 @@ void main() {
       _colorOf(tester, JamSyncStrings.catchingUp),
       JamNowPlayingColors.text,
     );
-    expect(_glyphColor(tester), JamColors.dark.warning);
+    expect(_glyphColor(tester), JamNowPlayingColors.warning);
 
     await tester.pumpWidget(_host(JamSyncState.reconnecting));
     await tester.pumpAndSettle();
@@ -90,29 +90,36 @@ void main() {
       _colorOf(tester, JamSyncStrings.reconnecting),
       JamNowPlayingColors.text,
     );
-    expect(_glyphColor(tester), JamColors.dark.warning);
+    expect(_glyphColor(tester), JamNowPlayingColors.warning);
 
+    // A calm line is words alone: a glyph at this size reads as a dot.
     await tester.pumpWidget(_host(JamSyncState.hostAway));
     await tester.pumpAndSettle();
     expect(
       _colorOf(tester, JamSyncStrings.hostAsleep),
       JamNowPlayingColors.text,
     );
-    expect(_glyphColor(tester), JamNowPlayingColors.text);
+    expect(
+      find.descendant(
+        of: find.byType(JamSyncIndicator),
+        matching: find.byType(Icon),
+      ),
+      findsNothing,
+    );
   });
 
   testWidgets('out of sync is the only red glyph', (tester) async {
     await tester.pumpWidget(_host(JamSyncState.offSync));
     await tester.pumpAndSettle();
     expect(_colorOf(tester, JamSyncStrings.offSync), JamNowPlayingColors.text);
-    expect(_glyphColor(tester), JamColors.dark.danger);
+    expect(_glyphColor(tester), JamNowPlayingColors.destructive);
   });
 
   testWidgets('the same colours in either app theme (D4)', (tester) async {
     await tester.pumpWidget(_host(JamSyncState.offSync, dark: true));
     await tester.pumpAndSettle();
     expect(_colorOf(tester, JamSyncStrings.offSync), JamNowPlayingColors.text);
-    expect(_glyphColor(tester), JamColors.dark.danger);
+    expect(_glyphColor(tester), JamNowPlayingColors.destructive);
   });
 
   testWidgets('a swap fades through: the two lines are never both visible', (

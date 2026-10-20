@@ -1,5 +1,6 @@
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show RenderParagraph;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:localjam_app/src/design/theme.dart';
 import 'package:localjam_app/src/design/tokens.dart';
@@ -61,6 +62,70 @@ void main() {
         ),
       );
       expect(find.text(JamTrackRowStrings.addedByYou), findsOneWidget);
+    });
+
+    testWidgets("in the jam the credit is the adder's face and name", (
+      tester,
+    ) async {
+      const mia = Color(0xFF2F815B);
+      await pumpRow(
+        tester,
+        const JamTrackRow(
+          title: 'Blue Moon',
+          byline: 'Billie',
+          addedByName: 'Mia',
+          addedByColor: mia,
+          duration: Duration(minutes: 3, seconds: 42),
+        ),
+      );
+      expect(find.text('Mia · 3:42'), findsOneWidget);
+      final face = tester.widget<JamAvatar>(find.byType(JamAvatar));
+      expect(face.resolvedColor, mia);
+      expect(face.size, lessThan(JamAvatarSize.credit));
+
+      // Your own: your initial, and "You".
+      await pumpRow(
+        tester,
+        const JamTrackRow(
+          title: 'Blue Moon',
+          addedByName: 'You',
+          addedByYou: true,
+          addedByColor: mia,
+          addedByFaceName: 'Bibek',
+          duration: Duration(minutes: 3),
+        ),
+      );
+      expect(find.text('You · 3:00'), findsOneWidget);
+      expect(tester.widget<JamAvatar>(find.byType(JamAvatar)).name, 'Bibek');
+    });
+
+    testWidgets('a long name is cut before the length ever is', (tester) async {
+      await pumpRow(
+        tester,
+        const Center(
+          child: SizedBox(
+            width: 220,
+            child: JamTrackRow(
+              title: 'Blue Moon',
+              byline: 'Billie',
+              addedByName: 'Electric Mongoose of the Long Road',
+              duration: Duration(minutes: 4, seconds: 10),
+            ),
+          ),
+        ),
+      );
+      expect(find.text(' · 4:10'), findsOneWidget);
+      final length = tester.renderObject<RenderParagraph>(find.text(' · 4:10'));
+      expect(length.didExceedMaxLines, isFalse);
+      expect(
+        tester
+            .renderObject<RenderParagraph>(
+              find.text('Added by Electric Mongoose of the Long Road'),
+            )
+            .didExceedMaxLines,
+        isTrue,
+        reason: 'the name takes the ellipsis',
+      );
     });
 
     testWidgets('artist and contributor remain visible at large text sizes', (

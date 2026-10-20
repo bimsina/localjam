@@ -103,19 +103,19 @@ void main() {
       onNext: () => skipped++,
     );
     await tester.pumpWidget(_host(bar()));
-    await tester.tap(find.byIcon(CupertinoIcons.forward_fill));
+    await tester.tap(find.byIcon(CupertinoIcons.forward_end_fill));
     expect(skipped, 1);
 
     // The iPad sidebar dock (~240 wide) keeps both glyphs…
     await tester.pumpWidget(
       _host(Center(child: SizedBox(width: 240, child: bar()))),
     );
-    expect(find.byIcon(CupertinoIcons.forward_fill), findsOneWidget);
+    expect(find.byIcon(CupertinoIcons.forward_end_fill), findsOneWidget);
     // …and only a capsule narrower than any real one drops next.
     await tester.pumpWidget(
       _host(Center(child: SizedBox(width: 200, child: bar()))),
     );
-    expect(find.byIcon(CupertinoIcons.forward_fill), findsNothing);
+    expect(find.byIcon(CupertinoIcons.forward_end_fill), findsNothing);
     expect(find.byIcon(CupertinoIcons.play_fill), findsOneWidget);
   });
 

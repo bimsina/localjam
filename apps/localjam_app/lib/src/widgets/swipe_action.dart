@@ -227,8 +227,11 @@ class _JamSwipeActionState extends State<JamSwipeAction>
                         style: JamPressStyle.none,
                         onTap: () => unawaited(_run()),
                         child: ClipRect(
+                          // The ground for white on red (`danger` is red
+                          // text: on dark it is a pale red that white
+                          // cannot be read on).
                           child: ColoredBox(
-                            color: colors.danger,
+                            color: colors.dangerFilled,
                             child: OverflowBox(
                               minWidth: _actionWidth,
                               maxWidth: _actionWidth,

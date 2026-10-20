@@ -40,7 +40,7 @@ void main() {
     final button = tester.widget<ColoredBox>(
       find.ancestor(of: find.text('Forget'), matching: find.byType(ColoredBox)),
     );
-    expect(button.color, JamColors.light.danger);
+    expect(button.color, JamColors.light.dangerFilled);
 
     await tester.tap(find.text('Forget'));
     await tester.pumpAndSettle();
