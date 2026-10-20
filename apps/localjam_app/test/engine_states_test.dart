@@ -897,9 +897,8 @@ void main() {
       }
     });
 
-    testWidgets('a retry in flight spins in place and cannot be left', (
-      tester,
-    ) async {
+    testWidgets('a retry in flight says so in place, and its way home stays '
+        'on the page, off', (tester) async {
       await tester.pumpWidget(
         MaterialApp(
           theme: jamLightTheme(),
@@ -913,13 +912,20 @@ void main() {
       );
       final retry = tester.widget<JamButton>(
         find.ancestor(
-          of: find.text(JamSessionEndedStrings.tryAgain),
+          of: find.text(JamSessionEndedStrings.trying),
           matching: find.byType(JamButton),
         ),
       );
       expect(retry.loading, isTrue);
-      // No way out while the rejoin runs: the way home is not offered.
-      expect(find.text(JamSessionEndedStrings.back), findsNothing);
+      // The room cannot leave while the rejoin runs, so the way home is
+      // off — but still there, so the page neither shrinks nor hides it.
+      final back = tester.widget<JamButton>(
+        find.ancestor(
+          of: find.text(JamSessionEndedStrings.back),
+          matching: find.byType(JamButton),
+        ),
+      );
+      expect(back.onPressed, isNull);
     });
   });
 

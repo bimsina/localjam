@@ -3,7 +3,6 @@
 /// and keeps its mark in one place whatever the news.
 library;
 
-import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:localjam_app/src/design/theme.dart';
@@ -11,6 +10,7 @@ import 'package:localjam_app/src/screens/session_ended_view.dart';
 import 'package:localjam_app/src/state/session_controller.dart';
 import 'package:localjam_app/src/widgets/buttons.dart';
 import 'package:localjam_app/src/widgets/jam_mark.dart';
+import 'package:localjam_app/src/widgets/wifi_glyph.dart';
 import 'package:localjam_client/localjam_client.dart';
 
 const _jam = 'Sunday at home';
@@ -71,8 +71,38 @@ void main() {
       onRetry: () {},
     );
     expect(find.byType(JamMark), findsNothing);
-    expect(find.byIcon(CupertinoIcons.wifi_slash), findsOneWidget);
+    // The outline Wi‑Fi slash, bare: a glyph in the mark's square would
+    // pose as a jam.
+    final glyph = tester.widget<JamWifiGlyph>(find.byType(JamWifiGlyph));
+    expect(glyph.slashed, isTrue);
+    expect(
+      find.ancestor(
+        of: find.byType(JamWifiGlyph),
+        matching: find.descendant(
+          of: find.byType(JamSessionEndedView),
+          matching: find.byType(DecoratedBox),
+        ),
+      ),
+      findsNothing,
+    );
     expect(find.text(JamSessionEndedStrings.hostGoneBody), findsOneWidget);
+  });
+
+  testWidgets('named or not, the title sits at one height', (tester) async {
+    await _pump(tester, JamSessionEndReason.hostGone, onRetry: () {});
+    final named = tester.getTopLeft(
+      find.text(JamSessionEndedStrings.hostGoneTitle),
+    );
+    await _pump(
+      tester,
+      JamSessionEndReason.hostGone,
+      jamName: null,
+      onRetry: () {},
+    );
+    final unnamed = tester.getTopLeft(
+      find.text(JamSessionEndedStrings.hostGoneTitle),
+    );
+    expect(unnamed.dy, named.dy);
   });
 
   testWidgets('a jam that restarted offers its new code first', (tester) async {
@@ -214,10 +244,67 @@ void main() {
       retrying: true,
     );
     expect(find.text(JamSessionEndedStrings.retrying(_jam)), findsOneWidget);
-    expect(_button(tester, JamSessionEndedStrings.tryAgain).loading, isTrue);
-    // Nothing else to start while it runs.
-    expect(find.text(JamSessionEndedStrings.newCode), findsNothing);
-    expect(find.text(JamSessionEndedStrings.back), findsNothing);
+    // The button says so too, in place.
+    expect(_button(tester, JamSessionEndedStrings.trying).loading, isTrue);
+    // Nothing else starts while it runs — but the other ways out stay on
+    // the page, so it neither shrinks nor loses its way home.
+    expect(_button(tester, JamSessionEndedStrings.newCode).onPressed, isNull);
+    expect(_button(tester, JamSessionEndedStrings.back).onPressed, isNull);
+  });
+
+  testWidgets('a retry keeps every action, in its place under the first', (
+    tester,
+  ) async {
+    // The sentence above changes length; the stack under the primary does
+    // not shrink.
+    Future<Map<String, double>> actions({required bool retrying}) async {
+      await _pump(
+        tester,
+        JamSessionEndReason.rejected,
+        rejectReason: RejectReason.unknown,
+        onRetry: () {},
+        onScan: () {},
+        retrying: retrying,
+      );
+      Offset at(String label) => tester.getTopLeft(
+        find.ancestor(of: find.text(label), matching: find.byType(JamButton)),
+      );
+      final primary = at(
+        retrying
+            ? JamSessionEndedStrings.trying
+            : JamSessionEndedStrings.tryAgain,
+      );
+      return {
+        for (final label in [
+          JamSessionEndedStrings.newCode,
+          JamSessionEndedStrings.back,
+        ])
+          label: at(label).dy - primary.dy,
+      };
+    }
+
+    final before = await actions(retrying: false);
+    final during = await actions(retrying: true);
+    expect(during, before);
+  });
+
+  testWidgets('a room that can let you leave mid-retry gets Back to Nearby '
+      'on', (tester) async {
+    var left = 0;
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: jamLightTheme(),
+        home: JamSessionEndedView(
+          reason: JamSessionEndReason.hostGone,
+          jamName: _jam,
+          onDone: () => left++,
+          onRetry: () {},
+          retrying: true,
+        ),
+      ),
+    );
+    await tester.tap(find.text(JamSessionEndedStrings.back));
+    expect(left, 1);
   });
 
   testWidgets('a retry that failed says so, and what is left to check', (

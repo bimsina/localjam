@@ -416,9 +416,10 @@ class _Caption extends StatelessWidget {
   }
 }
 
-/// The floating controls over the feed: the glass xmark, the flashlight
-/// when there is one, and — where there is a viewfinder — Enter Link at the
-/// bottom. A dead end carries its link under its message instead.
+/// The floating controls over the feed: the flashlight when there is one,
+/// the glass xmark in the trailing corner, and — where there is a
+/// viewfinder — Enter Link at the bottom. A dead end carries its link under
+/// its message instead.
 class _ScanChrome extends StatelessWidget {
   const _ScanChrome({
     required this.controller,
@@ -446,13 +447,6 @@ class _ScanChrome extends StatelessWidget {
             ),
             child: Row(
               children: [
-                JamGlassButton(
-                  icon: CupertinoIcons.xmark,
-                  semanticLabel: JamScanStrings.close,
-                  onArtwork: true,
-                  onPressed: onClose,
-                ),
-                const Spacer(),
                 if (controller != null)
                   ValueListenableBuilder<MobileScannerState>(
                     valueListenable: controller,
@@ -481,6 +475,14 @@ class _ScanChrome extends StatelessWidget {
                       );
                     },
                   ),
+                const Spacer(),
+                // Trailing, where every sheet's own close or Done sits.
+                JamGlassButton(
+                  icon: CupertinoIcons.xmark,
+                  semanticLabel: JamScanStrings.close,
+                  onArtwork: true,
+                  onPressed: onClose,
+                ),
               ],
             ),
           ),
@@ -603,6 +605,22 @@ class ScannerUnavailableView extends StatelessWidget {
         ? (JamScanStrings.retry, onRetry)
         : (null, null);
     void link() => unawaited(onLink());
+    final block = JamEmptyState(
+      icon: denied || declined
+          ? CupertinoIcons.camera
+          : CupertinoIcons.qrcode_viewfinder,
+      title: title,
+      body: body,
+      foregroundColor: JamNowPlayingColors.text,
+      secondaryColor: JamNowPlayingColors.secondary,
+      // Neutral, never tinted: the fix where there is one, else the link
+      // itself.
+      actionLabel: fixLabel ?? JamScanStrings.enterLink,
+      onAction: onFix ?? link,
+      actionVariant: JamButtonVariant.gray,
+      secondaryActionLabel: fixLabel == null ? null : JamScanStrings.enterLink,
+      onSecondaryAction: fixLabel == null ? null : link,
+    );
 
     return JamForcedAppearance(
       brightness: Brightness.dark,
@@ -611,24 +629,19 @@ class ScannerUnavailableView extends StatelessWidget {
         child: Stack(
           fit: StackFit.expand,
           children: [
-            Center(
-              child: JamEmptyState(
-                icon: denied || declined
-                    ? CupertinoIcons.camera
-                    : CupertinoIcons.qrcode_viewfinder,
-                title: title,
-                body: body,
-                foregroundColor: JamNowPlayingColors.text,
-                secondaryColor: JamNowPlayingColors.secondary,
-                // Neutral, never tinted: the fix where there is one, else
-                // the link itself.
-                actionLabel: fixLabel ?? JamScanStrings.enterLink,
-                onAction: onFix ?? link,
-                actionVariant: JamButtonVariant.gray,
-                secondaryActionLabel: fixLabel == null
-                    ? null
-                    : JamScanStrings.enterLink,
-                onSecondaryAction: fixLabel == null ? null : link,
+            // Anchored as Nearby anchors its empty state — a third of the
+            // way down the space under the chrome — so the glyph and the
+            // title sit at one height whichever dead end this is, instead
+            // of moving with the length of the sentence.
+            SafeArea(
+              child: LayoutBuilder(
+                builder: (context, constraints) => SingleChildScrollView(
+                  padding: EdgeInsets.only(
+                    top: _anchorFor(constraints.maxHeight),
+                    bottom: JamSpace.xxl,
+                  ),
+                  child: block,
+                ),
               ),
             ),
             _ScanChrome(
@@ -642,4 +655,16 @@ class ScannerUnavailableView extends StatelessWidget {
       ),
     );
   }
+
+  /// The chrome row over the page: a 44 pt glass button in 4 pt of padding.
+  static const double _chromeHeight = JamMetrics.hitTarget + 2 * JamSpace.xs;
+
+  /// Where the block starts: under the chrome, then a third of the space
+  /// left once a full empty block ([kJamEmptyBlockHeight]) is taken out.
+  static double _anchorFor(double height) =>
+      _chromeHeight +
+      math.max(
+        JamSpace.lg,
+        (height - _chromeHeight - kJamEmptyBlockHeight) / 3,
+      );
 }

@@ -17,6 +17,7 @@ import '../util/capabilities.dart';
 import '../widgets/buttons.dart';
 import '../widgets/empty_state.dart';
 import '../widgets/jam_mark.dart';
+import '../widgets/wifi_glyph.dart';
 
 /// Every user-facing string the ended page can show. `JamRoomStrings`
 /// forwards the constant names, so either spelling finds the same copy.
@@ -126,6 +127,9 @@ abstract final class JamSessionEndedStrings {
       'host’s Wi‑Fi or hotspot, then try again.';
 
   static const String tryAgain = 'Try Again';
+
+  /// The Try Again button while its retry runs.
+  static const String trying = 'Trying…';
   static const String back = 'Back to Nearby';
 
   /// A new code for a jam that restarted: the scanner where there is a
@@ -172,7 +176,9 @@ class JamSessionEndedView extends StatelessWidget {
   /// picks the copy and whether a retry is offered ([jamRejectIsRetryable]).
   final RejectReason? rejectReason;
 
-  /// Back to Nearby. Null while a retry is in flight.
+  /// Back to Nearby. The button stays on the page while a retry runs, and
+  /// is off while this is null (the room passes null until it can leave
+  /// mid-retry).
   final VoidCallback? onDone;
 
   /// Rejoin the room this device came from, when there is one to rejoin.
@@ -187,7 +193,8 @@ class JamSessionEndedView extends StatelessWidget {
   /// Link where there is no camera). Null: the page says to ask the host.
   final VoidCallback? onScan;
 
-  /// A "Try Again" is running: its button spins in place.
+  /// A "Try Again" is running: its button says so in place, and the other
+  /// ways out stay where they were.
   final bool retrying;
 
   /// Why the last "Try Again" failed, said here rather than in a notice
@@ -213,7 +220,7 @@ class JamSessionEndedView extends StatelessWidget {
     final offersCode = onScan != null;
     final (icon, title, detail) = switch (reason) {
       JamSessionEndReason.hostGone => (
-        CupertinoIcons.wifi_slash,
+        null,
         JamSessionEndedStrings.hostGoneTitle,
         JamSessionEndedStrings.hostGone(jam),
       ),
@@ -286,14 +293,15 @@ class JamSessionEndedView extends StatelessWidget {
         : null;
     // A new code is the way back into a room that restarted, and the likely
     // one into a room that turned this phone away without saying why.
-    final scan =
+    final offersScan =
+        onScan != null &&
         reason == JamSessionEndReason.rejected &&
-            (rejectReason == RejectReason.badToken ||
-                rejectReason == RejectReason.unknown ||
-                rejectReason == null) &&
-            !retrying
-        ? onScan
-        : null;
+        (rejectReason == RejectReason.badToken ||
+            rejectReason == RejectReason.unknown ||
+            rejectReason == null);
+    // Shown but off while a retry runs: nothing else starts meanwhile, and
+    // nothing on the page moves.
+    final VoidCallback? scan = offersScan && !retrying ? onScan : null;
 
     // What the page says under the title: the reason, unless a retry is
     // running (say so — the spinner cannot) or just failed (the newer news).
@@ -319,39 +327,40 @@ class JamSessionEndedView extends StatelessWidget {
     // code, when any is possible — with the way home as the plain second;
     // otherwise the way home alone, as a quiet grey button (leaving is not
     // the loud action on a screen that just told you something ended).
+    //
+    // The plain actions under the primary stay on the page while a retry
+    // runs — off where they cannot work yet — so the page neither shrinks
+    // nor leaves the user without a visible way out.
     final String actionLabel;
     final VoidCallback? action;
     final JamButtonVariant variant;
-    String? secondaryLabel = JamSessionEndedStrings.back;
-    VoidCallback? secondary = onDone;
-    // A third, plain way out — only when a retry and a new code are both
-    // real options, so home is never the one that goes missing.
-    VoidCallback? home;
+    final plain = <(String, VoidCallback?)>[];
     if (retry != null || retrying) {
-      actionLabel = JamSessionEndedStrings.tryAgain;
-      // Kept non-null while the retry spins, so the button stays in place
-      // (the spinner swallows taps).
+      actionLabel = retrying
+          ? JamSessionEndedStrings.trying
+          : JamSessionEndedStrings.tryAgain;
+      // Kept non-null while the retry runs, so the button stays in place
+      // (loading swallows taps).
       action = retry ?? _busy;
       variant = JamButtonVariant.filled;
-      if (scan != null) {
-        secondaryLabel = JamSessionEndedStrings.newCode;
-        secondary = scan;
-        home = onDone;
-      }
+      // Home is never the one that goes missing: a new code, when it is a
+      // real option too, sits between.
+      if (offersScan) plain.add((JamSessionEndedStrings.newCode, scan));
+      plain.add((JamSessionEndedStrings.back, onDone));
     } else if (startNew != null) {
       actionLabel = JamSessionEndedStrings.startNew;
       action = startNew;
       variant = JamButtonVariant.filled;
+      plain.add((JamSessionEndedStrings.back, onDone));
     } else if (scan != null) {
       actionLabel = JamSessionEndedStrings.newCode;
       action = scan;
       variant = JamButtonVariant.filled;
+      plain.add((JamSessionEndedStrings.back, onDone));
     } else {
       actionLabel = JamSessionEndedStrings.back;
       action = onDone;
       variant = JamButtonVariant.gray;
-      secondaryLabel = null;
-      secondary = null;
     }
 
     final Widget mark = jam == null
@@ -390,15 +399,10 @@ class JamSessionEndedView extends StatelessWidget {
                       onAction: action,
                       actionVariant: variant,
                       actionLoading: retrying,
-                      secondaryActionLabel: secondaryLabel,
-                      onSecondaryAction: secondary,
                     ),
-                    if (home != null) ...[
+                    for (final (label, onPressed) in plain) ...[
                       const SizedBox(height: JamSpace.xs),
-                      JamButton.plain(
-                        label: JamSessionEndedStrings.back,
-                        onPressed: home,
-                      ),
+                      JamButton.plain(label: label, onPressed: onPressed),
                     ],
                   ],
                 ),
@@ -425,30 +429,32 @@ class JamSessionEndedView extends StatelessWidget {
   static void _busy() {}
 }
 
-/// The reason, when the jam has no name to mark it with: an outline glyph
-/// on the same tile a jam's mark is drawn on, so a named and an unnamed end
-/// are the same object at the same size.
+/// The reason, when the jam has no name to mark it with: its outline glyph,
+/// bare — a glyph inside the jam mark's square would pose as a jam — and
+/// standing on the mark's baseline, so the title under it sits where a
+/// named jam's does.
 class _ReasonMark extends StatelessWidget {
   const _ReasonMark({required this.icon});
 
-  final IconData icon;
+  /// Null: the host is unreachable, drawn as the outline Wi‑Fi slash.
+  final IconData? icon;
 
   @override
   Widget build(BuildContext context) {
     final colors = context.jamColors;
-    const size = JamMarkSize.ended;
+    final glyph = icon;
     return ExcludeSemantics(
-      child: DecoratedBox(
-        decoration: ShapeDecoration(
-          color: colors.fillSecondary,
-          shape: RoundedSuperellipseBorder(
-            borderRadius: BorderRadius.circular(JamRadius.artwork(size)),
-          ),
-        ),
-        child: SizedBox.square(
-          dimension: size,
-          // At a monogram's size, where a monogram would be.
-          child: Icon(icon, size: size * 0.46, color: colors.secondaryLabel),
+      child: SizedBox(
+        height: JamMarkSize.ended,
+        child: Align(
+          alignment: Alignment.bottomCenter,
+          child: glyph == null
+              ? const JamWifiGlyph(slashed: true)
+              : Icon(
+                  glyph,
+                  size: JamIconSize.hero,
+                  color: colors.secondaryLabel,
+                ),
         ),
       ),
     );

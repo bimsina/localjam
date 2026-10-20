@@ -286,8 +286,46 @@ void main() {
         .width;
     expect(width, inInclusiveRange(140, 300));
 
+    // The xmark in the trailing corner, where a sheet's own close sits.
+    final close = tester.getRect(find.bySemanticsLabel(JamScanStrings.close));
+    final page = tester.getRect(find.byType(ScannerUnavailableView));
+    expect(close.center.dx, greaterThan(page.center.dx));
     await tester.tap(find.bySemanticsLabel(JamScanStrings.close));
     await tester.pumpAndSettle();
     expect(closed, 1);
+  });
+
+  testWidgets('every dead end puts its glyph and title at one height', (
+    tester,
+  ) async {
+    // Centred, the block moved with the length of its sentence and the
+    // number of its actions; anchored, it does not move at all.
+    final tops = <double>{};
+    final titles = <double>{};
+    for (final (code, declined) in [
+      (MobileScannerErrorCode.permissionDenied, false),
+      (MobileScannerErrorCode.permissionDenied, true),
+      (MobileScannerErrorCode.unsupported, false),
+      (MobileScannerErrorCode.genericError, false),
+    ]) {
+      await pumpUnavailable(tester, code, declined: declined, onRetry: () {});
+      final state = find.byType(JamEmptyState);
+      tops.add(
+        tester
+            .getTopLeft(
+              find.descendant(of: state, matching: find.byType(Icon)).first,
+            )
+            .dy,
+      );
+      titles.add(
+        tester
+            .getTopLeft(
+              find.descendant(of: state, matching: find.byType(Text)).first,
+            )
+            .dy,
+      );
+    }
+    expect(tops, hasLength(1));
+    expect(titles, hasLength(1));
   });
 }

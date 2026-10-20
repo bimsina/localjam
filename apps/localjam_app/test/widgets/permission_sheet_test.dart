@@ -3,12 +3,16 @@ library;
 
 import 'package:flutter/cupertino.dart' show CupertinoIcons;
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:localjam_app/src/design/theme.dart';
+import 'package:localjam_app/src/design/typography.dart';
 import 'package:localjam_app/src/design/tokens.dart';
 import 'package:localjam_app/src/widgets/buttons.dart';
 import 'package:localjam_app/src/widgets/permission_sheet.dart';
 import 'package:localjam_app/src/widgets/sheet.dart';
+import 'package:localjam_app/src/widgets/wifi_glyph.dart';
 
 Widget _host(Future<void> Function(BuildContext) onTap, {ThemeData? theme}) =>
     MaterialApp(
@@ -112,10 +116,21 @@ void main() {
     final glyph = tester.widget<Icon>(find.byIcon(CupertinoIcons.lock));
     expect(glyph.color, isNot(JamColors.light.tint));
     expect(glyph.size, JamIconSize.row);
-    // Nor is the hero glyph: one rule with every empty state's (D8).
-    final hero = tester.widget<Icon>(find.byIcon(rationale.icon));
-    expect(hero.color, JamColors.light.secondaryLabel);
-    expect(hero.size, JamIconSize.hero);
+    // Nor is the hero glyph: one rule with every empty state's (D8). The
+    // network's own glyph is drawn in outline, at an icon's hero size.
+    expect(rationale.icon, isNull);
+    final hero = tester.widget<JamWifiGlyph>(find.byType(JamWifiGlyph));
+    expect(hero.color, isNull); // secondaryLabel
+    expect(hero.slashed, isFalse);
+    expect(tester.getSize(find.byType(JamWifiGlyph)), const Size.square(48));
+    // The promises wrap at the full column, not balanced to half of it.
+    expect(
+      find.descendant(
+        of: find.byType(Row),
+        matching: find.byType(JamBalancedText),
+      ),
+      findsNothing,
+    );
     expect(find.text(JamPermissionSheetStrings.continueLabel), findsOneWidget);
     expect(find.text(JamPermissionSheetStrings.dismissLabel), findsOneWidget);
   });
@@ -211,5 +226,51 @@ void main() {
 
     expect(find.text(JamPermissionSheetStrings.cameraTitle), findsOneWidget);
     expect(tester.takeException(), isNull);
+  });
+
+  // Last in the file: it swaps the body face for a proportional one.
+  testWidgets('no promise ends on one word alone', (tester) async {
+    // The test font sets every glyph a full em wide, so its lines wrap like
+    // no real face's. Measure with a proportional one (Manrope, bundled)
+    // standing in for the system face.
+    final manrope = rootBundle.load('assets/fonts/Manrope.ttf');
+    for (final family in ['Roboto', 'CupertinoSystemText']) {
+      await tester.runAsync(
+        () => (FontLoader(family)..addFont(manrope)).load(),
+      );
+    }
+    for (final width in [320.0, 360.0, 402.0, 430.0]) {
+      tester.view.physicalSize = Size(width, 874);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+      for (final rationale in [
+        JamPermissionRationale.localNetwork,
+        JamPermissionRationale.notifications,
+        JamPermissionRationale.audioLibrary,
+        JamPermissionRationale.camera,
+      ]) {
+        await tester.pumpWidget(const SizedBox());
+        await tester.pumpWidget(
+          _host((context) => showJamPermissionSheet(context, rationale)),
+        );
+        await tester.tap(find.text('Go'));
+        await tester.pumpAndSettle();
+        for (final detail in [rationale.doesBullet, rationale.neverBullet]) {
+          final paragraph = tester.renderObject<RenderParagraph>(
+            find.text(detail, skipOffstage: false),
+          );
+          // The first character of the last line; 0 when there is one.
+          final start = paragraph
+              .getPositionForOffset(Offset(1, paragraph.size.height - 1))
+              .offset;
+          if (start == 0) continue;
+          expect(
+            detail.substring(start).trim(),
+            contains(' '),
+            reason: '$width: $detail',
+          );
+        }
+      }
+    }
   });
 }
