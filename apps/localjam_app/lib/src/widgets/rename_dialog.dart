@@ -16,7 +16,7 @@ import 'dialogs.dart';
 
 /// The strings this prompt puts on screen.
 abstract final class RenameStrings {
-  static const String title = 'Your Name';
+  static const String title = 'Your name';
 
   /// One line in the alert: "…people in a / jam." left a word alone.
   static const String message = 'How you appear to people in a jam.';

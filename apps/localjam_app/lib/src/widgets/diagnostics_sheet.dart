@@ -29,24 +29,24 @@ import 'sheet.dart';
 /// Every user-facing string this sheet can show.
 abstract final class JamDiagnosticsStrings {
   static const String title = 'Diagnostics';
-  static const String copy = 'Copy Diagnostics';
+  static const String copy = 'Copy diagnostics';
   static const String done = 'Done';
 
   /// Copy's label for a moment after it worked.
   static const String copied = 'Copied';
 
   static const String syncHeader = 'Sync';
-  static const String clockOffset = 'Clock Offset';
+  static const String clockOffset = 'Clock offset';
   static const String clockSyncing = 'Syncing…';
   static const String drift = 'Drift';
-  static const String lastCorrection = 'Last Correction';
+  static const String lastCorrection = 'Last correction';
   static const String none = 'None';
   static const String slew = 'Slew';
   static const String hardResync = 'Resync';
   static const String empty = '—';
 
   static const String playerHeader = 'Player';
-  static const String playerError = 'Last Error';
+  static const String playerError = 'Last error';
 
   static const String playbackHeader = 'Playback';
 }

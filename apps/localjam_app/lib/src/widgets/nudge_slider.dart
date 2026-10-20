@@ -23,7 +23,7 @@ import 'sheet.dart';
 
 /// Every user-facing string this control can show.
 abstract final class JamNudgeStrings {
-  static const String title = 'Sound Offset';
+  static const String title = 'Sound offset';
 
   /// Kept for older call sites; the control's name is [title].
   static const String label = title;
@@ -50,7 +50,7 @@ abstract final class JamNudgeStrings {
 
 /// How [NudgeSlider] presents its value.
 enum NudgeSliderStyle {
-  /// A row: "Sound Offset" and the value, the slider under it — for a
+  /// A row: "Sound offset" and the value, the slider under it — for a
   /// grouped section (Diagnostics).
   row,
 

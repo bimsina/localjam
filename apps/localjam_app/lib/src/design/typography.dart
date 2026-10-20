@@ -57,7 +57,7 @@ class JamTypeScale extends ThemeExtension<JamTypeScale> {
   /// headers, a jam's name at its largest.
   final TextStyle title2;
 
-  /// Manrope 20/27 semibold. Section titles ("Recent", "Up Next"), alert
+  /// Manrope 20/27 semibold. Section titles ("Recent", "Up next"), alert
   /// titles, a jam's name in a row.
   final TextStyle title3;
 

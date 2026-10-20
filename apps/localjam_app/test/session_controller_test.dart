@@ -493,7 +493,7 @@ void main() {
     await tester.tap(find.text('Bar Room ended'));
     await tester.pumpAndSettle();
     // ...and it lands on the screen that explains it, with a way back in.
-    expect(find.text('You Were Removed'), findsOneWidget);
+    expect(find.text('You were removed'), findsOneWidget);
     expect(find.text('Back to Nearby'), findsOneWidget);
 
     await tester.tap(find.text('Back to Nearby'));

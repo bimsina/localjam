@@ -50,7 +50,7 @@ class JamSwipeAction extends StatefulWidget implements JamSelfSeparatingRow {
 
   final Widget child;
 
-  /// The button's word, Title Case ("Forget", "Remove").
+  /// The button's word, sentence case ("Forget", "Remove").
   final String label;
 
   /// The screen-reader action's name; defaults to [label].

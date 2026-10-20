@@ -26,7 +26,7 @@ import '../widgets/wifi_glyph.dart';
 /// functions of the same stem name the jam when it is (spec §10.9: "jam",
 /// never "room"; plain reasons; never "check your connection").
 abstract final class JamSessionEndedStrings {
-  static const String hostGoneTitle = 'The Host Left';
+  static const String hostGoneTitle = 'The host left';
   static const String hostGoneBody =
       'The jam stopped reaching this phone. If the host’s phone is asleep, '
       'ask them to open LocalJam.';
@@ -35,7 +35,7 @@ abstract final class JamSessionEndedStrings {
       : '$jam stopped reaching this phone. If the host’s phone is asleep, '
             'ask them to open LocalJam.';
 
-  static const String kickedTitle = 'You Were Removed';
+  static const String kickedTitle = 'You were removed';
   static const String kickedBody = 'The host removed you from this jam.';
   static String kicked(String? jam) =>
       jam == null ? kickedBody : 'The host removed you from $jam.';
@@ -47,7 +47,7 @@ abstract final class JamSessionEndedStrings {
   // Where the page offers the new code itself ([newCode], `offersCode`),
   // the sentence stops at the reason: the button under it is the way, and
   // "ask the host" is only the advice for a page with no such button.
-  static const String rejectedTitle = 'Couldn’t Get Back In';
+  static const String rejectedTitle = 'Couldn’t get back in';
   static const String rejectedBody =
       'The jam turned this phone away. It may have restarted, so ask the '
       'host for a new code.';
@@ -63,8 +63,8 @@ abstract final class JamSessionEndedStrings {
   }
 
   /// `bad_token`: the room restarted under a new code. The old link can
-  /// never work again, so there is no "Try Again" — a new code is the way.
-  static const String restartedTitle = 'The Jam Restarted';
+  /// never work again, so there is no "Try again" — a new code is the way.
+  static const String restartedTitle = 'The jam restarted';
   static const String restartedBody =
       'The code this phone joined with doesn’t work any more. Ask the host '
       'for the new one.';
@@ -80,11 +80,11 @@ abstract final class JamSessionEndedStrings {
 
   /// `version`: no retry fixes this; an update does — and an update needs
   /// the internet this group does not have, so it says when.
-  static const String versionTitle = 'Update Needed';
+  static const String versionTitle = 'Update needed';
   static const String versionBody = kJamVersionMismatch;
 
   /// `full`: the one refusal that can turn into a yes on its own.
-  static const String fullTitle = 'This Jam Is Full';
+  static const String fullTitle = 'This jam is full';
   static const String fullBody =
       'Someone has to leave before this phone can get back in.';
   static String full(String? jam) => jam == null
@@ -93,7 +93,7 @@ abstract final class JamSessionEndedStrings {
 
   /// Host only: the OS took the room's listening socket while the app was
   /// away and it could not be reopened (listenerFailed).
-  static const String listenerFailedTitle = 'New Guests Can’t Join';
+  static const String listenerFailedTitle = 'New guests can’t join';
   static const String listenerFailedBody =
       'This jam stopped letting new guests in while LocalJam was in the '
       'background. Your queue comes with you.';
@@ -101,32 +101,32 @@ abstract final class JamSessionEndedStrings {
       ? listenerFailedBody
       : '$jam stopped letting new guests in while LocalJam was in the '
             'background. Your queue comes with you.';
-  static const String startNew = 'Start a New Jam';
+  static const String startNew = 'Start a new jam';
 
   /// The host ended it on purpose. Every jam leaves a record, so the page
   /// says where this one went.
-  static const String hostEndedTitle = 'The Host Ended the Jam';
+  static const String hostEndedTitle = 'The host ended the jam';
   static const String hostEndedBody =
-      'This jam is over for everyone. You’ll find it in Past Jams.';
+      'This jam is over for everyone. You’ll find it in Past jams.';
   static String hostEnded(String? jam) => jam == null
       ? hostEndedBody
-      : '$jam is over for everyone. You’ll find it in Past Jams.';
+      : '$jam is over for everyone. You’ll find it in Past jams.';
 
-  static const String endedTitle = 'Jam Ended';
+  static const String endedTitle = 'Jam ended';
   static const String endedBody = 'This jam is over.';
   static String ended(String? jam) => jam == null ? endedBody : '$jam is over.';
 
-  /// While "Try Again" runs: the words the spinner cannot say.
+  /// While "Try again" runs: the words the spinner cannot say.
   static String retrying(String? jam) =>
       jam == null ? 'Trying to reach the jam…' : 'Trying to reach $jam…';
 
-  /// A "Try Again" that got no answer at all: the newer news, with the one
+  /// A "Try again" that got no answer at all: the newer news, with the one
   /// thing left to check.
   static String stillUnreachable(String? jam) =>
       'Still couldn’t reach ${jam ?? 'the jam'}. Check this phone is on the '
       'host’s Wi‑Fi or hotspot, then try again.';
 
-  static const String tryAgain = 'Try Again';
+  static const String tryAgain = 'Try again';
 
   /// The Try Again button while its retry runs.
   static const String trying = 'Trying…';
@@ -134,8 +134,8 @@ abstract final class JamSessionEndedStrings {
 
   /// A new code for a jam that restarted: the scanner where there is a
   /// camera, the Join with Link alert where there is not.
-  static const String scanNew = 'Scan New Code';
-  static const String linkNew = 'Join with New Link';
+  static const String scanNew = 'Scan new code';
+  static const String linkNew = 'Join with new link';
   static String get newCode => canScanQrCodes ? scanNew : linkNew;
 
   static const String rejoinFailed = kJamRejoinFailed;
@@ -192,11 +192,11 @@ class JamSessionEndedView extends StatelessWidget {
   /// Link where there is no camera). Null: the page says to ask the host.
   final VoidCallback? onScan;
 
-  /// A "Try Again" is running: its button turns a ring beside "Trying…"
+  /// A "Try again" is running: its button turns a ring beside "Trying…"
   /// in place, a new code waits, and the way home stays where it was.
   final bool retrying;
 
-  /// Why the last "Try Again" failed, said here rather than in a notice
+  /// Why the last "Try again" failed, said here rather than in a notice
   /// over a screen that is about to be read anyway.
   final String? error;
 
@@ -265,7 +265,7 @@ class JamSessionEndedView extends StatelessWidget {
         JamSessionEndedStrings.hostEndedTitle,
         JamSessionEndedStrings.hostEnded(jam),
       ),
-      // The host's own room, gone without "End Jam" being pressed.
+      // The host's own room, gone without "End jam" being pressed.
       JamSessionEndReason.listenerFailed => (
         CupertinoIcons.exclamationmark_circle,
         JamSessionEndedStrings.listenerFailedTitle,

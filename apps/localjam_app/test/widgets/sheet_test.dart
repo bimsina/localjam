@@ -234,7 +234,7 @@ void main() {
           title: 'People',
           grouped: true,
           builder: (_) =>
-              const JamSection(children: [JamRow(title: 'Invite People')]),
+              const JamSection(children: [JamRow(title: 'Invite people')]),
         ),
         theme: jamDarkTheme(),
       ),
@@ -319,7 +319,7 @@ void main() {
       _host(
         (context) => showJamSheet<void>(
           context,
-          title: 'Invite People',
+          title: 'Invite people',
           actions: const JamSheetActions.done(),
           initialChildSize: kJamSheetMediumSize,
           builder: (_) => const SizedBox(height: 200),
@@ -420,7 +420,7 @@ void main() {
       _host(
         (context) => showJamSheet<void>(
           context,
-          title: 'Invite People',
+          title: 'Invite people',
           actions: const JamSheetActions.done(),
           builder: (_) => const SizedBox(height: 40),
         ),
@@ -430,7 +430,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text(JamSheetStrings.done));
     await tester.pumpAndSettle();
-    expect(find.text('Invite People'), findsNothing);
+    expect(find.text('Invite people'), findsNothing);
   });
 
   group('the room keeps what it opens in its own dark (R2)', () {
@@ -535,7 +535,7 @@ void main() {
                 builder: (inner) => TextButton(
                   onPressed: () => showJamSheet<void>(
                     inner,
-                    title: 'Sound Offset',
+                    title: 'Sound offset',
                     builder: (_) => const SizedBox(height: 40),
                   ),
                   child: const Text('Open'),

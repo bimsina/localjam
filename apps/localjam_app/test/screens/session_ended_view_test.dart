@@ -6,6 +6,7 @@ library;
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:localjam_app/src/design/theme.dart';
+import 'package:localjam_app/src/screens/history_screen.dart';
 import 'package:localjam_app/src/screens/session_ended_view.dart';
 import 'package:localjam_app/src/state/session_controller.dart';
 import 'package:localjam_app/src/widgets/buttons.dart';
@@ -58,7 +59,10 @@ void main() {
     expect(find.text(JamSessionEndedStrings.hostEndedTitle), findsOneWidget);
     // Which jam, and where it went.
     expect(find.text(JamSessionEndedStrings.hostEnded(_jam)), findsOneWidget);
-    expect(JamSessionEndedStrings.hostEnded(_jam), contains('Past Jams'));
+    expect(
+      JamSessionEndedStrings.hostEnded(_jam),
+      contains(HistoryStrings.title),
+    );
   });
 
   testWidgets('a jam with no name keeps a glyph for the reason', (
@@ -120,7 +124,7 @@ void main() {
       findsOneWidget,
     );
     expect(find.textContaining('Ask the host'), findsNothing);
-    // The old link can never work: no "Try Again".
+    // The old link can never work: no "Try again".
     expect(find.text(JamSessionEndedStrings.tryAgain), findsNothing);
     expect(
       _button(tester, JamSessionEndedStrings.newCode).variant,

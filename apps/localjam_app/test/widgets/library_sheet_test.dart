@@ -67,7 +67,7 @@ void main() {
     );
   });
 
-  testWidgets('"Select All" ends on the page margin', (tester) async {
+  testWidgets('"Select all" ends on the page margin', (tester) async {
     await _pump(tester);
     final sheet = tester.getRect(find.byType(JamLibraryPicker));
     final label = tester.getRect(find.text(LibrarySheetStrings.selectAll));

@@ -55,8 +55,8 @@ abstract final class HomeStrings {
 
   /// The scanner — the same two words on every button that opens it, and
   /// the scanner's own title.
-  static const String scan = 'Scan Code';
-  static const String host = 'Start a Jam';
+  static const String scan = 'Scan code';
+  static const String host = 'Start a jam';
 
   /// The paste-a-link way in, named as the alert it opens is: the nav-bar
   /// action on platforms with no camera, and beside Scan Code where there
@@ -66,7 +66,7 @@ abstract final class HomeStrings {
 
   static const String settings = 'Settings';
   static const String recent = 'Recent';
-  static const String seeAll = 'See All';
+  static const String seeAll = 'See all';
 
   static const String offlineTitle = 'Not on Wi‑Fi';
   static const String offlineBody =
@@ -74,14 +74,14 @@ abstract final class HomeStrings {
       'connect to it.';
 
   /// This phone is *sharing* the hotspot, so it is almost always the host.
-  static const String hotspotTitle = 'You’re Sharing a Hotspot';
+  static const String hotspotTitle = 'You’re sharing a hotspot';
   static const String hotspotBody =
       'Nearby jams can’t be listed over a hotspot. Start one here, or scan '
       'the host’s code.';
 
-  /// Not "No Jams Nearby" under a large "Nearby": the page title already
+  /// Not "No jams nearby" under a large "Nearby": the page title already
   /// says where.
-  static const String quietTitle = 'No Jams Yet';
+  static const String quietTitle = 'No jams yet';
   static const String quietBody =
       'When someone on this Wi‑Fi starts one, it shows up here.';
 
@@ -103,7 +103,7 @@ abstract final class HomeStrings {
       'You’re hosting. Nearby jams show up again when it ends.';
   static const String guestingEnds =
       'You’re in this jam. Nearby jams show up again when you leave.';
-  static const String invite = 'Invite People';
+  static const String invite = 'Invite people';
 
   /// The one-line versions, above Recent.
   static String hostingBody(String room) =>
@@ -114,7 +114,7 @@ abstract final class HomeStrings {
   static const String badCode = 'That code isn’t a jam invite.';
 }
 
-/// How many past jams the Recent section lists before "See All".
+/// How many past jams the Recent section lists before "See all".
 const int kJamHomeRecents = 3;
 
 /// How far a newly discovered room rises into place.
@@ -188,7 +188,7 @@ class _HomeScreenState extends State<HomeScreen> {
     }
     // A jam that just ended leaves a fresh record behind it.
     if (!session.hasRoom) unawaited(_loadRecents());
-    // The ended page's "Scan New Code" came here for the scanner.
+    // The ended page's "Scan new code" came here for the scanner.
     if (!session.hasRoom && session.scanRequested) _scanWhenOnTop();
   }
 
@@ -336,7 +336,7 @@ class _HomeScreenState extends State<HomeScreen> {
     final session = JamSession.read(context);
     if (!await jamReadyForNewSession(context, session) || !mounted) return;
     await session.prepareForSession();
-    // A blank setup: nothing left over from a "Host Again" backed out of.
+    // A blank setup: nothing left over from a "Host again" backed out of.
     session.hostSetupDraft = null;
     if (mounted) unawaited(context.push('/host'));
   }

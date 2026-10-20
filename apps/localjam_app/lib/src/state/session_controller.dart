@@ -140,7 +140,7 @@ String jamRemovedNotice(String name) => 'Removed $name';
 
 /// This app and the host cannot talk: a different major protocol version
 /// (§2) — refused at the door, or reported by the host later. The same
-/// sentence as the "Update Needed" page, which says it when a jam ends over
+/// sentence as the "Update needed" page, which says it when a jam ends over
 /// it: an update needs the internet this group does not have, so it says
 /// when.
 const String kJamVersionMismatch =
@@ -316,7 +316,7 @@ class JamSessionController extends ChangeNotifier {
   /// The jam that ended, read off its engine as it ended ([endedJam]).
   JamEndedJam? _endedJam;
 
-  /// A "Scan New Code" waiting for Home ([requestScan]).
+  /// A "Scan new code" waiting for Home ([requestScan]).
   bool _scanRequested = false;
 
   /// Every file the hosted room was started with, in the order picked — so
@@ -448,7 +448,7 @@ class JamSessionController extends ChangeNotifier {
   JamRestartArgs? get restartArgs => _restartArgs;
 
   /// The jam that ended — its name, its host, the cover that was playing —
-  /// for the page it ended on, while [phase] is `ended` or a "Try Again"
+  /// for the page it ended on, while [phase] is `ended` or a "Try again"
   /// runs. Read off the engine as the jam ended and kept past it: a retry
   /// tears the engine down, and the page goes on naming the jam whatever the
   /// retry says. Null otherwise.
@@ -459,7 +459,7 @@ class JamSessionController extends ChangeNotifier {
 
   /// Asks Home to open its own way in with a code — the scanner, or Join
   /// with Link where there is no camera — once it is the page on top. The
-  /// ended page's "Scan New Code" leaves the dead room for Home first, so
+  /// ended page's "Scan new code" leaves the dead room for Home first, so
   /// the flow cannot be opened from where the button is.
   void requestScan() {
     _scanRequested = true;
@@ -1314,7 +1314,7 @@ class JamSessionController extends ChangeNotifier {
   }
 
   /// Removes [peerId] from the jam this device hosts (§5.6) — what People's
-  /// "Remove from Jam" should call, so the departure that follows is told
+  /// "Remove from jam" should call, so the departure that follows is told
   /// as the host's own action ("Removed Okon"), even for a guest the engine
   /// cannot keep out (one that sent no device id). Throws what
   /// [JamHostEngine.kickPeer] throws.

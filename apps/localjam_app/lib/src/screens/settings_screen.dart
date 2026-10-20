@@ -47,7 +47,7 @@ abstract final class SettingsStrings {
 
   static const String about = 'About';
   static const String version = 'Version';
-  static const String openSource = 'Source Code';
+  static const String openSource = 'Source code';
   static const String openSourceDetail = 'GitHub';
   static const String linkCopied = JamConfirmationStrings.copied;
 

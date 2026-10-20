@@ -52,7 +52,7 @@ abstract final class RoomSheetStrings {
   // People sheet.
   static const String title = 'People';
   static const String done = 'Done';
-  static const String invitePeople = 'Invite People';
+  static const String invitePeople = 'Invite people';
 
   /// The people section's header: "3 people".
   static String peopleCount(int n) => n == 1 ? '1 person' : '$n people';
@@ -69,16 +69,16 @@ abstract final class RoomSheetStrings {
 
   // Whether people nearby can see the jam: chosen in Start a Jam, and the
   // host's to change while it runs. Same words as Start a Jam's switch.
-  static const String nearby = 'Show to People Nearby';
+  static const String nearby = 'Show to people nearby';
   static const String nearbyOnFooter =
       'People on this Wi‑Fi can see and join this jam.';
   static const String nearbyOffFooter =
       'Only people with the link or the code can join.';
 
   // The per-guest menu.
-  static const String makeCohost = 'Make Co-host';
-  static const String removeCohost = 'Remove Co-host';
-  static const String removePeer = 'Remove from Jam';
+  static const String makeCohost = 'Make co-host';
+  static const String removeCohost = 'Remove co-host';
+  static const String removePeer = 'Remove from jam';
   static const String cancel = 'Cancel';
   static const String remove = 'Remove';
   static String removeTitle(String name) => 'Remove $name?';
@@ -109,21 +109,21 @@ abstract final class RoomSheetStrings {
   static const String removed = 'Removed';
   static const String removedDetail =
       'They can’t rejoin until you let them back in.';
-  static const String letBackIn = 'Let Back In';
+  static const String letBackIn = 'Let back in';
   static String letBackInDone(String name) => '$name can join again';
 
   /// A host action the room refused — never the exception's own text.
   static const String actionFailed = 'Couldn’t change that. Try again.';
 
   // The way out.
-  static const String endJam = 'End Jam';
-  static const String leaveJam = 'Leave Jam';
-  static const String endTitle = 'End Jam?';
+  static const String endJam = 'End jam';
+  static const String leaveJam = 'Leave jam';
+  static const String endTitle = 'End jam?';
   static const String endDetail = 'The music stops for everyone.';
 
   /// End Jam with nobody else here: there is no "everyone" to stop.
   static const String endDetailAlone = 'This ends the jam.';
-  static const String leaveTitle = 'Leave Jam?';
+  static const String leaveTitle = 'Leave jam?';
   static const String leaveDetail =
       'You can rejoin as long as the jam is still going.';
 
@@ -131,15 +131,15 @@ abstract final class RoomSheetStrings {
   static const String leave = leaveJam;
 
   // Invite sheet.
-  static const String inviteTitle = 'Invite People';
+  static const String inviteTitle = 'Invite people';
   static const String inviteOnNetwork =
       'Anyone on this Wi‑Fi can scan to join.';
   static const String inviteOnHotspot =
       'People join your hotspot first, then scan to join.';
   static String qrLabel(String room) => 'Code to join $room';
 
-  static const String shareLink = 'Share Link';
-  static const String copyLink = 'Copy Link';
+  static const String shareLink = 'Share link';
+  static const String copyLink = 'Copy link';
 
   /// Copy Link's label for a moment after it worked — the confirmation
   /// happens in place, not in a toast over the buttons (§10.5).

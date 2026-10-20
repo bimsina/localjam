@@ -33,12 +33,12 @@ void main() {
     tester,
   ) async {
     await tester.pumpWidget(
-      _host(JamButton.filled(label: 'Start a Jam', onPressed: () {})),
+      _host(JamButton.filled(label: 'Start a jam', onPressed: () {})),
     );
     final ground = _groundOf(tester)!;
     expect(ground.color, JamColors.light.tint);
     expect(ground.shape, isA<RoundedRectangleBorder>());
-    final style = _labelStyle(tester, 'Start a Jam');
+    final style = _labelStyle(tester, 'Start a jam');
     expect(style.color, JamColors.light.onTint);
     expect(style.fontSize, 17);
     expect(style.fontWeight, FontWeight.w600);
@@ -53,16 +53,16 @@ void main() {
     expect(_labelStyle(tester, 'Join').color, JamColors.light.tint);
 
     await tester.pumpWidget(
-      _host(JamButton.gray(label: 'Host Again', onPressed: () {})),
+      _host(JamButton.gray(label: 'Host again', onPressed: () {})),
     );
     expect(_groundOf(tester)!.color, JamColors.light.fill);
-    expect(_labelStyle(tester, 'Host Again').color, JamColors.light.tint);
+    expect(_labelStyle(tester, 'Host again').color, JamColors.light.tint);
 
     await tester.pumpWidget(
-      _host(JamButton.plain(label: 'See All', onPressed: () {})),
+      _host(JamButton.plain(label: 'See all', onPressed: () {})),
     );
     expect(_groundOf(tester), isNull);
-    expect(_labelStyle(tester, 'See All').color, JamColors.light.tint);
+    expect(_labelStyle(tester, 'See all').color, JamColors.light.tint);
   });
 
   testWidgets('small is 30 painted inside a 44 hit area', (tester) async {
@@ -96,7 +96,7 @@ void main() {
   testWidgets('destructive turns the fill or label danger', (tester) async {
     await tester.pumpWidget(
       _host(
-        JamButton.filled(label: 'End Jam', destructive: true, onPressed: () {}),
+        JamButton.filled(label: 'End jam', destructive: true, onPressed: () {}),
       ),
     );
     expect(_groundOf(tester)!.color, JamColors.light.dangerFilled);
@@ -104,13 +104,13 @@ void main() {
     await tester.pumpWidget(
       _host(
         JamButton.plain(
-          label: 'Leave Jam',
+          label: 'Leave jam',
           destructive: true,
           onPressed: () {},
         ),
       ),
     );
-    expect(_labelStyle(tester, 'Leave Jam').color, JamColors.light.danger);
+    expect(_labelStyle(tester, 'Leave jam').color, JamColors.light.danger);
   });
 
   testWidgets('tapping fires; disabled is neutral and ignores taps', (
@@ -247,7 +247,7 @@ void main() {
     await tester.pumpWidget(
       _host(
         JamButton.filled(
-          label: 'Try Again',
+          label: 'Try again',
           loading: true,
           loadingLabel: 'Trying…',
           onPressed: () {},
@@ -256,7 +256,7 @@ void main() {
     );
     await tester.pump();
     expect(find.text('Trying…'), findsOneWidget);
-    expect(find.text('Try Again'), findsNothing);
+    expect(find.text('Try again'), findsNothing);
     expect(
       tester.getCenter(find.byType(JamProgressRing)).dx,
       lessThan(tester.getCenter(find.text('Trying…')).dx),
@@ -285,26 +285,26 @@ void main() {
   ) async {
     var copies = 0;
     await tester.pumpWidget(
-      _host(JamCopyButton(label: 'Copy Link', onCopy: () => copies++)),
+      _host(JamCopyButton(label: 'Copy link', onCopy: () => copies++)),
     );
-    await tester.tap(find.text('Copy Link'));
+    await tester.tap(find.text('Copy link'));
     await tester.pump();
     expect(copies, 1);
     expect(find.text(JamConfirmationStrings.copied), findsOneWidget);
     expect(find.byIcon(CupertinoIcons.checkmark), findsOneWidget);
     await tester.pump(kJamInPlaceConfirmation);
-    expect(find.text('Copy Link'), findsOneWidget);
+    expect(find.text('Copy link'), findsOneWidget);
   });
 
   testWidgets('a button announces itself as one', (tester) async {
     final handle = tester.ensureSemantics();
     await tester.pumpWidget(
-      _host(JamButton.filled(label: 'Start a Jam', onPressed: () {})),
+      _host(JamButton.filled(label: 'Start a jam', onPressed: () {})),
     );
     expect(
       tester.getSemantics(find.byType(JamButton)),
       matchesSemantics(
-        label: 'Start a Jam',
+        label: 'Start a jam',
         isButton: true,
         isEnabled: true,
         hasEnabledState: true,

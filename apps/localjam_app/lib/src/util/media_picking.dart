@@ -27,8 +27,8 @@ import 'permissions.dart';
 abstract final class JamPickerStrings {
   static const String audioTypeLabel = 'Audio';
 
-  static const String addFrom = 'Add Songs From';
-  static const String library = 'Music Library';
+  static const String addFrom = 'Add songs from';
+  static const String library = 'Music library';
   static const String libraryDetail = 'Songs saved on this phone';
   static const String files = 'Files';
   static const String filesDetail = 'Downloads and cloud storage';

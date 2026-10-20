@@ -45,12 +45,12 @@ import '../widgets/track_row.dart';
 
 /// Every user-facing string on these pages, in one place.
 abstract final class HistoryStrings {
-  static const String title = 'Past Jams';
+  static const String title = 'Past jams';
   static const String forget = 'Forget';
-  static const String hostAgain = 'Host Again';
+  static const String hostAgain = 'Host again';
 
   /// A jam you joined was never yours to host *again*.
-  static const String hostThis = 'Host This Jam';
+  static const String hostThis = 'Host this jam';
   static String hostLabel({required bool wasHost}) =>
       wasHost ? hostAgain : hostThis;
   static const String youHosted = 'You hosted';
@@ -84,9 +84,9 @@ abstract final class HistoryStrings {
   /// The detail page's list of what played.
   static const String songsHeader = 'Songs';
 
-  static const String forgetTitle = 'Forget This Jam?';
+  static const String forgetTitle = 'Forget this jam?';
   static String forgetBody(String name) =>
-      '$name will be removed from Past Jams. Songs on this device won’t be '
+      '$name will be removed from Past jams. Songs on this device won’t be '
       'deleted.';
   static const String forgetConfirm = 'Forget';
 
@@ -95,7 +95,7 @@ abstract final class HistoryStrings {
   static String forgotten(String name) => 'Forgot $name';
   static const String undo = 'Undo';
 
-  static const String emptyTitle = 'No Past Jams';
+  static const String emptyTitle = 'No past jams';
   static const String emptyBody = 'Jams you host or join show up here.';
 
   static const String justNow = 'Just now';

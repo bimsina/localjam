@@ -52,7 +52,7 @@ class JamScaffold extends StatefulWidget {
          'A JamScaffold needs slivers or children.',
        );
 
-  /// The page title (Title Case).
+  /// The page title (sentence case).
   final String title;
 
   /// Large title that collapses on scroll; false for an inline-only bar.

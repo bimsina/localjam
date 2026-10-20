@@ -75,7 +75,7 @@ void main() {
     expect(mark.onBackdrop, isTrue);
     expect(mark.name, 'Van Jam');
     expect(mark.cover, isNull);
-    // "Nothing Playing" alone, and Add Songs where play will be: on the
+    // "Nothing playing" alone, and Add Songs where play will be: on the
     // play square's line (IR-1), the ivory object always the next step.
     expect(find.text(JamRoomStrings.nothingQueuedBody), findsNothing);
     final square = find.descendant(

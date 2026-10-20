@@ -2,7 +2,7 @@
 /// on Now Playing (DESIGN_SPEC v3 §6.3 D5, §6.6), and in the docked panel on
 /// wide windows (D7).
 ///
-/// One implementation for host and guest, capability-gated: "Add Songs"
+/// One implementation for host and guest, capability-gated: "Add songs"
 /// only with `addTracks`, drag handles only with `editQueue`, swipe-to-remove
 /// and the long-press menu (Play Next, Remove) per what the room allows.
 /// A friend's song wears their face at the row's end (R3) — never your own
@@ -37,10 +37,10 @@ import 'track_row.dart';
 
 /// Everything the queue says out loud.
 abstract final class QueueSheetStrings {
-  static const String title = 'Up Next';
-  static const String addSongs = 'Add Songs';
+  static const String title = 'Up next';
+  static const String addSongs = 'Add songs';
   static const String empty = 'Nothing up next';
-  static const String playNext = 'Play Next';
+  static const String playNext = 'Play next';
   static const String remove = 'Remove';
   static const String reorder = 'Reorder';
 
@@ -51,7 +51,7 @@ abstract final class QueueSheetStrings {
   static const String importing = 'Adding your music to the jam';
   static const String hostRunsQueue = 'Only the host can add songs.';
 
-  /// Why "Add Songs" is grey while the host cannot be reached — the same
+  /// Why "Add songs" is grey while the host cannot be reached — the same
   /// rule as the transport's: a control that stops working says why.
   static const String hostAsleep =
       'The host’s phone is asleep. You can add songs when it wakes.';
@@ -67,7 +67,7 @@ abstract final class QueueSheetStrings {
 
 /// The queue's rows and header, as a column that fills what it is given.
 ///
-/// Used in place on Now Playing (with its own "Up Next" header) and in the
+/// Used in place on Now Playing (with its own "Up next" header) and in the
 /// wide docked panel (where the panel's switcher is the header).
 class QueuePanel extends StatefulWidget {
   const QueuePanel({
@@ -88,7 +88,7 @@ class QueuePanel extends StatefulWidget {
   /// An external scroll controller, if the host layout needs one.
   final ScrollController? scrollController;
 
-  /// Whether to draw the "Up Next" header with its count.
+  /// Whether to draw the "Up next" header with its count.
   final bool showHeader;
 
   /// The side margin rows and the header share — the artwork's margin on
@@ -1181,7 +1181,7 @@ class _RowMenuLayout extends MultiChildLayoutDelegate {
 
 /// Picks a source, picks files, and hands them to the controller.
 ///
-/// Shared by the queue's "Add Songs" row and the empty Now Playing, so both
+/// Shared by the queue's "Add songs" row and the empty Now Playing, so both
 /// report failures the same way — once, as a summary, rather than one notice
 /// per bad file.
 Future<void> jamAddToQueue(BuildContext context, JamEngine engine) async {

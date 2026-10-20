@@ -8,10 +8,14 @@ This spec replaces the visual direction of [v3](DESIGN_SPEC_V3.md). v3 is
 still the baseline for behaviour: navigation, permissions, sync, recovery
 flows, platform integration, and any metric that v4 does not change.
 
-**Copy is in Title Case for now.** Titles, buttons and row labels use Title
-Case. Sentences and counts use sentence case ("12 songs", "Just you"). A
-separate pass to move everything to sentence case is still to be decided.
-Until then, don't mix the two piecemeal.
+**Copy is in sentence case.** Titles, buttons, menu items, rows, segments,
+section headers, alerts and notices capitalise only their first word, like
+the sentences and counts around them: "Start a jam", "Invite people", "Up
+next", "The host ended the jam", "12 songs", "Just you". Proper nouns keep
+their capitals: LocalJam, Wi‑Fi, Bluetooth, GitHub, and the names of
+people, songs, artists and jams. So does a page named as a place to go
+("Back to Nearby", "Open Settings", "You'll find it in Past jams"). "jam" is
+a common noun. This replaces v3's Title Case rule.
 
 ## Direction
 
@@ -96,7 +100,7 @@ no status dots or connection badges, no emoji and no filler copy.
     monogram on `fill`. It is never a mosaic, a person's colour or raspberry.
   - The host's face appears as a badge, knocked out of the tile, only where
     it adds something: a guest's Invite sheet and the page a jam ends on. It
-    never appears on list rows (Nearby, Recent, Past Jams), never shows your
+    never appears on list rows (Nearby, Recent, Past jams), never shows your
     own face, and is never guessed from a name.
   - Sizes: Nearby 44, rows and Invite 56, ended and past-jam pages 88. On the
     Now Playing backdrop it is the empty room's quiet see-through tile.
@@ -106,7 +110,7 @@ no status dots or connection badges, no emoji and no filler copy.
   - `JamPeopleLine` cuts long names before it ever cuts the count. A screen
     reader hears what the line shows.
   - The same phrasing is used in the Now Playing footer, the Invite sheet and
-    Past Jams.
+    Past jams.
 - **Credits mean someone else (R3).**
   - Song rows show a 20 pt face at the trailing edge only for songs someone
     else added, and every face in a list shares one column. Your own songs
@@ -131,16 +135,16 @@ no status dots or connection badges, no emoji and no filler copy.
     phone without playback rights, the play square is a hairline outline.
   - The footer: a pile of up to three other people's 24 pt faces (your own
     face only when you're alone) with "Just you" or "With Mia and Theo" and
-    a chevron to People, then the Up Next toggle (selected, it is glass,
+    a chevron to People, then the Up next toggle (selected, it is glass,
     never ivory).
 
   The queue opens in place. The cover shrinks to a 56 pt thumbnail beside the
   title, and the scrubber and transport stay pinned. Problems are one footnote
   under the jam's name. A state that needs action is a banner above the cover
   with one action. With nothing playing, the room shows its mark, "Nothing
-  Playing", and Add Songs where the play square will be.
+  playing", and Add songs where the play square will be.
 - **The room's palette (R2).** Everything opened from inside the room
-  (sheets, alerts, menus, People, Invite, Sound Offset, Diagnostics) uses the
+  (sheets, alerts, menus, People, Invite, Sound offset, Diagnostics) uses the
   room's dark palette in both themes.
 - **Shape by window.** A short window (under 560 pt tall) or a wide pane
   turns the player side-on, with the cover on the left. Wide layouts keep the
@@ -150,17 +154,17 @@ no status dots or connection badges, no emoji and no filler copy.
   rows grow and wrap.
 - **Nearby.** Each jam is a quiet bordered card holding the mark, the name at
   row scale, and a small tinted Join. Join moves under the name when the
-  name would otherwise get too narrow. Scan Code and Join with Link sit under
-  the list, and Start a Jam is pinned at the bottom. While you're in a jam,
+  name would otherwise get too narrow. Scan code and Join with link sit under
+  the list, and Start a jam is pinned at the bottom. While you're in a jam,
   Home shows that jam (its mark with the playing cover) rather than "No
-  Jams".
-- **Past Jams and Recent** use one row: the mark, the name, a face pile with
+  jams yet".
+- **Past jams and Recent** use one row: the mark, the name, a face pile with
   the people line, "You hosted · 12 songs · Yesterday", and a chevron. A past
-  jam's page shows the 88 mark, Host Again (filled), and its songs credited
+  jam's page shows the 88 mark, Host again (filled), and its songs credited
   the same way the queue credits them.
-- **Start a Jam.** The jam's name is a large inline Manrope field. Below it
-  come the Songs (under the one Add Songs row), Guests Can, and Show to
-  People Nearby.
+- **Start a jam.** The jam's name is a large inline Manrope field. Below it
+  come the Songs (under the one Add songs row), Guests can, and Show to
+  people nearby.
 
 ## Components
 
@@ -188,7 +192,7 @@ no status dots or connection badges, no emoji and no filler copy.
   - Hairlines are inset to the text. Inside a block they run to the block's
     edge; in plain lists they stop where the content stops.
   - Chevrons and values end on the same trailing edge.
-  - `JamAddSongsRow` is the only Add Songs.
+  - `JamAddSongsRow` is the only Add songs.
 - **Sheets.**
   - A sheet that commits something has Cancel and a verb (Start, Join, Add).
   - Every other sheet closes with a trailing semibold **Done**, never an
@@ -208,8 +212,8 @@ no status dots or connection badges, no emoji and no filler copy.
     text says.
   - Network pages use the outline Wi‑Fi glyph.
 - **One label per action.** An action has the same words everywhere it
-  appears: Scan Code, Join with Link, Invite People, Add Songs, Leave Jam,
-  End Jam, Done.
+  appears: Scan code, Join with link, Invite people, Add songs, Leave jam,
+  End jam, Done.
 
 ## Large text and motion
 

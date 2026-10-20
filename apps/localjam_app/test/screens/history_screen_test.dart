@@ -454,7 +454,7 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('a jam you joined offers "Host This Jam", not "Host Again"', (
+  testWidgets('a jam you joined offers "Host this jam", not "Host again"', (
     tester,
   ) async {
     final session = testSession();

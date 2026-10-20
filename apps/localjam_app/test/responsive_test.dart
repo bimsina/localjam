@@ -57,7 +57,7 @@ void main() {
     expect(find.text(AppSidebarStrings.history), findsOneWidget);
     expect(find.text(AppSidebarStrings.settings), findsOneWidget);
     // Start a Jam is still the page's one filled action.
-    expect(find.text('Start a Jam'), findsOneWidget);
+    expect(find.text(HomeStrings.host), findsOneWidget);
     // Identity lives in the sidebar, so the nav bar carries no avatar.
     expect(find.bySemanticsLabel('Settings'), findsNothing);
   });
@@ -201,7 +201,7 @@ void main() {
     );
     expect(padding.bottom, greaterThanOrEqualTo(jamRoomBarReach(0)));
     // Start a Jam gives way to the mini player.
-    expect(find.text('Start a Jam'), findsNothing);
+    expect(find.text(HomeStrings.host), findsNothing);
 
     await leaveTestSession(tester, session);
   });

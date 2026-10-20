@@ -11,7 +11,7 @@
 /// Inside a `JamSection` the hairline is automatic (every row but the last).
 /// In a plain list, pass `separator: true` to every row but the last.
 ///
-/// [JamAddSongsRow] is the app's one "Add Songs" affordance — Start a Jam's
+/// [JamAddSongsRow] is the app's one "Add songs" affordance — Start a Jam's
 /// song list and the queue both use it. [JamDisclosureChevron] is the one
 /// chevron.
 library;
@@ -29,7 +29,7 @@ import 'switch.dart';
 /// Strings the shared rows say.
 abstract final class JamListStrings {
   /// [JamAddSongsRow]'s default title.
-  static const String addSongs = 'Add Songs';
+  static const String addSongs = 'Add songs';
 }
 
 /// Where a row sits, published by `JamSection` to each child.
@@ -207,7 +207,7 @@ class JamRow extends StatelessWidget implements JamSelfSeparatingRow {
        titleMaxLines = 1,
        subtitleMaxLines = 2;
 
-  /// Body, Title Case.
+  /// Body, sentence case.
   final String title;
 
   /// Subheadline, `secondaryLabel` unless [subtitleColor] says otherwise
@@ -252,7 +252,7 @@ class JamRow extends StatelessWidget implements JamSelfSeparatingRow {
   /// Title (and icon) in `danger`.
   final bool destructive;
 
-  /// Title (and icon) in tint — an action row like "Add Songs".
+  /// Title (and icon) in tint — an action row like "Add songs".
   final bool tinted;
 
   /// Centres the title (the lone destructive row at the end of a sheet).
@@ -498,12 +498,12 @@ class _JamRowBody extends StatelessWidget {
   }
 }
 
-/// "Add Songs": a plus in a cover-sized tile, then the title, both in tint —
+/// "Add songs": a plus in a cover-sized tile, then the title, both in tint —
 /// the app's single most important collaborative action, drawn one way
 /// wherever it appears (Start a Jam's songs, the queue).
 ///
 /// [kJamAddSongsRowHeight] tall — a song row's height — so it sits on the
-/// songs' grid: the plus where the covers are, "Add Songs" where the titles
+/// songs' grid: the plus where the covers are, "Add songs" where the titles
 /// start. On the Now Playing backdrop ([onBackdrop]) the tile is white 12%
 /// and the plus and title white, like every other control there.
 ///
@@ -525,7 +525,7 @@ class JamAddSongsRow extends StatelessWidget implements JamSelfSeparatingRow {
   /// Null disables the row (the tertiary ink, as a disabled button).
   final VoidCallback? onTap;
 
-  /// Title Case; also what a screen reader hears.
+  /// Sentence case; also what a screen reader hears.
   final String title;
 
   /// Something is being added: a spinner replaces the plus and taps are

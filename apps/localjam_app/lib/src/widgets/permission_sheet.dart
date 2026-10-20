@@ -50,7 +50,7 @@ class JamPermissionRationale {
   /// beside the outline glyphs every other primer and empty state shows.
   final IconData? icon;
 
-  /// Title Case, title2.
+  /// Sentence case, title2.
   final String title;
 
   /// The body sentence(s).
@@ -63,7 +63,7 @@ class JamPermissionRationale {
   /// actually want to read.
   final String neverBullet;
 
-  /// The promise rows' headings, Title Case — specific to the permission,
+  /// The promise rows' headings, sentence case — specific to the permission,
   /// so no two primers read the same.
   final String doesHeading;
   final String neverHeading;
@@ -75,10 +75,10 @@ class JamPermissionRationale {
 
   /// The two local-network promises, shared by the Android rationale and the
   /// Apple one: the same permission and the same promise.
-  static const String _localNetworkDoesHeading = 'Finds Phones Nearby';
+  static const String _localNetworkDoesHeading = 'Finds phones nearby';
   static const String _localNetworkDoes =
       'So everyone hears the same second of the same song.';
-  static const String _localNetworkNeverHeading = 'Stays Off the Internet';
+  static const String _localNetworkNeverHeading = 'Stays off the internet';
   static const String _localNetworkNever =
       'A jam never leaves the network you’re on.';
 
@@ -95,7 +95,7 @@ class JamPermissionRationale {
   /// The same thing on iOS and macOS, where the system does the asking.
   ///
   /// One button, because there is nothing to decline: the OS alert is coming
-  /// either way the moment the first socket opens, and a "Not Now" that
+  /// either way the moment the first socket opens, and a "Not now" that
   /// cannot stop it would be a lie.
   static const JamPermissionRationale localNetworkApple =
       JamPermissionRationale(
@@ -114,9 +114,9 @@ class JamPermissionRationale {
     icon: CupertinoIcons.play_rectangle,
     title: JamPermissionSheetStrings.notificationsTitle,
     body: JamPermissionSheetStrings.notificationsBody,
-    doesHeading: 'Playback on the Lock Screen',
+    doesHeading: 'Playback on the lock screen',
     doesBullet: 'The song and its controls, while a jam plays.',
-    neverHeading: 'Nothing Else',
+    neverHeading: 'Nothing else',
     neverBullet: 'No promotions, no reminders.',
   );
 
@@ -125,9 +125,9 @@ class JamPermissionRationale {
     icon: CupertinoIcons.music_albums,
     title: JamPermissionSheetStrings.audioLibraryTitle,
     body: JamPermissionSheetStrings.audioLibraryBody,
-    doesHeading: 'Only While You Pick',
+    doesHeading: 'Only while you pick',
     doesBullet: 'LocalJam looks at your songs only to show you the list.',
-    neverHeading: 'Nothing Uploaded',
+    neverHeading: 'Nothing uploaded',
     neverBullet: 'Songs you don’t add never leave this phone.',
   );
 
@@ -136,9 +136,9 @@ class JamPermissionRationale {
     icon: CupertinoIcons.qrcode_viewfinder,
     title: JamPermissionSheetStrings.cameraTitle,
     body: JamPermissionSheetStrings.cameraDetail,
-    doesHeading: 'Only While Scanning',
+    doesHeading: 'Only while scanning',
     doesBullet: 'The camera is on only while the scanner is open.',
-    neverHeading: 'Nothing Saved',
+    neverHeading: 'Nothing saved',
     neverBullet: 'Nothing it sees is kept or sent anywhere.',
   );
 
@@ -157,32 +157,32 @@ class JamPermissionRationale {
 /// Strings this sheet owns.
 abstract final class JamPermissionSheetStrings {
   static const String continueLabel = 'Continue';
-  static const String dismissLabel = 'Not Now';
+  static const String dismissLabel = 'Not now';
 
   /// The single-button variant, for a sheet that only announces something.
   static const String gotItLabel = 'Continue';
 
   /// The promise rows' fallback headings, for a rationale that names none.
-  static const String doesHeading = 'What LocalJam Does';
-  static const String neverHeading = 'What LocalJam Never Does';
+  static const String doesHeading = 'What LocalJam does';
+  static const String neverHeading = 'What LocalJam never does';
 
-  static const String localNetworkTitle = 'Let LocalJam Use This Network';
+  static const String localNetworkTitle = 'Let LocalJam use this network';
   static const String localNetworkBody =
       'A jam plays between phones on the same Wi‑Fi or hotspot.';
   static const String localNetworkAppleBody =
       'A jam plays between phones on the same Wi‑Fi or hotspot. Next, the '
       'system will ask to let LocalJam find them.';
 
-  static const String notificationsTitle = 'Show the Playback Card';
+  static const String notificationsTitle = 'Show the playback card';
   static const String notificationsBody =
-      'Pause and skip from the Lock Screen without unlocking. Music still '
+      'Pause and skip from the lock screen without unlocking. Music still '
       'plays if you say no.';
 
-  static const String audioLibraryTitle = 'Reach Your Music';
+  static const String audioLibraryTitle = 'Reach your music';
   static const String audioLibraryBody =
       'Pick songs that are already on this phone and add them to a jam.';
 
-  static const String cameraTitle = 'Scan to Join';
+  static const String cameraTitle = 'Scan to join';
   static const String cameraDetail =
       'LocalJam uses the camera only to read a jam’s code.';
 }

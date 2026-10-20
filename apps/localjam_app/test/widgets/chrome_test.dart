@@ -146,7 +146,7 @@ void main() {
             JamScaffold(
               title: 'Nearby',
               bottomBar: JamButton.filled(
-                label: 'Start a Jam',
+                label: 'Start a jam',
                 expand: true,
                 onPressed: () {},
               ),
@@ -173,7 +173,7 @@ void main() {
             JamScaffold(
               title: 'Nearby',
               bottomBar: JamButton.filled(
-                label: 'Start a Jam',
+                label: 'Start a jam',
                 expand: true,
                 onPressed: () {},
               ),
@@ -195,7 +195,7 @@ void main() {
               .opacity,
           0,
         );
-        expect(find.text('Start a Jam'), findsOneWidget);
+        expect(find.text('Start a jam'), findsOneWidget);
       },
     );
 
@@ -206,14 +206,14 @@ void main() {
           JamScaffold(
             title: 'Nearby',
             bottomBar: JamButton.filled(
-              label: 'Start a Jam',
+              label: 'Start a jam',
               expand: true,
               onPressed: () {},
             ),
             slivers: const [
               SliverFillRemaining(
                 hasScrollBody: false,
-                child: Center(child: Text('No Jams Nearby')),
+                child: Center(child: Text('No jams nearby')),
               ),
             ],
           ),
@@ -388,14 +388,14 @@ void main() {
             groups: [
               [
                 JamMenuItem(
-                  title: 'Invite People',
+                  title: 'Invite people',
                   icon: CupertinoIcons.person_badge_plus,
                   onPressed: () => invited++,
                 ),
               ],
               [
                 JamMenuItem(
-                  title: 'End Jam',
+                  title: 'End jam',
                   icon: CupertinoIcons.xmark_circle,
                   destructive: true,
                   onPressed: () {},
@@ -408,7 +408,7 @@ void main() {
       expect(find.byIcon(CupertinoIcons.ellipsis_circle), findsOneWidget);
       await tester.tap(find.byType(JamMenuButton));
       await tester.pumpAndSettle();
-      expect(find.text('Invite People'), findsOneWidget);
+      expect(find.text('Invite people'), findsOneWidget);
       final items = tester
           .widgetList<JamMenuRow>(find.byType(JamMenuRow))
           .toList();
@@ -417,7 +417,7 @@ void main() {
       // On LocalJam's own tokens: the warm menu ground and `danger`, not
       // Cupertino's grey and system red.
       expect(
-        tester.widget<Text>(find.text('End Jam')).style!.color,
+        tester.widget<Text>(find.text('End jam')).style!.color,
         JamColors.light.danger,
       );
       expect(
@@ -429,10 +429,10 @@ void main() {
         contains(JamColors.light.elevatedGroupedSurface),
       );
       expect(find.byType(CupertinoMenuItem), findsNothing);
-      await tester.tap(find.text('Invite People'));
+      await tester.tap(find.text('Invite people'));
       await tester.pumpAndSettle();
       expect(invited, 1);
-      expect(find.text('Invite People'), findsNothing);
+      expect(find.text('Invite people'), findsNothing);
     });
 
     testWidgets('titles carry a complete text style wherever the anchor '
@@ -586,7 +586,7 @@ void main() {
                   preferUp: true,
                   groups: [
                     [
-                      JamMenuItem(title: 'Sound Offset', onPressed: () {}),
+                      JamMenuItem(title: 'Sound offset', onPressed: () {}),
                       JamMenuItem(title: 'Diagnostics', onPressed: () {}),
                     ],
                   ],
@@ -617,14 +617,14 @@ void main() {
               alignment: Alignment.topCenter,
               child: JamMenuButton(
                 groups: [
-                  [JamMenuItem(title: 'Listen Only', onPressed: () {})],
+                  [JamMenuItem(title: 'Listen only', onPressed: () {})],
                 ],
                 builder: (context, open) => GestureDetector(
                   onTap: open,
                   child: const SizedBox(
                     width: 760,
                     height: 44,
-                    child: Text('Guests Can'),
+                    child: Text('Guests can'),
                   ),
                 ),
               ),
@@ -632,8 +632,8 @@ void main() {
           ),
         ),
       );
-      final row = tester.getRect(find.text('Guests Can'));
-      await tester.tap(find.text('Guests Can'));
+      final row = tester.getRect(find.text('Guests can'));
+      await tester.tap(find.text('Guests can'));
       await tester.pumpAndSettle();
       final menu = tester.getRect(find.byType(JamMenuRow));
       expect(menu.right, closeTo(row.right - JamSpace.lg, 1));
@@ -648,7 +648,7 @@ void main() {
             groups: [
               [
                 JamMenuItem(
-                  title: 'End Jam',
+                  title: 'End jam',
                   destructive: true,
                   onPressed: () {},
                 ),
@@ -660,7 +660,7 @@ void main() {
       await tester.tap(find.byType(JamMenuButton));
       await tester.pumpAndSettle();
       expect(
-        tester.widget<Text>(find.text('End Jam')).style!.color,
+        tester.widget<Text>(find.text('End jam')).style!.color,
         JamColors.dark.danger,
       );
     });
@@ -709,7 +709,7 @@ void main() {
             width: 250,
             groups: [
               [
-                JamMenuItem(title: 'Play Next', onPressed: () => ran++),
+                JamMenuItem(title: 'Play next', onPressed: () => ran++),
                 JamMenuItem(
                   title: 'Remove',
                   destructive: true,
@@ -721,8 +721,8 @@ void main() {
           ),
         ),
       );
-      await tester.tap(find.text('Play Next'));
-      expect(chosen, ['Play Next']);
+      await tester.tap(find.text('Play next'));
+      expect(chosen, ['Play next']);
       expect(ran, 0, reason: 'the host runs it, after closing');
     });
 

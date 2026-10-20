@@ -60,7 +60,7 @@ class JamMenuItem {
     this.subtitle,
   });
 
-  /// Title Case ("Sound Offset…").
+  /// Sentence case ("Sound offset…").
   final String title;
 
   /// Drawn on the trailing side, at [JamIconSize.control].

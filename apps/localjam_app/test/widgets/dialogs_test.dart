@@ -206,14 +206,14 @@ void main() {
         (context) async => JamDialogs.confirmDestructive(
           context,
           title: 'Remove Electric Mongoose?',
-          confirmLabel: 'Remove from This Jam',
+          confirmLabel: 'Remove from this jam',
         ),
       ),
     );
     await tester.tap(find.text('Go'));
     await tester.pumpAndSettle();
     expect(
-      tester.getCenter(find.text('Remove from This Jam')).dy,
+      tester.getCenter(find.text('Remove from this jam')).dy,
       lessThan(tester.getCenter(find.text('Cancel')).dy),
     );
   });
@@ -225,7 +225,7 @@ void main() {
     await tester.pumpWidget(
       _host(
         (context) async =>
-            JamDialogs.confirm(context, title: 'End Jam?', message: message),
+            JamDialogs.confirm(context, title: 'End jam?', message: message),
       ),
     );
     await tester.tap(find.text('Go'));
@@ -240,7 +240,7 @@ void main() {
       closeTo(JamMetrics.alertWidth - 2 * JamSpace.xl, 1),
     );
     expect(
-      tester.widget<Text>(find.text('End Jam?')).style!.fontFamily,
+      tester.widget<Text>(find.text('End jam?')).style!.fontFamily,
       'Manrope',
     );
   });
@@ -368,8 +368,8 @@ void main() {
                   child: TextButton(
                     onPressed: () => JamDialogs.confirmDestructive(
                       outer,
-                      title: 'End Jam?',
-                      confirmLabel: 'End Jam',
+                      title: 'End jam?',
+                      confirmLabel: 'End jam',
                     ),
                     child: const Text('Go'),
                   ),
@@ -383,9 +383,9 @@ void main() {
     await tester.tap(find.text('Go'));
     await tester.pumpAndSettle();
     expect(_ground(tester, 'Cancel'), JamColors.dark.fill);
-    expect(_ground(tester, 'End Jam'), JamColors.dark.dangerFilled);
+    expect(_ground(tester, 'End jam'), JamColors.dark.dangerFilled);
     expect(
-      Theme.of(tester.element(find.text('End Jam?'))).brightness,
+      Theme.of(tester.element(find.text('End jam?'))).brightness,
       Brightness.dark,
     );
   });

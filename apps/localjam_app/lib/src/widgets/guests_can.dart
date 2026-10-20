@@ -24,12 +24,12 @@ import 'menu.dart';
 
 /// The presets' names and descriptions — the one source for them.
 abstract final class JamPresetStrings {
-  static const String guestsCan = 'Guests Can';
+  static const String guestsCan = 'Guests can';
 
   /// Preset names. None of them is a capability's name.
   static const String everything = 'Everything';
-  static const String songsOnly = 'Songs & Queue';
-  static const String listenOnly = 'Listen Only';
+  static const String songsOnly = 'Songs & queue';
+  static const String listenOnly = 'Listen only';
 
   /// The `JamPolicy.jam` preset's name, under its older constant.
   static const String addMusic = songsOnly;
@@ -38,9 +38,9 @@ abstract final class JamPresetStrings {
   static const String custom = 'Custom';
 
   /// The capabilities — the switches' titles and the per-guest menu items.
-  static const String addSongs = 'Add Songs';
-  static const String controlPlayback = 'Control Playback';
-  static const String editQueue = 'Edit the Queue';
+  static const String addSongs = 'Add songs';
+  static const String controlPlayback = 'Control playback';
+  static const String editQueue = 'Edit the queue';
 
   /// The presets' pull-down subtitles, in the capabilities' own words.
   static const String everythingDetail =

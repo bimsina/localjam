@@ -742,9 +742,9 @@ void main() {
       unawaited(
         JamDialogs.confirmDestructive(
           tester.element(find.byType(RoomScreen)),
-          title: 'End Jam?',
-          message: 'The music stops for everyone.',
-          confirmLabel: 'End Jam',
+          title: RoomSheetStrings.endTitle,
+          message: RoomSheetStrings.endDetail,
+          confirmLabel: RoomSheetStrings.endJam,
         ),
       );
       await cap.snap('24-end-confirmation');
@@ -931,7 +931,7 @@ void main() {
       );
       await cap.snap(
         '05-nearby-recent',
-        note: 'Recent rows are the Past Jams row.',
+        note: 'Recent rows are the Past jams row.',
       );
       // Where the app shell puts a notice on Home: above Start a Jam.
       final toast = showJamNotice(

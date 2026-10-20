@@ -28,7 +28,7 @@ Widget _host(Future<void> Function(BuildContext) onTap, {ThemeData? theme}) =>
     );
 
 void main() {
-  test('each primer says its own thing once, in Title Case headings', () {
+  test('each primer says its own thing once, in sentence-case headings', () {
     expect(
       JamPermissionRationale.localNetwork.title,
       JamPermissionSheetStrings.localNetworkTitle,

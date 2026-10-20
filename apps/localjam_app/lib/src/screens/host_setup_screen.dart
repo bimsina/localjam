@@ -39,7 +39,7 @@ import '../widgets/track_row.dart';
 
 /// Everything this screen says out loud.
 abstract final class HostSetupStrings {
-  static const String title = 'Start a Jam';
+  static const String title = 'Start a jam';
   static const String cancel = 'Cancel';
   static const String start = 'Start';
   static const String starting = 'Starting the jam';
@@ -56,7 +56,7 @@ abstract final class HostSetupStrings {
   /// "12 songs" — the section header once there are some (sentence case,
   /// §10.9).
   static String songCount(int n) => n == 1 ? '1 song' : '$n songs';
-  static const String addSongs = 'Add Songs';
+  static const String addSongs = 'Add songs';
   static const String looking = 'Looking for music on this device…';
 
   /// The Songs footer, true to the chosen preset: under Listen Only nobody
@@ -69,7 +69,7 @@ abstract final class HostSetupStrings {
       policy.addTracks ? songsFooterGuests : songsFooterHost;
   static const String remove = 'Remove';
 
-  static const String discoverable = 'Show to People Nearby';
+  static const String discoverable = 'Show to people nearby';
   static const String discoverableOn =
       'People on this Wi‑Fi can see and join this jam.';
   static const String discoverableOff =
@@ -92,7 +92,7 @@ class HostSetupScreen extends StatefulWidget {
     this.scrollController,
   });
 
-  /// Tracks to preload — the "Host Again" seam from jam history.
+  /// Tracks to preload — the "Host again" seam from jam history.
   ///
   /// A non-null value is an *exact* set: the Documents sweep below is skipped
   /// for it, or reopening a two-track past jam would quietly hand the host

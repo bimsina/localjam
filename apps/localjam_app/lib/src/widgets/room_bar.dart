@@ -42,14 +42,14 @@ abstract final class JamRoomBarStrings {
   static String endedNamed(String? jam) => jam == null ? ended : '$jam ended';
   static const String endedAction = 'Details';
   static const String rejoining = 'Getting back in…';
-  static const String open = 'Open Now Playing';
+  static const String open = 'Open now playing';
   static const String play = 'Play';
   static const String pause = 'Pause';
   static const String next = 'Next';
 
   /// Line two while the jam has nothing queued: line one is already the
   /// jam's name.
-  static const String nothingPlaying = 'Nothing Playing';
+  static const String nothingPlaying = 'Nothing playing';
 }
 
 /// The capsule's own height (§6.4), above the margin under it.
@@ -447,7 +447,7 @@ class _RoomBarState extends State<RoomBar> {
     final canControl = engine.can(JamCapability.controlPlayback);
     final canSend = session.canSendCommands;
     final suspension = engine.outputSuspension.value;
-    // While this phone's sound is suspended the button is "Resume Audio" —
+    // While this phone's sound is suspended the button is "Resume audio" —
     // for everyone, since it touches only this phone. Showing "pause" there
     // offered to stop the whole room for someone who just wanted their own
     // sound back.
@@ -505,7 +505,7 @@ class _EndedBar extends StatelessWidget {
 
   final BorderRadius? borderRadius;
 
-  /// A "Try Again" is in flight from the room screen.
+  /// A "Try again" is in flight from the room screen.
   final bool rejoining;
 
   @override

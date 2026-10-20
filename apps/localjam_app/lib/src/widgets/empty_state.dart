@@ -76,7 +76,7 @@ class JamEmptyState extends StatelessWidget {
   /// A ready-made mark used instead of [icon] (a `JamMark`).
   final Widget? mark;
 
-  /// Title Case ("No Jams Nearby").
+  /// Sentence case ("No jams yet").
   final String title;
 
   /// One sentence.
@@ -99,7 +99,7 @@ class JamEmptyState extends StatelessWidget {
   final String? actionLoadingLabel;
 
   /// A second, plain action under the first — only for terminal states
-  /// ("Try Again" + "Back to Nearby").
+  /// ("Try again" + "Back to Nearby").
   final String? secondaryActionLabel;
   final VoidCallback? onSecondaryAction;
 

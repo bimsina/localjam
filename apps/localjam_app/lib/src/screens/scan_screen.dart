@@ -37,7 +37,7 @@ import '../widgets/join_link_dialog.dart';
 /// Every user-facing string this screen can show.
 abstract final class JamScanStrings {
   /// Announced for the viewfinder.
-  static const String title = 'Scan Code';
+  static const String title = 'Scan code';
   static const String hint = 'Point at a LocalJam code';
   static const String wrongCode = 'That code isn’t a jam invite.';
   static const String found = 'Joining…';
@@ -45,10 +45,10 @@ abstract final class JamScanStrings {
   /// The Join with Link alert, named as it is everywhere it is offered.
   static const String joinWithLink = JamJoinLinkStrings.title;
   static const String close = 'Close';
-  static const String torchOn = 'Turn On Flashlight';
-  static const String torchOff = 'Turn Off Flashlight';
+  static const String torchOn = 'Turn on flashlight';
+  static const String torchOff = 'Turn off flashlight';
 
-  static const String deniedTitle = 'No Camera Access';
+  static const String deniedTitle = 'No camera access';
   static const String deniedBody = JamPermissionCopy.cameraDenied;
   static const String openSettings = 'Open Settings';
 
@@ -56,16 +56,16 @@ abstract final class JamScanStrings {
   /// never asked and there is nothing in Settings to turn on. Telling this
   /// user to "turn on camera access in Settings" sends them to a switch that
   /// is already where it should be, to fix a permission they never denied.
-  static const String declinedTitle = 'Camera Access Needed';
+  static const String declinedTitle = 'Camera access needed';
   static const String declinedBody =
       'Allow the camera to scan a jam’s code, or enter the link instead.';
-  static const String unsupportedTitle = 'Camera Unavailable';
+  static const String unsupportedTitle = 'Camera unavailable';
   static const String unsupportedBody =
       'This device can’t scan codes. Enter a link instead.';
-  static const String failedTitle = 'The Camera Didn’t Start';
+  static const String failedTitle = 'The camera didn’t start';
   static const String failedBody =
       'Another app may be using the camera. Try again, or enter the link.';
-  static const String retry = 'Try Again';
+  static const String retry = 'Try again';
 }
 
 /// The viewfinder's share of the screen's shorter side…

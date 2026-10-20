@@ -122,7 +122,7 @@ void main() {
         JamPeerRow(
           name: 'Silky Puffin',
           menu: [
-            [JamMenuItem(title: 'Make Co-host', onPressed: () => tapped++)],
+            [JamMenuItem(title: 'Make co-host', onPressed: () => tapped++)],
           ],
         ),
       );
@@ -136,7 +136,7 @@ void main() {
       expect(find.byIcon(CupertinoIcons.ellipsis_circle), findsNothing);
       await tester.tap(find.byIcon(CupertinoIcons.ellipsis));
       await tester.pumpAndSettle();
-      await tester.tap(find.text('Make Co-host'));
+      await tester.tap(find.text('Make co-host'));
       await tester.pumpAndSettle();
       expect(tapped, 1);
     });

@@ -308,7 +308,7 @@ void main() {
   });
 
   group('this phone’s sound', () {
-    testWidgets('a suspended output offers "Resume Audio" until it clears', (
+    testWidgets('a suspended output offers "Resume audio" until it clears', (
       tester,
     ) async {
       final session = testSession();

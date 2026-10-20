@@ -66,7 +66,7 @@ void main() {
       await tester.pumpWidget(
         _host(
           JamRow(
-            title: 'Add Songs',
+            title: 'Add songs',
             icon: CupertinoIcons.plus,
             tinted: true,
             onTap: () {},
@@ -77,7 +77,7 @@ void main() {
       expect(icon.size, 22);
       expect(icon.color, JamColors.light.tint);
       expect(
-        tester.widget<Text>(find.text('Add Songs')).style!.color,
+        tester.widget<Text>(find.text('Add songs')).style!.color,
         JamColors.light.tint,
       );
     });
@@ -86,18 +86,18 @@ void main() {
       await tester.pumpWidget(
         _host(
           JamRow(
-            title: 'End Jam',
+            title: 'End jam',
             destructive: true,
             centered: true,
             onTap: () {},
           ),
         ),
       );
-      final text = tester.widget<Text>(find.text('End Jam'));
+      final text = tester.widget<Text>(find.text('End jam'));
       expect(text.style!.color, JamColors.light.danger);
       expect(text.textAlign, TextAlign.center);
       expect(
-        tester.getCenter(find.text('End Jam')).dx,
+        tester.getCenter(find.text('End jam')).dx,
         closeTo(tester.getCenter(find.byType(JamRow)).dx, 1),
       );
     });
@@ -137,7 +137,7 @@ void main() {
         _host(
           StatefulBuilder(
             builder: (context, setState) => JamRow.toggle(
-              title: 'Show to People Nearby',
+              title: 'Show to people nearby',
               value: value,
               onChanged: (v) => setState(() => value = v),
             ),
@@ -148,7 +148,7 @@ void main() {
       await tester.tap(find.byType(CupertinoSwitch));
       await tester.pumpAndSettle();
       expect(value, isTrue);
-      await tester.tap(find.text('Show to People Nearby'));
+      await tester.tap(find.text('Show to people nearby'));
       await tester.pumpAndSettle();
       expect(value, isFalse);
     });
@@ -346,7 +346,7 @@ void main() {
       await tester.pumpWidget(
         _host(
           JamRow(
-            title: 'Add Songs',
+            title: 'Add songs',
             icon: CupertinoIcons.plus,
             tinted: true,
             onTap: () {},

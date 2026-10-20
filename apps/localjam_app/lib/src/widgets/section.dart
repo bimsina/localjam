@@ -87,11 +87,11 @@ class JamSection extends StatelessWidget {
        );
 
   /// Sentence case. Footnote `secondaryLabel` by default; title3 `label`
-  /// when [prominentHeader] ("Recent", "Up Next").
+  /// when [prominentHeader] ("Recent", "Up next").
   final String? header;
 
   /// Right-aligned beside the header: a count, a `JamButton.plain`
-  /// ("See All").
+  /// ("See all").
   final Widget? headerTrailing;
 
   /// Title3 header in `label` instead of footnote `secondaryLabel`.

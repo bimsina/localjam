@@ -39,15 +39,15 @@ abstract final class OnboardingStrings {
   /// router's gate test, which only cares that the intro can be left.
   static const String skip = continueLabel;
 
-  static const String oneTitle = 'Listen Together';
+  static const String oneTitle = 'Listen together';
   static const String oneBody =
       'One phone plays and everyone hears the same song at the same moment, '
       'on their own headphones.';
 
-  static const String twoTitle = 'No Internet, No Accounts';
+  static const String twoTitle = 'No internet, no accounts';
   static const String twoBody = 'It all happens over your Wi‑Fi or hotspot.';
 
-  static const String threeTitle = 'Everyone Adds Songs';
+  static const String threeTitle = 'Everyone adds songs';
   static const String threeBody =
       'Anyone you allow can add to the queue, and everyone sees who added '
       'what.';
@@ -57,7 +57,7 @@ abstract final class OnboardingStrings {
   static const String appearAsLead = 'You’ll appear as ';
   static String appearAs(String name) => '$appearAsLead$name.';
   static const String change = 'Change';
-  static const String changeName = 'Change Your Name';
+  static const String changeName = 'Change your name';
 }
 
 /// Content never grows past this, so a maximised desktop window shows a

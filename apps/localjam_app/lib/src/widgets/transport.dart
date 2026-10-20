@@ -102,7 +102,7 @@ class JamTransport extends StatelessWidget {
   final JamPlaybackState state;
 
   /// What the play button is called when it does something other than play
-  /// the room — "Resume Audio" while this phone's own sound is suspended.
+  /// the room — "Resume audio" while this phone's own sound is suspended.
   /// Null: "Play".
   final String? playLabel;
 
@@ -118,7 +118,7 @@ class JamTransport extends StatelessWidget {
   final bool enabled;
 
   /// The explanation shown under a gated bar. Null when the screen already
-  /// says why (an empty room's "Nothing Playing" and its Add Songs): one
+  /// says why (an empty room's "Nothing playing" and its Add Songs): one
   /// prompt per action, not three.
   final String? gatedMessage;
 

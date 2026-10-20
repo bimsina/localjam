@@ -27,7 +27,7 @@ Future<void> _tall(WidgetTester tester) async {
   addTearDown(tester.view.resetPhysicalSize);
 }
 
-/// [text] inside the sheet — home under it says "Start a Jam" too.
+/// [text] inside the sheet — home under it says "Start a jam" too.
 Finder _inSheet(String text) => find.descendant(
   of: find.byType(HostSetupScreen),
   matching: find.text(text),
@@ -215,7 +215,7 @@ void main() {
     );
   });
 
-  testWidgets('"Host Again" songs arrive as song rows, swipe to remove', (
+  testWidgets('"Host again" songs arrive as song rows, swipe to remove', (
     tester,
   ) async {
     final session = testSession();

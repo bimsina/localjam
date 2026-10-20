@@ -40,7 +40,7 @@ class JamAlertAction {
     this.destructive = false,
   });
 
-  /// Title Case ("Leave Jam").
+  /// Sentence case ("Leave jam").
   final String label;
 
   /// Null disables the button.
@@ -71,7 +71,7 @@ class JamAlert extends StatelessWidget {
     required this.actions,
   });
 
-  /// Title Case question or statement ("End Jam?").
+  /// A sentence-case question or statement ("End jam?").
   final String title;
 
   /// One or two sentences.

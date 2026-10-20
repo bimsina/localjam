@@ -108,7 +108,7 @@ void main() {
     expect(find.textContaining('Listening'), findsNothing);
     expect(find.textContaining('No internet'), findsNothing);
     expect(find.text('Host a Jam'), findsNothing);
-    // History's old nav-bar clock icon is gone; the sidebar and "See All"
+    // History's old nav-bar clock icon is gone; the sidebar and "See all"
     // reach it instead.
     expect(find.byIcon(Icons.history_rounded), findsNothing);
     expect(find.byIcon(CupertinoIcons.clock), findsNothing);

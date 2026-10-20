@@ -14,8 +14,8 @@ import 'package:localjam_client/localjam_client.dart';
 void main() {
   test('one name and one description per preset, Custom past them', () {
     expect(JamPresetStrings.name(JamPolicy.open), 'Everything');
-    expect(JamPresetStrings.name(JamPolicy.jam), 'Songs & Queue');
-    expect(JamPresetStrings.name(JamPolicy.listenOnly), 'Listen Only');
+    expect(JamPresetStrings.name(JamPolicy.jam), 'Songs & queue');
+    expect(JamPresetStrings.name(JamPolicy.listenOnly), 'Listen only');
     final custom = JamPolicy.jam.copyWith(
       controlPlayback: true,
       editQueue: false,
@@ -85,7 +85,7 @@ void main() {
         ),
       ),
     );
-    expect(find.text('Songs & Queue'), findsOneWidget);
+    expect(find.text(JamPresetStrings.songsOnly), findsOneWidget);
     await tester.tap(find.text(JamPresetStrings.guestsCan));
     await tester.pumpAndSettle();
     final items = tester

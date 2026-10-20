@@ -442,7 +442,7 @@ abstract final class JamNowPlayingColors {
   /// What a queue row's long-press menu dims the rest of the screen with.
   static const Color contextScrim = Color(0x59000000);
 
-  /// Destructive *text* on the backdrop ("End Jam" in the docked panel, the
+  /// Destructive *text* on the backdrop ("End jam" in the docked panel, the
   /// status line's failures). Holds 4.5:1 over the backdrop's brightest
   /// allowed ground and still reads as red.
   static const Color destructive = Color(0xFFFFBAB5);

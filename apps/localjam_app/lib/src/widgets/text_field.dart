@@ -23,7 +23,7 @@ import '../design/typography.dart';
 
 /// Strings the field says.
 abstract final class JamTextFieldStrings {
-  static const String clear = 'Clear Text';
+  static const String clear = 'Clear text';
 }
 
 /// The clear button's painted circle.

@@ -74,11 +74,11 @@ import '../widgets/transport.dart';
 /// Every user-facing string the room can show.
 abstract final class JamRoomStrings {
   // Header and footer.
-  static const String close = 'Close Now Playing';
-  static const String invite = 'Invite People';
+  static const String close = 'Close now playing';
+  static const String invite = 'Invite people';
   static const String people = 'People';
-  static const String soundOffset = 'Sound Offset';
-  static const String queue = 'Up Next';
+  static const String soundOffset = 'Sound offset';
+  static const String queue = 'Up next';
   static const String more = 'More';
 
   /// The footer names who you are listening with, from your side.
@@ -94,8 +94,8 @@ abstract final class JamRoomStrings {
 
   // The ••• menu (spec §10.1): only what has no control of its own.
   static const String diagnostics = 'Diagnostics';
-  static const String endJam = 'End Jam';
-  static const String leaveJam = 'Leave Jam';
+  static const String endJam = 'End jam';
+  static const String leaveJam = 'Leave jam';
   // The same confirmation the People sheet asks, word for word.
   static const String endTitle = RoomSheetStrings.endTitle;
   static const String endBody = RoomSheetStrings.endDetail;
@@ -105,8 +105,8 @@ abstract final class JamRoomStrings {
   static const String cancel = 'Cancel';
 
   // The title block.
-  static const String nothingPlaying = 'Nothing Playing';
-  static const String addSongs = 'Add Songs';
+  static const String nothingPlaying = 'Nothing playing';
+  static const String addSongs = 'Add songs';
   static const String nothingQueuedBody = 'The host hasn’t added any songs.';
   static const String importing = 'Adding your music…';
 
@@ -129,9 +129,9 @@ abstract final class JamRoomStrings {
   // Status lines under the room's name, and the fetch capsule.
   static String fetching(int percent) => 'Getting this song… $percent%';
   static const String fetchFailed = 'Couldn’t get this song';
-  static const String retry = 'Try Again';
+  static const String retry = 'Try again';
 
-  /// What "Try Again" says to a screen reader, which hears it apart from
+  /// What "Try again" says to a screen reader, which hears it apart from
   /// the sentence before it.
   static const String retryFetch = 'Try getting this song again';
   static String importingCount(int done, int total) =>
@@ -144,7 +144,7 @@ abstract final class JamRoomStrings {
       : 'Waiting for $n people to get this song';
 
   /// The docked panel's two views (wide windows).
-  static const String panelQueue = 'Up Next';
+  static const String panelQueue = 'Up next';
   static const String panelRoom = 'People';
 }
 
@@ -290,7 +290,7 @@ class _RoomScreenState extends State<RoomScreen>
       ..add(engine.states.listen(refresh))
       ..add(engine.playlistUpdates.listen(refresh))
       ..add(engine.permissionUpdates.listen(refresh))
-      // The big button is "Resume Audio" while this phone is silenced.
+      // The big button is "Resume audio" while this phone is silenced.
       ..add(engine.outputSuspensionChanges.listen(refresh));
     if (engine is JamGuestEngine) {
       _subs.add(engine.peerEvents.listen(refresh));
@@ -329,7 +329,7 @@ class _RoomScreenState extends State<RoomScreen>
     return _theme!;
   }
 
-  /// "Try Again": the controller keeps this room mounted for the whole
+  /// "Try again": the controller keeps this room mounted for the whole
   /// rejoin ([JamSessionController.rejoining]) and, if it fails, lands back
   /// on the same ended screen with [JamSessionController.error] saying why —
   /// so there is nothing to navigate here, in either outcome.
@@ -353,7 +353,7 @@ class _RoomScreenState extends State<RoomScreen>
     );
   }
 
-  /// "Scan New Code" for a jam that restarted under one: out of the dead
+  /// "Scan new code" for a jam that restarted under one: out of the dead
   /// room to Home, which opens its own scanner (or Join with Link) as soon
   /// as it is on top — the same way in as from Nearby.
   Future<void> _scanNew(JamSessionController session) async {
@@ -506,7 +506,7 @@ class _RoomScreenState extends State<RoomScreen>
             ? null
             : ResizeImage(MemoryImage(cover), width: coverPx, height: coverPx),
         retrying: rejoining,
-        // Only a failed "Try Again" leaves an error behind on this screen;
+        // Only a failed "Try again" leaves an error behind on this screen;
         // anything older was cleared when the session started.
         error: rejoining ? null : session.error,
         // Home at any point — mid-retry too: the rejoin is given up on
@@ -1538,7 +1538,7 @@ class _RenderStage extends RenderBox
     final queue = slots[_Slot.queue];
     if (queue != null) {
       // Clear of the now-playing row by more than the rows are from each
-      // other, so the song and "Up Next" read as two things.
+      // other, so the song and "Up next" read as two things.
       final top = rowBottom + JamSpace.xl;
       final bottom = bigScrubY - JamSpace.xs;
       _layout(
@@ -1939,8 +1939,8 @@ class _StatusLine extends StatelessWidget {
 }
 
 /// The engine notice above the cover, for a state that wants something
-/// done: this phone's sound suspended ("Resume Audio"), or a song it could
-/// not get ("Try Again"). Nothing (and no height) otherwise; the stage takes
+/// done: this phone's sound suspended ("Resume audio"), or a song it could
+/// not get ("Try again"). Nothing (and no height) otherwise; the stage takes
 /// its room out of the cover alone, so no control moves when it comes.
 class _EngineNotice extends StatelessWidget {
   const _EngineNotice({
@@ -2160,7 +2160,7 @@ const double _kCreditGap = JamSpace.xs + JamSpace.xxs;
 /// so the transport never moves for a long name; in the accessibility
 /// layout it wraps instead, as far as it needs.
 ///
-/// An empty room says "Nothing Playing" here and nothing else; its Add Songs
+/// An empty room says "Nothing playing" here and nothing else; its Add Songs
 /// stands where the play square will (IR-1, [_TransportArea]).
 class _TitleBlock extends StatelessWidget {
   const _TitleBlock({
@@ -2179,7 +2179,7 @@ class _TitleBlock extends StatelessWidget {
   final MediaItem? item;
 
   /// The host's starting files are still being added. An empty room in that
-  /// moment is not "Nothing Playing" — the music is on its way.
+  /// moment is not "Nothing playing" — the music is on its way.
   final bool importing;
 
   /// Whether this device may add songs (`addTracks`): if not, an empty room
@@ -2574,7 +2574,7 @@ class _TransportArea extends StatelessWidget {
     final reduced = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
     // While this phone's own sound is suspended (a call, another app,
     // headphones out) the room plays on without it, and the big button is
-    // "Resume Audio" — for everyone, since it touches only this phone. As
+    // "Resume audio" — for everyone, since it touches only this phone. As
     // "Pause" it stopped the whole room for someone who only wanted their
     // own sound back. Mirrors the mini player.
     final suspended = engine.outputSuspension.value != null;

@@ -27,7 +27,7 @@ import 'pressable.dart';
 /// Everything the sidebar says out loud.
 abstract final class AppSidebarStrings {
   static const String nearby = 'Nearby';
-  static const String history = 'Past Jams';
+  static const String history = 'Past jams';
   static const String settings = 'Settings';
   static const String identityHint = 'Change your name';
 

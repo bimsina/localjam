@@ -51,7 +51,7 @@ class JamSwitch extends StatelessWidget {
 }
 
 /// The segmented control: one choice among two to four, said in words.
-/// [segments] maps each value to its label (Title Case). A selection
+/// [segments] maps each value to its label (sentence case). A selection
 /// haptic on change.
 ///
 /// LocalJam's own (CR-8), not the stock sliding control: a soft-rectangle

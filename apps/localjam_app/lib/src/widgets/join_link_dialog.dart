@@ -30,7 +30,7 @@ import 'dialogs.dart';
 
 /// Every user-facing string these alerts can show.
 abstract final class JamJoinLinkStrings {
-  static const String title = 'Join with Link';
+  static const String title = 'Join with link';
   static const String message = 'Paste a link someone shared.';
 
   /// Not the URI scheme: `localjam://join?…` is machine text and tells the
@@ -46,7 +46,7 @@ abstract final class JamJoinLinkStrings {
   /// app.
   static const String confirmBody = 'Someone shared a link to this jam.';
   static const String confirmDecline = cancel;
-  static const String confirmFallbackName = 'This Jam';
+  static const String confirmFallbackName = 'this jam';
 
   /// "Join Van Jam?" — the deep-link confirmation's title.
   static String confirmTitle(String name) => 'Join $name?';

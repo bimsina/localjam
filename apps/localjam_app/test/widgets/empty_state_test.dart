@@ -20,9 +20,9 @@ void main() {
       _host(
         JamEmptyState(
           icon: CupertinoIcons.dot_radiowaves_left_right,
-          title: 'No Jams Nearby',
+          title: 'No jams nearby',
           body: 'Jams on this Wi‑Fi show up here.',
-          actionLabel: 'Scan Code',
+          actionLabel: 'Scan code',
           actionVariant: JamButtonVariant.plain,
           onAction: () => taps++,
         ),
@@ -33,7 +33,7 @@ void main() {
       find.byIcon(CupertinoIcons.dot_radiowaves_left_right),
       findsOneWidget,
     );
-    expect(find.text('No Jams Nearby'), findsOneWidget);
+    expect(find.text('No jams nearby'), findsOneWidget);
     expect(find.text('Jams on this Wi‑Fi show up here.'), findsOneWidget);
     expect(find.byType(JamButton), findsOneWidget);
     expect(
@@ -52,7 +52,7 @@ void main() {
       _host(
         const JamEmptyState(
           icon: CupertinoIcons.music_note_list,
-          title: 'Nothing Up Next',
+          title: 'Nothing up next',
           body: 'Add songs to keep the jam going.',
         ),
       ),
@@ -61,7 +61,7 @@ void main() {
     expect(icon.size, 48);
     // ContentUnavailableView's colour: tertiary all but vanished on black.
     expect(icon.color, JamColors.light.secondaryLabel);
-    final title = tester.widget<Text>(find.text('Nothing Up Next')).style!;
+    final title = tester.widget<Text>(find.text('Nothing up next')).style!;
     expect(title.fontSize, 22);
     expect(title.fontWeight, FontWeight.w700);
     final body = tester
@@ -114,7 +114,7 @@ void main() {
       _host(
         const JamEmptyState(
           icon: CupertinoIcons.clock,
-          title: 'No Past Jams',
+          title: 'No past jams',
           body: 'Jams you host or join show up here.',
         ),
       ),
@@ -133,7 +133,7 @@ void main() {
           icon: CupertinoIcons.wifi_slash,
           title: 'Host Is Gone',
           body: 'The host left the network.',
-          actionLabel: 'Try Again',
+          actionLabel: 'Try again',
           onAction: () => retry++,
           secondaryActionLabel: 'Back to Nearby',
           onSecondaryAction: () => back++,
@@ -141,7 +141,7 @@ void main() {
       ),
     );
     expect(find.byType(JamButton), findsNWidgets(2));
-    await tester.tap(find.text('Try Again'));
+    await tester.tap(find.text('Try again'));
     await tester.tap(find.text('Back to Nearby'));
     expect((retry, back), (1, 1));
   });
@@ -152,7 +152,7 @@ void main() {
         const JamEmptyState(
           mark: SizedBox(key: Key('logo'), width: 72, height: 72),
           icon: CupertinoIcons.clock,
-          title: 'No Past Jams',
+          title: 'No past jams',
           body: 'Jams you host or join show up here.',
         ),
       ),

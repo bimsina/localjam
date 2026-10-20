@@ -29,24 +29,24 @@ import 'track_row.dart';
 
 /// Everything this sheet says out loud.
 abstract final class LibrarySheetStrings {
-  static const String title = 'Music Library';
+  static const String title = 'Music library';
   static const String cancel = 'Cancel';
 
   /// The commit: what it does to the jam, not "Done".
   static const String add = 'Add';
   static const String search = 'Search';
-  static const String selectAll = 'Select All';
-  static const String deselectAll = 'Deselect All';
-  static const String unknownArtist = 'Unknown Artist';
+  static const String selectAll = 'Select all';
+  static const String deselectAll = 'Deselect all';
+  static const String unknownArtist = 'Unknown artist';
   static const String selected = 'Selected';
-  static const String noResults = 'No Results';
+  static const String noResults = 'No results';
 
   /// Says what was searched for, rather than a stock "check the spelling".
   static String noResultsFor(String query) => 'No songs match “$query”.';
 
-  /// "3 Songs Selected" — the title once something is chosen.
+  /// "3 songs selected" — the title once something is chosen.
   static String selectedCount(int n) =>
-      n == 1 ? '1 Song Selected' : '$n Songs Selected';
+      n == 1 ? '1 song selected' : '$n songs selected';
 
   /// "214 songs" — a count line, so sentence case (§10.9).
   static String available(int n) => n == 1 ? '1 song' : '$n songs';
@@ -214,7 +214,7 @@ class _JamLibraryPickerState extends State<JamLibraryPicker> {
             SliverToBoxAdapter(
               child: Padding(
                 // The small plain button pads its label by 4, so 12 here puts
-                // "Select All" on the same 16 trailing edge as the search field
+                // "Select all" on the same 16 trailing edge as the search field
                 // and the checkmarks.
                 padding: const EdgeInsetsDirectional.fromSTEB(
                   JamSpace.page,

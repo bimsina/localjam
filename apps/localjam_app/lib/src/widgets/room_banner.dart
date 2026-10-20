@@ -6,7 +6,7 @@
 /// It is for states that want something *done*: this phone's own sound
 /// stopped while the room plays on (a call, another app, headphones pulled
 /// out, a native failure) — [JamOutputBanner], with the one action that
-/// fixes it — or a track this phone could not fetch ("Try Again"). Waits
+/// fixes it — or a track this phone could not fetch ("Try again"). Waits
 /// that need nothing from anyone ("Reconnecting…", "The host’s phone is
 /// asleep") are a footnote under the room's name instead.
 ///
@@ -40,7 +40,7 @@ abstract final class JamRoomBannerStrings {
   static const String playbackErrorRetrying = 'Playback error. Retrying…';
 
   /// The action that ends any of them.
-  static const String resume = 'Resume Audio';
+  static const String resume = 'Resume audio';
 
   static const String hostAsleep = 'The host’s phone is asleep';
   static const String reconnecting = 'Reconnecting…';

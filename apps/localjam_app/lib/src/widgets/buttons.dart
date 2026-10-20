@@ -186,7 +186,7 @@ class JamButton extends StatelessWidget {
          semanticLabel: semanticLabel,
        );
 
-  /// Title Case: "Start a Jam".
+  /// Sentence case: "Start a jam".
   final String label;
 
   /// Null disables the button.
@@ -488,7 +488,7 @@ abstract final class JamConfirmationStrings {
 const Duration kJamInPlaceConfirmation = Duration(milliseconds: 1500);
 
 /// Confirms an action *in place* (spec §10.5): the control that was used
-/// changes for [duration] — "Copy Link" becomes "Copied" with a checkmark —
+/// changes for [duration] — "Copy link" becomes "Copied" with a checkmark —
 /// instead of a toast landing on top of it.
 ///
 /// [builder] gets whether the confirmation is showing and a `confirm`
@@ -567,7 +567,7 @@ class JamCopyButton extends StatelessWidget {
     this.expand = false,
   });
 
-  /// "Copy Link".
+  /// "Copy link".
   final String label;
 
   /// "Copied".
