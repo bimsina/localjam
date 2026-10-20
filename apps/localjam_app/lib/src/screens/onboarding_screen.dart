@@ -244,9 +244,7 @@ class _Feature extends StatelessWidget {
             const SizedBox(height: JamSpace.xxs),
             Text(
               body,
-              style: context.jamSubheadline.copyWith(
-                color: colors.secondaryLabel,
-              ),
+              style: context.jamBody.copyWith(color: colors.secondaryLabel),
             ),
           ],
         ),
@@ -255,9 +253,9 @@ class _Feature extends StatelessWidget {
   }
 }
 
-/// "You’ll appear as Sparkly Kiwi." with your face and **Change** — the
-/// name the app made up, said before it is on anyone else's screen.
-/// Leaving it alone keeps it; Continue is still the one tap.
+/// "You’ll appear as / Sparkly Kiwi" with your face and **Change**, on a
+/// card of its own — the name the app made up, said before it is on anyone
+/// else's screen. Leaving it alone keeps it; Continue is still the one tap.
 class _IdentityRow extends StatelessWidget {
   const _IdentityRow({required this.name, required this.onChange});
 
@@ -270,49 +268,72 @@ class _IdentityRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final colors = context.jamColors;
     final known = name.isNotEmpty;
-    final row = Row(
-      children: [
-        if (known)
-          JamAvatar(name: name, size: JamAvatarSize.identity)
-        else
-          const SizedBox.square(dimension: JamAvatarSize.identity),
-        const SizedBox(width: JamSpace.md),
-        Expanded(
-          child: Text.rich(
-            TextSpan(
-              text: OnboardingStrings.appearAsLead,
-              children: [
-                TextSpan(
-                  text: name,
-                  style: TextStyle(
-                    color: colors.label,
-                    fontWeight: FontWeight.w600,
-                  ),
+    // The same card a nearby jam sits on: the one object on this page that
+    // is yours.
+    final radius = BorderRadius.circular(JamRadius.section);
+    final card = DecoratedBox(
+      decoration: BoxDecoration(
+        color: colors.groupedSurface,
+        border: Border.all(
+          color: colors.separator,
+          width: 1 / MediaQuery.devicePixelRatioOf(context),
+        ),
+        borderRadius: radius,
+      ),
+      child: Padding(
+        padding: const EdgeInsetsDirectional.fromSTEB(
+          JamSpace.md,
+          JamSpace.md,
+          JamSpace.sm,
+          JamSpace.md,
+        ),
+        child: Row(
+          children: [
+            if (known)
+              JamAvatar(name: name, size: JamAvatarSize.sheet)
+            else
+              const SizedBox.square(dimension: JamAvatarSize.sheet),
+            const SizedBox(width: JamSpace.md),
+            Expanded(
+              child: Semantics(
+                label: OnboardingStrings.appearAs(name),
+                excludeSemantics: true,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      OnboardingStrings.appearAsLead.trim(),
+                      style: context.jamFootnote.copyWith(
+                        color: colors.secondaryLabel,
+                      ),
+                    ),
+                    Text(
+                      name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: context.jamHeadline,
+                    ),
+                  ],
                 ),
-                const TextSpan(text: '.'),
-              ],
+              ),
             ),
-            semanticsLabel: OnboardingStrings.appearAs(name),
-            style: context.jamSubheadline.copyWith(
-              color: colors.secondaryLabel,
+            const SizedBox(width: JamSpace.sm),
+            JamButton.plain(
+              label: OnboardingStrings.change,
+              semanticLabel: OnboardingStrings.changeName,
+              size: JamButtonSize.small,
+              onPressed: known ? onChange : null,
             ),
-          ),
+          ],
         ),
-        const SizedBox(width: JamSpace.sm),
-        JamButton.plain(
-          label: OnboardingStrings.change,
-          semanticLabel: OnboardingStrings.changeName,
-          size: JamButtonSize.small,
-          onPressed: known ? onChange : null,
-        ),
-      ],
+      ),
     );
     final reduceMotion = MediaQuery.disableAnimationsOf(context);
     return AnimatedOpacity(
       opacity: known ? 1 : 0,
       duration: reduceMotion ? Duration.zero : JamDuration.fast,
       curve: JamCurve.standard,
-      child: ExcludeSemantics(excluding: !known, child: row),
+      child: ExcludeSemantics(excluding: !known, child: card),
     );
   }
 }
