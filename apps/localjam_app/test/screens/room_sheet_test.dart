@@ -641,7 +641,9 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text(RoomSheetStrings.inviteTitle), findsWidgets);
     expect(find.byType(QrImageView), findsOneWidget);
-    expect(find.byType(JamSheetCloseButton), findsOneWidget);
+    // Closed with the same trailing Done as every sheet (CR-24).
+    expect(find.text(JamSheetStrings.done), findsWidgets);
+    expect(find.byIcon(CupertinoIcons.xmark), findsNothing);
 
     await tester.runAsync(host.leave);
   });

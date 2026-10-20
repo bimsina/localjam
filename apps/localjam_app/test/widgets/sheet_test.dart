@@ -296,7 +296,7 @@ void main() {
         (context) => showJamSheet<void>(
           context,
           title: 'Queue',
-          actions: const JamSheetActions.close(),
+          actions: const JamSheetActions.done(),
           builder: (_) => const SizedBox(height: 40),
         ),
       ),
@@ -320,7 +320,7 @@ void main() {
         (context) => showJamSheet<void>(
           context,
           title: 'Invite People',
-          actions: const JamSheetActions.close(),
+          actions: const JamSheetActions.done(),
           initialChildSize: kJamSheetMediumSize,
           builder: (_) => const SizedBox(height: 200),
         ),
@@ -381,21 +381,20 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Sheet'), findsNothing);
 
-    // A sheet that only shows something closes the way every other sheet
-    // does (CR-24): one trailing Done, never an xmark.
-    await open(const JamSheetActions.close());
-    expect(find.byType(JamSheetCloseButton), findsOneWidget);
+    // Every other sheet — one that only shows something, one that applies
+    // as it goes — closes one way (CR-24): one trailing Done, never an
+    // xmark.
+    await open(const JamSheetActions.done());
     expect(find.text(JamSheetStrings.done), findsOneWidget);
     expect(find.byIcon(CupertinoIcons.xmark), findsNothing);
     expect(find.text(JamSheetStrings.cancel), findsNothing);
-    final done = tester.getRect(find.text(JamSheetStrings.done));
-    await tester.tap(find.byType(JamSheetCloseButton));
+    expect(
+      tester.getCenter(find.text(JamSheetStrings.done)).dx,
+      greaterThan(tester.getCenter(find.text('Sheet')).dx),
+    );
+    await tester.tap(find.text(JamSheetStrings.done));
     await tester.pumpAndSettle();
     expect(find.text('Sheet'), findsNothing);
-
-    // …in the same place, in the same weight, as a live sheet's Done.
-    await open(const JamSheetActions.done());
-    expect(tester.getRect(find.text(JamSheetStrings.done)), done);
   });
 
   testWidgets('dragging the sheet down dismisses it', (tester) async {
@@ -422,14 +421,14 @@ void main() {
         (context) => showJamSheet<void>(
           context,
           title: 'Invite People',
-          actions: const JamSheetActions.close(),
+          actions: const JamSheetActions.done(),
           builder: (_) => const SizedBox(height: 40),
         ),
       ),
     );
     await tester.tap(find.text('Open'));
     await tester.pumpAndSettle();
-    await tester.tap(find.byType(JamSheetCloseButton));
+    await tester.tap(find.text(JamSheetStrings.done));
     await tester.pumpAndSettle();
     expect(find.text('Invite People'), findsNothing);
   });

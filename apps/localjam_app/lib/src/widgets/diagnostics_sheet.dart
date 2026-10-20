@@ -61,7 +61,7 @@ Future<void> showDiagnosticsSheet(
     context,
     title: JamDiagnosticsStrings.title,
     // Shows figures and changes nothing: close-only (§10.2).
-    actions: const JamSheetActions.close(),
+    actions: const JamSheetActions.done(),
     grouped: true,
     // Sized to its content; scrolls rather than clips at large text sizes.
     scrollable: false,

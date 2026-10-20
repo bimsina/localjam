@@ -202,7 +202,7 @@ Future<void> showInviteSheet(
 }) => showJamSheet<void>(
   context,
   title: RoomSheetStrings.inviteTitle,
-  actions: const JamSheetActions.close(),
+  actions: const JamSheetActions.done(),
   grouped: true,
   // Sized to its content: the code, two buttons, nothing to scroll — except
   // at large text sizes, where it scrolls rather than clips.

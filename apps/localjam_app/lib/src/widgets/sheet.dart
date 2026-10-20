@@ -57,9 +57,6 @@ import 'section.dart';
 
 /// Strings the sheet chrome says.
 abstract final class JamSheetStrings {
-  /// The word on the control that closes a sheet: Done, as on every other
-  /// sheet (CR-24).
-  static const String close = 'Done';
   static const String cancel = 'Cancel';
   static const String done = 'Done';
   static const String dismiss = 'Dismiss';
@@ -281,49 +278,21 @@ class JamSheetGrabber extends StatelessWidget {
   );
 }
 
-/// What closes a sheet that only shows something: the trailing semibold
-/// **Done** every sheet closes with (CR-24) — not an xmark.
-class JamSheetCloseButton extends StatelessWidget {
-  const JamSheetCloseButton({super.key, this.onPressed});
-
-  /// Defaults to popping the sheet's route.
-  final VoidCallback? onPressed;
-
-  @override
-  Widget build(BuildContext context) => JamTextButton(
-    label: JamSheetStrings.close,
-    bold: true,
-    onPressed: onPressed ?? () => Navigator.of(context).maybePop(),
-  );
-}
-
-enum _JamSheetActionKind { close, done, confirm }
+enum _JamSheetActionKind { done, confirm }
 
 /// The only header layouts a sheet may have (spec §10.2).
 ///
-/// - [JamSheetActions.close]: a sheet that only shows something (Invite,
-///   Diagnostics): a trailing **Done** that closes it, nothing leading —
-///   the same control as [JamSheetActions.done].
-/// - [JamSheetActions.done]: a sheet whose changes apply as they are made
-///   (People, Sound Offset): a trailing **Done**; add [showCancel] only when
-///   Done commits something Cancel would throw away.
+/// - [JamSheetActions.done]: every sheet that does not commit with a verb
+///   — one that only shows something (Invite, Diagnostics) and one whose
+///   changes apply as they are made (People, Sound Offset) alike: a
+///   trailing semibold **Done**, never an xmark (CR-24); add [showCancel]
+///   only when Done commits something Cancel would throw away.
 /// - [JamSheetActions.confirm]: a sheet that edits and then commits with a
 ///   verb (Start, Join, Add): leading **Cancel**, trailing semibold verb.
 ///
 /// Secondary actions (Copy, Reset) belong in the content.
 @immutable
 class JamSheetActions {
-  /// A trailing **Done** that closes the sheet. [onClose] defaults to
-  /// popping it.
-  const JamSheetActions.close({this.onClose})
-    : _kind = _JamSheetActionKind.close,
-      label = JamSheetStrings.done,
-      onConfirm = null,
-      onCancel = null,
-      showCancel = false,
-      busy = false,
-      busyLabel = null;
-
   /// A trailing semibold **Done** ([label]). [onDone] defaults to popping
   /// the sheet.
   const JamSheetActions.done({
@@ -333,12 +302,11 @@ class JamSheetActions {
     this.onCancel,
   }) : _kind = _JamSheetActionKind.done,
        onConfirm = onDone,
-       onClose = null,
        busy = false,
        busyLabel = null;
 
   /// Leading **Cancel**, trailing semibold [label] ("Start"). A null
-  /// [onConfirm] disables the verb; [busy] swaps it for a spinner and
+  /// [onConfirm] disables the verb; [busy] swaps it for a turning ring and
   /// disables Cancel (a one-way door is being walked through).
   const JamSheetActions.confirm({
     required this.label,
@@ -347,8 +315,7 @@ class JamSheetActions {
     this.busy = false,
     this.busyLabel,
   }) : _kind = _JamSheetActionKind.confirm,
-       showCancel = true,
-       onClose = null;
+       showCancel = true;
 
   final _JamSheetActionKind _kind;
 
@@ -361,16 +328,13 @@ class JamSheetActions {
   /// Cancel's action; defaults to popping the sheet.
   final VoidCallback? onCancel;
 
-  /// The closing Done's action; defaults to popping the sheet.
-  final VoidCallback? onClose;
-
   /// Whether the leading Cancel shows.
   final bool showCancel;
 
-  /// The verb is running: a spinner in its place, Cancel disabled.
+  /// The verb is running: a turning ring in its place, Cancel disabled.
   final bool busy;
 
-  /// What the spinner announces ("Starting"); defaults to [label].
+  /// What the ring announces ("Starting"); defaults to [label].
   final String? busyLabel;
 
   /// The leading slot, or null for none.
@@ -386,7 +350,6 @@ class JamSheetActions {
 
   /// The trailing slot.
   Widget trailing(BuildContext context) => switch (_kind) {
-    _JamSheetActionKind.close => JamSheetCloseButton(onPressed: onClose),
     _JamSheetActionKind.done => JamTextButton(
       label: label,
       bold: true,

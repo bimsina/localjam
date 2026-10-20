@@ -63,9 +63,9 @@ void main() {
       expect(find.byType(JamSheetSurface), findsNothing);
     });
 
-    testWidgets('the xmark backs out with no answer', (tester) async {
+    testWidgets('Done backs out with no answer', (tester) async {
       final answer = await open(tester);
-      await tester.tap(find.bySemanticsLabel(JamSheetStrings.close));
+      await tester.tap(find.text(JamSheetStrings.done));
       await tester.pumpAndSettle();
       expect(await answer, isNull);
     });

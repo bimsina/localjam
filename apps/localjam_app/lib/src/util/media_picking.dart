@@ -201,7 +201,7 @@ Future<JamAddSource?> showJamAddSourceSheet(BuildContext context) =>
     showJamSheet<JamAddSource>(
       context,
       title: JamPickerStrings.addFrom,
-      actions: const JamSheetActions.close(),
+      actions: const JamSheetActions.done(),
       grouped: true,
       scrollable: false,
       builder: (context) {

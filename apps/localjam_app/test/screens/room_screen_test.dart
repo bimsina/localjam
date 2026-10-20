@@ -998,7 +998,7 @@ void main() {
     await tester.tap(invite);
     await tester.pumpAndSettle();
     expect(find.byType(InvitePanel), findsOneWidget);
-    await tester.tap(find.bySemanticsLabel(JamSheetStrings.close));
+    await tester.tap(find.text(JamSheetStrings.done));
     await tester.pumpAndSettle();
     expect(find.byType(InvitePanel), findsNothing);
 
