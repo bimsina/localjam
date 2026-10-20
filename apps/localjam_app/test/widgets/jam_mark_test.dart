@@ -54,7 +54,7 @@ void main() {
         expect(letter.style!.color, colors.secondaryLabel);
         final ground = _ground(tester);
         // Never a person's colour, never raspberry.
-        expect(ground.color, colors.fillSecondary);
+        expect(ground.color, colors.fill);
         expect(ground.color, isNot(colors.tint));
         expect(kJamAvatarPalette, isNot(contains(ground.color)));
         // A rounded square with continuous corners: music, not a person.
@@ -85,7 +85,9 @@ void main() {
       expect(find.byType(Text), findsNothing);
     });
 
-    testWidgets('one cover fills the tile; four make a mosaic', (tester) async {
+    testWidgets('one cover fills the tile — never a mosaic (R4)', (
+      tester,
+    ) async {
       await _pump(tester, JamMark(name: 'Van Jam', covers: [_pixel]));
       expect(find.byType(Image), findsOneWidget);
       expect(find.text('V'), findsNothing);
@@ -98,7 +100,66 @@ void main() {
           covers: [_pixel, _pixel, _pixel, _pixel],
         ),
       );
-      expect(find.byType(Image), findsNWidgets(4));
+      expect(find.byType(Image), findsOneWidget);
+      expect(
+        tester.getSize(find.byType(Image)),
+        const Size.square(JamMarkSize.row),
+      );
+    });
+
+    testWidgets('on the backdrop: the placeholder ground, a quiet letter', (
+      tester,
+    ) async {
+      await _pump(
+        tester,
+        const JamMark(name: 'Sunday', size: 332, onBackdrop: true),
+        dark: true,
+      );
+      expect(_ground(tester).color, JamNowPlayingColors.placeholderGround);
+      final letter = tester.widget<Text>(find.text('S'));
+      expect(letter.style!.color, JamNowPlayingColors.placeholderGlyph);
+      // A cover-sized mark keeps its letter quiet (IR-1); list marks don't
+      // change.
+      expect(letter.style!.fontSize, closeTo(66.4, 0.01));
+      expect(JamMark.monogramSizeFor(JamMarkSize.nearby), 44 * 0.46);
+      expect(JamMark.monogramSizeFor(JamMarkSize.ended), 88 * 0.46);
+      expect(JamMark.monogramSizeFor(1000), 72);
+    });
+
+    testWidgets('the badge gap is cut from the shadow too — no halo', (
+      tester,
+    ) async {
+      await _pump(
+        tester,
+        const JamMark(
+          name: 'Sunday',
+          size: JamMarkSize.ended,
+          hostName: 'Bibek',
+          shadow: true,
+        ),
+      );
+      final mark = tester.getRect(find.byType(JamMark));
+      final badge = tester.getRect(find.byType(JamAvatar));
+      // A point in the gap between the badge and the tile: outside the
+      // badge, inside its knock-out.
+      final gap =
+          badge.center -
+          mark.topLeft +
+          Offset(badge.width / 2 + kJamMarkBadgeGap / 2, 0);
+      final clips = tester
+          .widgetList<ClipPath>(
+            find.descendant(
+              of: find.byType(JamMark),
+              matching: find.byType(ClipPath),
+            ),
+          )
+          .toList();
+      // One clip for the tile, one for its shadow.
+      expect(clips, hasLength(2));
+      for (final clip in clips) {
+        final path = clip.clipper!.getClip(mark.size);
+        expect(path.contains(gap), isFalse);
+      }
     });
 
     testWidgets('a known host wears a face on the corner, knocked out', (
