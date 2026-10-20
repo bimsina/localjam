@@ -175,13 +175,19 @@ class JamArtworkHero extends StatelessWidget {
   final Widget child;
 
   @override
-  Widget build(BuildContext context) => Hero(
-    tag: kJamNowPlayingArtworkTag,
-    flightShuttleBuilder: (context, animation, direction, from, to) {
-      final hero = (direction == HeroFlightDirection.push ? to : from).widget;
-      return FittedBox(child: (hero as Hero).child);
-    },
-    child: child,
+  Widget build(BuildContext context) => HeroMode(
+    // Under reduced motion the room fades in (the router's transition) and
+    // the cover does not fly: the largest movement in the app is exactly
+    // what that setting asks to go without (RB-13).
+    enabled: !(MediaQuery.maybeDisableAnimationsOf(context) ?? false),
+    child: Hero(
+      tag: kJamNowPlayingArtworkTag,
+      flightShuttleBuilder: (context, animation, direction, from, to) {
+        final hero = (direction == HeroFlightDirection.push ? to : from).widget;
+        return FittedBox(child: (hero as Hero).child);
+      },
+      child: child,
+    ),
   );
 }
 

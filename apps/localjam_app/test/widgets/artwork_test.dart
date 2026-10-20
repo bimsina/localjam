@@ -178,4 +178,17 @@ void main() {
       expect(find.byType(ImageFiltered), findsNothing);
     });
   });
+
+  testWidgets('under reduced motion the cover does not fly between the mini '
+      'player and Now Playing (RB-13)', (tester) async {
+    for (final reduced in [false, true]) {
+      await tester.pumpWidget(
+        MediaQuery(
+          data: MediaQueryData(disableAnimations: reduced),
+          child: const JamArtworkHero(child: SizedBox.square(dimension: 40)),
+        ),
+      );
+      expect(tester.widget<HeroMode>(find.byType(HeroMode)).enabled, !reduced);
+    }
+  });
 }
