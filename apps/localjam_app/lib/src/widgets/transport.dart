@@ -8,10 +8,13 @@
 /// finger mid-gesture.
 ///
 /// Both live on the immersive backdrop (D4) and paint in the fixed
-/// [JamNowPlayingColors]: white glyphs, no circles, no thumb, no tint.
+/// [JamNowPlayingColors]: white skip glyphs, no circles, no thumb, no tint —
+/// and one signature control, the ivory play square (76 pt, continuous
+/// corners, warm-ink glyph) that squeezes under a finger.
 ///
 /// The controls are *gated, never hidden*: a guest without playback control
-/// sees the same bar at 30% with a line saying whose call it is, so the
+/// sees the same bar drawn quiet — the square as glass, every glyph in the
+/// backdrop's tertiary white — with a line saying whose call it is, so the
 /// room's rules are legible rather than mysterious.
 library;
 
@@ -62,16 +65,12 @@ const Key jamScrubberTrackKey = Key('jam.scrubber.track');
 /// The transparent 44 pt touch area over a [JamScrubber]'s track.
 const Key jamScrubberHitKey = Key('jam.scrubber.hit');
 
-/// Glyph sizes (§4: transport 34/44/34).
-const double _kSkipGlyph = 34;
-const double _kPlayGlyph = 44;
-
-/// The touch boxes around them — generous, the way the Music app's are.
+/// The skip glyphs' touch boxes — generous, the way the Music app's are.
 const double _kSkipHit = 64;
-const double _kPlayHit = 76;
 
-/// The opacity of a control the room has not given you (§6.3).
-const double _kDisabledOpacity = 0.3;
+/// How far the play triangle sits right of the square's centre: its visual
+/// mass is left of its box, so geometric centring reads as off-centre.
+const double _kPlayOpticalShift = 1.5;
 
 /// Previous · play/pause · next, evenly spaced across the width it is given.
 class JamTransport extends StatelessWidget {
@@ -119,7 +118,6 @@ class JamTransport extends StatelessWidget {
       children: [
         _TransportButton(
           icon: CupertinoIcons.backward_fill,
-          glyph: _kSkipGlyph,
           hit: _kSkipHit,
           label: JamTransportStrings.previous,
           onPressed: enabled && onPrevious != null
@@ -131,8 +129,7 @@ class JamTransport extends StatelessWidget {
         ),
         _TransportButton(
           icon: playing ? CupertinoIcons.pause_fill : CupertinoIcons.play_fill,
-          glyph: _kPlayGlyph,
-          hit: _kPlayHit,
+          hit: JamMetrics.playSquare,
           loading: loading,
           primary: true,
           label: loading
@@ -151,7 +148,6 @@ class JamTransport extends StatelessWidget {
         ),
         _TransportButton(
           icon: CupertinoIcons.forward_fill,
-          glyph: _kSkipGlyph,
           hit: _kSkipHit,
           label: JamTransportStrings.next,
           onPressed: enabled && onNext != null
@@ -166,7 +162,7 @@ class JamTransport extends StatelessWidget {
 
     if (enabled) return bar;
 
-    // Dimmed and inert, but still on screen: the controls you will get when
+    // Quiet and inert, but still on screen: the controls you will get when
     // the host promotes you.
     final inert = IgnorePointer(child: ExcludeSemantics(child: bar));
     final message = gatedMessage;
@@ -176,6 +172,7 @@ class JamTransport extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         inert,
+        const SizedBox(height: JamSpace.md),
         Text(
           message,
           textAlign: TextAlign.center,
@@ -189,13 +186,18 @@ class JamTransport extends StatelessWidget {
   }
 }
 
-/// One transport glyph: white, no circle, dims on press and when disabled.
+/// One transport control. A skip is a bare white glyph that dims under a
+/// finger; the primary is the play square, ivory with a warm-ink glyph,
+/// that squeezes instead ([JamPressStyle.scale]) — half-transparent ivory
+/// over a cover goes muddy. Disabled, a skip glyph and the square's glyph go
+/// to the backdrop's tertiary white and the square to glass: quiet, never a
+/// dimmed slab.
+///
 /// The glyph swap (play ↔ pause) cross-fades with a small scale so a tap
 /// reads as one control changing state.
 class _TransportButton extends StatelessWidget {
   const _TransportButton({
     required this.icon,
-    required this.glyph,
     required this.hit,
     required this.label,
     required this.onPressed,
@@ -204,7 +206,6 @@ class _TransportButton extends StatelessWidget {
   });
 
   final IconData icon;
-  final double glyph;
   final double hit;
   final String label;
   final VoidCallback? onPressed;
@@ -215,21 +216,76 @@ class _TransportButton extends StatelessWidget {
   Widget build(BuildContext context) {
     final reduced = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
     final enabled = onPressed != null;
+    // A loading button is busy, not forbidden: it keeps its full colours.
+    final live = enabled || loading;
+    final glyphColor = !live
+        ? JamNowPlayingColors.tertiary
+        : primary
+        ? JamNowPlayingColors.playGlyph
+        : JamNowPlayingColors.text;
     final Widget face = loading
         ? CupertinoActivityIndicator(
-            key: ValueKey<String>('loading'),
+            key: const ValueKey<String>('loading'),
             radius: 14,
-            color: primary
-                ? JamNowPlayingColors.selectedGlyph
-                : JamNowPlayingColors.text,
+            color: glyphColor,
           )
-        : Icon(
-            icon,
+        : Transform.translate(
             key: ValueKey<IconData>(icon),
-            size: primary ? 32 : glyph,
-            color: primary
-                ? JamNowPlayingColors.selectedGlyph
-                : JamNowPlayingColors.text,
+            offset: Offset(
+              primary && icon == CupertinoIcons.play_fill
+                  ? _kPlayOpticalShift
+                  : 0,
+              0,
+            ),
+            // Skips at the play glyph's size, so neither side outweighs the
+            // square between them.
+            child: Icon(icon, size: JamIconSize.play, color: glyphColor),
+          );
+
+    final glyph = AnimatedSwitcher(
+      duration: reduced ? Duration.zero : JamDuration.fast,
+      switchInCurve: JamCurve.standard,
+      switchOutCurve: JamCurve.standard,
+      transitionBuilder: (child, animation) => FadeTransition(
+        opacity: animation,
+        child: ScaleTransition(
+          scale: Tween<double>(begin: 0.7, end: 1).animate(animation),
+          child: child,
+        ),
+      ),
+      child: face,
+    );
+
+    final Widget control = primary
+        ? JamPressable(
+            onTap: onPressed,
+            style: JamPressStyle.scale,
+            child: AnimatedContainer(
+              duration: reduced ? Duration.zero : JamDuration.fast,
+              curve: JamCurve.standard,
+              width: hit,
+              height: hit,
+              decoration: ShapeDecoration(
+                color: live
+                    ? JamNowPlayingColors.playSurface
+                    : JamNowPlayingColors.glass,
+                shape: const RoundedSuperellipseBorder(
+                  borderRadius: BorderRadius.all(
+                    Radius.circular(JamRadius.playSquare),
+                  ),
+                ),
+              ),
+              child: Center(child: glyph),
+            ),
+          )
+        : JamPressable(
+            onTap: onPressed,
+            pressedOpacity: 0.5,
+            child: SizedBox(
+              width: hit,
+              height: hit,
+              child: Center(child: glyph),
+            ),
           );
 
     return Semantics(
@@ -239,39 +295,7 @@ class _TransportButton extends StatelessWidget {
       label: label,
       onTap: onPressed,
       excludeSemantics: true,
-      child: Opacity(
-        // A loading button is busy, not forbidden: it stays at full white.
-        opacity: enabled || loading ? 1 : _kDisabledOpacity,
-        child: JamPressable(
-          onTap: onPressed,
-          pressedOpacity: 0.5,
-          child: Container(
-            width: hit,
-            height: hit,
-            decoration: primary
-                ? BoxDecoration(
-                    color: const Color(0xFFF7F2EE),
-                    borderRadius: BorderRadius.circular(26),
-                  )
-                : null,
-            child: Center(
-              child: AnimatedSwitcher(
-                duration: reduced ? Duration.zero : JamDuration.fast,
-                switchInCurve: JamCurve.standard,
-                switchOutCurve: JamCurve.standard,
-                transitionBuilder: (child, animation) => FadeTransition(
-                  opacity: animation,
-                  child: ScaleTransition(
-                    scale: Tween<double>(begin: 0.7, end: 1).animate(animation),
-                    child: child,
-                  ),
-                ),
-                child: face,
-              ),
-            ),
-          ),
-        ),
-      ),
+      child: control,
     );
   }
 }
