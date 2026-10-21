@@ -31,6 +31,14 @@
 /// exactly `outputLatency + baseLatency` and is stable to ~0.05 ms, while
 /// `currentTime` moves in 23 ms callback steps.
 ///
+/// `positionUs` is the position HEARD now, as on Android (presented frames):
+/// the frame that was due the reported latency ago — the timestamp mapping
+/// with no latency shift, or `currentTime` minus the reported latency. The
+/// `playAt` mapping above is unchanged by this. Because the Dart side
+/// schedules its anchors `outputLatencyUs` early, a schedule that landed on
+/// time reads the room's position and a §5.4 drift check reads 0; the frame
+/// due now would read the whole latency ahead.
+///
 /// Autoplay: the `AudioContext` is created lazily by the first call that
 /// needs it and `resume()`d (and, on iOS, the `<audio>` element `play()`ed)
 /// synchronously at the start of `load`, `playAt`, `outputLatencyUs` and
@@ -117,9 +125,10 @@ class _Segment {
 ///  * `setRate` changes the live node's `playbackRate` (a resample: pitch
 ///    shifts ~9 cents at the ±0.5 % §5.4 slews, as on desktop).
 ///  * `pause` stops the node (native keeps a paused node; here `playAt`
-///    re-anchors either way). `positionUs` is null unless playing/scheduled;
-///    before a scheduled start it reads the schedule's timeline extrapolated
-///    back to now, clamped at 0 (a start at 10 s due in 2 s reads 8 s).
+///    re-anchors either way). `positionUs` (the position heard now, see the
+///    library docs) is null unless playing/scheduled; before a scheduled
+///    start it reads the schedule's timeline extrapolated back to now,
+///    clamped at 0 (a start at 10 s heard in 2 s reads 8 s).
 ///  * `dispose` stops output and drops the buffer (and any kept probe
 ///    buffer) but keeps the context and the iOS element (see Autoplay).
 ///  * `outputLatencyUs` = `outputLatency + baseLatency` where reported, else
@@ -158,6 +167,13 @@ class LocaljamAudioWeb {
   /// detect from the user agent.
   @visibleForTesting
   static bool? debugIsIOSOverride;
+
+  /// Replaces the reported output latency (s) — what `outputLatencyUs`
+  /// answers and schedules are mapped with — so tests can pin the latency
+  /// contract whatever the machine's output device reports; null = report
+  /// the browser's `outputLatency + baseLatency`.
+  @visibleForTesting
+  static double? debugOutputLatencyOverrideSec;
 
   /// The live `AudioContext`, if one was created.
   @visibleForTesting
@@ -240,8 +256,10 @@ class LocaljamAudioWeb {
   /// `currentTime`). Fixed per schedule, so the mapping never flips under it.
   bool _scheduleUsesTimestamps = false;
 
-  /// The latency (ms) the current schedule was mapped with, frozen so that
-  /// browser jitter in `outputLatency` does not jitter [positionUs].
+  /// The reported latency (ms) when the current schedule was installed:
+  /// what it was mapped with (through timestamps) and how far the heard
+  /// position trails the due one in [_positionUs] (either mapping). Frozen
+  /// so that browser jitter in `outputLatency` does not jitter positions.
   double _scheduleLatencyMs = 0;
 
   bool _contextWasRunning = false;
@@ -362,10 +380,22 @@ class LocaljamAudioWeb {
     }
   }
 
-  /// Context time (s) of the frame due at performance time [perfMs], heard
-  /// [latencyMs] later (see the library docs), through the output
-  /// timestamp when [timestamps], else through `currentTime` (render clock,
-  /// one callback coarse: 23 ms steps in Chrome with the 'playback' hint).
+  /// Context time (s) of the frame DUE at performance time [perfMs], i.e.
+  /// heard [latencyMs] later (see the library docs): the mapping `playAt`
+  /// schedules through.
+  ///
+  /// With [timestamps], through the output timestamp, which gives the
+  /// context time HEARD at an instant (`offset + perf`): the frame due at
+  /// [perfMs] is the one heard at `perfMs + latencyMs`. Else through
+  /// `currentTime`, the render clock, whose frame is the one due by
+  /// definition (heard the reported latency later), so [latencyMs] does not
+  /// enter it (one callback coarse: 23 ms steps in Chrome with the
+  /// 'playback' hint).
+  ///
+  /// The frame HEARD at a performance time is therefore the one due
+  /// [latencyMs] earlier: `_ctxTimeAt(ctx, perfMs - latencyMs, latencyMs)`
+  /// — `offset + perfMs` through timestamps, `currentTime − latency`
+  /// through the render clock. That is what [_positionUs] reads.
   double _ctxTimeAt(
     web.AudioContext ctx,
     double perfMs,
@@ -385,6 +415,8 @@ class LocaljamAudioWeb {
   /// `outputLatency + baseLatency` (s), each counted only where the browser
   /// reports a finite non-negative number (Safari: no `outputLatency`).
   static double _latencySec(web.AudioContext ctx) {
+    final override = debugOutputLatencyOverrideSec;
+    if (override != null) return override;
     var total = 0.0;
     for (final name in const ['outputLatency', 'baseLatency']) {
       final value = _number(ctx, name);
@@ -816,7 +848,9 @@ class LocaljamAudioWeb {
     // Map the anchor into context time. A late anchor (§5.3 late join) is
     // moved to the earliest exact start with the media advanced to match.
     final timestamps = _tsOffsetSec != null;
-    final latencyMs = timestamps ? _latencySec(ctx) * 1000 : 0.0;
+    // Used by the timestamp mapping only; the render-clock mapping ignores
+    // it (see [_ctxTimeAt]), but [_positionUs] needs it either way.
+    final latencyMs = _latencySec(ctx) * 1000;
     var when = _ctxTimeAt(
       ctx,
       nativeTimeUs / 1000,
@@ -894,21 +928,27 @@ class LocaljamAudioWeb {
     return null;
   }
 
-  /// The media position of the frame due now (µs, clamped to the file),
-  /// read from the context clock each call — so a sound card running fast
-  /// or slow against `performance.now()` shows up as drift (§5.4). Before a
-  /// scheduled start it reads the schedule's timeline extrapolated back to
-  /// now, clamped at 0: a start at 10 s due in 2 s reads 8 s, a start at 0
-  /// reads 0.
+  /// The media position being HEARD now (µs, clamped to the file), as on
+  /// Android (presented frames): the frame that was due the schedule's
+  /// latency ago, not the one due now, which is heard that much later.
+  /// The Dart side schedules its anchors `outputLatencyUs` early so they
+  /// are heard on time (§7), so a schedule that landed on time reads the
+  /// room's position and the drift check (§5.4) reads 0; the due-now frame
+  /// would read the whole output latency ahead. Read from the context
+  /// clock each call — so a sound card running fast or slow against
+  /// `performance.now()` shows up as drift. Before a scheduled start it
+  /// reads the schedule's timeline extrapolated back to now, clamped at 0:
+  /// a start at 10 s heard in 2 s reads 8 s, a start at 0 reads 0.
   Object? _positionUs() {
     final ctx = _ctx;
     if (_state != _State.playing || ctx == null || _segments.isEmpty) {
       return null;
     }
+    final latencyMs = _scheduleLatencyMs;
     final now = _ctxTimeAt(
       ctx,
-      _perfNowMs(),
-      _scheduleLatencyMs,
+      _perfNowMs() - latencyMs,
+      latencyMs,
       timestamps: _scheduleUsesTimestamps,
     );
     final segment = _segments.lastWhere(
@@ -942,8 +982,11 @@ class LocaljamAudioWeb {
     final at = math.max(ctx.currentTime + _minLead(ctx), last.ctxTime);
     source.playbackRate.setValueAtTime(rate.toDouble(), at);
     _segments = [
-      // [positionUs] reads "now", which trails the render clock by up to
-      // the output latency: keep recent pieces (16 is ample for slews).
+      // [positionUs] reads the instant being heard, which trails the
+      // render clock by the output latency (Bluetooth: hundreds of ms), so
+      // it can still be inside an earlier piece: keep recent ones. A §5.4
+      // slew sets the rate at most twice per 1 s drift check, so 16 pieces
+      // span seconds — ample.
       ..._segments.skip(_segments.length < 16 ? 0 : 1),
       _Segment(at, last.mediaAt(at), rate.toDouble()),
     ];

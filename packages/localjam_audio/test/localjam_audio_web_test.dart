@@ -136,12 +136,40 @@ void main() {
     await LocaljamAudioWeb.debugInstance!.debugCloseContext();
     await subscription.cancel();
     LocaljamAudioWeb.debugIsIOSOverride = null;
+    LocaljamAudioWeb.debugOutputLatencyOverrideSec = null;
   });
 
   web.AudioContext context() => LocaljamAudioWeb.debugInstance!.debugContext!;
 
   Matcher platformError(String code) =>
       isA<PlatformException>().having((e) => e.code, 'code', code);
+
+  /// Schedules [positionUs] to be HEARD at [heardAtUs], as the Dart
+  /// controller does (§7): the anchor shifted by the reported output
+  /// latency. `positionUs` reads the heard position, so it then follows
+  /// `positionUs + (now − heardAtUs) × rate`.
+  ///
+  /// A fresh context reports only `baseLatency` until it runs (Chrome here:
+  /// 23 ms, then 55 ms with `outputLatency`), so a latency read before the
+  /// first schedule may not be the one `playAt` maps with: schedule again
+  /// with the settled value, as a re-apply would.
+  Future<void> playHeardAt(
+    int heardAtUs,
+    int positionUs, {
+    double rate = 1,
+  }) async {
+    var latencyUs = await audio.outputLatencyUs();
+    for (var attempt = 0; attempt < 3; attempt++) {
+      await audio.playAt(
+        nativeTimeUs: heardAtUs - latencyUs,
+        positionUs: positionUs,
+        rate: rate,
+      );
+      final settled = await audio.outputLatencyUs();
+      if ((settled - latencyUs).abs() <= 1000) return;
+      latencyUs = settled;
+    }
+  }
 
   group('clock', () {
     test('nowUs is performance.now() in µs and never runs backwards', () async {
@@ -285,7 +313,8 @@ void main() {
 
   group('playAt', () {
     /// Samples positionUs for [ms] and checks each against the anchor
-    /// formula: position = start + (now − anchor) × rate (clamped at 0).
+    /// formula: position = start + (now − anchor) × rate (clamped at 0),
+    /// where [anchorUs] is when [startUs] is HEARD (see [playHeardAt]).
     Future<void> expectFollowsAnchor({
       required int anchorUs,
       required int startUs,
@@ -319,16 +348,38 @@ void main() {
       if (needsAutoplay()) return;
       await audio.load(wavUrl(3));
       final anchorUs = perfNowUs() + 300000;
-      await audio.playAt(nativeTimeUs: anchorUs, positionUs: 1000000);
+      await playHeardAt(anchorUs, 1000000);
       expect(context().state, 'running');
       await expectFollowsAnchor(anchorUs: anchorUs, startUs: 1000000);
+    });
+
+    test('positionUs is the position HEARD now: a schedule shifted by the '
+        'output latency reads the room position, not latency ahead', () async {
+      if (needsAutoplay()) return;
+      // A route reporting 150 ms (Bluetooth-like), whatever this machine's
+      // output device says, so the latency term is far outside tolerance.
+      LocaljamAudioWeb.debugOutputLatencyOverrideSec = 0.150;
+      final latencyUs = await audio.outputLatencyUs();
+      expect(latencyUs, 150000);
+      await audio.load(wavUrl(3));
+      // The controller's convention (§7): to be HEARD at T, schedule the
+      // anchor the output latency earlier.
+      final heardAtUs = perfNowUs() + 400000;
+      await audio.playAt(
+        nativeTimeUs: heardAtUs - latencyUs,
+        positionUs: 1000000,
+      );
+      // So a drift check reads P + (now − T), the room's position — not
+      // P + (now − T) + latency, the frame due (still to be heard) now.
+      await sleepMs(500);
+      await expectFollowsAnchor(anchorUs: heardAtUs, startUs: 1000000);
     });
 
     test('a position-0 schedule reads 0 until it starts', () async {
       if (needsAutoplay()) return;
       await audio.load(wavUrl(3));
       final anchorUs = perfNowUs() + 400000;
-      await audio.playAt(nativeTimeUs: anchorUs, positionUs: 0);
+      await playHeardAt(anchorUs, 0);
       expect(await audio.positionUs(), 0);
       await sleepMs(600);
       expect(await audio.positionUs(), closeTo(perfNowUs() - anchorUs, 30000));
@@ -338,7 +389,7 @@ void main() {
       if (needsAutoplay()) return;
       await audio.load(wavUrl(3));
       final anchorUs = perfNowUs() - 500000;
-      await audio.playAt(nativeTimeUs: anchorUs, positionUs: 200000);
+      await playHeardAt(anchorUs, 200000);
       await expectFollowsAnchor(anchorUs: anchorUs, startUs: 200000, ms: 400);
     });
 
@@ -346,7 +397,7 @@ void main() {
       if (needsAutoplay()) return;
       await audio.load(wavUrl(3));
       final anchorUs = perfNowUs() + 100000;
-      await audio.playAt(nativeTimeUs: anchorUs, positionUs: 0, rate: 1.5);
+      await playHeardAt(anchorUs, 0, rate: 1.5);
       await expectFollowsAnchor(
         anchorUs: anchorUs,
         startUs: 0,
@@ -376,7 +427,7 @@ void main() {
       // on: a schedule mapped through the old offset would start ~2 s late
       // (position 0 all along).
       final anchorUs = perfNowUs() + 300000;
-      await audio.playAt(nativeTimeUs: anchorUs, positionUs: 0);
+      await playHeardAt(anchorUs, 0);
       await sleepMs(400);
       await expectFollowsAnchor(anchorUs: anchorUs, startUs: 0, ms: 500);
     });
@@ -386,7 +437,7 @@ void main() {
       await audio.load(wavUrl(3));
       await audio.playAt(nativeTimeUs: perfNowUs(), positionUs: 0);
       final anchorUs = perfNowUs() + 100000;
-      await audio.playAt(nativeTimeUs: anchorUs, positionUs: 2000000);
+      await playHeardAt(anchorUs, 2000000);
       await expectFollowsAnchor(anchorUs: anchorUs, startUs: 2000000, ms: 300);
     });
 
@@ -443,7 +494,7 @@ void main() {
       if (needsAutoplay()) return;
       await audio.load(wavUrl(4));
       final anchorUs = perfNowUs() + 100000;
-      await audio.playAt(nativeTimeUs: anchorUs, positionUs: 0);
+      await playHeardAt(anchorUs, 0);
       await sleepMs(300);
       final before = (await audio.positionUs())!;
       await audio.setRate(2);
@@ -470,7 +521,7 @@ void main() {
       if (needsAutoplay()) return;
       await audio.load(wavUrl(3));
       final anchorUs = perfNowUs() + 300000;
-      await audio.playAt(nativeTimeUs: anchorUs, positionUs: 0);
+      await playHeardAt(anchorUs, 0);
       await audio.setRate(1.5);
       await sleepMs(350);
       final position = (await audio.positionUs())!;
@@ -496,15 +547,12 @@ void main() {
       expect(await audio.positionUs(), isNull);
       await audio.load(wavUrl(3));
       expect(await audio.positionUs(), isNull);
-      await audio.playAt(nativeTimeUs: perfNowUs(), positionUs: 0);
+      await playHeardAt(perfNowUs(), 0);
       await sleepMs(100);
       expect(await audio.positionUs(), greaterThan(0));
       await audio.pause();
       expect(await audio.positionUs(), isNull);
-      await audio.playAt(
-        nativeTimeUs: perfNowUs() + 100000,
-        positionUs: 500000,
-      );
+      await playHeardAt(perfNowUs() + 100000, 500000);
       await sleepMs(200);
       expect(await audio.positionUs(), closeTo(600000, 40000));
       await audio.stop();
@@ -606,7 +654,7 @@ void main() {
       expect(identical(context(), first), isTrue);
       if (needsAutoplay()) return;
       final anchorUs = perfNowUs() + 100000;
-      await audio.playAt(nativeTimeUs: anchorUs, positionUs: 0);
+      await playHeardAt(anchorUs, 0);
       await sleepMs(300);
       expect(await audio.positionUs(), closeTo(perfNowUs() - anchorUs, 30000));
     });
@@ -616,7 +664,7 @@ void main() {
       LocaljamAudioWeb.debugIsIOSOverride = true;
       await audio.load(wavUrl(2));
       final anchorUs = perfNowUs() + 100000;
-      await audio.playAt(nativeTimeUs: anchorUs, positionUs: 0);
+      await playHeardAt(anchorUs, 0);
       final element = LocaljamAudioWeb.debugInstance!.debugElement;
       expect(element, isNotNull);
       expect(element!.srcObject, isNotNull);
