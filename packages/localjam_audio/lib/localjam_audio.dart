@@ -369,6 +369,15 @@ class LocaljamAudio {
 
   /// Current playback position (µs), derived from the engine's sample time —
   /// NOT a cached value. Null when nothing is playing or scheduled.
+  ///
+  /// It is the position being HEARD now (the frame leaving the speaker), not
+  /// the frame being rendered or due now, which is heard [outputLatencyUs]
+  /// later. Callers schedule [playAt] anchors shifted [outputLatencyUs]
+  /// early so they are heard on time (§7), so a drift check against the
+  /// anchor reads 0 when the schedule, shifted by `outputLatencyUs`, landed
+  /// on time; a due-now position would read the whole latency as drift.
+  /// Android reads presented frames (`AudioTimestamp`); web maps through the
+  /// output timestamp with no latency shift.
   Future<int?> positionUs() => _ch.invokeMethod<int>('positionUs');
 
   /// Adjusts playback rate without re-anchoring (drift slew, §5.4).

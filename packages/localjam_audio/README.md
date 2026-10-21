@@ -134,6 +134,14 @@ with `start(when, offset)`; graph source → `GainNode` → destination.
   `no_file`/`bad_position` as native. After the context was suspended or
   interrupted, the next `playAt` waits (≤ 1 s) for a fresh output timestamp:
   the context clock stood still while performance time ran on.
+- **`positionUs`** is the position HEARD now, as on Android (presented
+  frames): the frame that was due the reported latency ago — the output
+  timestamp mapped with no latency shift, or `currentTime` minus the
+  reported latency. The `playAt` mapping is unchanged by this. Because the
+  Dart side schedules anchors `outputLatencyUs()` early (§7), a schedule
+  that landed on time reads the room's position and a §5.4 drift check
+  reads 0; reading the frame due now would show the whole output latency as
+  drift.
 - **`setRate`** sets the live node's `playbackRate` 50 ms ahead (resample:
   pitch shifts ~9 cents at ±0.5 %, as on desktop); positions stay continuous.
   **`pause`** stops the node (`playAt` re-anchors anyway); `positionUs` is
