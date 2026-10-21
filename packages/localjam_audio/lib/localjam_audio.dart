@@ -377,7 +377,8 @@ class LocaljamAudio {
   /// anchor reads 0 when the schedule, shifted by `outputLatencyUs`, landed
   /// on time; a due-now position would read the whole latency as drift.
   /// Android reads presented frames (`AudioTimestamp`); web maps through the
-  /// output timestamp with no latency shift.
+  /// output timestamp with no latency shift; iOS/macOS query the player's
+  /// node-time mapping at now − [outputLatencyUs] (as read at [playAt]).
   Future<int?> positionUs() => _ch.invokeMethod<int>('positionUs');
 
   /// Adjusts playback rate without re-anchoring (drift slew, §5.4).
@@ -399,6 +400,22 @@ class LocaljamAudio {
   /// Releases the native engine. Web: releases the buffer and the node but
   /// keeps the page's gesture-unlocked `AudioContext` for the next engine.
   Future<void> dispose() => _ch.invokeMethod<void>('dispose');
+
+  /// iOS/macOS debug builds only (a test hook, absent from release builds):
+  /// replaces the latency the plugin reports from [outputLatencyUs] and maps
+  /// [positionUs]'s heard instant with, so a test can pin the latency
+  /// contract whatever the machine's output device reports. Null restores
+  /// the platform's value. The override outlives [dispose]; reset it.
+  @visibleForTesting
+  Future<void> debugSetOutputLatencyOverrideUs(int? us) =>
+      _ch.invokeMethod<void>('debugSetOutputLatencyOverride', {'us': us});
+
+  /// iOS/macOS debug builds only: every latency quantity the platform
+  /// reports for the current output (µs and frames), for measurement.
+  @visibleForTesting
+  Future<Map<String, Object?>> debugLatencyInfo() async =>
+      (await _ch.invokeMapMethod<String, Object?>('debugLatencyInfo')) ??
+      const {};
 }
 
 // ---------------------------------------------------------------------------

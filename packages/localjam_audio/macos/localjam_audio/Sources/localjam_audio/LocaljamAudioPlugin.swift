@@ -54,10 +54,38 @@ import FlutterMacOS
 ///    CURRENT host time through its render-anchored mapping: error ≤ ~35 µs
 ///    at rate 1.0; a near-constant ~24 ms lead at rate 1.05 from the pitch
 ///    unit's priming consumption (scales with |rate−1|, so ~2 ms at the
-///    ±0.5 % drift-slew rates — under the §5.4 15 ms ignore threshold).
-/// We use the host-time-now query, falling back to lastRenderTime. Any
-/// residual constant lead is part of output latency in the §7 sense and is
-/// absorbed by output-latency calibration / the manual nudge.
+///    ±0.5 % drift-slew rates — measured +2.8 ms at 1.005 on macOS 27 —
+///    under the §5.4 15 ms ignore threshold).
+/// We use the host-time query, falling back to lastRenderTime.
+///
+/// That mapping gives the frame DUE at a host time — the one play(at:)
+/// starts at a host time — and a due frame is heard the output latency
+/// later (Apple's HelloMetronome: hearing time = node host time +
+/// `outputNode.presentationLatency`). `positionUs` must be the position
+/// HEARD now (the `LocaljamAudio.positionUs` contract, as Android's
+/// presented frames): Dart schedules its anchors `outputLatencyUs` early so
+/// they are heard on time (§7) and compares `positionUs` with the room
+/// position (§5.4). So `positionUs` queries the mapping at now − the
+/// reported latency (`reportedOutputLatencyUs`, the very value
+/// `outputLatencyUs` answers, read once per schedule), not at now. Measured
+/// on macOS 27 with the controller's scheduling (`playAt(T −
+/// outputLatencyUs, P)`, then `positionUs − (P + now − T)`, median of 30
+/// reads at rate 1.0): querying at now read +1.06 ms on USB EarPods, +1.51
+/// ms on the built-in speakers and +2.03 ms on an HDMI monitor — each the
+/// reported latency (1.04 / 1.47 / 2.00 ms) to within 40 µs — and now reads
+/// 0.00 / +0.05 / +0.05 ms (every read within ±0.2 ms). On iOS the reported
+/// latency is `AVAudioSession.outputLatency`, 150–250 ms on Bluetooth: the
+/// due-now position would read that as drift on every check, past the 50 ms
+/// hard-resync band. A constant lead in `positionUs` is NOT absorbed by
+/// output-latency calibration or the manual nudge: those move the schedule,
+/// not the §5.4 comparison, so every drift check reads the lead.
+///
+/// Also measured (same runs): `presentationLatency` is the HAL device
+/// latency alone (46, 65 and 88 frames at 44.1 kHz = 1.04, 1.47, 2.00 ms);
+/// the built-in speakers' 639-frame (14.5 ms) stream latency is not in it,
+/// although the header says it corresponds to both. That under-reports the
+/// latency `outputLatencyUs` gives the §7 calibration on such devices; it
+/// does not affect drift, since scheduling and `positionUs` use one value.
 ///
 /// Also measured: AVAudioUnitTimePitch realizes rate 1.05 as ~1.0508 (small
 /// rate quantization). Irrelevant for drift slew — the §5.4 loop measures
@@ -173,7 +201,11 @@ public class LocaljamAudioPlugin: NSObject, FlutterPlugin, FlutterStreamHandler 
   /// Current native monotonic time in µs (mach_absolute_time → µs, exact
   /// integer math to avoid double rounding over long uptimes).
   private static func machNowUs() -> Int64 {
-    let ticks = mach_absolute_time()
+    machUs(fromTicks: mach_absolute_time())
+  }
+
+  /// Mach host ticks → native-time µs (as `machNowUs`).
+  private static func machUs(fromTicks ticks: UInt64) -> Int64 {
     let n = UInt64(timebase.numer)
     let d = UInt64(timebase.denom)
     let ns = (ticks / d) * n + (ticks % d) * n / d
@@ -227,6 +259,13 @@ public class LocaljamAudioPlugin: NSObject, FlutterPlugin, FlutterStreamHandler 
   /// Media position (µs, frame-exact) of the first frame of the scheduled
   /// segment — the `scheduledStartPositionUs` term of the position formula.
   private var segmentStartUs: Int64 = 0
+  /// The reported output latency (µs) when the current schedule was
+  /// installed: how far the heard position trails the due one in
+  /// `positionUs`. Read once per schedule, because the macOS query is a HAL
+  /// round trip (measured 0.7–2.5 ms per read), which would bias and jitter
+  /// every position; Dart re-schedules (refreshing it) on any route or
+  /// engine change.
+  private var scheduleLatencyUs: Int64 = 0
   /// Duration of the loaded file (µs); positionUs is clamped to it.
   private var durationUs: Int64 = 0
   /// Bumped on every (re)schedule/stop/dispose so stale segment-completion
@@ -342,6 +381,12 @@ public class LocaljamAudioPlugin: NSObject, FlutterPlugin, FlutterStreamHandler 
         self.handleOutputLatencyUs(reply)
       case "dispose":
         self.handleDispose(reply)
+      #if DEBUG
+      case "debugSetOutputLatencyOverride":
+        self.handleDebugSetOutputLatencyOverride(args, reply)
+      case "debugLatencyInfo":
+        self.handleDebugLatencyInfo(reply)
+      #endif
       default:
         reply(FlutterMethodNotImplemented)
       }
@@ -569,6 +614,9 @@ public class LocaljamAudioPlugin: NSObject, FlutterPlugin, FlutterStreamHandler 
     let startFrame = AVAudioFramePosition(startFrameExact)
     // Keep the anchor frame-exact so the position formula has no rounding bias.
     segmentStartUs = Self.clampedInt64(Double(startFrame) * 1_000_000.0 / sampleRate)
+    // Read with the engine running on its device, the latency Dart just
+    // queried to shift this anchor with (outputLatencyUs).
+    scheduleLatencyUs = reportedOutputLatencyUs()
 
     // Last-moment check: a route change can stop the engine at any instant
     // (on the system's thread), and play(at:) on a stopped engine raises
@@ -665,14 +713,20 @@ public class LocaljamAudioPlugin: NSObject, FlutterPlugin, FlutterStreamHandler 
     }
     // Derived from the engine's sample clock, not a cached value: the player
     // maintains a host-time ↔ source-frame mapping from its actual render
-    // callbacks; querying it AT the current host time yields the source-frame
-    // count "now" (see the class comment for why no ×rate term appears and
-    // for measured accuracy). Before a scheduled start it extrapolates
-    // negative, matching the §5.1 anchor formula. Fall back to lastRenderTime
+    // callbacks (see the class comment for why no ×rate term appears and for
+    // measured accuracy). That mapping is the one play(at:) schedules
+    // through: it gives the frame DUE at a host time, which is heard the
+    // output latency later. The contract is the frame HEARD now (README,
+    // LocaljamAudio.positionUs), so query it at now − the reported latency
+    // (as read for this schedule): the frame due then is the one leaving the
+    // speaker now. Before a scheduled start it extrapolates negative,
+    // matching the §5.1 anchor formula. Fall back to lastRenderTime
     // (~render-ahead lead) if the host-time query fails.
-    let nowNodeTime = AVAudioTime(hostTime: mach_absolute_time())
+    let latencyTicks = Self.hostTicks(fromUs: scheduleLatencyUs)
+    let nowTicks = mach_absolute_time()
+    let heardNodeTime = AVAudioTime(hostTime: nowTicks > latencyTicks ? nowTicks - latencyTicks : 0)
     guard let playerTime =
-      player.playerTime(forNodeTime: nowNodeTime)
+      player.playerTime(forNodeTime: heardNodeTime)
         ?? player.lastRenderTime.flatMap({ player.playerTime(forNodeTime: $0) }),
       playerTime.sampleRate > 0
     else {
@@ -703,13 +757,76 @@ public class LocaljamAudioPlugin: NSObject, FlutterPlugin, FlutterStreamHandler 
   }
 
   private func handleOutputLatencyUs(_ reply: (Any?) -> Void) {
+    reply(reportedOutputLatencyUs())
+  }
+
+  /// The route's output latency (µs) as `outputLatencyUs` reports it: iOS
+  /// `AVAudioSession.outputLatency`, macOS the output node's
+  /// `presentationLatency` (measured: the HAL device latency alone, see the
+  /// class comment). 0 when unknown. `positionUs` maps the heard instant
+  /// with this same value, so the two always agree.
+  private func reportedOutputLatencyUs() -> Int64 {
+    #if DEBUG
+    if let override = debugOutputLatencyOverrideUs { return override }
+    #endif
     #if os(iOS)
     let latencySeconds = AVAudioSession.sharedInstance().outputLatency
     #else
     let latencySeconds = engine?.outputNode.presentationLatency ?? 0
     #endif
-    reply(latencySeconds.isFinite ? Self.clampedInt64(latencySeconds * 1_000_000.0) : Int64(0))
+    guard latencySeconds.isFinite, latencySeconds > 0 else { return 0 }
+    return Self.clampedInt64(latencySeconds * 1_000_000.0)
   }
+
+  #if DEBUG
+  // MARK: - Test hooks (debug builds only)
+
+  /// Replaces the reported output latency (µs) — what `outputLatencyUs`
+  /// answers and `positionUs` maps the heard instant with — so the example
+  /// app's integration test can pin the latency contract whatever this
+  /// machine's output device reports. nil = the platform's value.
+  private var debugOutputLatencyOverrideUs: Int64?
+
+  private func handleDebugSetOutputLatencyOverride(_ args: [String: Any]?, _ reply: (Any?) -> Void) {
+    debugOutputLatencyOverrideUs = (args?["us"] as? NSNumber)?.int64Value
+    reply(nil)
+  }
+
+  /// Every latency quantity the platform reports for the current output, for
+  /// measuring which one `positionUs`'s mapping needs.
+  private func handleDebugLatencyInfo(_ reply: (Any?) -> Void) {
+    var info: [String: Any] = ["reportedOutputLatencyUs": reportedOutputLatencyUs()]
+    if let engine = engine {
+      info["presentationLatencyUs"] = Self.clampedInt64(engine.outputNode.presentationLatency * 1_000_000.0)
+      // How far the last render's host time leads now: the render-ahead.
+      if let render = engine.outputNode.lastRenderTime, render.isHostTimeValid {
+        info["renderLeadUs"] = Self.machUs(fromTicks: render.hostTime) - Self.machNowUs()
+      }
+    }
+    #if os(iOS)
+    let session = AVAudioSession.sharedInstance()
+    info["sessionOutputLatencyUs"] = Self.clampedInt64(session.outputLatency * 1_000_000.0)
+    info["ioBufferDurationUs"] = Self.clampedInt64(session.ioBufferDuration * 1_000_000.0)
+    info["sampleRate"] = session.sampleRate
+    info["route"] = session.currentRoute.outputs
+      .map { "\($0.portType.rawValue):\($0.portName)" }.joined(separator: "+")
+    #else
+    if let device = engineOutputDevice() ?? Self.defaultOutputDevice() {
+      let out = kAudioDevicePropertyScopeOutput
+      info["deviceName"] = Self.deviceName(device)
+      info["deviceLatencyFrames"] = Self.uint32Property(device, kAudioDevicePropertyLatency, out)
+      info["safetyOffsetFrames"] = Self.uint32Property(device, kAudioDevicePropertySafetyOffset, out)
+      info["bufferFrames"] = Self.uint32Property(device, kAudioDevicePropertyBufferFrameSize, out)
+      info["streamLatencyFrames"] = Self.firstOutputStream(device).flatMap {
+        Self.uint32Property($0, kAudioStreamPropertyLatency, kAudioObjectPropertyScopeGlobal)
+      }
+      info["sampleRate"] = Self.doubleProperty(
+        device, kAudioDevicePropertyNominalSampleRate, kAudioObjectPropertyScopeGlobal)
+    }
+    #endif
+    reply(info)
+  }
+  #endif
 
   private func handleDispose(_ reply: (Any?) -> Void) {
     cancelRestartEvent()
@@ -948,9 +1065,7 @@ public class LocaljamAudioPlugin: NSObject, FlutterPlugin, FlutterStreamHandler 
     // output latency (§7). (macOS omits it: the engine re-binds to the new
     // device only after its configuration change, so Dart re-queries
     // outputLatencyUs at schedule time instead.)
-    let latencySeconds = AVAudioSession.sharedInstance().outputLatency
-    fields["outputLatencyUs"] = latencySeconds.isFinite
-      ? Self.clampedInt64(latencySeconds * 1_000_000.0) : Int64(0)
+    fields["outputLatencyUs"] = reportedOutputLatencyUs()
     #endif
     if let routeId = Self.currentRouteId() {
       fields["routeId"] = routeId
@@ -1246,6 +1361,52 @@ public class LocaljamAudioPlugin: NSObject, FlutterPlugin, FlutterStreamHandler 
     let status = AudioObjectGetPropertyData(object, &address, 0, nil, &size, &value)
     return status == noErr ? value : nil
   }
+
+  #if DEBUG
+  private func engineOutputDevice() -> AudioDeviceID? {
+    guard let unit = engine?.outputNode.audioUnit else { return nil }
+    var device = AudioDeviceID(0)
+    var size = UInt32(MemoryLayout<AudioDeviceID>.size)
+    let status = AudioUnitGetProperty(
+      unit, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0, &device, &size)
+    return status == noErr && device != 0 ? device : nil
+  }
+
+  private static func deviceName(_ device: AudioDeviceID) -> String? {
+    var address = AudioObjectPropertyAddress(
+      mSelector: kAudioObjectPropertyName, mScope: kAudioObjectPropertyScopeGlobal,
+      mElement: elementMain)
+    var name: Unmanaged<CFString>?
+    var size = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
+    guard AudioObjectGetPropertyData(device, &address, 0, nil, &size, &name) == noErr,
+      let value = name
+    else { return nil }
+    return value.takeRetainedValue() as String
+  }
+
+  private static func firstOutputStream(_ device: AudioDeviceID) -> AudioStreamID? {
+    var address = AudioObjectPropertyAddress(
+      mSelector: kAudioDevicePropertyStreams, mScope: kAudioDevicePropertyScopeOutput,
+      mElement: elementMain)
+    var size: UInt32 = 0
+    guard AudioObjectGetPropertyDataSize(device, &address, 0, nil, &size) == noErr, size > 0
+    else { return nil }
+    var ids = [AudioStreamID](repeating: 0, count: Int(size) / MemoryLayout<AudioStreamID>.size)
+    guard AudioObjectGetPropertyData(device, &address, 0, nil, &size, &ids) == noErr else { return nil }
+    return ids.first
+  }
+
+  private static func doubleProperty(
+    _ object: AudioObjectID, _ selector: AudioObjectPropertySelector,
+    _ scope: AudioObjectPropertyScope
+  ) -> Double? {
+    var address = AudioObjectPropertyAddress(mSelector: selector, mScope: scope, mElement: elementMain)
+    guard AudioObjectHasProperty(object, &address) else { return nil }
+    var value: Double = 0
+    var size = UInt32(MemoryLayout<Double>.size)
+    return AudioObjectGetPropertyData(object, &address, 0, nil, &size, &value) == noErr ? value : nil
+  }
+  #endif
 
   /// 'blue' → "blue"; non-printable codes fall back to hex.
   private static func fourCC(_ value: UInt32) -> String {
