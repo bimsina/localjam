@@ -14,6 +14,7 @@ import 'package:meta/meta.dart';
 
 import 'guest_errors.dart';
 import 'guest_transport.dart';
+import 'jam_ticker.dart';
 import 'media_sink.dart';
 import 'monotonic.dart';
 
@@ -477,7 +478,10 @@ class JamGuestClient {
   /// it would only start then.
   void _startLivenessWatchdog() {
     final check = _livenessTimeout ~/ 6;
-    _livenessTimer = Timer.periodic(
+    // From [JamTicker], like the ping schedule: in a background browser tab
+    // a throttled check would declare the host dead a minute late — or, its
+    // pongs throttled with it, call a live host dead.
+    _livenessTimer = JamTicker.periodic(
       check < const Duration(milliseconds: 50)
           ? const Duration(milliseconds: 50)
           : check > const Duration(seconds: 1)
@@ -511,8 +515,11 @@ class JamGuestClient {
   void _startClockSchedule() {
     // Burst of 8 pings at join; the estimator keeps the min-RTT sample.
     _startBurst();
-    // Steady state: one ping every 2 s (also our liveness heartbeat, §3.3).
-    _pingTimer = Timer.periodic(_pingInterval, (_) => _sendPing());
+    // Steady state: one ping every 2 s (also our liveness heartbeat, §3.3),
+    // from [JamTicker] — in a browser a worker, since a background tab
+    // throttles its own timers to one a minute and the host drops a peer
+    // after 10 s of silence.
+    _pingTimer = JamTicker.periodic(_pingInterval, (_) => _sendPing());
   }
 
   /// Sends a fresh §4 burst now — 8 pings [burstPingSpacing] apart, on top
@@ -535,7 +542,7 @@ class JamGuestClient {
     _burstTimers.clear();
     _sendPing();
     for (var i = 1; i < 8; i++) {
-      _burstTimers.add(Timer(burstPingSpacing * i, _sendPing));
+      _burstTimers.add(JamTicker.after(burstPingSpacing * i, _sendPing));
     }
   }
 

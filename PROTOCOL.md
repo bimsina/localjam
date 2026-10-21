@@ -378,6 +378,18 @@ media plane is bounded the same way (§6.2). Whether the host said it was
 going away first (§3.5) changes how long the guest keeps reconnecting, not
 how fast it notices.
 
+**A browser guest MUST schedule its pings from a source the browser does
+not throttle.** A page's own timers are no schedule to keep a heartbeat on:
+once a tab has been hidden for a while and is not audibly playing, browsers
+coalesce its timers — Chrome, after five hidden minutes, to one wake-up a
+minute. A guest pinging on them goes quiet for up to a minute, the host
+drops it after 10 s, and a listener whose room is paused, or whose phone
+tab is in the background, leaves and rejoins every few dozen seconds. The
+reference page ticks its ping schedule, its watchdog and its reconnect
+backoff from a dedicated Web Worker, whose timers keep time and whose
+messages reach the page as tasks, not timers. The cadence and every
+timeout above are unchanged; only where the ticks come from differs.
+
 **Reconnecting.** Guests reconnect by sending `hello` with the same `token`,
 the same `clientId`, plus `resumePeerId: <their old peerId>`; the host keeps
 a 30 s grace slot per dropped peer. A valid resume reclaims the old peerId

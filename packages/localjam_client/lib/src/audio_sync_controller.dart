@@ -1307,9 +1307,17 @@ class AudioSyncController {
 
   // --- Drift loop (§5.4) ---------------------------------------------------
 
+  /// Ticks from [JamTicker] (natively a plain `Timer.periodic`): in a
+  /// browser tab the page's own timers are throttled to one a minute while
+  /// it is hidden and inaudible — a room playing too quietly to count, or
+  /// held across a clock discontinuity — and a once-a-minute check lets
+  /// drift grow for a minute before it is corrected. A late check is never
+  /// a spurious resync, though: the expected position comes from the anchor
+  /// at the moment of the check and the actual one from the player at that
+  /// same moment, so lateness alone measures no error.
   void _startDriftLoop() {
     _driftTimer?.cancel();
-    _driftTimer = Timer.periodic(driftInterval, (_) {
+    _driftTimer = JamTicker.periodic(driftInterval, (_) {
       unawaited(checkDriftNow());
     });
   }
@@ -1415,7 +1423,10 @@ class AudioSyncController {
           if (!_slewing || generation != _generation) break;
           _slewCount++;
           _slewRestoreTimer?.cancel();
-          _slewRestoreTimer = Timer(
+          // Same source as the drift loop: a throttled restore would hold
+          // a 3–10 s slew for up to a minute, and 0.5 % for 60 s is 300 ms —
+          // six times the §5.4 hard-resync bound, the other way.
+          _slewRestoreTimer = JamTicker.after(
             Duration(microseconds: durationUs),
             () => unawaited(_restoreNominalRate()),
           );

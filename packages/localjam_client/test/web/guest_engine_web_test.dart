@@ -16,86 +16,32 @@
 @TestOn('browser')
 library;
 
-import 'dart:async';
 import 'dart:convert';
-import 'dart:js_interop';
 
-import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:flutter_web_plugins/flutter_web_plugins.dart';
-import 'package:localjam_audio/localjam_audio_web.dart';
 import 'package:localjam_client/localjam_client.dart';
-import 'package:shared_preferences/shared_preferences.dart';
-import 'package:web/web.dart' as web;
 
-const String _hostInfo = String.fromEnvironment('LOCALJAM_WEB_TEST_HOST');
-
-Future<Map<String, Object?>> _control(
-  String url, {
-  String method = 'GET',
-}) async {
-  final response = await web.window
-      .fetch(url.toJS, web.RequestInit(method: method))
-      .toDart;
-  final text = (await response.text().toDart).toDart;
-  return (jsonDecode(text) as Map).cast<String, Object?>();
-}
-
-Future<void> _waitFor(
-  bool Function() condition, {
-  Duration timeout = const Duration(seconds: 20),
-  required String reason,
-}) async {
-  final deadline = DateTime.now().add(timeout);
-  while (!condition()) {
-    if (DateTime.now().isAfter(deadline)) fail('timed out waiting for $reason');
-    await Future<void>.delayed(const Duration(milliseconds: 20));
-  }
-}
+import 'web_test_support.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  if (_hostInfo.isEmpty) {
+  if (webTestHostInfo.isEmpty) {
     test('the guest engine in a browser', () {
       markTestSkipped('needs a host: run tool/web_engine_test.sh');
     });
     return;
   }
-  final info = (jsonDecode(_hostInfo) as Map).cast<String, Object?>();
+  final info = (jsonDecode(webTestHostInfo) as Map).cast<String, Object?>();
   final control = info['control']! as String;
   final wavId = info['wav']! as String;
   final junkId = info['junk']! as String;
 
-  setUpAll(() {
-    SharedPreferences.setMockInitialValues({});
-    // The test binding has no plugin registrant: route the engine's
-    // channels through a Registrar with the real web audio plugin on it, as
-    // the page's generated registrant does. A channel no web plugin answers
-    // (the OS media session, the Android keep-alive) is then answered null,
-    // a MissingPluginException, exactly as on the page — unrouted, the test
-    // binding would never answer it at all.
-    final registrar = Registrar();
-    LocaljamAudioWeb.registerWith(registrar);
-    final messenger =
-        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
-    for (final name in [
-      'localjam_audio',
-      'localjam_audio/events',
-      'localjam_audio/media_session',
-      'localjam/keepalive',
-    ]) {
-      messenger.setMockMessageHandler(name, (data) {
-        final reply = Completer<ByteData?>();
-        registrar.handleFrameworkMessage(name, data, reply.complete);
-        return reply.future;
-      });
-    }
-  });
+  setUpAll(routeChannelsLikeThePage);
 
   tearDownAll(() async {
     try {
-      await _control('$control/quit');
+      await webTestControl('$control/quit');
     } catch (_) {}
   });
 
@@ -118,11 +64,11 @@ void main() {
 
     // §6.2 + §3.1: the WAV decodes and is ready; the junk arrives whole and
     // verified, then fails to decode and is unplayable.
-    await _waitFor(
+    await waitFor(
       () => engine.prefetchStates.value[wavId]?.ready ?? false,
       reason: 'the WAV to be ready',
     );
-    await _waitFor(
+    await waitFor(
       () =>
           engine.prefetchStates.value[junkId]?.phase ==
           JamPrefetchPhase.unplayable,
@@ -134,7 +80,8 @@ void main() {
     // the other — whose bytes were complete and sha256-verified, so only
     // the decode gate kept it from `ready`.
     Future<String?> hostSays(String id) async {
-      final states = (await _control('$control/ready/$id'))['states']! as Map;
+      final states =
+          (await webTestControl('$control/ready/$id'))['states']! as Map;
       return states[engine.selfPeerId] as String?;
     }
 
@@ -152,9 +99,9 @@ void main() {
     final samples = <DriftSample>[];
     final sub = engine.driftSamples.listen(samples.add);
     addTearDown(sub.cancel);
-    final started = await _control('$control/play', method: 'POST');
+    final started = await webTestControl('$control/play', method: 'POST');
     expect(started['status'], 'playing');
-    await _waitFor(
+    await waitFor(
       () => samples.length >= 6,
       timeout: const Duration(seconds: 20),
       reason: 'six drift checks while playing',

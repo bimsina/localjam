@@ -74,12 +74,28 @@ hash routing would eat the fragment; use no router).
 1. **Landing**: brand, room name, a name field (generated default like the
    app's identity names, persisted in `localStorage`), one primary button
    "Tap to listen". The tap is the user gesture that creates the
-   `AudioContext` (and on iOS starts the `<audio>` element).
+   `AudioContext` (and on iOS starts the `<audio>` element). Before any of
+   it, the invitation read from the fragment is kept in this tab's
+   `sessionStorage` (`localjam.invite`) and the address is rewritten with
+   `history.replaceState` to the same path without the fragment, so the
+   token does not sit in the browser's history or a screenshot of the
+   address bar; a reload reads it back from the tab, and a tab that cannot
+   store it keeps the address as opened (`InviteStartup` in
+   `apps/localjam_web/lib/src/join_target.dart`, applied in `main.dart`).
 2. **Join**: `ws://<origin>/ws`, `hello { clientKind: "web", clientId }`
    (`clientId` persisted in `localStorage`). Clock pings use
    `performance.now()` as the monotonic clock. Everything in §3–§5 applies
    unchanged: reconnect with `resumePeerId`, host away copy, `session_ended`
-   is terminal, every reject is final.
+   is terminal, every reject is final. The ping schedule, the liveness
+   watchdog, the reconnect backoff and the drift self-check (4) tick from a
+   dedicated Web Worker (`JamTicker` in `localjam_net`: a few lines of JS
+   started from a `blob:` URL, same origin, nothing extra in the bundle),
+   not from the page's own timers: a tab hidden for five minutes and not
+   audibly playing has its timers coalesced to one wake-up a minute
+   (Chrome's intensive wake-up throttling), and the host drops a peer after
+   10 s of silence (§3.3) — a paused room's listener would leave and rejoin
+   every few dozen seconds. A browser that cannot start the worker falls
+   back to plain timers.
 3. **Media**: `fetch('/media/{id}', Authorization: Bearer)` with the whole
    body kept as bytes (§6.2 full prefetch), bounded connections (≤ 6), 10 s
    stall timeout, `media_status` reports. **`ready` is reported only after the
@@ -135,7 +151,13 @@ hash routing would eat the fragment; use no router).
 ## Test plan
 
 - Unit: JoinLink both forms; static routes (200/304/404, headers, limits);
-  web transport and web audio under `flutter test --platform chrome`.
+  web transport and web audio under `flutter test --platform chrome`;
+  `JamTicker` on the VM and in Chrome (`localjam_net`).
+- Background tab: `packages/localjam_client/tool/web_engine_test.sh
+  --throttling` hides the test's tab with intensive throttling after a 10 s
+  grace, against a real host with the room paused. Control: on page timers
+  the host drops the guest; with the worker it stays joined for two
+  minutes, same peerId, no reconnect.
 - E2E on the Mac: `localjam_cli host --web-dir` with `test-media/`, open the
   join URL in Chrome and Safari, verify zero off-origin requests, sync within
   target against a CLI guest.

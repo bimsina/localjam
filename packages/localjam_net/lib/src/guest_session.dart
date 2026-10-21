@@ -10,6 +10,7 @@ import 'dart:typed_data';
 import 'package:localjam_core/localjam_core.dart';
 
 import 'guest_client.dart';
+import 'jam_ticker.dart';
 import 'media_sink.dart';
 
 /// Connection lifecycle of a [JamGuestSession].
@@ -590,11 +591,13 @@ class JamGuestSession {
     }
   }
 
-  /// A [close]-interruptible delay.
+  /// A [close]-interruptible delay, from [JamTicker]: in a background
+  /// browser tab a throttled backoff would turn a 0.5 s retry into a minute,
+  /// long past the host's 30 s resume grace (§3.3).
   Future<void> _sleep(Duration duration) {
     final wake = Completer<void>();
     _retryWake = wake;
-    _retryTimer = Timer(duration, () {
+    _retryTimer = JamTicker.after(duration, () {
       if (!wake.isCompleted) wake.complete();
     });
     return wake.future;

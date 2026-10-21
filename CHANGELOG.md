@@ -33,6 +33,37 @@ iPhone Safari guest): see `docs/design/WEB_GUEST.md`.
   host. `tool/build_web_guest.sh` builds it (through
   `apps/localjam_web/tool/build.sh`, about 17 MB) into the app's assets; the
   build output is never committed.
+- A listener whose tab is in the background stays in the room. Chrome
+  coalesces a hidden, silent page's timers to one wake-up a minute after
+  five minutes, so a paused room's browser guest pinged once a minute and
+  the host dropped and re-admitted it every 12–40 s. The guest's pings,
+  liveness watchdog, reconnect backoff and drift self-check now tick from a
+  dedicated Web Worker (`JamTicker` in `localjam_net`, started from a
+  same-origin `blob:` URL; plain timers natively and wherever a worker
+  cannot start). PROTOCOL.md §3.3 now says a browser guest must schedule
+  its pings that way. `packages/localjam_client/tool/web_engine_test.sh
+  --throttling` reproduces the drop on page timers and shows the worker
+  keeping the guest joined.
+- The page tells "this browser cannot play this" from "the check did not
+  work this time": a decode check answers `unsupported_format` only for
+  bytes the browser cannot decode; a failed fetch or a decode that failed
+  for another reason (`load_failed`, `engine_error`), or a check that
+  outlives the engine's `decodeProbeTimeout` (60 s), is retried and never
+  marks the song unplayable.
+- The current song decodes once, not twice: `probeDurationUs(keepForLoad:)`
+  keeps the decoded buffer for the `load` that follows (one buffer at most;
+  native ignores it).
+- Songs too big or too long for a tab are refused before any byte is
+  fetched: `JamMediaStore.refuses` answers `too_large` (bigger than the
+  in-memory budget) or `too_long` (past 20 minutes of decoded audio), and the
+  song shows as unplayable for that listener instead of taking the page
+  down mid-decode. Natively nothing is refused.
+- Leaving a jam on the page keeps its audio context (web `dispose` releases
+  the buffer and the node only), so "Try Again" or the next jam plays
+  without a second tap — iOS Safari refuses a context made outside one.
+- The invitation is kept in the tab's `sessionStorage` and the token is
+  dropped from the address bar with `history.replaceState`; a reload reads
+  it back.
 
 ### Design
 
