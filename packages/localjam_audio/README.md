@@ -87,6 +87,19 @@ rebuilt on the next `playAt`, so a bad file or an unlucky route change surfaces
 as an error, never a crash. The plugin's `PrivacyInfo.xcprivacy` declares
 `mach_absolute_time` (System boot time, reason `35F9.1`).
 
+Apple `positionUs` is the position HEARD now, as on Android and web: the
+player's node-time mapping (the one `play(at:)` schedules through) gives the
+frame due at a host time, so it is queried at now − the reported latency
+(`outputLatencyUs`: iOS `AVAudioSession.outputLatency`, macOS
+`outputNode.presentationLatency`, read once per `playAt`). A schedule shifted
+`outputLatencyUs()` early therefore reads the room's position (measured on
+macOS: within ±0.2 ms; the frame due now read +1–2 ms there, and would read
+the whole 150–250 ms on iOS Bluetooth). On macOS `presentationLatency`
+measured as the HAL device latency alone, without the stream latency (14.5 ms
+on built-in MacBook Pro speakers), so it under-reports the §7 starting point
+there. Debug builds add the test hooks `debugSetOutputLatencyOverrideUs` and
+`debugLatencyInfo`.
+
 ## Platforms
 
 | Platform | Engine | Formats |

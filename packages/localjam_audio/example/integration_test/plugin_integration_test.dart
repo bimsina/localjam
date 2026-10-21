@@ -176,6 +176,69 @@ void main() {
     });
   });
 
+  // The LocaljamAudio.positionUs contract: the position HEARD now. The sync
+  // controller schedules anchors outputLatencyUs early and compares
+  // positionUs with the room position, so a schedule shifted that way must
+  // read the room's position, not the room's position + the latency.
+  group('positionUs is the position heard now', () {
+    tearDown(() => audio.debugSetOutputLatencyOverrideUs(null));
+
+    /// Schedules media [p] to be HEARD at T the way the controller does —
+    /// `playAt(T − outputLatencyUs, p)` — then returns the median and the
+    /// largest |error| (µs) of `positionUs − (p + now − T)` over [samples]
+    /// reads, with what the platform reported about its latency meanwhile.
+    Future<({int median, int worst, Map<String, Object?> info})> heardError({
+      int samples = 12,
+    }) async {
+      final file = await writeWav('heard.wav', sampleRate: 44100);
+      await audio.load(file.path);
+      final latencyUs = await audio.outputLatencyUs();
+      const p = 500000;
+      final t = await audio.nativeNowUs() + 400000;
+      await audio.playAt(nativeTimeUs: t - latencyUs, positionUs: p);
+      // Past T, so the schedule is heard (and the latency shift is behind
+      // us) before the first read.
+      await Future<void>.delayed(const Duration(milliseconds: 700));
+      final info = await audio.debugLatencyInfo();
+      final errors = <int>[];
+      for (var i = 0; i < samples; i++) {
+        final before = await audio.nativeNowUs();
+        final position = await audio.positionUs();
+        final after = await audio.nativeNowUs();
+        errors.add(position! - (p + (before + after) ~/ 2 - t));
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+      }
+      await audio.stop();
+      errors.sort();
+      return (
+        median: errors[errors.length ~/ 2],
+        worst: errors.map((e) => e.abs()).reduce((a, b) => a > b ? a : b),
+        info: info,
+      );
+    }
+
+    testWidgets('at a pinned Bluetooth-sized latency', (tester) async {
+      // 180 ms, as iOS reports for Bluetooth headphones. The frame due now
+      // is heard 180 ms later: a due-now position reads +180 ms on every
+      // drift check, past the 50 ms hard-resync band.
+      await audio.debugSetOutputLatencyOverrideUs(180000);
+      expect(await audio.outputLatencyUs(), 180000);
+      final error = await heardError();
+      expect(error.median.abs(), lessThan(5000), reason: '$error');
+      expect(error.worst, lessThan(15000), reason: '$error');
+    }, skip: !isApple);
+
+    testWidgets("at this device's own latency", (tester) async {
+      // Prints what the platform reports, for measuring on a device (an
+      // iPhone on Bluetooth headphones, say).
+      final error = await heardError();
+      // ignore: avoid_print
+      print('positionUs heard-now error (µs): $error');
+      expect(error.median.abs(), lessThan(5000), reason: '$error');
+      expect(error.worst, lessThan(15000), reason: '$error');
+    }, skip: !isApple);
+  });
+
   testWidgets('currentRouteId is stable and does not need a loaded file', (
     tester,
   ) async {
