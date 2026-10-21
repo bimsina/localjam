@@ -77,4 +77,6 @@ flutter test                       # the page's states against a faked room
 
 The guest engine's browser test (join a real host, fetch, decode-gated
 `ready`, play at the anchor) lives in `packages/localjam_client`
-(`tool/web_engine_test.sh`).
+(`tool/web_engine_test.sh`); `tool/web_engine_test.sh --throttling` hides the
+tab under Chrome's intensive timer throttling and checks the guest stays in
+the room (its pings tick from a Web Worker, PROTOCOL.md §3.3).
