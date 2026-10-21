@@ -145,24 +145,32 @@ class _ListenerShellState extends State<ListenerShell> {
   }
 
   /// "Tap to Listen" / "Try Again": the tap is the user gesture the page's
-  /// audio needs, so the unlock happens first, before any await.
+  /// audio needs, so the unlock happens first, before any await. A second
+  /// tap while a join is under way does nothing: [_joining] is set here,
+  /// synchronously, not after [_join]'s first await.
   void _listen() {
-    if (_joining) return;
+    if (_joining || widget.target.joinUri == null) return;
+    _joining = true;
     widget.unlockAudio();
     unawaited(_join());
   }
 
   Future<void> _join() async {
-    final joinUri = widget.target.joinUri;
-    if (joinUri == null) return;
-    var name = _name.text.trim();
-    if (name.isEmpty) name = await widget.defaultName();
-    _name.text = name;
+    final joinUri = widget.target.joinUri!;
     setState(() {
-      _joining = true;
       _failure = null;
       _rejectReason = null;
     });
+    var name = _name.text.trim();
+    if (name.isEmpty) {
+      try {
+        name = await widget.defaultName();
+      } catch (_) {
+        name = '';
+      }
+      if (!mounted) return;
+    }
+    _name.text = name;
     final old = _room;
     if (old != null) {
       old.removeListener(_onRoom);
@@ -314,12 +322,15 @@ class _ListenerShellState extends State<ListenerShell> {
         return _rejected(RejectReason.kicked);
       case JamSessionEndReason.rejected:
         return _rejected(reject ?? RejectReason.unknown);
+      // A host-side reason a guest is never given, and a local close the
+      // page never shows (it is the page's own doing): neither may claim
+      // the host ended anything.
       case JamSessionEndReason.listenerFailed ||
           JamSessionEndReason.closedLocally:
         return MessageView(
           icon: CupertinoIcons.music_note_2,
-          title: Copy.endedTitle,
-          message: Copy.endedMessage,
+          title: Copy.stoppedTitle,
+          message: Copy.stoppedMessage,
           actions: [
             PageButton(
               label: Copy.backToStart,
@@ -358,6 +369,9 @@ abstract final class Copy {
   static const String endedMessage =
       'The host ended the jam. Thanks for '
       'listening.';
+  static const String stoppedTitle = 'Listening Stopped';
+  static const String stoppedMessage =
+      'This page lost the jam. Start over to join it again.';
   static const String hostGoneTitle = 'The Host Disappeared';
   static const String hostGoneMessage =
       "Their phone may have left the Wi-Fi or run out of battery.";

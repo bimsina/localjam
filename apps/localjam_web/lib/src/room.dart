@@ -93,6 +93,10 @@ abstract class ListenerRoom implements Listenable {
   /// room's timeline. Call from a tap: it is a user gesture.
   Future<void> resumeAudio();
 
+  /// Fetches [mediaId] again after its automatic retries ran out (§6.2);
+  /// false when there is nothing to retry.
+  bool retryFetch(String mediaId);
+
   /// Leaves the jam and releases everything.
   Future<void> leave();
 }
@@ -114,10 +118,13 @@ enum RoomStatusKind {
   /// The current song is still on its way (§6.2), or being decoded.
   fetching,
 
-  /// The current song's download failed; it is retried.
+  /// The current song's download (or decode check) failed. While it is
+  /// retried on its own the line says so; once the retries ran out it
+  /// offers a retry instead ([RoomStatus.retryable]).
   fetchFailed,
 
-  /// The current song is in a format this browser cannot decode (§3.1).
+  /// The current song cannot play in this browser (§3.1): a format it
+  /// cannot decode, or too big or too long to hold in a tab.
   cantPlay,
 
   /// The session clock is not synchronized yet (§4).
@@ -136,13 +143,22 @@ enum RoomStatusKind {
 /// One line of plain language about how listening is going.
 @immutable
 class RoomStatus {
-  const RoomStatus(this.kind, this.text, {this.progress});
+  const RoomStatus(
+    this.kind,
+    this.text, {
+    this.progress,
+    this.retryable = false,
+  });
 
   final RoomStatusKind kind;
   final String text;
 
   /// Download progress in [0, 1] for [RoomStatusKind.fetching].
   final double? progress;
+
+  /// A [RoomStatusKind.fetchFailed] that nothing will retry on its own: the
+  /// page offers "Try Again" ([ListenerRoom.retryFetch]).
+  final bool retryable;
 
   /// Whether this is trouble worth a glyph (anything but synced/waiting).
   bool get isProblem =>
@@ -154,7 +170,10 @@ class RoomStatus {
   static const String _nothing = 'Waiting for the host to add music';
   static const String _fetching = 'Getting this song…';
   static const String _fetchFailed = "Couldn't get this song. Trying again…";
+  static const String _fetchGaveUp = "Couldn't get this song";
   static const String _cantPlay = "Can't play this song in this browser";
+  static const String _tooLong = 'This song is too long to play in a browser';
+  static const String _tooBig = 'This song is too big to play in a browser';
   static const String _syncing = 'Syncing with the room…';
   static const String _audioHeld = 'Sound paused on this page';
   static const String _reconnecting = 'Reconnecting…';
@@ -178,7 +197,11 @@ class RoomStatus {
     }
     final state = room.prefetch[current];
     if (state?.phase == JamPrefetchPhase.unplayable) {
-      return const RoomStatus(RoomStatusKind.cantPlay, _cantPlay);
+      return RoomStatus(RoomStatusKind.cantPlay, switch (state!.error) {
+        JamMediaStore.tooLong => _tooLong,
+        JamMediaStore.tooLarge => _tooBig,
+        _ => _cantPlay,
+      });
     }
     if (snapshot.status != PlaybackStatus.playing) {
       return RoomStatus(
@@ -188,7 +211,14 @@ class RoomStatus {
     }
     if (state == null || !state.ready) {
       if (state?.phase == JamPrefetchPhase.failed) {
-        return const RoomStatus(RoomStatusKind.fetchFailed, _fetchFailed);
+        // Say "trying again" only while something will.
+        return state!.willRetry
+            ? const RoomStatus(RoomStatusKind.fetchFailed, _fetchFailed)
+            : const RoomStatus(
+                RoomStatusKind.fetchFailed,
+                _fetchGaveUp,
+                retryable: true,
+              );
       }
       return RoomStatus(
         RoomStatusKind.fetching,

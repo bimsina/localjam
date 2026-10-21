@@ -42,6 +42,9 @@ class RoomPage extends StatefulWidget {
   static const String queueHeader = 'Queue';
   static const String queueEmpty = 'Nothing in the queue yet';
   static const String cantPlay = "Can't play in this browser";
+  static const String tooLong = 'Too long to play in a browser';
+  static const String tooBig = 'Too big to play in a browser';
+  static const String retry = 'Try Again';
   static const String nowPlaying = 'Now playing';
   static const String peopleHeader = "Who's here";
   static const String hostRole = 'Host';
@@ -56,12 +59,29 @@ class RoomPage extends StatefulWidget {
   static const int maxNudgeUs = 500000;
   static const int nudgeStepUs = 10000;
 
+  /// Every nudge the engine applies re-anchors playback, and on the web
+  /// each re-anchor is a ≥ 50 ms gap: a drag goes to the engine at most
+  /// this often (and once more where it ends)…
+  static const Duration nudgeDragInterval = Duration(milliseconds: 300);
+
+  /// …and a run of ± taps once, this long after the last tap.
+  static const Duration nudgeTapSettle = Duration(milliseconds: 400);
+
   @override
   State<RoomPage> createState() => _RoomPageState();
 }
 
 class _RoomPageState extends State<RoomPage> {
   Timer? _tick;
+
+  /// The nudge on screen while a change waits to reach the engine (see
+  /// [RoomPage.nudgeDragInterval]); null when there is none.
+  int? _pendingNudgeUs;
+
+  /// Whether the waiting change is to be stored (taps, a drag's end) or is
+  /// a live drag position.
+  bool _pendingNudgePersists = false;
+  Timer? _nudgeTimer;
 
   ListenerRoom get room => widget.room;
 
@@ -89,8 +109,52 @@ class _RoomPageState extends State<RoomPage> {
   @override
   void dispose() {
     _tick?.cancel();
+    // A change still waiting is the person's choice: it lands anyway.
+    if (_pendingNudgeUs != null) _applyNudge(persist: true, rebuild: false);
     room.removeListener(_onRoom);
     super.dispose();
+  }
+
+  int get _nudgeShown => _pendingNudgeUs ?? room.nudgeUs;
+
+  /// Shows [us] at once and sends it on after [delay]: a drag
+  /// ([persist] false) keeps its first timer, so it is sent at most once
+  /// per [delay]; taps restart theirs, so a run of them is sent once.
+  void _queueNudge(int us, {required bool persist, required Duration delay}) {
+    setState(() {
+      _pendingNudgeUs = us.clamp(-RoomPage.maxNudgeUs, RoomPage.maxNudgeUs);
+      _pendingNudgePersists = _pendingNudgePersists || persist;
+    });
+    if (persist) _nudgeTimer?.cancel();
+    if (persist || _nudgeTimer == null) {
+      _nudgeTimer = Timer(delay, () => _applyNudge(persist: false));
+    }
+  }
+
+  /// Sends the waiting nudge now ([persist] forces it stored).
+  void _applyNudge({required bool persist, bool rebuild = true}) {
+    _nudgeTimer?.cancel();
+    _nudgeTimer = null;
+    final us = _pendingNudgeUs;
+    if (us == null) return;
+    final store = persist || _pendingNudgePersists;
+    _pendingNudgePersists = false;
+    final applied = room.setNudgeUs(us, persist: store);
+    unawaited(
+      applied.whenComplete(() {
+        // Hand the screen back to the room, unless a newer change waits.
+        if (!mounted || _pendingNudgeUs != us || _nudgeTimer != null) return;
+        setState(() => _pendingNudgeUs = null);
+      }),
+    );
+    if (rebuild && mounted) setState(() {});
+  }
+
+  void _setNudgeNow(int us) {
+    _nudgeTimer?.cancel();
+    _nudgeTimer = null;
+    _pendingNudgeUs = us.clamp(-RoomPage.maxNudgeUs, RoomPage.maxNudgeUs);
+    _applyNudge(persist: true);
   }
 
   void _onRoom() {
@@ -245,12 +309,17 @@ class _RoomPageState extends State<RoomPage> {
     final text = progress == null
         ? status.text
         : '${status.text} ${(progress * 100).floor()}%';
-    return Semantics(
-      liveRegion: true,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
+    final current = room.snapshot.mediaId;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // Announced when the state changes, not at every percent: the live
+        // region's label is the state's text alone.
+        Semantics(
+          liveRegion: true,
+          label: status.text,
+          excludeSemantics: true,
+          child: Row(
             children: [
               Icon(icon, size: 18, color: color),
               const SizedBox(width: 6),
@@ -262,17 +331,26 @@ class _RoomPageState extends State<RoomPage> {
               ),
             ],
           ),
-          if (status.kind == RoomStatusKind.audioHeld) ...[
-            const SizedBox(height: 8),
-            PageButton(
-              label: RoomPage.resume,
-              style: PageButtonStyle.tinted,
-              icon: CupertinoIcons.play_fill,
-              onPressed: () => unawaited(room.resumeAudio()),
-            ),
-          ],
+        ),
+        if (status.kind == RoomStatusKind.audioHeld) ...[
+          const SizedBox(height: 8),
+          PageButton(
+            label: RoomPage.resume,
+            style: PageButtonStyle.tinted,
+            icon: CupertinoIcons.play_fill,
+            onPressed: () => unawaited(room.resumeAudio()),
+          ),
         ],
-      ),
+        if (status.retryable && current != null) ...[
+          const SizedBox(height: 8),
+          PageButton(
+            label: RoomPage.retry,
+            style: PageButtonStyle.tinted,
+            icon: CupertinoIcons.arrow_clockwise,
+            onPressed: () => room.retryFetch(current),
+          ),
+        ],
+      ],
     );
   }
 
@@ -348,19 +426,15 @@ class _RoomPageState extends State<RoomPage> {
   }
 
   Widget _offsetSection(PageColors c) {
-    final nudge = room.nudgeUs;
+    final nudge = _nudgeShown;
     final ms = (nudge / 1000).round();
     final value = ms == 0
         ? '0 ms'
         : ms > 0
         ? '$ms ms ${RoomPage.offsetEarlier.toLowerCase()}'
         : '${-ms} ms ${RoomPage.offsetLater.toLowerCase()}';
-    void set(int us, {bool persist = true}) => unawaited(
-      room.setNudgeUs(
-        us.clamp(-RoomPage.maxNudgeUs, RoomPage.maxNudgeUs),
-        persist: persist,
-      ),
-    );
+    void tap(int us) =>
+        _queueNudge(us, persist: true, delay: RoomPage.nudgeTapSettle);
     return PageSection(
       header: RoomPage.offsetHeader,
       footer: RoomPage.offsetFooter,
@@ -375,7 +449,7 @@ class _RoomPageState extends State<RoomPage> {
                 size: 20,
                 onPressed: nudge <= -RoomPage.maxNudgeUs
                     ? null
-                    : () => set(nudge - RoomPage.nudgeStepUs),
+                    : () => tap(nudge - RoomPage.nudgeStepUs),
               ),
               Expanded(
                 child: Column(
@@ -397,8 +471,12 @@ class _RoomPageState extends State<RoomPage> {
                         value: nudge
                             .clamp(-RoomPage.maxNudgeUs, RoomPage.maxNudgeUs)
                             .toDouble(),
-                        onChanged: (v) => set(v.round(), persist: false),
-                        onChangeEnd: (v) => set(v.round()),
+                        onChanged: (v) => _queueNudge(
+                          v.round(),
+                          persist: false,
+                          delay: RoomPage.nudgeDragInterval,
+                        ),
+                        onChangeEnd: (v) => _setNudgeNow(v.round()),
                       ),
                     ),
                   ],
@@ -410,7 +488,7 @@ class _RoomPageState extends State<RoomPage> {
                 size: 20,
                 onPressed: nudge >= RoomPage.maxNudgeUs
                     ? null
-                    : () => set(nudge + RoomPage.nudgeStepUs),
+                    : () => tap(nudge + RoomPage.nudgeStepUs),
               ),
             ],
           ),
@@ -419,7 +497,7 @@ class _RoomPageState extends State<RoomPage> {
           PageRow(
             title: RoomPage.offsetReset,
             titleStyle: PageType.body.copyWith(color: c.tint),
-            onTap: () => set(0),
+            onTap: () => _setNudgeNow(0),
           ),
       ],
     );
@@ -456,7 +534,11 @@ class _RoomPageState extends State<RoomPage> {
     final duration = item.durationUs;
     final String subtitle;
     if (unplayable) {
-      subtitle = RoomPage.cantPlay;
+      subtitle = switch (state!.error) {
+        JamMediaStore.tooLong => RoomPage.tooLong,
+        JamMediaStore.tooLarge => RoomPage.tooBig,
+        _ => RoomPage.cantPlay,
+      };
     } else {
       subtitle = [
         if (artist != null && artist.isNotEmpty) artist,

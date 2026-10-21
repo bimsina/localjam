@@ -86,9 +86,15 @@ class PageColors {
       brightness == Brightness.dark ? dark : light;
 }
 
-/// The type scale (DESIGN_SPEC_V3 §3 sizes), all Manrope.
+/// The type scale (DESIGN_SPEC_V3 §3 sizes), all Manrope, falling back to
+/// the bundled Noto Sans Devanagari for what Manrope lacks (Nepali titles
+/// and names): a glyph no bundled face has would otherwise send the engine
+/// to its font-fallback URL, which this LAN page cannot serve.
 abstract final class PageType {
   static const String family = 'Manrope';
+
+  /// Bundled faces tried, in order, for glyphs [family] lacks.
+  static const List<String> fallback = ['NotoSansDevanagari'];
 
   static TextStyle _style(
     double size,
@@ -97,6 +103,7 @@ abstract final class PageType {
     double tracking = 0,
   ]) => TextStyle(
     fontFamily: family,
+    fontFamilyFallback: fallback,
     fontSize: size,
     height: line / size,
     fontWeight: weight,
@@ -152,6 +159,7 @@ ThemeData pageTheme(Brightness brightness) {
   return ThemeData(
     brightness: brightness,
     fontFamily: PageType.family,
+    fontFamilyFallback: PageType.fallback,
     scaffoldBackgroundColor: c.background,
     splashFactory: NoSplash.splashFactory,
     highlightColor: Colors.transparent,

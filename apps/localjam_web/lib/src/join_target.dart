@@ -56,3 +56,52 @@ class JoinTarget {
     return JoinTarget._(link, asJoin.toLocaljamUri());
   }
 }
+
+/// What the page does with its address at startup, so the token does not
+/// stay in the browser's history (or a shared screenshot of the address
+/// bar) while a reload still works: an invitation in the fragment is
+/// remembered in this tab's `sessionStorage` and the fragment is dropped
+/// from the address with `history.replaceState`; a page opened (or
+/// reloaded) without a fragment reads the remembered one. Pure, so the
+/// rules are tested without a browser; `main` does the storage and history
+/// calls.
+class InviteStartup {
+  const InviteStartup._(this.page, this.remember, this.cleanAddress);
+
+  /// The URL to read the invitation from ([JoinTarget.fromPageUrl]).
+  final Uri page;
+
+  /// The fragment to remember for this tab, or null to leave what is
+  /// remembered alone.
+  final String? remember;
+
+  /// What to put in the address bar once [remember] is stored (the page's
+  /// URL without its fragment), or null to leave the address alone. Only
+  /// after the store succeeded: a tab that cannot remember (storage
+  /// disabled) keeps the token in its address, or a reload would lose it.
+  final Uri? cleanAddress;
+
+  /// The startup for a page opened at [page] in a tab that remembers
+  /// [stored] (null: nothing, or no storage).
+  ///
+  /// * A fragment that is an invitation wins: remember it, clean the
+  ///   address. (A new link opened in the same tab replaces the old one.)
+  /// * No fragment at all: the remembered invitation, if any — a reload.
+  /// * A fragment that is not an invitation: read as it is (no invite),
+  ///   never mixed with a remembered one.
+  static InviteStartup resolve(Uri page, String? stored) {
+    if (page.hasFragment && page.fragment.isNotEmpty) {
+      if (!JoinTarget.fromPageUrl(page).canJoin) {
+        return InviteStartup._(page, null, null);
+      }
+      return InviteStartup._(page, page.fragment, page.removeFragment());
+    }
+    if (stored != null && stored.isNotEmpty) {
+      final remembered = page.replace(fragment: stored);
+      if (JoinTarget.fromPageUrl(remembered).canJoin) {
+        return InviteStartup._(remembered, null, null);
+      }
+    }
+    return InviteStartup._(page, null, null);
+  }
+}

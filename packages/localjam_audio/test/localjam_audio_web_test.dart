@@ -132,6 +132,8 @@ void main() {
 
   tearDown(() async {
     await audio.dispose();
+    // dispose keeps the page's context; each case starts from a fresh one.
+    await LocaljamAudioWeb.debugInstance!.debugCloseContext();
     await subscription.cancel();
     LocaljamAudioWeb.debugIsIOSOverride = null;
   });
@@ -184,10 +186,59 @@ void main() {
       expect(await audio.positionUs(), isNotNull);
     });
 
-    test('probeDuration of garbage or a missing URL is null', () async {
+    test('probeDuration: null for bytes load would refuse, an error when '
+        'it could not tell', () async {
       final garbage = blobUrl(Uint8List.fromList(List.filled(4096, 7)));
       expect(await audio.probeDurationUs(garbage), isNull);
-      expect(await audio.probeDurationUs('/no/such/file.wav'), isNull);
+      expect(await audio.probeDurationUs(blobUrl(Uint8List(0))), isNull);
+      // Unreadable is not undecodable: the caller may try again.
+      await expectLater(
+        audio.probeDurationUs('/no/such/file.wav'),
+        throwsA(platformError('load_failed')),
+      );
+      final revoked = wavUrl(0.1);
+      web.URL.revokeObjectURL(revoked);
+      await expectLater(
+        audio.probeDurationUs(revoked),
+        throwsA(platformError('load_failed')),
+      );
+    });
+
+    test('probeDuration keepForLoad: the next load of that URL takes the '
+        'decoded buffer instead of decoding again', () async {
+      final kept = wavUrl(0.5);
+      final probed = await audio.probeDurationUs(kept, keepForLoad: true);
+      expect(probed, closeTo(500000, 100));
+      // The bytes are gone: only the kept buffer can satisfy this load.
+      web.URL.revokeObjectURL(kept);
+      expect(await audio.load(kept), probed);
+
+      // Without keepForLoad nothing is kept.
+      final plain = wavUrl(0.5);
+      expect(await audio.probeDurationUs(plain), isNotNull);
+      web.URL.revokeObjectURL(plain);
+      await expectLater(
+        audio.load(plain),
+        throwsA(platformError('load_failed')),
+      );
+
+      // A load of another URL drops what was kept.
+      final dropped = wavUrl(0.25);
+      await audio.probeDurationUs(dropped, keepForLoad: true);
+      await audio.load(wavUrl(0.25));
+      web.URL.revokeObjectURL(dropped);
+      await expectLater(
+        audio.load(dropped),
+        throwsA(platformError('load_failed')),
+      );
+
+      // A kept probe of undecodable bytes answers null and keeps nothing.
+      final garbage = blobUrl(Uint8List.fromList(List.filled(4096, 7)));
+      expect(await audio.probeDurationUs(garbage, keepForLoad: true), isNull);
+      await expectLater(
+        audio.load(garbage),
+        throwsA(platformError('unsupported_format')),
+      );
     });
 
     test('undecodable bytes → unsupported_format, nothing loaded', () async {
@@ -302,6 +353,32 @@ void main() {
         rate: 1.5,
         ms: 500,
       );
+    });
+
+    test('after a suspension the next schedule starts on time, not late by '
+        'the whole suspension', () async {
+      if (needsAutoplay()) return;
+      await audio.load(wavUrl(4));
+      await audio.playAt(nativeTimeUs: perfNowUs(), positionUs: 0);
+      await sleepMs(300); // A confirmed output timestamp is in use.
+      await context().suspend().toDart;
+      expect(
+        (await nextEvent()).kind,
+        LocaljamAudioEventKind.interruptionBegan,
+      );
+      await sleepMs(2000);
+      await context().resume().toDart;
+      expect(
+        (await nextEvent()).kind,
+        LocaljamAudioEventKind.interruptionEnded,
+      );
+      // The context clock stood still for 2 s while performance time ran
+      // on: a schedule mapped through the old offset would start ~2 s late
+      // (position 0 all along).
+      final anchorUs = perfNowUs() + 300000;
+      await audio.playAt(nativeTimeUs: anchorUs, positionUs: 0);
+      await sleepMs(400);
+      await expectFollowsAnchor(anchorUs: anchorUs, startUs: 0, ms: 500);
     });
 
     test('playAt again replaces the schedule', () async {
@@ -514,17 +591,24 @@ void main() {
       );
     });
 
-    test('dispose then use again builds a fresh context', () async {
+    test('dispose releases the buffer but keeps the page\'s context, so '
+        'the next engine needs no new gesture', () async {
       await audio.load(wavUrl(1));
       final first = context();
       await audio.dispose();
-      expect(LocaljamAudioWeb.debugInstance!.debugContext, isNull);
+      expect(identical(context(), first), isTrue);
+      expect(first.state, isNot('closed'));
       await expectLater(
         audio.playAt(nativeTimeUs: perfNowUs(), positionUs: 0),
         throwsA(platformError('no_file')),
       );
       await audio.load(wavUrl(1));
-      expect(identical(context(), first), isFalse);
+      expect(identical(context(), first), isTrue);
+      if (needsAutoplay()) return;
+      final anchorUs = perfNowUs() + 100000;
+      await audio.playAt(nativeTimeUs: anchorUs, positionUs: 0);
+      await sleepMs(300);
+      expect(await audio.positionUs(), closeTo(perfNowUs() - anchorUs, 30000));
     });
 
     test('iOS graph: plays through a hidden <audio> element', () async {
@@ -540,7 +624,12 @@ void main() {
       expect(element.isConnected, isTrue);
       await sleepMs(300);
       expect(await audio.positionUs(), closeTo(perfNowUs() - anchorUs, 30000));
+      // Kept across dispose (it holds the gesture-unlocked audio route)…
       await audio.dispose();
+      expect(element.isConnected, isTrue);
+      expect(element.paused, isFalse);
+      // …and removed only with its context.
+      await LocaljamAudioWeb.debugInstance!.debugCloseContext();
       expect(element.isConnected, isFalse);
     });
   });

@@ -49,6 +49,21 @@ abstract class JamMediaStore {
   /// and never names anything.
   bool accepts(MediaItem item);
 
+  /// [JamPrefetchState.error] of an item [refuses] as bigger than the
+  /// store's whole budget.
+  static const String tooLarge = 'too_large';
+
+  /// [JamPrefetchState.error] of an item [refuses] as longer than this
+  /// device can decode.
+  static const String tooLong = 'too_long';
+
+  /// Why this store will never hold [item] playably, decided from its
+  /// declared metadata (§6.1) before any byte is fetched — [tooLarge] or
+  /// [tooLong] — or null when it might. The engine makes such an item
+  /// [JamPrefetchPhase.unplayable] with that error and never fetches it.
+  /// Natively always null; a browser's memory budget is what refuses.
+  String? refuses(MediaItem item) => null;
+
   /// The ref of [item] when the store already holds it whole (a lookup is a
   /// use: it counts as recent for eviction), else null.
   Future<String?> lookup(MediaItem item);

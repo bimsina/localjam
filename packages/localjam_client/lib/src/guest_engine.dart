@@ -74,10 +74,15 @@ enum JamPrefetchPhase {
   failed,
 
   /// Fetched and verified, but this device cannot decode it (a browser
-  /// guest, §3.1: Ogg in Safari). Reported `none` to the host and never
-  /// fetched again this session; it never blocks the room (§6.3 waits only
-  /// for `fetching`). Copy: "Can't play in this browser". Only a store that
-  /// [JamMediaStore.verifiesDecode] produces it.
+  /// guest, §3.1: Ogg in Safari; [JamPrefetchState.error]
+  /// `unsupported_format`). Reported `none` to the host and never fetched
+  /// again this session; it never blocks the room (§6.3 waits only for
+  /// `fetching`). Copy: "Can't play in this browser". Only a store that
+  /// [JamMediaStore.verifiesDecode] produces it — or one that
+  /// [JamMediaStore.refuses] the item from its declared size or duration
+  /// before fetching it (error [JamMediaStore.tooLarge] /
+  /// [JamMediaStore.tooLong]; copy "Too big / too long to play in a
+  /// browser").
   unplayable,
 }
 
@@ -181,8 +186,12 @@ class JamNotConnectedException implements Exception {
 /// ([JamMemoryMediaStore]), and an item is `ready` (§6.3) only once it has
 /// also decoded: the bytes are probed with [LocaljamAudio.probeDurationUs],
 /// which decodes without touching playback, one item at a time in the
-/// prefetch order (the current track, then the next). An item that will not
-/// decode is [JamPrefetchPhase.unplayable], reported `none`, and dropped.
+/// prefetch order (the current track, then the next; the current track's
+/// probe keeps its decode for the `load` that follows). An item whose bytes
+/// will not decode is [JamPrefetchPhase.unplayable], reported `none`, and
+/// dropped; a probe that fails for any other reason is retried like a
+/// failed fetch. An item too big for the store or too long to decode in a
+/// tab ([JamMediaStore.refuses]) is unplayable without being fetched.
 class JamGuestEngine extends JamEngine {
   JamGuestEngine._(
     this._session,
@@ -194,6 +203,7 @@ class JamGuestEngine extends JamEngine {
     required this.fetchRetryBackoff,
     required this.maxFetchRetries,
     required this.clockWakeTimeout,
+    required this.decodeProbeTimeout,
   }) {
     sync = AudioSyncController(
       player: player,
@@ -262,7 +272,8 @@ class JamGuestEngine extends JamEngine {
   /// neither a jump nor a clock that still agrees with its estimate (see
   /// the class docs); keep it above the session's liveness timeout (6 s), so
   /// a connection still up when it expires has demonstrably been hearing the
-  /// host's pongs.
+  /// host's pongs. [decodeProbeTimeout] bounds one decode check where the
+  /// store [JamMediaStore.verifiesDecode] (see [_settle]).
   ///
   /// Throws [JamRejectedException] if the host rejects the join (a kicked
   /// device gets [RejectReason.kicked]), [SocketException] if no host
@@ -285,6 +296,7 @@ class JamGuestEngine extends JamEngine {
     JamBackoff? fetchRetryBackoff,
     int maxFetchRetries = 5,
     Duration clockWakeTimeout = const Duration(seconds: 8),
+    Duration decodeProbeTimeout = const Duration(seconds: 60),
 
     /// Stable per-device id announced in `hello` (§3.3), so a host replaces
     /// this device's previous slot instead of keeping a ghost of it in the
@@ -329,6 +341,7 @@ class JamGuestEngine extends JamEngine {
           ),
       maxFetchRetries: maxFetchRetries,
       clockWakeTimeout: clockWakeTimeout,
+      decodeProbeTimeout: decodeProbeTimeout,
     )..joinUri = joinUri;
     await engine.restorePersistedNudge();
     await engine.startSessionGuards();
@@ -392,6 +405,12 @@ class JamGuestEngine extends JamEngine {
   /// this is the fallback for a burst whose readings the estimator could
   /// neither accept nor act on (a network much worse than before).
   final Duration clockWakeTimeout;
+
+  /// The longest one decode check may take (a browser's `decodeAudioData`
+  /// of a long track on a slow phone takes seconds; one that never answers
+  /// must not stall the prefetch pipeline behind it). Expiry counts as a
+  /// failure that says nothing about the bytes: retried, never unplayable.
+  final Duration decodeProbeTimeout;
 
   Timer? _hostGoneTimer;
 
@@ -1320,6 +1339,13 @@ class JamGuestEngine extends JamEngine {
       } else if (_undecodable.contains(item.sha256)) {
         _forgetFailures(id);
         next[id] = _unplayableState;
+      } else if (_store.refuses(item) case final why?) {
+        // Never fetched: it could not play here whatever its bytes.
+        _forgetFailures(id);
+        next[id] = JamPrefetchState(
+          phase: JamPrefetchPhase.unplayable,
+          error: why,
+        );
       } else if (targetIds.contains(id)) {
         next[id] = existing?.phase == JamPrefetchPhase.failed
             ? existing!
@@ -1332,9 +1358,14 @@ class JamGuestEngine extends JamEngine {
         next[id] = const JamPrefetchState.notQueued();
       }
     }
-    // Items that left the playlist altogether.
-    for (final id in previous.keys) {
-      if (!next.containsKey(id)) _forgetFailures(id);
+    // Items that left the playlist altogether. Their `blob:` URL (a copy
+    // of the bytes, outside the store's budget) goes now: nothing resolves
+    // an item that is not in the playlist. The bytes stay, evictable.
+    for (final entry in previous.entries) {
+      if (next.containsKey(entry.key)) continue;
+      _forgetFailures(entry.key);
+      final ref = entry.value.path;
+      if (ref != null && ref != _probingRef) _store.release(ref);
     }
     _prefetchStates.value = Map.unmodifiable(next);
     // Re-announce anything already ready (e.g. after a reconnect cleared the
@@ -1504,7 +1535,9 @@ class JamGuestEngine extends JamEngine {
       final cached = await _store.lookup(item);
       if (cached != null) {
         if (_closed) return;
-        _forgetFailures(id);
+        // Failures are forgotten once it settles ready: a decode check that
+        // keeps failing on bytes already here must run out of retries.
+        _fetchRetryTimers.remove(id)?.cancel();
         await _settle(item, cached);
         return;
       }
@@ -1560,7 +1593,6 @@ class JamGuestEngine extends JamEngine {
       );
       final ref = await write.commit();
       if (_closed) return;
-      _forgetFailures(id);
       if (_store.verifiesDecode) {
         // The fetch said `fetching` and nothing since: the decode decides.
         _lastReportedMediaState[id] = MediaFetchState.fetching;
@@ -1588,9 +1620,13 @@ class JamGuestEngine extends JamEngine {
 
   /// Makes a stored item [JamPrefetchPhase.ready] — after a decode check
   /// where the store [JamMediaStore.verifiesDecode] — reports it (§6.3) and
-  /// tells the controller. An item that will not decode becomes
+  /// tells the controller. An item whose bytes will not decode becomes
   /// [JamPrefetchPhase.unplayable] instead: its bytes are dropped, the host
-  /// hears `none`, and it is never fetched again this session.
+  /// hears `none`, and it is never fetched again this session. A check that
+  /// could not tell (the probe threw — a context closed under it, a failed
+  /// allocation — or outlasted [decodeProbeTimeout]) is a failure like a
+  /// fetch's: the host hears `none` so the room does not wait on it, and it
+  /// is retried with the fetch backoff and bound, the bytes kept.
   Future<void> _settle(MediaItem item, String ref) async {
     final id = item.mediaId;
     if (_store.verifiesDecode && !_decoded.contains(item.sha256)) {
@@ -1598,26 +1634,33 @@ class JamGuestEngine extends JamEngine {
         id,
         const JamPrefetchState(phase: JamPrefetchPhase.fetching, progress: 1),
       );
-      final decodes = await _decodesHere(item, ref);
+      final (check, error) = await _decodesHere(item, ref);
       if (_closed) return;
-      if (decodes == null) {
-        // The bytes left the store mid-probe: fetch them again.
-        _setPrefetch(id, const JamPrefetchState());
-        return;
+      switch (check) {
+        case _DecodeCheck.gone:
+          // The bytes left the store mid-probe: fetch them again.
+          _setPrefetch(id, const JamPrefetchState());
+          return;
+        case _DecodeCheck.undecodable:
+          _forgetFailures(id);
+          _undecodable.add(item.sha256);
+          try {
+            await _store.remove(ref);
+          } catch (_) {
+            // Best effort: eviction gets it later.
+          }
+          _setPrefetch(id, _unplayableState);
+          _reportMediaStatus(id, MediaFetchState.none);
+          return;
+        case _DecodeCheck.unsure:
+          _reportMediaStatus(id, MediaFetchState.none);
+          _onFetchFailed(id, 'decode check failed: $error');
+          return;
+        case _DecodeCheck.decodes:
+          _decoded.add(item.sha256);
       }
-      if (!decodes) {
-        _undecodable.add(item.sha256);
-        try {
-          await _store.remove(ref);
-        } catch (_) {
-          // Best effort: eviction gets it later.
-        }
-        _setPrefetch(id, _unplayableState);
-        _reportMediaStatus(id, MediaFetchState.none);
-        return;
-      }
-      _decoded.add(item.sha256);
     }
+    _forgetFailures(id);
     _setPrefetch(
       id,
       JamPrefetchState(phase: JamPrefetchPhase.ready, progress: 1, path: ref),
@@ -1628,37 +1671,56 @@ class JamGuestEngine extends JamEngine {
 
   /// Whether [item]'s bytes ([ref]) decode on this device: a full decode
   /// through [LocaljamAudio.probeDurationUs], which never touches the loaded
-  /// track or playback (the web player keeps one decoded buffer, D7, and
-  /// this one is dropped as soon as the probe returns). The `blob:` URL the
-  /// probe read is released afterwards unless the item is the current track
-  /// (whose `load` wants it). Null when the bytes are gone from the store.
-  Future<bool?> _decodesHere(MediaItem item, String ref) async {
+  /// track or playback (the web player keeps one decoded buffer, D7). For
+  /// the current track the probe keeps its buffer for the `load` that
+  /// follows, so the track decodes once before it plays, not twice; any
+  /// other item's buffer is dropped as soon as the probe returns. The
+  /// `blob:` URL the probe read is released afterwards unless the item is
+  /// the current track (whose `load` wants it).
+  ///
+  /// Null from the probe (or no duration) is the browser saying it cannot
+  /// decode these bytes: [_DecodeCheck.undecodable]. A probe that threw or
+  /// timed out could not tell: [_DecodeCheck.unsure], with the error —
+  /// unless the bytes are gone from the store ([_DecodeCheck.gone]).
+  Future<(_DecodeCheck, Object?)> _decodesHere(
+    MediaItem item,
+    String ref,
+  ) async {
     final String? url;
     try {
       url = await _store.resolve(ref);
     } catch (_) {
-      return null;
+      return (_DecodeCheck.gone, null);
     }
-    if (url == null) return null;
+    if (url == null) return (_DecodeCheck.gone, null);
     _probingRef = ref;
     int? durationUs;
+    Object? error;
     try {
-      durationUs = await player.probeDurationUs(url);
-    } catch (_) {
-      durationUs = null;
+      durationUs = await player
+          .probeDurationUs(
+            url,
+            keepForLoad: _session.snapshot.mediaId == item.mediaId,
+          )
+          .timeout(decodeProbeTimeout);
+    } catch (e) {
+      error = e;
     } finally {
       _probingRef = null;
       if (_session.snapshot.mediaId != item.mediaId) _store.release(ref);
     }
-    if (durationUs != null && durationUs > 0) return true;
-    // A failed probe of bytes that are no longer there says nothing about
-    // the format.
-    try {
-      if (await _store.lookup(item) == null) return null;
-    } catch (_) {
-      return null;
+    if (error == null) {
+      return durationUs != null && durationUs > 0
+          ? (_DecodeCheck.decodes, null)
+          : (_DecodeCheck.undecodable, null);
     }
-    return false;
+    // A failed probe of bytes that are no longer there says nothing either.
+    try {
+      if (await _store.lookup(item) == null) return (_DecodeCheck.gone, null);
+    } catch (_) {
+      return (_DecodeCheck.gone, null);
+    }
+    return (_DecodeCheck.unsure, error);
   }
 
   static const JamPrefetchState _unplayableState = JamPrefetchState(
@@ -1755,4 +1817,19 @@ class JamGuestEngine extends JamEngine {
     _hostAway.dispose();
     disposeEngineState();
   }
+}
+
+/// What one decode check found ([JamGuestEngine._decodesHere]).
+enum _DecodeCheck {
+  /// The bytes decode here: the item may be `ready`.
+  decodes,
+
+  /// The browser cannot decode these bytes: unplayable for the session.
+  undecodable,
+
+  /// The bytes left the store mid-check: fetch them again.
+  gone,
+
+  /// The check failed for a reason that says nothing about the bytes.
+  unsure,
 }

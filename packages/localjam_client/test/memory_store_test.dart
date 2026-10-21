@@ -360,5 +360,245 @@ void main() {
         isEmpty,
       );
     });
+
+    /// The audio channel with `probeDuration` answered by [probe], every
+    /// call's arguments recorded.
+    List<Map<Object?, Object?>> mockProbeWith(
+      Future<Object?> Function(Map<Object?, Object?> args, int call) probe,
+    ) {
+      final calls = <Map<Object?, Object?>>[];
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(audioChannel, (call) async {
+            switch (call.method) {
+              case 'probeDuration':
+                final args = call.arguments as Map<Object?, Object?>;
+                calls.add(args);
+                return probe(args, calls.length);
+              case 'nowUs':
+                return 1;
+              case 'load':
+                return 10_000_000;
+              case 'outputLatencyUs':
+                return 0;
+            }
+            return null;
+          });
+      addTearDown(
+        () => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(audioChannel, null),
+      );
+      return calls;
+    }
+
+    JamBackoff fastRetry() => JamBackoff(
+      initialDelay: const Duration(milliseconds: 50),
+      maxDelay: const Duration(milliseconds: 100),
+      jitterRatio: 0,
+    );
+
+    test('a probe that fails for a reason other than the format is retried, '
+        'not unplayable, and the room does not wait on it', () async {
+      // The first check fails the way a context closed under the decode
+      // does; the second one decodes.
+      final calls = mockProbeWith((args, call) async {
+        if (call == 1) {
+          throw PlatformException(code: 'engine_error', message: 'closed');
+        }
+        return 10_000_000;
+      });
+      final (host, item) = await hostWith([(6, 'audio/mpeg')]);
+      final engine = await JamGuestEngine.join(
+        host.joinUriFor(InternetAddress.loopbackIPv4),
+        clientName: 'browser',
+        clientKind: 'web',
+        mediaStore: JamMemoryMediaStore(blobUrls: RecordingBlobUrls()),
+        fetchRetryBackoff: fastRetry(),
+      );
+      addTearDown(engine.close);
+
+      final seen = <JamPrefetchPhase>[];
+      engine.prefetchStates.addListener(() {
+        final phase = engine.prefetchStates.value[item.mediaId]?.phase;
+        if (phase != null && (seen.isEmpty || seen.last != phase)) {
+          seen.add(phase);
+        }
+      });
+      await waitFor(
+        () => engine.prefetchStates.value[item.mediaId]?.ready ?? false,
+        reason: 'ready after the retried check',
+      );
+      expect(calls, hasLength(2));
+      expect(seen, contains(JamPrefetchPhase.failed));
+      expect(seen, isNot(contains(JamPrefetchPhase.unplayable)));
+      await waitFor(
+        () =>
+            host.peerMediaState(engine.selfPeerId, item.mediaId) ==
+            MediaReadiness.ready,
+        reason: 'the host to hear ready',
+      );
+    });
+
+    test('a probe that never answers times out into a bounded retry instead '
+        'of stalling the pipeline', () async {
+      final calls = mockProbeWith((args, call) {
+        final path = args['path']! as String;
+        // The first track's decode hangs, every time.
+        if (path.contains('#audio/ogg')) return Completer<Object?>().future;
+        return Future<Object?>.value(10_000_000);
+      });
+      final (host, hung) = await hostWith([
+        (7, 'audio/ogg'),
+        (8, 'audio/mpeg'),
+      ]);
+      final next = host.playlist[1];
+      final engine = await JamGuestEngine.join(
+        host.joinUriFor(InternetAddress.loopbackIPv4),
+        clientName: 'browser',
+        clientKind: 'web',
+        mediaStore: JamMemoryMediaStore(blobUrls: RecordingBlobUrls()),
+        prefetchPolicy: const JamPrefetchPolicy(aheadCount: 1),
+        fetchRetryBackoff: fastRetry(),
+        maxFetchRetries: 2,
+        decodeProbeTimeout: const Duration(milliseconds: 100),
+      );
+      addTearDown(engine.close);
+
+      // The next item is not stuck behind the hung one.
+      await waitFor(
+        () => engine.prefetchStates.value[next.mediaId]?.ready ?? false,
+        reason: 'the next item to get ready',
+      );
+      // The hung one runs out of retries: failed, never unplayable.
+      await waitFor(() {
+        final state = engine.prefetchStates.value[hung.mediaId];
+        return state?.phase == JamPrefetchPhase.failed && !state!.willRetry;
+      }, reason: 'the retries to run out');
+      final hungChecks = calls.where(
+        (c) => (c['path']! as String).contains('#audio/ogg'),
+      );
+      expect(hungChecks, hasLength(3), reason: 'first check + 2 retries');
+      expect(
+        host.peerMediaState(engine.selfPeerId, hung.mediaId),
+        MediaReadiness.none,
+      );
+      // Its bytes are kept, and a manual retry checks them again.
+      expect(engine.retryFetch(hung.mediaId), isTrue);
+    });
+
+    test('the current track\'s probe keeps its decode for load; the next '
+        'track\'s does not', () async {
+      final calls = mockProbeWith((args, call) async => 10_000_000);
+      final (host, first) = await hostWith([
+        (10, 'audio/mpeg'),
+        (11, 'audio/mpeg'),
+      ]);
+      final second = host.playlist[1];
+      host.setMedia(first.mediaId);
+      final engine = await JamGuestEngine.join(
+        host.joinUriFor(InternetAddress.loopbackIPv4),
+        clientName: 'browser',
+        clientKind: 'web',
+        mediaStore: JamMemoryMediaStore(blobUrls: RecordingBlobUrls()),
+        prefetchPolicy: const JamPrefetchPolicy(aheadCount: 1),
+      );
+      addTearDown(engine.close);
+      await waitFor(
+        () => engine.prefetchStates.value[second.mediaId]?.ready ?? false,
+        reason: 'both items ready',
+      );
+      expect(calls, hasLength(2));
+      expect(calls[0]['keep'], isTrue, reason: 'the current track');
+      expect(calls[1].containsKey('keep'), isFalse, reason: 'the next one');
+    });
+
+    test('an item bigger than the budget or longer than a tab can decode is '
+        'unplayable without being fetched', () async {
+      final calls = mockProbeWith((args, call) async => 10_000_000);
+      final host = JamHostServer(sessionName: 'Web', policy: JamPolicy.open);
+      await host.start(address: InternetAddress.loopbackIPv4);
+      addTearDown(host.close);
+      Future<MediaItem> add(int seed, int size, int durationUs) async {
+        final file = await writeTempMedia(
+          makeMediaBytes(size, seed: seed),
+          name: 'track$seed.mp3',
+        );
+        final item = await JamHostServer.describeFile(
+          file,
+          kind: MediaKind.audio,
+          mime: 'audio/mpeg',
+          durationUs: durationUs,
+        );
+        host.addMedia(item, file);
+        return item;
+      }
+
+      final big = await add(12, 8192, 10_000_000);
+      final long = await add(13, 1024, JamMemoryMediaStore.maxDecodeUs + 1);
+      final fine = await add(14, 1024, 10_000_000);
+      final store = JamMemoryMediaStore(
+        maxBytes: 4096,
+        blobUrls: RecordingBlobUrls(),
+      );
+      final engine = await JamGuestEngine.join(
+        host.joinUriFor(InternetAddress.loopbackIPv4),
+        clientName: 'browser',
+        clientKind: 'web',
+        mediaStore: store,
+        prefetchPolicy: const JamPrefetchPolicy(prefetchAll: true),
+      );
+      addTearDown(engine.close);
+      await waitFor(
+        () => engine.prefetchStates.value[fine.mediaId]?.ready ?? false,
+        reason: 'the item that fits to get ready',
+      );
+      final states = engine.prefetchStates.value;
+      expect(states[big.mediaId]?.phase, JamPrefetchPhase.unplayable);
+      expect(states[big.mediaId]?.error, JamMediaStore.tooLarge);
+      expect(states[long.mediaId]?.phase, JamPrefetchPhase.unplayable);
+      expect(states[long.mediaId]?.error, JamMediaStore.tooLong);
+      // Never fetched: the host never heard of them, the store holds none.
+      for (final refused in [big, long]) {
+        expect(
+          host.peerMediaState(engine.selfPeerId, refused.mediaId),
+          MediaReadiness.none,
+        );
+        expect(await store.lookup(refused), isNull);
+      }
+      expect(calls, hasLength(1));
+      expect(engine.retryFetch(big.mediaId), isFalse);
+      expect(store.refuses(fine), isNull);
+    });
+
+    test('a track removed from the playlist while current lets go of its '
+        'blob URL', () async {
+      mockProbeWith((args, call) async => 10_000_000);
+      final (host, first) = await hostWith([
+        (15, 'audio/mpeg'),
+        (16, 'audio/mpeg'),
+      ]);
+      final second = host.playlist[1];
+      host.setMedia(first.mediaId);
+      final urls = RecordingBlobUrls();
+      final engine = await JamGuestEngine.join(
+        host.joinUriFor(InternetAddress.loopbackIPv4),
+        clientName: 'browser',
+        clientKind: 'web',
+        mediaStore: JamMemoryMediaStore(blobUrls: urls),
+        prefetchPolicy: const JamPrefetchPolicy(aheadCount: 1),
+      );
+      addTearDown(engine.close);
+      await waitFor(
+        () => engine.prefetchStates.value[second.mediaId]?.ready ?? false,
+        reason: 'both items ready',
+      );
+      expect(urls.live, hasLength(1), reason: "the current track's URL");
+      final currentUrl = urls.live.keys.single;
+
+      host.removeMediaItem(first.mediaId);
+      await waitFor(
+        () => !urls.live.containsKey(currentUrl),
+        reason: "the removed track's URL to be revoked",
+      );
+    });
   });
 }

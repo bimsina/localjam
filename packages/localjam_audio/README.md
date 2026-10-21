@@ -111,11 +111,17 @@ with `start(when, offset)`; graph source → `GainNode` → destination.
   `fetch` — a `blob:` URL (`URL.createObjectURL` of media bytes the page
   already prefetched) or a same-origin `http(s):` URL. Fetch failure or a
   non-2xx answer → `load_failed`; bytes the browser cannot decode →
-  `unsupported_format`. `load` replaces the buffer (D7: a 5-min track is
-  ~100 MB of PCM). `probeDuration` has no header-only path in a browser: it
-  fetches and decodes the whole file (CPU and transient memory), touching
-  neither the buffer nor playback, and answers null on any failure. Durations
-  are of the decoded buffer (resampled to the context rate; within a frame).
+  `unsupported_format`; a decode that failed for any other reason (context
+  closed under it, allocation failure) → `engine_error`, worth retrying.
+  `load` replaces the buffer (D7: a 5-min track is ~100 MB of PCM).
+  `probeDuration` has no header-only path in a browser: it fetches and
+  decodes the whole file (CPU and transient memory), touching neither the
+  buffer nor playback. It answers null only for bytes `load` would refuse
+  and throws (`load_failed`, `engine_error`) when it could not tell, so a
+  caller can retry. `probeDurationUs(path, keepForLoad: true)` keeps that
+  decode for a `load` of the same URL (one kept at most): the current track
+  decodes once. Durations are of the decoded buffer (resampled to the
+  context rate; within a frame).
 - **`playAt`**: performance time is mapped to context time with
   `getOutputTimestamp()` (the context time heard at a given instant) shifted by
   the reported latency, so the frame is heard `outputLatencyUs()` after
@@ -123,12 +129,16 @@ with `start(when, offset)`; graph source → `GainNode` → destination.
   out whenever the timestamp is accurate. Without that API (or before it
   yields a stable value) `currentTime` is sampled against `performance.now()`
   instead (one render callback coarse, 23 ms steps in Chrome). A past anchor
-  starts 50 ms ahead of the render clock with the position advanced (late
-  join). Same `bad_args` bounds and `no_file`/`bad_position` as native.
+  starts 50 ms (or 2 × `baseLatency`, if longer) ahead of the render clock
+  with the position advanced (late join). Same `bad_args` bounds and
+  `no_file`/`bad_position` as native. After the context was suspended or
+  interrupted, the next `playAt` waits (≤ 1 s) for a fresh output timestamp:
+  the context clock stood still while performance time ran on.
 - **`setRate`** sets the live node's `playbackRate` 50 ms ahead (resample:
   pitch shifts ~9 cents at ±0.5 %, as on desktop); positions stay continuous.
   **`pause`** stops the node (`playAt` re-anchors anyway); `positionUs` is
-  null unless playing/scheduled. **`outputLatencyUs`** is `outputLatency +
+  null unless playing/scheduled, and before a scheduled start reads the
+  timeline extrapolated back to now, clamped at 0. **`outputLatencyUs`** is `outputLatency +
   baseLatency` where reported, else 0. **`currentRouteId`** is always null.
 - **Autoplay**: the `AudioContext` is created by the first call that needs it
   and `resume()`d synchronously at the start of `load`, `playAt`,
@@ -136,7 +146,9 @@ with `start(when, offset)`; graph source → `GainNode` → destination.
   call one of them (e.g. `outputLatencyUs()`) inside the gesture. If the
   context cannot run within 1 s, `playAt` completes without playing and emits
   `interruptionBegan` (native's refused-audio contract); `interruptionEnded`
-  follows once it runs. The plugin never suspends the context afterwards.
+  follows once it runs. The plugin never suspends the context afterwards,
+  and `dispose` keeps it (and the iOS element): it releases the buffer and
+  the node only, so the page's next engine plays without another gesture.
 - **iOS / iPadOS** (user agent `iPhone|iPad|iPod`, or `Macintosh` with touch
   points): the gain feeds a `MediaStreamAudioDestinationNode` played by a
   hidden `<audio autoplay playsinline>` element, `play()`ed in the same

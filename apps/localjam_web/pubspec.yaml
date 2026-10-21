@@ -35,7 +35,15 @@ flutter:
   uses-material-design: true
   # The one face the page draws with. Bundled, and named by the theme, so the
   # engine never fetches a default font from the internet (WEB_GUEST.md D8).
+  # Noto Sans Devanagari (~270 KB, OFL) is the theme's fallback for what
+  # Manrope lacks: Nepali and Hindi song titles and guest names. Other
+  # scripts (CJK, …) draw as boxes — see README "Fonts".
   fonts:
     - family: Manrope
       fonts:
         - asset: assets/fonts/Manrope.ttf
+    - family: NotoSansDevanagari
+      fonts:
+        - asset: assets/fonts/NotoSansDevanagari-Regular.ttf
+        - asset: assets/fonts/NotoSansDevanagari-Bold.ttf
+          weight: 700
