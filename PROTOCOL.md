@@ -1107,7 +1107,10 @@ scheduling earlier by its known output latency), but the protocol supports it:
   (`AVAudioSession.outputLatency`, Web Audio `outputLatency`, Android
   `AudioTrack#getTimestamp`-derived) as the default.
 - Clients SHOULD offer a manual nudge (±500 ms, 10 ms steps), persisted per
-  output device.
+  output device. The nudge moves the schedule on purpose, so the §5.4
+  self-check MUST compare the measured (heard) position against the anchor
+  formula shifted by the nudge — `nudge × rate` ahead for a positive "play
+  earlier" nudge — or it reads the nudge as drift and corrects it away.
 - `G→H media_status` MAY include `reportedLatencyUs` for host-side diagnostics.
 
 **Browser guests** (§1.1) have the least to go on. Web Audio reports

@@ -183,6 +183,10 @@ iPhone Safari guest): see `docs/design/WEB_GUEST.md`.
   `JamHostServer.kickKeepsOut` / `JamHostEngine.kickKeepsOut` say so before
   the kick. PROTOCOL §3.1/§5.6 now state that id-less clients cannot be held
   (an address is shared by a NAT or a hotspot, so it is not used).
+- A sync nudge no longer reads as drift: the drift check expects the heard
+  position the nudge moves (`nudge × rate` ahead of the room), so a nudge
+  past 15 ms stops slewing and one past 50 ms stops re-anchoring every few
+  seconds, and the sync indicator shows the nudged device in sync.
 
 ### Android
 

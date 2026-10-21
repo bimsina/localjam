@@ -38,6 +38,17 @@ class FakeLocaljamAudio extends LocaljamAudio {
   /// Position served by [positionUs]; null = "nothing playing".
   int? scriptedPositionUs;
 
+  /// When set, [positionUs] ignores [scriptedPositionUs] and reports the
+  /// position a real player would report as HEARD (the
+  /// [LocaljamAudio.positionUs] contract) for the last [playAt] it was
+  /// given: the schedule's position at this native time, shifted back by
+  /// [heardLatencyUs] — the latency the platform maps its heard instant
+  /// with. Null before the first [playAt].
+  int Function()? followScheduleNativeNowUs;
+
+  /// See [followScheduleNativeNowUs].
+  int heardLatencyUs = 0;
+
   /// Thrown by the next [playAt] calls, one per call (then they succeed).
   final List<Object> playAtErrors = [];
 
@@ -132,7 +143,14 @@ class FakeLocaljamAudio extends LocaljamAudio {
   @override
   Future<int?> positionUs() async {
     calls.add('positionUs');
-    return scriptedPositionUs;
+    final nativeNowUs = followScheduleNativeNowUs;
+    if (nativeNowUs == null) return scriptedPositionUs;
+    if (playAtCalls.isEmpty) return null;
+    final last = playAtCalls.last;
+    final heardSinceStartUs =
+        nativeNowUs() - heardLatencyUs - last.nativeTimeUs;
+    if (heardSinceStartUs <= 0) return last.positionUs;
+    return last.positionUs + (heardSinceStartUs * last.rate).round();
   }
 
   @override

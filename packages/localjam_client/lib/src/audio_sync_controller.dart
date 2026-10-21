@@ -20,15 +20,15 @@
 /// ```
 ///
 /// While playing, a 1 Hz drift loop compares the player's measured position
-/// against the anchor formula and feeds a [DriftPolicy] (§5.4): slews are
-/// applied as a bounded rate multiplier and restored after their duration;
-/// hard resyncs recalibrate and re-schedule from the current anchor, backing
-/// off when they keep coming (an output that cannot keep up re-anchors every
-/// ~10 s, not every second). Every
-/// check is published as a [DriftSample] for telemetry UIs. The same loop
-/// watches the session-clock estimator (§4): a stepped offset re-schedules
-/// from the current anchor, a clock discontinuity holds output until the
-/// fresh join burst lands.
+/// against the anchor formula — shifted by the manual nudge, which moves the
+/// heard position along with the schedule — and feeds a [DriftPolicy]
+/// (§5.4): slews are applied as a bounded rate multiplier and restored after
+/// their duration; hard resyncs recalibrate and re-schedule from the current
+/// anchor, backing off when they keep coming (an output that cannot keep up
+/// re-anchors every ~10 s, not every second). Every check is published as a
+/// [DriftSample] for telemetry UIs. The same loop watches the session-clock
+/// estimator (§4): a stepped offset re-schedules from the current anchor, a
+/// clock discontinuity holds output until the fresh join burst lands.
 ///
 /// The OS can take this device's output away while the room plays on — a
 /// call, unplugged headphones, another app grabbing audio focus, a native
@@ -67,13 +67,17 @@ class DriftSample {
     required this.action,
   });
 
-  /// Anchor-derived expected media position (µs) at the check instant.
+  /// Where the player's heard position should read (µs) at the check
+  /// instant: the anchor formula's position plus the manual nudge (§7), which
+  /// deliberately moves what this device plays — so [errorUs] is the error
+  /// the drift loop corrects, 0 when the nudged schedule landed on time.
   final int expectedUs;
 
   /// Player-measured media position (µs) at the check instant.
   final int actualUs;
 
-  /// Signed error: `actual - expected` (positive = we are ahead).
+  /// Signed error: `actual - expected` (positive = we are ahead of where
+  /// the nudged schedule puts us).
   int get errorUs => actualUs - expectedUs;
 
   /// What the [DriftPolicy] decided about this error.
@@ -496,6 +500,30 @@ class AudioSyncController {
   /// latency, e.g. Bluetooth).
   int get manualOffsetUs => _manualOffsetUs;
 
+  /// Where [LocaljamAudio.positionUs] should read when the room's anchor
+  /// formula says [roomPositionUs] and the schedule landed on time.
+  ///
+  /// The schedule is shifted [manualOffsetUs] earlier on the native clock,
+  /// and `positionUs` reports the HEARD position against the
+  /// platform-reported latency only — it cannot know about the extra latency
+  /// a nudge compensates (that is why the user nudged). So a positive nudge
+  /// reads `nudge × rate` ahead of the room by design: the drift loop must
+  /// expect that, or it reads the nudge as a constant drift, slews it and,
+  /// past the hard-resync threshold, re-anchors every check straight back
+  /// onto the same nudge.
+  int _expectedPlayerUs(PlaybackSnapshot snapshot, int roomPositionUs) =>
+      roomPositionUs + (_manualOffsetUs * snapshot.rate).round();
+
+  /// Whether the media has run out here: the room's position, or the heard
+  /// position a positive nudge runs ahead of it ([_expectedPlayerUs]),
+  /// has reached the loaded duration. Either way nothing is left for this
+  /// device to schedule or correct.
+  bool _atEnd(int roomPositionUs, int expectedPlayerUs) {
+    final durationUs = loadedDurationUs.value;
+    return durationUs != null &&
+        (roomPositionUs >= durationUs || expectedPlayerUs >= durationUs);
+  }
+
   bool get _clockIsReady => clockReady?.call() ?? true;
   bool get _clockStepped => clockStepPending?.call() ?? false;
 
@@ -683,17 +711,19 @@ class AudioSyncController {
       actualUs = null; // Player unreachable: treat as stale.
     }
     if (_stopped) return;
-    final int expectedUs;
+    final int roomUs;
     try {
-      expectedUs = snapshot.positionAt(sessionNowUs());
+      roomUs = snapshot.positionAt(sessionNowUs());
     } catch (_) {
       // Session clock unknown (a guest mid-reconnect): nothing to verify
       // against yet — the snapshot is re-fed once the clock re-syncs.
       return;
     }
+    // Nudge-corrected, as in [checkDriftNow]: a nudged device must not
+    // re-anchor on every return to the foreground.
+    final expectedUs = _expectedPlayerUs(snapshot, roomUs);
     // The anchor ran past the end while backgrounded: the track is over.
-    final durationUs = loadedDurationUs.value;
-    if (durationUs != null && expectedUs >= durationUs) {
+    if (_atEnd(roomUs, expectedUs)) {
       _enterTrackFinished();
       return;
     }
@@ -1207,9 +1237,9 @@ class AudioSyncController {
     // End-of-media clamp: when the anchor extrapolates to/past the loaded
     // duration there is nothing left to play — scheduling would only produce
     // native bad_position errors. Treat it as the track having finished.
-    final durationUs = loadedDurationUs.value;
-    if (durationUs != null &&
-        snapshot.positionAt(sessionNowUs()) >= durationUs) {
+    // A positive nudge starts the native schedule that much further in.
+    final roomUs = snapshot.positionAt(sessionNowUs());
+    if (_atEnd(roomUs, _expectedPlayerUs(snapshot, roomUs))) {
       _enterTrackFinished();
       return;
     }
@@ -1374,11 +1404,13 @@ class AudioSyncController {
           nowLocalUs - scheduledAt >= _restartAfterPlayAtUs) {
         _failures = 0;
       }
-      final expectedUs = snapshot.positionAt(sessionNowUs());
+      // The player reports the heard position, which the nudge moves on
+      // purpose: compare against the nudged expectation, not the room's.
+      final roomUs = snapshot.positionAt(sessionNowUs());
+      final expectedUs = _expectedPlayerUs(snapshot, roomUs);
       // The anchor ran past the end of the file: the track is over, not
       // drifting — a hard resync here would just re-schedule out of bounds.
-      final durationUs = loadedDurationUs.value;
-      if (durationUs != null && expectedUs >= durationUs) {
+      if (_atEnd(roomUs, expectedUs)) {
         _enterTrackFinished();
         return;
       }

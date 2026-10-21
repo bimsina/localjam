@@ -1,7 +1,7 @@
 /// Deterministic unit tests for [AudioSyncController]: the playAt time
 /// conversion arithmetic (session → local → native, with calibration, output
 /// latency, and manual nudge), pause propagation, drift slew apply/restore,
-/// and hard resync rescheduling. All clocks are scripted; the player is a
+/// hard resync rescheduling, and a nudged schedule reading as in sync. All clocks are scripted; the player is a
 /// fake that records calls and serves scripted positions; timer-driven paths
 /// run under fake_async.
 library;
@@ -292,6 +292,196 @@ void main() {
         player.scriptedPositionUs = 0;
         async.elapse(const Duration(seconds: 3));
         expect(player.calls.where((c) => c == 'positionUs').length, 3);
+
+        controller.dispose();
+        async.flushMicrotasks();
+      });
+    });
+  });
+
+  // The manual nudge (§7) moves the native schedule earlier on purpose, and
+  // `positionUs` reports the HEARD position against the platform-reported
+  // latency only (it cannot see the extra latency the nudge compensates).
+  // A nudged schedule that landed on time therefore reads `nudge` ahead of
+  // the room's anchor formula — the drift check must expect that. Before the
+  // fix it compared against the bare anchor formula: a +60 ms nudge read as
+  // +60 ms of drift on every check, past the 50 ms bound, so the controller
+  // hard-resynced, re-applied the same nudge and landed at +60 ms again —
+  // an audible skip every few seconds for anyone who nudged.
+  group('manual nudge vs the drift check (§7, §5.4)', () {
+    // Native clock = local + 250 µs; the route reports 30 ms of latency,
+    // and the fake player maps its heard instant with that same 30 ms.
+    const calibrationUs = 250;
+    const latencyUs = 30000;
+
+    void followSchedule() {
+      player
+        ..calibrationOffsetUs = calibrationUs
+        ..scriptedOutputLatencyUs = latencyUs
+        ..heardLatencyUs = latencyUs
+        ..followScheduleNativeNowUs = () => clock.localUs + calibrationUs;
+    }
+
+    test('a +60 ms nudge reads ~0 drift: no slew, no resync, no re-apply', () {
+      fakeAsync((async) {
+        followSchedule();
+        clock.sessionOffsetUs = 1000000;
+        clock.localUs = 5000000;
+        final controller = buildController();
+        final samples = <DriftSample>[];
+        controller.driftSamples.listen(samples.add);
+        controller.setManualOffsetUs(60000);
+        // Starts 750 ms from now, 45 s into the track.
+        controller.onSnapshot(
+          playingSnapshot(
+            anchorHostTimeUs: 6750000,
+            anchorPositionUs: 45000000,
+          ),
+        );
+        async.flushMicrotasks();
+        expect(player.playAtCalls, hasLength(1));
+
+        for (var i = 1; i <= 10; i++) {
+          clock.localUs = 5750000 + i * 1000000;
+          controller.checkDriftNow();
+          async.flushMicrotasks();
+        }
+
+        expect(samples, hasLength(10));
+        for (final sample in samples) {
+          expect(sample.errorUs.abs(), lessThan(1000));
+          expect(sample.action, isA<DriftNone>());
+        }
+        // What the player reads IS the nudge ahead of the room — the +60 ms
+        // the unfixed check took for drift.
+        final roomUs = controller.snapshot!.positionAt(clock.sessionNowUs());
+        expect(samples.last.actualUs - roomUs, 60000);
+        expect(samples.last.expectedUs, roomUs + 60000);
+        expect(controller.slewCount, 0);
+        expect(controller.resyncCount, 0);
+        expect(player.setRateCalls, isEmpty);
+        expect(player.playAtCalls, hasLength(1), reason: 'never re-anchored');
+        expect(player.calibrateCount, 1);
+
+        controller.dispose();
+        async.flushMicrotasks();
+      });
+    });
+
+    test('a nudge scales with the playback rate', () {
+      fakeAsync((async) {
+        followSchedule();
+        final controller = buildController();
+        controller.setManualOffsetUs(60000);
+        controller.onSnapshot(
+          playingSnapshot(anchorHostTimeUs: 0, anchorPositionUs: 0, rate: 1.25),
+        );
+        async.flushMicrotasks();
+
+        clock.localUs = 8000000;
+        controller.checkDriftNow();
+        async.flushMicrotasks();
+
+        // 60 ms of native time is 75 ms of media at 1.25×.
+        expect(controller.lastSample?.expectedUs, 10000000 + 75000);
+        expect(controller.lastSample?.errorUs.abs(), lessThan(1000));
+        expect(controller.lastSample?.action, isA<DriftNone>());
+        expect(controller.resyncCount, 0);
+
+        controller.dispose();
+        async.flushMicrotasks();
+      });
+    });
+
+    test('changing the nudge mid-track re-applies once, then reads 0', () {
+      fakeAsync((async) {
+        followSchedule();
+        final controller = buildController();
+        controller.onSnapshot(
+          playingSnapshot(anchorHostTimeUs: 0, anchorPositionUs: 0),
+        );
+        async.flushMicrotasks();
+
+        clock.localUs = 10000000;
+        controller.checkDriftNow();
+        async.flushMicrotasks();
+        expect(controller.lastSample?.errorUs.abs(), lessThan(1000));
+
+        for (final nudgeUs in [60000, -40000, 120000]) {
+          final playAtsBefore = player.playAtCalls.length;
+          controller.setManualOffsetUs(nudgeUs);
+          async.flushMicrotasks();
+          expect(
+            player.playAtCalls,
+            hasLength(playAtsBefore + 1),
+            reason: 'the new nudge is heard at once',
+          );
+
+          for (var i = 0; i < 3; i++) {
+            clock.localUs += 1000000;
+            controller.checkDriftNow();
+            async.flushMicrotasks();
+            expect(controller.lastSample?.errorUs.abs(), lessThan(1000));
+            expect(controller.lastSample?.action, isA<DriftNone>());
+          }
+          expect(
+            player.playAtCalls,
+            hasLength(playAtsBefore + 1),
+            reason: 'and then left alone',
+          );
+        }
+        expect(controller.slewCount, 0);
+        expect(controller.resyncCount, 0);
+
+        controller.dispose();
+        async.flushMicrotasks();
+      });
+    });
+
+    test('a nudged device back in the foreground does not re-anchor', () {
+      fakeAsync((async) {
+        followSchedule();
+        final controller = buildController();
+        controller.setManualOffsetUs(60000);
+        controller.onSnapshot(
+          playingSnapshot(anchorHostTimeUs: 0, anchorPositionUs: 0),
+        );
+        async.flushMicrotasks();
+
+        clock.localUs = 30000000;
+        controller.reverifySync();
+        async.flushMicrotasks();
+
+        expect(player.playAtCalls, hasLength(1));
+        expect(controller.lastSample?.action, isA<DriftNone>());
+        expect(controller.resyncCount, 0);
+
+        controller.dispose();
+        async.flushMicrotasks();
+      });
+    });
+
+    test('a nudge that puts the heard position past the end finishes the '
+        'track instead of resyncing', () {
+      fakeAsync((async) {
+        final controller = buildController();
+        controller.setManualOffsetUs(60000);
+        controller.onSnapshot(
+          playingSnapshot(anchorHostTimeUs: 0, anchorPositionUs: 0),
+        );
+        async.flushMicrotasks();
+
+        // The room is 30 ms short of the 180 s end; the nudged player has
+        // run out and sits at the end — 90 ms behind the nudged expectation
+        // were the end not taken into account.
+        clock.localUs = 179970000;
+        player.scriptedPositionUs = 179940000;
+        controller.checkDriftNow();
+        async.flushMicrotasks();
+
+        expect(controller.trackFinished.value, isTrue);
+        expect(controller.resyncCount, 0);
+        expect(player.playAtCalls, hasLength(1));
 
         controller.dispose();
         async.flushMicrotasks();
