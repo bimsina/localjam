@@ -210,10 +210,20 @@ Future<bool> joinUriIsLocalOnlyResolved(
 /// The one parser is [JoinLink]; this keeps the URI in the form it came in
 /// (a guest's own invite shows what it was given). Whatever the form, the
 /// on-LAN gate ([joinUriIsLocalOnlyResolved]) judges every candidate.
+///
+/// Never throws: the scanner, the paste dialog (on every keystroke) and
+/// deep links call it bare. [JoinLink] refuses a candidate it could not
+/// render, so building the URI should not fail, but a link that somehow
+/// cannot be rendered is no link (review 2026-10-21: `host=1.2.3.4:99`
+/// used to parse and then throw here).
 Uri? parseJoinUri(String text) {
   final link = JoinLink.parse(text);
   if (link == null) return null;
-  return _schemeOf(text) == 'http' ? link.toHttpUri() : link.toLocaljamUri();
+  try {
+    return _schemeOf(text) == 'http' ? link.toHttpUri() : link.toLocaljamUri();
+  } on FormatException {
+    return null;
+  }
 }
 
 String _schemeOf(String text) {

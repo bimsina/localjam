@@ -33,9 +33,10 @@ abstract class JamMediaSink {
 }
 
 /// A [JamMediaSink] that keeps the body in memory — what `fetchMedia` uses,
-/// and the natural sink in a browser. A fetch can only grow it to the
-/// playlist entry's declared `sizeBytes` plus `JamGuestClient.sizeSlackBytes`
-/// (§6.2), so its size is the host's claim, bounded.
+/// and the natural sink in a browser. A fetch can only grow it to the size
+/// the host gave (the playlist entry's `sizeBytes` or the `Content-Length`)
+/// plus `JamGuestClient.sizeSlackBytes`, and never past the fetch's
+/// `maxBytes` (§6.2), so its size is the host's claim, bounded.
 class JamBytesMediaSink extends JamMediaSink {
   final BytesBuilder _builder = BytesBuilder(copy: false);
 

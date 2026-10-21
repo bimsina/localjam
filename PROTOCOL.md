@@ -13,9 +13,13 @@ browser guest its page (§1.1). Neither changes a frame: a 1.0 host never
 serves the page and never prints the http form, and a 1.2 host still speaks
 to a 1.0 guest exactly as before. The one place the two meet is a person
 with a phone: a 1.0 or 1.1 joiner shown an http QR code cannot read it as an
-invitation, because the only form it parses is `localjam://`. A 1.2 host can
-still hand such a joiner that form (an "Open in app" link, the CLI's second
-line), but the code on the screen is for cameras and browsers first.
+invitation, because the only form it parses is `localjam://`. That form
+stays valid — deep links and the browser page's "Open in app" button use
+it, and the reference CLI prints it on a second line — but the QR code,
+share text and copied link of a 1.2 host carry the http form only. A joiner
+that cannot read it joins from its Nearby list (§1), which carries no URL
+and reads the same in every 1.x. (No 1.0 or 1.1 app was released; this is
+for other implementations.)
 
 Design goals, in priority order:
 
@@ -86,16 +90,22 @@ http://192.168.1.7:44100/join#v=1&token=<sessionToken>&name=RoadTrip&host=192.16
   and the URL's own host SHOULD be the first of them. An IPv6 literal is
   bracketed in the URL's authority, as in any URL (`[fe80::1%25en0]`), and
   bare in the `host` list.
-- The token rides the fragment because a fragment never leaves the device:
-  it is not in the request line, not in a `Referer`, not in a log.
+- The token rides the fragment because a fragment is never part of an HTTP
+  request: it is not in the request line and not in a `Referer`, so the
+  request for the page, and any log of it, does not carry the token. That
+  is all it buys. The browser keeps the whole URL, fragment and all, in its
+  history (which it may sync to its user's other devices), and the token
+  crosses the LAN in cleartext anyway, in `hello` and as the media plane's
+  bearer (§9).
 - A joiner accepts both forms and builds the same join parameters from
   either; whatever door a link came in by, the on-LAN rule (§9) applies to
   every candidate. A browser guest reads its own fragment, and its origin is
   its host.
 - A 1.2 host's QR code and share text carry the http form. It picks the
   URL's host the way it picks the first `host` candidate. The `localjam://`
-  form stays valid — "Open in app" deep links use it — and is what a
-  pre-1.2 joiner understands (see the caveat at the top).
+  form stays valid — "Open in app" deep links use it — and is the only form
+  a pre-1.2 joiner understands, which therefore joins from Nearby rather
+  than from the QR (see the caveat at the top).
 
 Secondary: mDNS/Bonjour advertisement for in-app "nearby rooms" listing.
 Hosts that opt in ("discoverable") advertise `_localjam._tcp` with TXT
@@ -157,7 +167,7 @@ after loading goes through `/ws`, `/media` and `/artwork` like any guest's.
 | Route | Serves |
 |---|---|
 | `GET /` and `GET /join` | the page's `index.html` — `Content-Type: text/html; charset=utf-8`, `Cache-Control: no-store` |
-| `GET /web/<path>` | the bundle file whose path is exactly `<path>` (percent-decoded) — its own `Content-Type`, `Cache-Control: no-cache`, a strong `ETag` (the quoted first 16 hex characters of the file's sha256), and `304 Not Modified` with no body when `If-None-Match` names that `ETag` (or `*`) |
+| `GET /web/<path>` | the bundle file whose path is `<path>` — percent-decoded, and compared exactly once the HTTP stack has normalised the request path (below) — with its own `Content-Type`, `Cache-Control: no-cache` (`no-store` for `index.html`, which is the page), a strong `ETag` (the quoted first 16 hex characters of the file's sha256), and `304 Not Modified` when `If-None-Match` names that `ETag` (or `*`): status and headers only, with no `Content-Type` and no body framing |
 | `HEAD` on either | the same status and headers, no body |
 | any other method on either | `405`, `Allow: GET, HEAD` |
 | `GET /web/<anything else>` | `404` |
@@ -171,12 +181,24 @@ after loading goes through `/ws`, `/media` and `/artwork` like any guest's.
 - **Everything else still applies.** The routes sit behind the same LAN-only
   rule (§9) and the same per-connection limits, header budget and
   `Connection: close` (§9.1) as every other request; a host never parses
-  more of a page request than of any other.
+  more of a page request than of any other. And because they need no
+  token, a response has a send deadline (§9.1): a client that asks for the
+  biggest bundle file and reads none of it loses the connection, rather
+  than keeping one of the host's connection slots for as long as it likes.
 - **Served from memory, from a fixed set.** The host holds the bundle as an
   immutable map of path → bytes and MIME type, loaded once (the reference
   app from its asset bundle, the reference CLI from `--web-dir`), and serves
   exactly its keys: there is no filesystem behind `/web/`, so no path —
   `..`, an encoded `%2e%2e`, a doubled slash — can reach anything else.
+  (The reference host's HTTP stack removes dot segments from a request
+  path before routing, RFC 3986 §5.2.4, so `/web/a/../b.js` is looked up as
+  `b.js` and `/web/../x` is not a page route at all; what is compared with
+  the keys is the path after that, percent-decoded.)
+- **The page is never stored.** Wherever it is served — `/`, `/join`, or
+  `/web/index.html` should anything ask for it there — the page carries
+  `no-store`, so a phone that scanned last week's room never runs last
+  week's player against this week's host. The rest of the bundle is
+  revalidated on every load instead (`no-cache` and the `ETag`).
 - **No player, no problem.** A host without a bundle (or without its
   `index.html`) answers `/` and `/join` with a small built-in page instead —
   "This LocalJam room has no browser player. Install the app." — that loads
@@ -850,6 +872,16 @@ that item and keeps the rest of the playlist (§2.1).
   longer than a few seconds (the reference guest uses 10 s), report
   `media_status: none`, and retry later. A transfer from a host that died
   mid-body otherwise never ends.
+- A guest SHOULD bound a body by the size it was given — the item's
+  `sizeBytes`, or the `Content-Length` when `sizeBytes` is 0 or past the
+  guest's own ceiling — plus a little slack, never past that ceiling (the
+  reference guest: 64 KB of slack, 512 MB, the reference host's cap on one
+  upload), and abandon the transfer past it. The host's word alone is no
+  bound: a browser tab holds the body in memory.
+- A fetch the guest reported `fetching` for that ends without the file —
+  a stall, a break, an over-size or mismatched body, or the guest's own
+  storage failing to open or flush — is reported `none` (§6.3), so the
+  host's readiness gate never waits on it.
 - One request per connection: hosts MAY answer every media-plane request
   with `Connection: close` (the reference host does, §9.1), so guests MUST
   NOT depend on keep-alive. On a LAN a fresh connection per transfer costs
@@ -1198,6 +1230,7 @@ a reject, a close, or a 4xx/5xx.
 | Playlist items from guests | 500 | `507` |
 | Uploads in flight, one peer | 2 | `429` |
 | Upload body progress | ≥ 32 KB/s over every 30 s | `408`, upload abandoned |
+| Time to send a page response (§1.1), which needs no token | the longer of 10 s and its size at 32 KB/s | connection destroyed |
 | Body of a refused upload read (and dropped) before answering | 64 MB, within 10 s | answered and closed at once |
 | Cover art in one upload | 8 MB | art dropped, track kept |
 | Tag bytes read from one upload | ≈ 8 MB per read, ≈ 17 MB in all | art (or tags) skipped |

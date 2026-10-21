@@ -5,6 +5,7 @@ library;
 
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart';
@@ -110,6 +111,16 @@ class JamGuestClient {
   /// pads a response (a trailing newline, a re-encode that grew a few bytes)
   /// still fails on the honest sha256 check rather than on this one.
   static const int sizeSlackBytes = 64 * 1024;
+
+  /// The default ceiling on one media body (§6.2), whatever the host
+  /// declares: the same 512 MB as the reference host's cap on one upload
+  /// (§9.1), so anything a guest added fits. Without it the bound on a fetch
+  /// would be the host's word alone — `sizeBytes: 0` means "unknown", and a
+  /// JSON number such as `1e300` decodes as an `int` under dart2js — and a
+  /// host that kept sending could fill a browser tab's memory until it died.
+  /// A host's own file bigger than this does not reach its guests unless
+  /// the caller passes a larger `maxBytes`.
+  static const int defaultMaxMediaBytes = 512 * 1024 * 1024;
 
   /// Reads [joinUri] in either join form (§1 Discovery) — `localjam://join?…`
   /// or the 1.2 `http://host:port/join#…` URL — through [JoinLink], tries
@@ -706,10 +717,13 @@ class JamGuestClient {
   /// docs promise ([JamMediaSink]): opened only after a `200`, closed always,
   /// abandoned before `none` is reported.
   ///
-  /// The transfer is also bounded by the playlist entry's `sizeBytes`
-  /// ([sizeSlackBytes] of slack): a host that keeps sending past the size it
-  /// advertised is either broken or hostile, and either way the guest stops
-  /// taking bytes instead of filling the device's disk (or memory). The
+  /// The transfer is also bounded by the size the host gave for it: the
+  /// playlist entry's `sizeBytes` — or, when that is 0 (unknown) or past
+  /// [maxBytes], the response's `Content-Length` — plus [sizeSlackBytes],
+  /// and never more than [maxBytes] (default [defaultMaxMediaBytes]), which
+  /// is also the bound when the host gave neither. A host that keeps sending past
+  /// that is either broken or hostile, and either way the guest stops taking
+  /// bytes instead of filling the device's disk (or a tab's memory). The
   /// digest check alone is too late — it only fires once the whole body has
   /// landed.
   ///
@@ -722,8 +736,10 @@ class JamGuestClient {
   /// and the platform's connection error when the connection breaks
   /// ([JamTransportException] in a browser; `dart:io`'s `SocketException` or
   /// `HttpException` natively). A stall, an over-size body and a digest
-  /// mismatch abandon the sink and report `media_status: none`, and so does
-  /// a connection that breaks mid-body (the error propagates after that).
+  /// mismatch abandon the sink and report `media_status: none`, and so do a
+  /// connection that breaks mid-body and a sink whose [JamMediaSink.open] or
+  /// [JamMediaSink.close] throws (a full disk): that error propagates after
+  /// the report, so the host's §6.3 gate never waits on a fetch that ended.
   ///
   /// With [reportReady] false the verified body is NOT reported `ready`:
   /// the caller reports it once the bytes are usable, which is later than
@@ -735,6 +751,7 @@ class JamGuestClient {
     JamMediaSink sink, {
     void Function(double progress)? onProgress,
     bool reportReady = true,
+    int maxBytes = defaultMaxMediaBytes,
   }) async {
     final item = _playlist.firstWhere(
       (i) => i.mediaId == mediaId,
@@ -767,18 +784,32 @@ class JamGuestClient {
         progress: 0,
       ),
     );
-    final total = item.sizeBytes > 0 ? item.sizeBytes : response.contentLength;
+    // The host's two words for the size, each only when it is one: zero or
+    // less is "unknown", and so is more than [maxBytes] (§6.1's `sizeBytes`
+    // is a JSON number, and dart2js takes `1e300` for an int).
+    int given(int size) => size > 0 && size <= maxBytes ? size : 0;
+    final declared = given(item.sizeBytes);
+    final framed = given(response.contentLength);
+    // The playlist's size is the item's (its sha256 is of exactly that
+    // many bytes), so it wins when there is one; the response's framing
+    // stands in when there is not, and [maxBytes] when neither is given.
+    final total = declared > 0 ? declared : framed;
+    final limit = total > 0 ? min(total + sizeSlackBytes, maxBytes) : maxBytes;
     final digestSink = _DigestSink();
     final hasher = sha256.startChunkedConversion(digestSink);
     try {
       await sink.open();
-    } catch (_) {
+    } catch (e, trace) {
+      // `fetching` has been reported: the host's §6.3 gate counts this guest
+      // in until it hears otherwise. The sink gets its `close` (always) and
+      // its `abandon` (a failure) like any failed transfer.
       response.abort();
-      rethrow;
+      try {
+        await sink.close();
+      } catch (_) {}
+      await _abandonFetch(mediaId, sink);
+      Error.throwWithStackTrace(e, trace);
     }
-    // The declared size plus slack: 0 means "unknown" (a legacy item without
-    // sizeBytes and a chunked response), where there is nothing to enforce.
-    final limit = item.sizeBytes > 0 ? item.sizeBytes + sizeSlackBytes : 0;
     var received = 0;
     var lastReported = 0.0;
     var overSize = false;
@@ -787,7 +818,7 @@ class JamGuestClient {
     StackTrace? brokenTrace;
     try {
       await for (final chunk in _idleBounded(response)) {
-        if (limit > 0 && received + chunk.length > limit) {
+        if (received + chunk.length > limit) {
           overSize = true;
           break;
         }
@@ -815,8 +846,17 @@ class JamGuestClient {
       // The connection broke mid-body: what arrived is a fragment.
       broken = e;
       brokenTrace = trace;
-    } finally {
+    }
+    try {
       await sink.close();
+    } catch (e, trace) {
+      // A sink that cannot flush (a native file on a full disk) holds no
+      // usable body, however the transfer went; report it as a break unless
+      // something already broke first.
+      if (broken == null && stalled == null) {
+        broken = e;
+        brokenTrace = trace;
+      }
     }
     hasher.close();
 
@@ -840,7 +880,9 @@ class JamGuestClient {
       // subscription, which tears the connection down: nothing more arrives.
       await _abandonFetch(mediaId, sink);
       throw StateError(
-        'media $mediaId exceeded its declared size (${item.sizeBytes} bytes)',
+        'media $mediaId exceeded its declared size: $limit bytes at most '
+        '(sizeBytes ${item.sizeBytes}, Content-Length '
+        '${response.contentLength})',
       );
     }
 

@@ -93,12 +93,20 @@ iPhone Safari guest): see `docs/design/WEB_GUEST.md`.
     travels in a request (§1). The host's QR, Share Link and Copy Link carry
     it, and so do nearby rooms; scanning, pasting and deep links accept both
     forms through one parser (`JoinLink` in `localjam_core`), and every
-    candidate of either form passes the same on-LAN check (§9). Caveat: a
-    1.0/1.1 app cannot read an http QR; the `localjam://` form still works.
+    candidate of either form passes the same on-LAN check (§9). The token
+    in the fragment is kept out of requests and `Referer`s, not secret: it
+    is in browser history, and on the LAN in `hello` as always (§9).
+    Caveat: a 1.0/1.1 app cannot read an http QR. The `localjam://` form
+    stays valid for deep links and the page's "Open in app", but the host
+    app's QR, Share and Copy carry only the http form, so such an app joins
+    from Nearby (no 1.0/1.1 app was released).
   - The host serves a browser guest's page without a token (§1.1): `GET /`
     and `/join` answer with the page (`no-store`), `GET /web/<path>` with its
-    bundle from memory (`no-cache`, sha256 `ETag`, `304`), under the same
-    LAN-only rule and §9.1 limits as everything else. With no bundle, a small
+    bundle from memory (`no-cache`, sha256 `ETag`, `304`; `index.html`
+    there is `no-store` too), under the same LAN-only rule and §9.1 limits
+    as everything else, plus a send deadline — the longer of 10 s and the
+    response's size at 32 KB/s — so a client that reads nothing cannot keep
+    a connection slot. With no bundle, a small
     built-in page says to install the app. `localjam host --web-dir <path>`
     serves a directory.
   - Plaintext is the decision for every client, browsers included: listening

@@ -13,8 +13,11 @@ import 'package:meta/meta.dart';
 /// links use. The http form is 1.2: a phone camera opens it with no app
 /// installed, and the host serves its browser player at that very URL
 /// (§1.1). Its fragment is a query string with the `localjam://` query's
-/// keys and encoding; the fragment never travels in a request or a
-/// `Referer`, so the token stays on the device that scanned it.
+/// keys and encoding. A fragment is never part of an HTTP request or a
+/// `Referer`, so the token is not in the request for the page or in any
+/// log of one. That is all it buys: the browser keeps the whole URL in its
+/// history (which it may sync), and the token crosses the LAN in cleartext
+/// anyway, in `hello` and as the media plane's bearer (§9).
 ///
 /// This is the one parser for both. It decides what a link *says* and
 /// nothing about whether to trust it: the on-LAN rule (§9) is the joiner's
@@ -32,13 +35,15 @@ class JoinLink {
     if (this.hosts.isEmpty) {
       throw ArgumentError.value(hosts, 'hosts', 'has no candidates');
     }
-    for (final host in this.hosts) {
-      if (!_isPlausibleHost(host)) {
-        throw ArgumentError.value(host, 'hosts', 'is not a host');
-      }
-    }
     if (port < 1 || port > 65535) {
       throw RangeError.range(port, 1, 65535, 'port');
+    }
+    for (final host in this.hosts) {
+      // Every candidate, not just the first: [copyWith] can reorder them,
+      // and [toHttpUri] must never throw.
+      if (!_isPlausibleHost(host) || !_rendersAsAuthority(host, port)) {
+        throw ArgumentError.value(host, 'hosts', 'is not a host');
+      }
     }
     if (v != null && v! < 1) throw RangeError.value(v!, 'v');
   }
@@ -193,10 +198,41 @@ class JoinLink {
   /// A candidate is an IP literal or a DNS name: no whitespace, nothing that
   /// would change what a URL built from it means (`/`, `?`, `#`, `@`,
   /// brackets). Whether it is on the LAN is the joiner's question (§9).
-  static bool _isPlausibleHost(String host) =>
-      host.isNotEmpty && !_notInHost.hasMatch(host);
+  ///
+  /// A `:` makes it an IPv6 literal, which must parse as one — `1.2.3.4:99`
+  /// or `a:b` is not a host, and building the http form's authority from it
+  /// would throw — with at most one zone id after a `%` (`fe80::1%en0`),
+  /// non-empty and holding no further `%`. Without a `:`, a `%` has no
+  /// place in a name or an IPv4 address.
+  static bool _isPlausibleHost(String host) {
+    if (host.isEmpty || _notInHost.hasMatch(host)) return false;
+    final zoneAt = host.indexOf('%');
+    if (!host.contains(':')) return zoneAt < 0;
+    if (zoneAt >= 0) {
+      final zone = host.substring(zoneAt + 1);
+      if (zone.isEmpty || zone.contains('%')) return false;
+    }
+    try {
+      Uri.parseIPv6Address(zoneAt < 0 ? host : host.substring(0, zoneAt));
+      return true;
+    } on FormatException {
+      return false;
+    }
+  }
 
   static final RegExp _notInHost = RegExp(r'[\s/?#@\[\]\\,<>"]');
+
+  /// Whether [host] can be the http form's authority ([toHttpUri]) — the
+  /// last word, should [_isPlausibleHost] ever let through something `Uri`
+  /// will not build.
+  static bool _rendersAsAuthority(String host, int port) {
+    try {
+      Uri(scheme: 'http', host: host, port: port);
+      return true;
+    } on FormatException {
+      return false;
+    }
+  }
 
   /// The `localjam://join?…` form (§1), for "Open in app" deep links and
   /// for joiners that predate 1.2. Keys in the order hosts have always

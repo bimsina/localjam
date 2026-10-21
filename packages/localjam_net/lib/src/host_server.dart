@@ -214,7 +214,8 @@ class JamHostServer {
   /// bound how long and how many uploads may hold their reservations
   /// (§6.4). [maxArtworkBytes] caps the cover art the host will extract
   /// from an upload and serve, and bounds what reading an upload's tags may
-  /// cost at all.
+  /// cost at all. [minPageSendTime] and [minPageBytesPerSecond] set the
+  /// deadline by which a page response (§1.1) must have been sent.
   ///
   /// [readinessWait] is the §6.3 readiness gate: how long starting a newly
   /// selected track may wait for guests that are mid-transfer of it (zero
@@ -251,6 +252,8 @@ class JamHostServer {
     this.uploadStallTimeout = const Duration(seconds: 30),
     this.minUploadBytesPerSecond = 32 * 1024,
     this.maxUploadsPerPeer = 2,
+    this.minPageSendTime = const Duration(seconds: 10),
+    this.minPageBytesPerSecond = 32 * 1024,
     this.admitLocalAddress,
     this.staticSite,
   }) : token = token ?? _randomHex(16),
@@ -415,6 +418,20 @@ class JamHostServer {
   /// Upper bound on uploads one peer may have in flight at once (§6.4,
   /// default 2). Further uploads are answered `429` until one finishes.
   final int maxUploadsPerPeer;
+
+  /// The least time a page response (§1.1) is given to be sent: a response
+  /// of `n` bytes has `max(minPageSendTime, n ÷ minPageBytesPerSecond)`,
+  /// and a connection still sending at its deadline is destroyed (§9.1).
+  /// The page routes need no token, so without it any LAN device could ask
+  /// for the biggest bundle file, read none of it, and hold a connection
+  /// slot for as long as it liked — a handful of addresses, every slot
+  /// (review 2026-10-21: six such sockets held a per-remote cap of six for
+  /// as long as the test ran). Default 10 s.
+  final Duration minPageSendTime;
+
+  /// The slowest a page response may be read (default 32 KB/s, the same
+  /// floor as [minUploadBytesPerSecond]); see [minPageSendTime].
+  final int minPageBytesPerSecond;
 
   /// Whether a connection that arrived on the host's local address `local`
   /// may be served (§9). Null — the default — serves every interface the
@@ -1356,11 +1373,16 @@ class JamHostServer {
 
   /// The page's own caching: never stored, so a phone that scanned last
   /// week's room never runs last week's player against this week's host.
+  /// That holds for every route the page is served at — `/`, `/join`, and
+  /// `/web/index.html` too, should anything ask for it there.
   static const String _indexCacheControl = 'no-store';
 
   /// Bundle files: revalidated on every load (`no-cache`), and the `ETag`
   /// makes that a `304` with no body unless the host's bundle changed.
   static const String _webCacheControl = 'no-cache';
+
+  /// The bundle key that is the page itself (see [_indexCacheControl]).
+  static const String _indexKey = 'index.html';
 
   /// `GET /` and `GET /join` (§1.1): the page, unauthenticated — the token
   /// rides the URL fragment, which no request carries, and is needed to do
@@ -1376,8 +1398,40 @@ class JamHostServer {
           .html // text/html; charset=utf-8
       ..set(HttpHeaders.cacheControlHeader, _indexCacheControl);
     res.contentLength = bytes.length;
-    res.add(bytes);
-    await res.close();
+    await _sendPage(req, bytes);
+  }
+
+  /// Sends a page response (§1.1) — [bytes] as its body, or none — and
+  /// closes it, by the deadline of [minPageSendTime]: a connection still
+  /// sending then is destroyed, freeing its slot (§9.1). The route needs no
+  /// token, so a reader that takes nothing must not be able to keep it.
+  Future<void> _sendPage(HttpRequest req, [Uint8List? bytes]) async {
+    final res = req.response;
+    final atRate = Duration(
+      microseconds:
+          (bytes?.length ?? 0) *
+          Duration.microsecondsPerSecond ~/
+          max(1, minPageBytesPerSecond),
+    );
+    final deadline = atRate > minPageSendTime ? atRate : minPageSendTime;
+    // `dart:io` destroys the connection at a response's deadline; the race
+    // below is so this handler is not left waiting on a close that a
+    // destroyed connection may never complete.
+    res.deadline = deadline;
+    final expired = Completer<void>();
+    final watchdog = Timer(deadline, expired.complete);
+    try {
+      if (bytes != null) res.add(bytes);
+      await Future.any([
+        res.close().then<void>((_) {}, onError: (Object _) {}),
+        expired.future,
+      ]);
+    } finally {
+      watchdog.cancel();
+      try {
+        res.deadline = null; // Sent in time: nothing left to destroy.
+      } catch (_) {}
+    }
   }
 
   static final Uint8List _builtInPageBytes = Uint8List.fromList(
@@ -1385,10 +1439,12 @@ class JamHostServer {
   );
 
   /// `GET /web/<path>` (§1.1): the bundle file keyed exactly [rawPath]
-  /// (percent-decoded), with its MIME, `Cache-Control: no-cache` and its
-  /// `ETag`, or `304` when `If-None-Match` already names that `ETag`. Only
-  /// keys of [staticSite] are ever served — there is no filesystem behind
-  /// this — so anything else, traversal attempts included, is `404`.
+  /// (percent-decoded, after `dart:io` has removed dot segments from the
+  /// request path, RFC 3986 §5.2.4, before routing ever sees it), with its
+  /// MIME, `Cache-Control: no-cache` (`no-store` for the page itself) and
+  /// its `ETag`, or `304` when `If-None-Match` already names that `ETag`.
+  /// Only keys of [staticSite] are ever served — there is no filesystem
+  /// behind this — so anything else, traversal attempts included, is `404`.
   Future<void> _serveWebFile(HttpRequest req, String rawPath) async {
     final res = req.response;
     if (await _refusedMethod(req)) return;
@@ -1401,15 +1457,17 @@ class JamHostServer {
     final file = path == null ? null : staticSite?.files[path];
     if (file == null) {
       res.statusCode = HttpStatus.notFound;
-      await res.close();
+      await _sendPage(req);
       return;
     }
     res.headers
-      ..set(HttpHeaders.cacheControlHeader, _webCacheControl)
+      ..set(
+        HttpHeaders.cacheControlHeader,
+        path == _indexKey ? _indexCacheControl : _webCacheControl,
+      )
       ..set(HttpHeaders.etagHeader, file.etag);
     if (_etagMatches(req.headers[HttpHeaders.ifNoneMatchHeader], file.etag)) {
-      res.statusCode = HttpStatus.notModified;
-      await res.close();
+      await _sendNotModified(res);
       return;
     }
     res.statusCode = HttpStatus.ok;
@@ -1419,8 +1477,29 @@ class JamHostServer {
       res.headers.contentType = ContentType.binary;
     }
     res.contentLength = file.length;
-    res.add(file.bytes);
-    await res.close();
+    await _sendPage(req, file.bytes);
+  }
+
+  /// A `304` is its head and nothing else (RFC 9110 §15.4.5): no
+  /// `Content-Type` — `dart:io` would otherwise send its default,
+  /// `text/plain` — and no framing, where `dart:io` would write
+  /// `Content-Length: 0` on a GET (which a 304 must not send unless it is
+  /// the 200's length, §8.6) and `Transfer-Encoding: chunked` on a HEAD. So
+  /// the head is written by detaching the socket, which writes the headers
+  /// as they stand and frames nothing, and the connection is then closed
+  /// (§9.1: one request per connection) with the guard's usual linger.
+  Future<void> _sendNotModified(HttpResponse res) async {
+    res.statusCode = HttpStatus.notModified;
+    res.headers
+      ..contentType = null
+      ..chunkedTransferEncoding = false;
+    final socket = await res.detachSocket();
+    try {
+      await socket.flush();
+    } catch (_) {
+      // Gone already.
+    }
+    unawaited(socket.close().then<void>((_) {}, onError: (Object _) {}));
   }
 
   /// `GET` (and `HEAD`, which `dart:io` answers with the same headers and

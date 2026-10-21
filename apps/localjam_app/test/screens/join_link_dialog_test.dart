@@ -163,6 +163,32 @@ void main() {
     expect((await pending)?.queryParameters['token'], 'abc123');
   });
 
+  testWidgets('a link whose host cannot be rendered is just not a link '
+      '(review 2026-10-21)', (tester) async {
+    const bad = 'http://192.168.1.7:44100/join#token=a&host=1.2.3.4:99';
+    mockClipboard(bad);
+    await openDialog(tester);
+
+    // Paste: kept out, like any other non-link — no exception.
+    await tester.tap(find.text(JamJoinLinkStrings.paste));
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+    expect(find.text(JamJoinLinkStrings.invalid), findsOneWidget);
+
+    // Typed: every keystroke rebuilds with it, and Join stays dead.
+    await tester.enterText(find.byType(CupertinoTextField), bad);
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+    await tapJoin(tester);
+    expect(find.text(JamJoinLinkStrings.title), findsOneWidget);
+
+    // Submitted: says why, on the field.
+    await tester.testTextInput.receiveAction(TextInputAction.go);
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+    expect(find.text(JamJoinLinkStrings.invalid), findsOneWidget);
+  });
+
   testWidgets('Return on a bad link says why, on the field', (tester) async {
     mockClipboard(null);
     await openDialog(tester);

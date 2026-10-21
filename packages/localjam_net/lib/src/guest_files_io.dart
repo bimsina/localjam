@@ -66,9 +66,11 @@ extension JamGuestClientFiles on JamGuestClient {
   /// body straight to [destination] while hashing incrementally — the file
   /// is never held in memory. Reports `media_status` upstream (§6.3):
   /// `fetching` with progress while downloading, `ready` once the sha256
-  /// digest matches the playlist entry. Bounded by the entry's `sizeBytes`
-  /// ([JamGuestClient.sizeSlackBytes] of slack), so a host that keeps
-  /// sending cannot fill the disk.
+  /// digest matches the playlist entry. Bounded as
+  /// [JamGuestClient.fetchMediaToSink] bounds every fetch — the size the
+  /// host gave plus [JamGuestClient.sizeSlackBytes], at most
+  /// [JamGuestClient.defaultMaxMediaBytes] — so a host that keeps sending
+  /// cannot fill the disk.
   ///
   /// [onProgress] receives values in [0, 1]. Returns [destination]. Throws
   /// [ArgumentError] if [mediaId] is not in the current playlist,
