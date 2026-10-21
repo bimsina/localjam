@@ -153,6 +153,43 @@ void main() {
       await guest.done.timeout(const Duration(seconds: 2));
     });
 
+    test('the ping schedule and the liveness watchdog tick from the '
+        'worker, not from page timers a hidden tab throttles (§3.3)', () async {
+      expect(JamTicker.usesWorker, isTrue);
+      // Every Timer.periodic the guest makes goes through this zone: none
+      // may, or a background tab would ping once a minute.
+      var pagePeriodic = 0;
+      var clockReads = 0;
+      final guest = await runZoned(
+        () => JamGuestClient.connect(
+          Uri.parse(info['joinUri']! as String),
+          clientName: 'browser ticker',
+          clientKind: 'web',
+          pingInterval: const Duration(milliseconds: 200),
+          // t0 of every ping and t3 of every frame (§4): counts the pings.
+          localClockUs: () {
+            clockReads++;
+            return monotonicNowUs();
+          },
+        ),
+        zoneSpecification: ZoneSpecification(
+          createPeriodicTimer: (self, parent, zone, period, f) {
+            pagePeriodic++;
+            return parent.createPeriodicTimer(zone, period, f);
+          },
+        ),
+      );
+      addTearDown(guest.close);
+      // Past the join burst (8 pings over 0.7 s): only the steady schedule.
+      await Future<void>.delayed(const Duration(seconds: 1));
+      final before = clockReads;
+      await Future<void>.delayed(const Duration(seconds: 1));
+      // ~5 pings and their pongs, two reads each.
+      expect(clockReads - before, greaterThanOrEqualTo(6));
+      expect(pagePeriodic, 0, reason: 'no page-timer schedule');
+      expect(guest.hostSilent, isFalse);
+    });
+
     test('the self-healing session joins too', () async {
       final session = await JamGuestSession.connect(
         Uri.parse(info['joinUri']! as String),

@@ -22,5 +22,6 @@ export 'package:localjam_core/localjam_core.dart';
 export 'src/guest_client.dart';
 export 'src/guest_errors.dart';
 export 'src/guest_session.dart';
+export 'src/jam_ticker.dart';
 export 'src/media_sink.dart';
 export 'src/monotonic.dart';

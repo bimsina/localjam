@@ -18,6 +18,7 @@ export 'src/guest_errors.dart';
 export 'src/guest_files_io.dart';
 export 'src/guest_session.dart';
 export 'src/host_server.dart';
+export 'src/jam_ticker.dart';
 export 'src/media_metadata.dart';
 export 'src/media_sink.dart';
 export 'src/monotonic.dart';
