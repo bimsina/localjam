@@ -12,6 +12,10 @@ import 'package:localjam_app/src/design/theme.dart';
 import 'package:localjam_app/src/state/session_controller.dart';
 import 'package:localjam_app/src/util/format.dart';
 import 'package:localjam_app/src/design/tokens.dart';
+import 'package:localjam_app/src/util/media_picking.dart';
+import 'package:localjam_app/src/widgets/buttons.dart';
+import 'package:localjam_app/src/widgets/catalog_sheet.dart';
+import 'package:localjam_app/src/widgets/library_sheet.dart';
 import 'package:localjam_app/src/widgets/queue_sheet.dart';
 import 'package:localjam_app/src/widgets/track_row.dart';
 import 'package:localjam_client/localjam_client.dart';
@@ -22,6 +26,25 @@ import '../harness.dart';
 /// Three real files, generated per test, so the engine has something it can
 /// actually register (see fixtures.dart — no gitignored media).
 List<String> _media() => makeTestTracks();
+
+/// Two songs over real files, as the host's shared library.
+class _Library extends JamCatalogSource {
+  _Library(this.files);
+
+  final Map<String, String> files;
+
+  @override
+  Future<List<CatalogEntry>> list() async => const [
+    CatalogEntry(catalogId: 'c_1', title: 'Low Tide'),
+    CatalogEntry(catalogId: 'c_2', title: 'Night Drive'),
+  ];
+
+  @override
+  Future<File?> open(String catalogId) async {
+    final path = files[catalogId];
+    return path == null ? null : File(path);
+  }
+}
 
 /// Polls on the real clock — the engines run over actual sockets.
 Future<bool> _waitFor(
@@ -338,6 +361,105 @@ void main() {
     // With nothing to do about it, the empty queue is one centred line.
     expect(find.text(QueueSheetStrings.empty), findsOneWidget);
     expect(find.byIcon(CupertinoIcons.line_horizontal_3), findsNothing);
+
+    await tester.runAsync(guest.leave);
+    await tester.runAsync(host.leave);
+  });
+
+  testWidgets('a guest who may not add can still browse the host’s library, '
+      'with the reason; granted add_tracks while browsing, Add adds', (
+    tester,
+  ) async {
+    // The guest really fetches the listing (the test binding's HttpClient
+    // answers everything 400).
+    final previousHttp = HttpOverrides.current;
+    HttpOverrides.global = null;
+    addTearDown(() => HttpOverrides.global = previousHttp);
+    final paths = _media();
+    final host = testSession(
+      librarySource: () => _Library({'c_1': paths[0], 'c_2': paths[1]}),
+    );
+    final guest = testSession();
+    final cache = _tempCache();
+
+    await tester.runAsync(() async {
+      await host.startHost(
+        sessionName: 'Listen Room',
+        policy: JamPolicy.listenOnly,
+        discoverable: false,
+        shareLibrary: true,
+      );
+      expect(await _waitFor(() => host.sharedLibrary != null), isTrue);
+      expect(await guest.join(host.joinUri!, mediaCacheDir: cache), isTrue);
+      expect(await _waitFor(() => guest.engine?.catalog.value != null), isTrue);
+    });
+    await tester.pump();
+    final engine = guest.engine!;
+    await _pump(tester, guest, QueuePanel(engine: engine));
+    await tester.pump();
+
+    final browse = QueueSheetStrings.browseCatalog(
+      JamPickerStrings.catalogOf(jamCatalogHostName(engine)),
+    );
+    expect(find.text(browse), findsOneWidget);
+    expect(find.text(QueueSheetStrings.addSongs), findsNothing);
+    expect(find.text(QueueSheetStrings.empty), findsNothing);
+
+    await tester.tap(find.text(browse));
+    for (var i = 0; i < 100 && find.text('Low Tide').evaluate().isEmpty; i++) {
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 10)),
+      );
+      await tester.pump();
+    }
+    expect(find.text('Low Tide'), findsOneWidget);
+    expect(
+      find.descendant(
+        of: find.byType(JamCatalogPicker),
+        matching: find.text(CatalogSheetStrings.cantAdd),
+      ),
+      findsOneWidget,
+    );
+    // A sheet that only shows closes with Done; there is no grey Add.
+    expect(
+      find.widgetWithText(JamTextButton, LibrarySheetStrings.add),
+      findsNothing,
+    );
+
+    // The host lets guests add while the sheet is open: Add arrives, and
+    // what is chosen there really goes to the host.
+    host.hostEngine!.setPolicy(JamPolicy.jam);
+    for (
+      var i = 0;
+      i < 100 &&
+          find
+              .widgetWithText(JamTextButton, LibrarySheetStrings.add)
+              .evaluate()
+              .isEmpty;
+      i++
+    ) {
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 10)),
+      );
+      await tester.pump();
+    }
+    // The sheet's entrance has finished by now on a real clock.
+    for (var i = 0; i < 10; i++) {
+      await tester.pump(const Duration(milliseconds: 100));
+    }
+    await tester.tap(find.text('Low Tide'));
+    await tester.pump();
+    await tester.tap(
+      find.widgetWithText(JamTextButton, LibrarySheetStrings.add),
+    );
+    await tester.pump();
+    await tester.runAsync(
+      () => _waitFor(() => host.hostEngine!.playlist.isNotEmpty),
+    );
+    expect(host.hostEngine!.playlist.single.addedBy, engine.selfPeerId);
+    // Once it reaches the guest, its row in the sheet reads "In queue".
+    await tester.runAsync(() => _waitFor(() => engine.playlist.isNotEmpty));
+    expect(engine.playlist.single.catalogId, 'c_1');
 
     await tester.runAsync(guest.leave);
     await tester.runAsync(host.leave);

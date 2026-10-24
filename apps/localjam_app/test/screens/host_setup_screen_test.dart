@@ -2,6 +2,8 @@
 /// grouped sheet (DESIGN_SPEC v3 §6.2).
 library;
 
+import 'dart:io';
+
 import 'package:flutter/cupertino.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:localjam_client/localjam_client.dart';
@@ -10,6 +12,9 @@ import 'package:localjam_app/src/design/tokens.dart';
 import 'package:localjam_app/src/router.dart';
 import 'package:localjam_app/src/screens/home_screen.dart';
 import 'package:localjam_app/src/screens/host_setup_screen.dart';
+import 'package:localjam_app/src/state/session_controller.dart';
+import 'package:localjam_app/src/util/media_picking.dart';
+import 'package:localjam_app/src/util/permissions.dart';
 import 'package:localjam_app/src/widgets/buttons.dart';
 import 'package:localjam_app/src/widgets/guests_can.dart';
 import 'package:localjam_app/src/widgets/list.dart';
@@ -18,6 +23,34 @@ import 'package:localjam_app/src/widgets/track_row.dart';
 import 'package:localjam_app/src/widgets/menu.dart';
 
 import '../harness.dart';
+
+/// A music library of one song, for the share switch.
+class _Library extends JamCatalogSource {
+  @override
+  Future<List<CatalogEntry>> list() async => const [
+    CatalogEntry(catalogId: 'c_1', title: 'Low Tide'),
+  ];
+
+  @override
+  Future<File?> open(String catalogId) async => null;
+}
+
+/// Whether this platform has a library, and what the permission ask says.
+void _library({
+  bool available = true,
+  JamPermissionOutcome outcome = JamPermissionOutcome.granted,
+}) {
+  debugJamLibraryAvailable = available;
+  jamAudioPermissionRequest = () async => outcome;
+  addTearDown(() {
+    debugJamLibraryAvailable = null;
+    jamAudioPermissionRequest = requestAudioLibraryPermission;
+  });
+}
+
+JamRow _shareRow(WidgetTester tester) => tester.widget<JamRow>(
+  find.widgetWithText(JamRow, HostSetupStrings.shareLibrary),
+);
 
 /// Tall enough that every section is on screen without scrolling — the
 /// default 800×600 test surface stops a lazy `ListView` from building it.
@@ -292,5 +325,105 @@ void main() {
 
     expect(_inSheet(HostSetupStrings.title), findsOneWidget);
     expect(tester.takeException(), isNull);
+  });
+
+  group('Share my music library', () {
+    testWidgets('is not offered where the phone has no library', (
+      tester,
+    ) async {
+      _library(available: false);
+      final session = testSession();
+      await _tall(tester);
+      final router = await pumpApp(tester, session);
+      router.push('/host');
+      await tester.pumpAndSettle();
+      expect(find.text(HostSetupStrings.shareLibrary), findsNothing);
+    });
+
+    testWidgets('sits under the songs, off by default, and says who will '
+        'see it', (tester) async {
+      _library();
+      final session = testSession();
+      await _tall(tester);
+      final router = await pumpApp(tester, session);
+      router.push('/host');
+      await tester.pumpAndSettle();
+      expect(_shareRow(tester).toggled, isFalse);
+      // Who sees the titles, true to the preset and the nearby switch.
+      expect(
+        find.text(
+          'Anyone on this Wi‑Fi who joins can see your song titles '
+          'and add them',
+        ),
+        findsOneWidget,
+      );
+      await tester.tap(find.text(HostSetupStrings.discoverable));
+      await tester.pumpAndSettle();
+      expect(
+        find.text(HostSetupStrings.shareLibraryDetail(JamPolicy.jam, false)),
+        findsOneWidget,
+      );
+      expect(
+        HostSetupStrings.shareLibraryDetail(JamPolicy.listenOnly, false),
+        'People in the jam can see your song titles',
+      );
+      final songs = tester.getRect(_inSheet(HostSetupStrings.addSongs));
+      final share = tester.getRect(find.text(HostSetupStrings.shareLibrary));
+      final nearby = tester.getRect(find.text(HostSetupStrings.discoverable));
+      expect(share.top, greaterThan(songs.bottom));
+      expect(share.bottom, lessThan(nearby.top));
+    });
+
+    testWidgets('a denied permission keeps it off, with the permission '
+        'notice', (tester) async {
+      _library(outcome: JamPermissionOutcome.denied);
+      final session = testSession();
+      final heard = <JamNotice>[];
+      final sub = session.notices.listen(heard.add);
+      addTearDown(sub.cancel);
+      await _tall(tester);
+      final router = await pumpApp(tester, session);
+      router.push('/host');
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text(HostSetupStrings.shareLibrary));
+      await tester.pumpAndSettle();
+      expect(_shareRow(tester).toggled, isFalse);
+      expect(
+        heard.map((n) => n.message),
+        contains(JamPermissionCopy.audioLibraryDenied),
+      );
+    });
+
+    testWidgets('granted, it turns on, and Start shares the library with '
+        'the jam', (tester) async {
+      _library();
+      final session = testSession(librarySource: _Library.new);
+      await _tall(tester);
+      final router = await pumpApp(tester, session);
+      router.push('/host');
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text(HostSetupStrings.shareLibrary));
+      await tester.pumpAndSettle();
+      expect(_shareRow(tester).toggled, isTrue);
+
+      await tester.tap(
+        find.widgetWithText(JamTextButton, HostSetupStrings.start),
+      );
+      for (
+        var i = 0;
+        i < 200 && session.hostEngine?.catalog.value == null;
+        i++
+      ) {
+        await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 10)),
+        );
+        await tester.pump();
+      }
+      expect(session.isLive, isTrue);
+      expect(session.hostEngine!.catalog.value?.count, 1);
+      await leaveTestSession(tester, session);
+    });
   });
 }

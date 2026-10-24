@@ -1,10 +1,12 @@
 /// LocalJam host: serves the control plane (WebSocket `/ws`), the media
-/// plane (HTTP `/media/{mediaId}`) and the web guest's page (`/`, `/join`,
-/// `/web/…`, §1.1) on one TCP port (PROTOCOL.md §1), and drives a
-/// [HostSession] as the single authoritative state writer (§5).
+/// plane (HTTP `/media/{mediaId}`, and the catalog's `/catalog`, §6.6) and
+/// the web guest's page (`/`, `/join`, `/web/…`, §1.1) on one TCP port
+/// (PROTOCOL.md §1), and drives a [HostSession] as the single authoritative
+/// state writer (§5).
 library;
 
 import 'dart:async';
+import 'dart:collection';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
@@ -14,11 +16,13 @@ import 'package:crypto/crypto.dart';
 import 'package:localjam_core/localjam_core.dart';
 import 'package:meta/meta.dart';
 
+import 'catalog_provider.dart';
 import 'connection_guard.dart';
 import 'media_metadata.dart';
 import 'monotonic.dart';
 import 'static_site.dart';
 
+export 'catalog_provider.dart';
 export 'static_site.dart';
 
 /// What a [JamHostServer] does when the current item reaches its end
@@ -78,6 +82,15 @@ enum JamHostEventKind {
   /// fire; re-uploading an item that was removed puts it back, and does.
   mediaUploaded,
 
+  /// A catalog add landed (§6.6): an entry of the host's catalog became a
+  /// playlist item ([JamHostEvent.peerId] — who it is credited to: the
+  /// requesting guest's peerId, or [JamPermissions.hostPeerId] for
+  /// [JamHostServer.addFromCatalog] — [JamHostEvent.mediaId] and
+  /// [JamHostEvent.catalogId] set). Emitted before the playlist broadcast
+  /// the add produces. An add whose content was already in the queue does
+  /// not fire; one that put removed content back in does.
+  catalogAdded,
+
   /// The current item reached its end ([JamHostEvent.mediaId] set to the
   /// ended item). Emitted exactly once per track end, before the state
   /// broadcast produced by the [JamEndPolicy].
@@ -99,6 +112,7 @@ class JamHostEvent {
     this.playlist,
     this.permissions,
     this.deniedAction,
+    this.catalogId,
   });
 
   final JamHostEventKind kind;
@@ -119,6 +133,10 @@ class JamHostEvent {
 
   /// Set for [JamHostEventKind.requestDenied].
   final RequestAction? deniedAction;
+
+  /// The catalog entry that was added. Set for
+  /// [JamHostEventKind.catalogAdded].
+  final String? catalogId;
 
   @override
   String toString() =>
@@ -223,6 +241,13 @@ class JamHostServer {
   ///
   /// [staticSite] is the browser player served to web guests (§1.1); see
   /// [staticSite] — it can also be set (or replaced) after [start].
+  ///
+  /// The catalog (§6.6, [setCatalog]) is bounded by
+  /// [maxCatalogIdsPerRequest] (ids past it in one `catalog_add` are
+  /// dropped), [maxPendingCatalogAdds] (adds waiting across all guests;
+  /// past it a request is answered `busy`), [maxPendingCatalogAddsPerPeer]
+  /// (the same, for one guest's device) and [catalogCoverCacheSize]
+  /// (covers kept in memory for `GET /catalog/{id}/artwork`).
   JamHostServer({
     required this.sessionName,
     this.hostName = '',
@@ -256,6 +281,10 @@ class JamHostServer {
     this.minPageBytesPerSecond = 32 * 1024,
     this.admitLocalAddress,
     this.staticSite,
+    this.maxCatalogIdsPerRequest = defaultMaxCatalogIdsPerRequest,
+    this.maxPendingCatalogAdds = defaultMaxPendingCatalogAdds,
+    this.maxPendingCatalogAddsPerPeer = defaultMaxPendingCatalogAddsPerPeer,
+    this.catalogCoverCacheSize = defaultCatalogCoverCacheSize,
   }) : token = token ?? _randomHex(16),
        sessionId = 's_${_randomHex(4)}',
        _permissions = JamPermissions.initial(policy: policy),
@@ -270,6 +299,27 @@ class JamHostServer {
   static const int defaultMaxArtworkBytes = 8 * 1024 * 1024;
   static const int defaultMaxConnections = 128;
   static const int defaultMaxConnectionsPerRemote = 32;
+  static const int defaultMaxCatalogIdsPerRequest = 50;
+  static const int defaultMaxPendingCatalogAdds = 128;
+
+  /// One device's share of [defaultMaxPendingCatalogAdds]: a full
+  /// [defaultMaxCatalogIdsPerRequest] selection fits whole.
+  static const int defaultMaxPendingCatalogAddsPerPeer = 50;
+  static const int defaultCatalogCoverCacheSize = 64;
+
+  /// The most cover bytes the catalog's cover cache holds at once, whatever
+  /// [catalogCoverCacheSize] says: 64 covers at the 8 MB cap would be half
+  /// a gigabyte of a phone's memory.
+  static const int catalogCoverCacheBytes = 32 * 1024 * 1024;
+
+  /// How many catalog covers (§6.6) the host reads from their files at
+  /// once; further requests wait their turn, up to
+  /// [catalogCoverReadsWaiting] of them, and past that are answered `503`.
+  static const int catalogCoverReadsAtOnce = 3;
+
+  /// How many catalog cover reads may wait for one of the
+  /// [catalogCoverReadsAtOnce] slots before the host answers `503`.
+  static const int catalogCoverReadsWaiting = 16;
 
   /// The longest `X-LocalJam-Duration-Us` an upload may declare (§6.4): a
   /// week. Anything longer — or zero, or negative — is not a duration any
@@ -484,6 +534,25 @@ class JamHostServer {
   /// disables the gate.
   final Duration readinessWait;
 
+  /// The most catalog ids one `catalog_add` request may carry (§6.6); the
+  /// rest are dropped.
+  final int maxCatalogIdsPerRequest;
+
+  /// The most catalog adds waiting to land across all guests (§6.6, §9.1).
+  /// A request that would go past it is answered `error { code: "busy" }`
+  /// for the ids that did not fit.
+  final int maxPendingCatalogAdds;
+
+  /// The most catalog adds waiting to land for one guest (§6.6, §9.1) —
+  /// counted by its device, so across its rejoins; past it that guest's
+  /// request is answered `busy`, whatever room [maxPendingCatalogAdds]
+  /// leaves.
+  final int maxPendingCatalogAddsPerPeer;
+
+  /// How many catalog covers (§6.6) the host keeps in memory, most recently
+  /// served first; see also [catalogCoverCacheBytes].
+  final int catalogCoverCacheSize;
+
   final HostSession _session;
   JamPermissions _permissions;
   static const MessageCodec _codec = MessageCodec();
@@ -559,6 +628,65 @@ class JamHostServer {
 
   /// Uploads in flight per uploading peerId, against [maxUploadsPerPeer].
   final Map<String, int> _uploadsInFlight = {};
+
+  // --- Catalog (§6.6) ---
+
+  /// Where the catalog's songs come from; null while the host offers none.
+  JamCatalogProvider? _catalogProvider;
+
+  /// The entries [_catalogProvider] gave at the last [setCatalog], in order
+  /// and by id.
+  List<CatalogEntry> _catalogList = const [];
+  Map<String, CatalogEntry> _catalogById = const {};
+
+  /// The catalog's `rev` (§6.6): bumped by every [setCatalog] that changes
+  /// anything, on or off.
+  int _catalogRev = 0;
+
+  /// Bumped whenever the provider itself changes (or goes): adds queued for
+  /// an earlier provider, and covers read from it, are not this one's.
+  int _catalogGeneration = 0;
+
+  /// `GET /catalog`'s body for the current rev, encoded on first request.
+  Uint8List? _catalogBody;
+
+  /// Catalog adds waiting to land, in arrival order; one lands at a time.
+  final Queue<_CatalogAdd> _catalogQueue = Queue<_CatalogAdd>();
+  bool _catalogDraining = false;
+
+  /// Guest catalog adds queued or landing, against [maxPendingCatalogAdds]
+  /// — and, like uploads in flight, against [maxPlaylistLength].
+  int _catalogPending = 0;
+
+  /// The same, per guest device (see [_catalogPeerKey]), against
+  /// [maxPendingCatalogAddsPerPeer].
+  final Map<Object, int> _catalogPendingByPeer = {};
+
+  /// Ids of guest catalog adds queued or landing under the current
+  /// generation: a second request for one is a no-op, not a second hash.
+  final Set<String> _catalogQueuedIds = {};
+
+  /// catalogId → the mediaId its file hashed to, under the current
+  /// generation: an id whose content is already in the queue is a no-op
+  /// without opening or hashing it again.
+  final Map<String, String> _catalogMediaIds = {};
+
+  /// Catalog cover reads under way, against [catalogCoverReadsAtOnce], and
+  /// those waiting for a slot, against [catalogCoverReadsWaiting].
+  int _coverReadsActive = 0;
+  final Queue<Completer<void>> _coverReadTurns = Queue<Completer<void>>();
+
+  /// Names staged catalog covers apart (see [_stageArtwork]).
+  int _stagedArtworkSeq = 0;
+
+  /// Recently served catalog covers, least recently used first. A null
+  /// value remembers a song without one, so its file is not read again.
+  final LinkedHashMap<String, _CatalogCover?> _coverCache =
+      LinkedHashMap<String, _CatalogCover?>();
+  int _coverCacheBytes = 0;
+
+  /// Cover reads under way, so concurrent requests for one song share one.
+  final Map<String, Future<_CatalogCover?>> _coverLoads = {};
 
   /// Bytes of guest uploads accepted this session (§6.4), against
   /// [uploadBudgetBytes]. Exposed for host UIs that want to show the
@@ -1280,6 +1408,8 @@ class JamHostServer {
     _livenessTimer?.cancel();
     _endTimer?.cancel();
     _cancelPendingStart();
+    _catalogGeneration++;
+    _dropQueuedCatalogAdds();
     for (final conn in List.of(_conns)) {
       unawaited(
         conn.ws.close(
@@ -1354,6 +1484,10 @@ class JamHostServer {
         await _serveMedia(req);
       } else if (path.startsWith('/artwork/')) {
         await _serveArtwork(req);
+      } else if (path == '/catalog') {
+        await _serveCatalog(req);
+      } else if (path.startsWith('/catalog/')) {
+        await _serveCatalogArtwork(req);
       } else {
         req.response.statusCode = HttpStatus.notFound;
         await req.response.close();
@@ -1732,6 +1866,746 @@ class JamHostServer {
     return entry != null && entry.uploaded ? entry.file : null;
   }
 
+  // --- Catalog (§6.6) ------------------------------------------------------------
+
+  /// The catalog as the control plane announces it (§6.6): what `welcome`
+  /// carries, or null while the host offers none.
+  CatalogSummary? get catalog => _catalogProvider == null
+      ? null
+      : CatalogSummary(rev: _catalogRev, count: _catalogList.length);
+
+  /// The entries the catalog offers, as read at the last [setCatalog]
+  /// (empty while the host offers none).
+  List<CatalogEntry> get catalogEntries => _catalogList;
+
+  /// Offers [provider]'s songs to the room as a catalog (§6.6), or stops
+  /// offering one (`null`). A call that changes what is offered bumps the
+  /// catalog's `rev` and broadcasts `catalog { rev, count }` — `count: 0`
+  /// when turned off — and later `welcome`s carry the same. A call that
+  /// leaves the listing as it was (the same entries, whether from the same
+  /// provider or another) bumps nothing and broadcasts nothing.
+  ///
+  /// [provider]'s entries are read first, once: call this again with the
+  /// same provider when its library changed. If reading them throws, the
+  /// catalog stays exactly as it was and the error is rethrown. Entries
+  /// whose id could not be a URL path segment, and repeats of an id (the
+  /// first wins), are dropped.
+  ///
+  /// Adds still waiting keep their place across a refresh by the same
+  /// provider, except those for ids it no longer offers, which are dropped;
+  /// a different provider, or `null`, drops them all, and an add already
+  /// under way is abandoned before it lands. While the host offers none,
+  /// `GET /catalog` is `404` and `catalog_add` changes nothing.
+  ///
+  /// A no-op before anything was offered when [provider] is null, and after
+  /// [close].
+  void setCatalog(JamCatalogProvider? provider) {
+    if (_closed) return;
+    if (provider == null && _catalogProvider == null) return;
+    // Read first: a provider that throws leaves the old catalog in place.
+    final list = <CatalogEntry>[];
+    final byId = <String, CatalogEntry>{};
+    if (provider != null) {
+      for (final entry in provider.entries) {
+        // The id is a path segment of `/catalog/{id}/artwork`; the first of
+        // two entries that share one wins.
+        if (!_isSafeResourceId(entry.catalogId)) continue;
+        if (byId.containsKey(entry.catalogId)) continue;
+        byId[entry.catalogId] = entry;
+        list.add(entry);
+      }
+    }
+    final listingChanged =
+        provider == null ||
+        _catalogProvider == null ||
+        !_sameCatalogEntries(list, _catalogList);
+    if (!identical(provider, _catalogProvider)) {
+      // Another provider's ids are not this one's: nothing queued, hashed
+      // or cover read under the old one carries over.
+      _catalogGeneration++;
+      _dropQueuedCatalogAdds();
+      _catalogQueuedIds.clear();
+      _catalogMediaIds.clear();
+      _coverCache.clear();
+      _coverCacheBytes = 0;
+      _coverLoads.clear();
+    }
+    _catalogProvider = provider;
+    if (!listingChanged) return;
+    _catalogList = List.unmodifiable(list);
+    _catalogById = byId;
+    _catalogBody = null;
+    _withdrawCatalogIds(byId);
+    _catalogRev++;
+    _broadcast(
+      CatalogMessage(
+        summary: CatalogSummary(rev: _catalogRev, count: list.length),
+      ),
+    );
+  }
+
+  static bool _sameCatalogEntries(List<CatalogEntry> a, List<CatalogEntry> b) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      final x = a[i];
+      final y = b[i];
+      if (identical(x, y)) continue;
+      if (x.catalogId != y.catalogId ||
+          x.title != y.title ||
+          x.artist != y.artist ||
+          x.album != y.album ||
+          x.durationUs != y.durationUs ||
+          x.sizeBytes != y.sizeBytes ||
+          x.hasArtwork != y.hasArtwork) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /// After a refresh by the same provider: adds waiting for ids it no
+  /// longer offers are dropped (their slots released), and their covers
+  /// forgotten.
+  void _withdrawCatalogIds(Map<String, CatalogEntry> offered) {
+    if (_catalogQueue.isNotEmpty) {
+      final keep = <_CatalogAdd>[];
+      while (_catalogQueue.isNotEmpty) {
+        final job = _catalogQueue.removeFirst();
+        if (offered.containsKey(job.catalogId)) {
+          keep.add(job);
+        } else {
+          _releaseCatalogAdd(job);
+          if (!job.done.isCompleted) job.done.complete(null);
+        }
+      }
+      _catalogQueue.addAll(keep);
+    }
+    final gone = [
+      for (final id in _coverCache.keys)
+        if (!offered.containsKey(id)) id,
+    ];
+    for (final id in gone) {
+      _coverCacheBytes -= _coverCache.remove(id)?.bytes.length ?? 0;
+    }
+  }
+
+  /// Adds the catalog entry [catalogId] to the queue for the host itself —
+  /// its own UI's "add from my library" — credited to
+  /// [JamPermissions.hostPeerId], through the same path a guest's
+  /// `catalog_add` takes (§6.6), behind any adds already waiting.
+  ///
+  /// Completes with the item and whether it was added (`added: false`: its
+  /// content was already in the queue, which is left as it was), or null
+  /// when nothing could be added — the host offers no catalog, [catalogId]
+  /// is not in it (any more), its file could not be opened, or the catalog
+  /// was turned off meanwhile. Host additions are not remote input: no
+  /// pending-adds bound and no playlist cap apply.
+  Future<({MediaItem item, bool added})?> addFromCatalog(String catalogId) {
+    if (_closed ||
+        _catalogProvider == null ||
+        !_catalogById.containsKey(catalogId)) {
+      return Future.value();
+    }
+    final job = _CatalogAdd(
+      catalogId,
+      requester: null,
+      generation: _catalogGeneration,
+    );
+    _catalogQueue.add(job);
+    _pumpCatalog();
+    return job.done.future;
+  }
+
+  /// The file backing [mediaId] in the media registry (§6.1) — what the
+  /// host's own player plays for an item it did not register itself: a
+  /// catalog add ([JamHostEventKind.catalogAdded]; the provider's file, or
+  /// whatever file the registry already held for the same content) or a
+  /// guest upload (see [storedUploadFile]). Null for an id never
+  /// registered.
+  File? mediaFile(String mediaId) => _media[mediaId]?.file;
+
+  /// A guest's `catalog_add` (§6.6), its `add_tracks` already checked: the
+  /// first [maxCatalogIdsPerRequest] ids, less repeats, ids the catalog
+  /// does not hold, ids already waiting to land and ids whose content is
+  /// already in the queue, are queued to land one at a time, as far as
+  /// [maxPendingCatalogAdds], [maxPendingCatalogAddsPerPeer] and the
+  /// playlist cap leave room — and the ids past that room are answered
+  /// with one `busy`. A request with no usable id changes nothing and gets
+  /// no answer: the playlist broadcasts are the answer (§6.6).
+  void _onCatalogAdd(_GuestConn conn, List<String> requested) {
+    if (_catalogProvider == null) return;
+    final wanted = <String>[];
+    final seen = <String>{};
+    for (final id in requested.take(maxCatalogIdsPerRequest)) {
+      if (!seen.add(id) || !_catalogById.containsKey(id)) continue;
+      // On its way already, or its content (hashed before) already in the
+      // queue: a no-op, and no slot taken.
+      if (_catalogQueuedIds.contains(id)) continue;
+      final known = _catalogMediaIds[id];
+      if (known != null && _inPlaylist(known)) continue;
+      wanted.add(id);
+    }
+    if (wanted.isEmpty) return;
+    final peerKey = _catalogPeerKey(conn);
+    final pendingRoom = maxPendingCatalogAdds - _catalogPending;
+    final peerRoom =
+        maxPendingCatalogAddsPerPeer - (_catalogPendingByPeer[peerKey] ?? 0);
+    final queueRoom =
+        maxPlaylistLength -
+        _playlist.length -
+        _pendingUploads -
+        _catalogPending;
+    final room = max(0, min(min(pendingRoom, peerRoom), queueRoom));
+    final accepted = min(room, wanted.length);
+    final request = _CatalogRequest();
+    for (final id in wanted.take(accepted)) {
+      _catalogPending++;
+      _catalogPendingByPeer[peerKey] =
+          (_catalogPendingByPeer[peerKey] ?? 0) + 1;
+      _catalogQueuedIds.add(id);
+      _catalogQueue.add(
+        _CatalogAdd(
+          id,
+          requester: conn,
+          generation: _catalogGeneration,
+          peerKey: peerKey,
+          request: request,
+        ),
+      );
+    }
+    if (accepted < wanted.length) {
+      request.busySent = true;
+      final dropped = wanted.length - accepted;
+      _sendTo(
+        conn.ws,
+        ErrorMessage(
+          code: ErrorCode.busy,
+          message: queueRoom <= min(pendingRoom, peerRoom)
+              ? 'the queue is full: $dropped not added'
+              : 'too many songs are being added: $dropped not added',
+        ),
+      );
+    }
+    if (accepted > 0) _pumpCatalog();
+  }
+
+  /// Whose share of [maxPendingCatalogAddsPerPeer] a guest's adds count
+  /// against: its device (so a rejoin under a new peerId does not reset
+  /// it), or the connection when it sent no clientId.
+  static Object _catalogPeerKey(_GuestConn conn) => conn.device ?? conn;
+
+  bool _inPlaylist(String mediaId) =>
+      _playlist.any((i) => i.mediaId == mediaId);
+
+  /// Lands queued catalog adds one at a time until the queue is empty.
+  void _pumpCatalog() {
+    if (_catalogDraining) return;
+    _catalogDraining = true;
+    unawaited(() async {
+      try {
+        while (_catalogQueue.isNotEmpty && !_closed) {
+          final job = _catalogQueue.removeFirst();
+          ({MediaItem item, bool added})? result;
+          try {
+            result = await _landCatalogAdd(job);
+          } catch (_) {
+            // An unreadable file, a full disk, a provider bug: this song is
+            // skipped, and the next one gets its turn.
+            result = null;
+          } finally {
+            _releaseCatalogAdd(job);
+          }
+          if (!job.done.isCompleted) job.done.complete(result);
+        }
+      } finally {
+        _catalogDraining = false;
+      }
+    }());
+  }
+
+  /// Every add still waiting is dropped (the catalog went, or changed
+  /// provider): nothing of it lands, and its reservations are released.
+  void _dropQueuedCatalogAdds() {
+    while (_catalogQueue.isNotEmpty) {
+      final job = _catalogQueue.removeFirst();
+      _releaseCatalogAdd(job);
+      if (!job.done.isCompleted) job.done.complete(null);
+    }
+  }
+
+  /// Gives back what [job] held — its place among the ids waiting, and,
+  /// for a guest's add, its pending-adds and playlist slots. Once per job.
+  void _releaseCatalogAdd(_CatalogAdd job) {
+    if (job.released) return;
+    job.released = true;
+    if (!job.remote) return;
+    // A later generation's set does not hold this one's ids.
+    if (job.generation == _catalogGeneration) {
+      _catalogQueuedIds.remove(job.catalogId);
+    }
+    _catalogPending--;
+    final key = job.peerKey!;
+    final left = (_catalogPendingByPeer[key] ?? 1) - 1;
+    if (left <= 0) {
+      _catalogPendingByPeer.remove(key);
+    } else {
+      _catalogPendingByPeer[key] = left;
+    }
+  }
+
+  /// Whether [job]'s entry is still offered by the provider it was queued
+  /// under.
+  bool _catalogStillOffers(_CatalogAdd job) =>
+      !_closed &&
+      job.generation == _catalogGeneration &&
+      _catalogProvider != null &&
+      _catalogById.containsKey(job.catalogId);
+
+  /// Whether [job] could still land: its entry still offered and, for a
+  /// guest's add, its requester still credited.
+  bool _catalogMayLand(_CatalogAdd job) {
+    if (!_catalogStillOffers(job)) return false;
+    final requester = job.requester;
+    return requester == null || _catalogCredit(requester) != null;
+  }
+
+  /// Who a guest's catalog add is credited to, if it may land now: the
+  /// peerId its device holds (the same test an upload's landing passes,
+  /// §6.4/§5.6), while that peer still has `add_tracks`. Null otherwise.
+  String? _catalogCredit(_GuestConn requester) {
+    final peerId = _landingPeer(requester);
+    if (peerId == null) return null;
+    return _permissions.allows(peerId, JamCapability.addTracks) ? peerId : null;
+  }
+
+  /// One catalog add, the way the host adds its own files: open, sha256;
+  /// for content the room does not have yet, probe, read tags (in full: the
+  /// host's own library is not remote input, §6.4) and cover; then land it
+  /// — or not, judged again at the landing, with no await between that
+  /// judgement and the registry write.
+  ///
+  /// Judged again after every await before that, too: an add the catalog
+  /// or its requester no longer wants stops there — mid-hash included —
+  /// and leaves nothing behind (its cover is written to disk only to be
+  /// registered at the landing, and deleted if it does not land).
+  Future<({MediaItem item, bool added})?> _landCatalogAdd(
+    _CatalogAdd job,
+  ) async {
+    bool wanted() => _catalogMayLand(job);
+    if (!wanted()) return null;
+    final requester = job.requester;
+    final provider = _catalogProvider!;
+    final id = job.catalogId;
+    final entry = _catalogById[id]!;
+
+    // Hashed under this catalog already, and still in the queue: a no-op,
+    // without opening or hashing it again.
+    final known = _catalogMediaIds[id];
+    final knownEntry = known == null ? null : _media[known];
+    if (knownEntry != null && _inPlaylist(known!)) {
+      return (item: knownEntry.item, added: false);
+    }
+
+    final file = await provider.open(id);
+    if (file == null || !wanted()) return null;
+    final hashed = await _hashCatalogFile(file, cancelled: () => !wanted());
+    if (hashed == null || !wanted()) return null;
+    final mediaId = 'm_${hashed.digest.substring(0, 12)}';
+    _catalogMediaIds[id] = mediaId;
+    var item = MediaItem(
+      mediaId: mediaId,
+      kind: MediaKind.audio,
+      name: Uri.file(file.path).pathSegments.last,
+      mime: provider.mimeFor(id, file),
+      sizeBytes: hashed.size,
+      sha256: hashed.digest,
+    );
+
+    _StagedArtwork? staged;
+    try {
+      if (!_media.containsKey(mediaId)) {
+        int? probed;
+        try {
+          probed = plausibleDurationUs(
+            await provider.probeDurationUs(id, file),
+          );
+        } catch (_) {
+          // No probe: the library's duration, then the tag's.
+        }
+        if (!wanted()) return null;
+        final tags = await readAudioTags(file);
+        if (!wanted()) return null;
+        if (tags.hasArtwork) {
+          staged = await _stageArtwork(
+            tags.artworkBytes!,
+            mime: tags.artworkMime!,
+          );
+          if (!wanted()) return null;
+        }
+        item = MediaItem(
+          mediaId: item.mediaId,
+          kind: item.kind,
+          name: item.name,
+          mime: item.mime,
+          sizeBytes: item.sizeBytes,
+          durationUs:
+              probed ??
+              plausibleDurationUs(entry.durationUs) ??
+              plausibleDurationUs(tags.durationUs),
+          sha256: item.sha256,
+          // §6.1: host-extracted tags; what the library said is the
+          // fallback for a file that carries none (it is what the guest
+          // browsed).
+          title: tags.title ?? _nonBlank(entry.title),
+          artist: tags.artist ?? _nonBlank(entry.artist),
+          album: tags.album ?? _nonBlank(entry.album),
+          artworkId: staged?.artworkId,
+        );
+      }
+
+      // The landing: from here to the registry write nothing awaits.
+      if (!_catalogStillOffers(job)) return null;
+      final String addedBy;
+      if (requester == null) {
+        addedBy = JamPermissions.hostPeerId;
+      } else {
+        final credit = _catalogCredit(requester);
+        if (credit == null) return null;
+        addedBy = credit;
+      }
+      final existing = _media[item.mediaId];
+      if (existing != null && _inPlaylist(item.mediaId)) {
+        // §6.6: idempotent like an upload — already queued, nothing changes
+        // (the item keeps whatever catalogId it has).
+        return (item: existing.item, added: false);
+      }
+      // §9.1: the guests' playlist cap counts catalog adds. This one's own
+      // slot was reserved when it was queued, but the host's own additions
+      // are not held to the cap and may have filled it meanwhile.
+      if (requester != null &&
+          _playlist.length + _pendingUploads + _catalogPending >
+              maxPlaylistLength) {
+        _catalogBusy(job, addedBy, 'the queue is full: not added');
+        return null;
+      }
+      final MediaItem landed;
+      final File backing;
+      final bool uploaded;
+      if (existing != null) {
+        // Removed content goes back in, credited to whoever put it back,
+        // with the metadata it had (§6.4) — and as this catalog row.
+        landed = _creditedTo(existing.item, addedBy, catalogId: id);
+        backing = existing.file;
+        uploaded = existing.uploaded;
+      } else {
+        if (staged != null) _registerStagedArtwork(staged);
+        landed = _creditedTo(item, addedBy, catalogId: id);
+        backing = file;
+        uploaded = false;
+      }
+      _emit(
+        JamHostEvent._(
+          JamHostEventKind.catalogAdded,
+          peerId: addedBy,
+          mediaId: landed.mediaId,
+          catalogId: id,
+        ),
+      );
+      _addMedia(landed, backing, uploaded: uploaded, device: requester?.device);
+      return (item: landed, added: true);
+    } finally {
+      // A cover written for an add that did not land (or whose bytes were
+      // registered meanwhile by someone else) is not kept.
+      final stray = staged?.file;
+      if (stray != null && !staged!.kept) {
+        try {
+          await stray.delete();
+        } catch (_) {
+          // Already gone (the upload dir went with close()).
+        }
+      }
+    }
+  }
+
+  /// Tells [job]'s requester (as [peerId] now, or on the connection it
+  /// asked on) that its add did not fit — once per request (§6.6).
+  void _catalogBusy(_CatalogAdd job, String peerId, String message) {
+    final request = job.request;
+    final requester = job.requester;
+    if (request == null || requester == null || request.busySent) return;
+    request.busySent = true;
+    _sendTo(
+      (_peers[peerId] ?? requester).ws,
+      ErrorMessage(code: ErrorCode.busy, message: message),
+    );
+  }
+
+  /// sha256 and size of [file], streamed in chunks, giving up (null) as
+  /// soon as [cancelled] says so — a song turned off mid-hash does not
+  /// keep the host reading it to the end.
+  static Future<({int size, String digest})?> _hashCatalogFile(
+    File file, {
+    required bool Function() cancelled,
+  }) async {
+    final digestSink = _DigestSink();
+    final hasher = sha256.startChunkedConversion(digestSink);
+    var size = 0;
+    await for (final chunk in file.openRead()) {
+      if (cancelled()) return null;
+      hasher.add(chunk);
+      size += chunk.length;
+    }
+    hasher.close();
+    return (size: size, digest: digestSink.value!.toString());
+  }
+
+  /// Writes cover [bytes] for a catalog add that has not landed yet, under
+  /// a name of its own, without registering it: [_registerStagedArtwork]
+  /// does that at the landing, and an add that does not land deletes the
+  /// file. Nothing is written when the registry holds these bytes already.
+  Future<_StagedArtwork> _stageArtwork(
+    Uint8List bytes, {
+    required String mime,
+  }) async {
+    final dir = _uploadDir;
+    if (dir == null) throw StateError('JamHostServer is not started');
+    final digest = sha256.convert(bytes).toString();
+    final artworkId = 'a_${digest.substring(0, 12)}';
+    if (_artwork.containsKey(artworkId)) {
+      return _StagedArtwork(artworkId, mime, null);
+    }
+    final file = File('${dir.path}/$artworkId.c${_stagedArtworkSeq++}');
+    final tmp = File('${file.path}.part');
+    try {
+      await tmp.writeAsBytes(bytes, flush: true);
+      await tmp.rename(file.path);
+    } catch (_) {
+      try {
+        await tmp.delete();
+      } catch (_) {}
+      rethrow;
+    }
+    return _StagedArtwork(artworkId, mime, file);
+  }
+
+  /// Registers [staged] as servable artwork (§6.5) — synchronously, at a
+  /// catalog add's landing — unless the same bytes were registered
+  /// meanwhile, in which case the staged copy is left to be deleted.
+  void _registerStagedArtwork(_StagedArtwork staged) {
+    final file = staged.file;
+    if (file == null || _artwork.containsKey(staged.artworkId)) return;
+    _artwork[staged.artworkId] = (mime: staged.mime, file: file);
+    staged.kept = true;
+  }
+
+  static String? _nonBlank(String? value) {
+    final trimmed = value?.trim();
+    return trimmed == null || trimmed.isEmpty ? null : trimmed;
+  }
+
+  /// Serves `GET /catalog` (§6.6): the current listing as JSON, `404` while
+  /// the host offers no catalog. Bearer-gated like the media plane.
+  Future<void> _serveCatalog(HttpRequest req) async {
+    final res = req.response;
+    if (!_bearerMatches(req.headers.value(HttpHeaders.authorizationHeader))) {
+      res.statusCode = HttpStatus.unauthorized;
+      await res.close();
+      return;
+    }
+    if (req.method != 'GET') {
+      res.statusCode = HttpStatus.methodNotAllowed;
+      await res.close();
+      return;
+    }
+    if (_catalogProvider == null) {
+      res.statusCode = HttpStatus.notFound;
+      await res.close();
+      return;
+    }
+    final body = _catalogBody ??= utf8.encode(
+      jsonEncode(CatalogListing(rev: _catalogRev, items: _catalogList)),
+    );
+    res.headers.contentType = ContentType.json;
+    res.headers.set(HttpHeaders.cacheControlHeader, 'no-store');
+    res.contentLength = body.length;
+    res.add(body);
+    await res.close();
+  }
+
+  /// Serves `GET /catalog/{catalogId}/artwork` (§6.6): the song's embedded
+  /// cover, read from its file on demand and kept in a small cache. `404`
+  /// for an id the catalog does not hold, a song without a cover (or one
+  /// over [maxArtworkBytes]), and while no catalog is offered — or when the
+  /// catalog changed provider while the cover was being read. `503` when
+  /// [catalogCoverReadsAtOnce] reads are under way and
+  /// [catalogCoverReadsWaiting] more are waiting (not remembered: ask
+  /// again).
+  Future<void> _serveCatalogArtwork(HttpRequest req) async {
+    final res = req.response;
+    if (!_bearerMatches(req.headers.value(HttpHeaders.authorizationHeader))) {
+      res.statusCode = HttpStatus.unauthorized;
+      await res.close();
+      return;
+    }
+    if (req.method != 'GET') {
+      res.statusCode = HttpStatus.methodNotAllowed;
+      await res.close();
+      return;
+    }
+    final segments = req.uri.pathSegments;
+    final id = segments.length == 3 && segments[2] == 'artwork'
+        ? segments[1]
+        : null;
+    final entry = id != null && _isSafeResourceId(id) ? _catalogById[id] : null;
+    final generation = _catalogGeneration;
+    final cover = entry == null || entry.hasArtwork == false
+        ? null
+        : await _catalogCover(entry.catalogId);
+    if (identical(cover, _coverBusy)) {
+      res.statusCode = HttpStatus.serviceUnavailable;
+      res.headers.set(HttpHeaders.retryAfterHeader, '1');
+      await res.close();
+      return;
+    }
+    // Turned off, replaced, or the song withdrawn while its cover was read.
+    if (cover == null ||
+        generation != _catalogGeneration ||
+        !_catalogById.containsKey(id)) {
+      res.statusCode = HttpStatus.notFound;
+      await res.close();
+      return;
+    }
+    try {
+      res.headers.contentType = ContentType.parse(cover.mime);
+    } catch (_) {
+      res.headers.contentType = ContentType.binary;
+    }
+    res.contentLength = cover.bytes.length;
+    res.add(cover.bytes);
+    await res.close();
+  }
+
+  /// What [_catalogCover] answers when too many cover reads are under way
+  /// and waiting: not a cover, not "none" — come back later (`503`).
+  static final _CatalogCover _coverBusy = _CatalogCover('', Uint8List(0));
+
+  /// The cover of [catalogId], from the cache or read now (one read per
+  /// song at a time, at most [catalogCoverReadsAtOnce] songs at a time,
+  /// [catalogCoverReadsWaiting] more waiting their turn; past that,
+  /// [_coverBusy]).
+  Future<_CatalogCover?> _catalogCover(String catalogId) {
+    if (_coverCache.containsKey(catalogId)) {
+      // Most recently used goes last.
+      final cover = _coverCache.remove(catalogId);
+      _coverCache[catalogId] = cover;
+      return Future.value(cover);
+    }
+    final loading = _coverLoads[catalogId];
+    if (loading != null) return loading;
+    if (_coverReadsActive >= catalogCoverReadsAtOnce &&
+        _coverReadTurns.length >= catalogCoverReadsWaiting) {
+      return Future.value(_coverBusy);
+    }
+    final load = _loadCatalogCover(catalogId);
+    _coverLoads[catalogId] = load;
+    unawaited(
+      load.whenComplete(() {
+        if (identical(_coverLoads[catalogId], load)) {
+          _coverLoads.remove(catalogId);
+        }
+      }),
+    );
+    return load;
+  }
+
+  /// [_readCatalogCover] once a read slot is free; null when the catalog
+  /// changed provider (or the server closed) while it waited.
+  Future<_CatalogCover?> _loadCatalogCover(String catalogId) async {
+    final generation = _catalogGeneration;
+    if (_coverReadsActive < catalogCoverReadsAtOnce) {
+      _coverReadsActive++;
+    } else {
+      final turn = Completer<void>();
+      _coverReadTurns.add(turn);
+      await turn.future; // The slot is handed over: see the finally below.
+    }
+    try {
+      if (_closed ||
+          generation != _catalogGeneration ||
+          !_catalogById.containsKey(catalogId)) {
+        return null;
+      }
+      return await _readCatalogCover(catalogId, generation);
+    } finally {
+      if (_coverReadTurns.isNotEmpty) {
+        _coverReadTurns.removeFirst().complete();
+      } else {
+        _coverReadsActive--;
+      }
+    }
+  }
+
+  /// Reads [catalogId]'s cover from the file the provider gives for it
+  /// ([JamCatalogProvider.openForArtwork] — never [JamCatalogProvider.open],
+  /// which may copy), bounded like an upload's tags (§6.4): a cover over
+  /// [maxArtworkBytes] is not read, and not served. Never throws; a file
+  /// that cannot be opened is a song without a cover this time, and is not
+  /// remembered as one.
+  Future<_CatalogCover?> _readCatalogCover(
+    String catalogId,
+    int generation,
+  ) async {
+    final provider = _catalogProvider;
+    if (provider == null) return null;
+    _CatalogCover? cover;
+    try {
+      final file = await provider.openForArtwork(catalogId);
+      if (file == null) return null;
+      final tags = await readAudioTags(file, maxMetadataBytes: maxArtworkBytes);
+      final bytes = tags.artworkBytes;
+      if (tags.hasArtwork && bytes!.length <= maxArtworkBytes) {
+        cover = _CatalogCover(
+          tags.artworkMime ?? 'application/octet-stream',
+          bytes,
+        );
+      }
+    } catch (_) {
+      return null;
+    }
+    if (generation == _catalogGeneration &&
+        _catalogById.containsKey(catalogId)) {
+      _cacheCover(catalogId, cover);
+    }
+    return cover;
+  }
+
+  /// Remembers [cover] (or that there is none) for [catalogId], evicting
+  /// the least recently used past [catalogCoverCacheSize] entries or
+  /// [catalogCoverCacheBytes] bytes.
+  void _cacheCover(String catalogId, _CatalogCover? cover) {
+    if (catalogCoverCacheSize <= 0) return;
+    final size = cover?.bytes.length ?? 0;
+    if (size > catalogCoverCacheBytes) return;
+    final previous = _coverCache.remove(catalogId);
+    _coverCacheBytes -= previous?.bytes.length ?? 0;
+    while (_coverCache.isNotEmpty &&
+        (_coverCache.length >= catalogCoverCacheSize ||
+            _coverCacheBytes + size > catalogCoverCacheBytes)) {
+      final oldest = _coverCache.keys.first;
+      _coverCacheBytes -= _coverCache.remove(oldest)?.bytes.length ?? 0;
+    }
+    _coverCache[catalogId] = cover;
+    _coverCacheBytes += size;
+  }
+
+  /// How many catalog covers are cached right now (tests).
+  @visibleForTesting
+  int get debugCatalogCoversCached => _coverCache.length;
+
+  /// Guest catalog adds queued or landing right now (tests).
+  @visibleForTesting
+  int get debugCatalogAddsPending => _catalogPending;
+
   // --- Guest uploads (§6.4) ------------------------------------------------------
 
   /// Handles `POST /media`: streams the raw body to disk while hashing
@@ -1816,7 +2690,8 @@ class JamHostServer {
     // then all invalidate: each one read the counters before any of them
     // wrote them, and the session sails past its budget by however many
     // guests uploaded at once.
-    if (_playlist.length + _pendingUploads >= maxPlaylistLength ||
+    if (_playlist.length + _pendingUploads + _catalogPending >=
+            maxPlaylistLength ||
         _uploadedBytes + _reservedBytes + declared > uploadBudgetBytes) {
       await _refuseUpload(req, HttpStatus.insufficientStorage);
       return;
@@ -2555,6 +3430,7 @@ class JamHostServer {
         host: hostPeer,
         uploadKey: conn.uploadKey,
         hostAway: _away,
+        catalog: catalog,
       ),
     );
     // §3.2: announce to everyone else.
@@ -2622,6 +3498,8 @@ class JamHostServer {
         case RequestAction.queueRemove:
           final mediaId = request.mediaId;
           if (mediaId != null) removeMediaItem(mediaId);
+        case RequestAction.catalogAdd:
+          _onCatalogAdd(conn, request.catalogIds ?? const []);
       }
     } on StateError catch (e) {
       _sendTo(
@@ -2639,9 +3517,12 @@ class JamHostServer {
   /// §5.6 validation: playback actions need [JamCapability.controlPlayback];
   /// queue reorder needs [JamCapability.editQueue]; queue removal needs
   /// editQueue OR ownership (removing your own contribution is always
-  /// allowed).
+  /// allowed); a catalog add (§6.6) needs [JamCapability.addTracks], like an
+  /// upload.
   bool _requestAllowed(String peerId, RequestMessage request) {
     switch (request.action) {
+      case RequestAction.catalogAdd:
+        return _permissions.allows(peerId, JamCapability.addTracks);
       case RequestAction.play:
       case RequestAction.pause:
       case RequestAction.seek:
@@ -2968,7 +3849,14 @@ class JamHostServer {
   }
 
   /// [item] with `addedBy` set to [peerId] and nothing else changed.
-  static MediaItem _creditedTo(MediaItem item, String peerId) => MediaItem(
+  /// [item] credited to [peerId] (§5.6), carrying [catalogId] (§6.1, 1.3):
+  /// the catalog entry a catalog add landed it from, or null — an upload or
+  /// a host file is no catalog row, whatever the same bytes were before.
+  static MediaItem _creditedTo(
+    MediaItem item,
+    String peerId, {
+    String? catalogId,
+  }) => MediaItem(
     mediaId: item.mediaId,
     kind: item.kind,
     name: item.name,
@@ -2981,6 +3869,7 @@ class JamHostServer {
     album: item.album,
     artworkId: item.artworkId,
     addedBy: peerId,
+    catalogId: catalogId,
   );
 
   // --- Permissions & moderation (§5.6) --------------------------------------
@@ -3428,6 +4317,73 @@ class _MediaEntry {
   /// under this session (§5.6). Null for the host's own items and for a
   /// peer that sent no clientId — attribution then stays with the peerId.
   final String? device;
+}
+
+/// One catalog add waiting to land (§6.6). See `JamHostServer._catalogQueue`.
+class _CatalogAdd {
+  _CatalogAdd(
+    this.catalogId, {
+    required this.requester,
+    required this.generation,
+    this.peerKey,
+    this.request,
+  });
+
+  final String catalogId;
+
+  /// The guest connection whose `catalog_add` this is — judged again, and
+  /// credited, when it lands — or null for the host's own
+  /// `JamHostServer.addFromCatalog`.
+  final _GuestConn? requester;
+
+  /// The catalog generation it was queued under.
+  final int generation;
+
+  /// Completes with what landed, or null.
+  final Completer<({MediaItem item, bool added})?> done =
+      Completer<({MediaItem item, bool added})?>();
+
+  /// Whose per-peer pending count it holds (a guest's add only).
+  final Object? peerKey;
+
+  /// The `catalog_add` it came in with (a guest's add only), so a request
+  /// gets at most one `busy`.
+  final _CatalogRequest? request;
+
+  /// Whether its slots were given back (once).
+  bool released = false;
+
+  /// Whether it is remote input, held to the pending-adds bound and the
+  /// playlist cap.
+  bool get remote => requester != null;
+}
+
+/// One guest `catalog_add` request (§6.6), shared by the adds it queued.
+class _CatalogRequest {
+  /// Whether this request was answered `busy` already.
+  bool busySent = false;
+}
+
+/// A catalog add's cover, written to disk but not registered until the add
+/// lands (see `JamHostServer._stageArtwork`). [file] is null when the
+/// registry held these bytes already, so nothing was written.
+class _StagedArtwork {
+  _StagedArtwork(this.artworkId, this.mime, this.file);
+
+  final String artworkId;
+  final String mime;
+  final File? file;
+
+  /// Whether [file] became the registered artwork (else it is deleted).
+  bool kept = false;
+}
+
+/// One cached catalog cover (§6.6).
+class _CatalogCover {
+  const _CatalogCover(this.mime, this.bytes);
+
+  final String mime;
+  final Uint8List bytes;
 }
 
 /// What the host made one device (§5.6), kept by its stable clientId so it

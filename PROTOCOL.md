@@ -1,4 +1,4 @@
-# LocalJam Protocol 1.2
+# LocalJam Protocol 1.3
 
 Synchronized local-network media playback. One **host** owns the files and the
 authoritative session state; N **guests** join over LAN, fetch media, and play
@@ -21,6 +21,14 @@ that cannot read it joins from its Nearby list (§1), which carries no URL
 and reads the same in every 1.x. (No 1.0 or 1.1 app was released; this is
 for other implementations.)
 
+1.3 adds a host's **catalog** (§6.6): a song list a guest can browse over the
+media plane and add from to the queue. It is one broadcast (`catalog`), one
+optional `welcome` field, one optional playlist-item field (`catalogId`,
+§6.1), one request action (`catalog_add`), one error code (`busy`) and two
+token-gated routes (`/catalog`, `/catalog/{id}/artwork`) —
+all of it safe to ignore, so a 1.2 peer meets a 1.3 one exactly as before:
+a 1.2 guest sees no catalog, and a 1.2 host ignores `catalog_add` (§2.1).
+
 Design goals, in priority order:
 
 1. Works fully offline (same Wi-Fi or host's hotspot; no internet, no accounts).
@@ -42,7 +50,7 @@ Two channels, both served by the host on a single TCP port:
 | Plane   | Transport                  | Purpose                                  |
 |---------|----------------------------|------------------------------------------|
 | Control | WebSocket `ws://host:port/ws` | Session state, clock sync, playback commands |
-| Media   | HTTP `http://host:port/media/{mediaId}` | File transfer. MUST support `Range` requests. Guest uploads via `POST /media` (§6.4) |
+| Media   | HTTP `http://host:port/media/{mediaId}` | File transfer. MUST support `Range` requests. Guest uploads via `POST /media` (§6.4); cover art via `/artwork/{id}` (§6.5); the host's catalog via `/catalog` (§6.6, 1.3) |
 | Page    | HTTP `http://host:port/`, `/join`, `/web/…` | The browser guest's player (§1.1, 1.2). No token |
 
 - Control messages are JSON text frames. The `hello` handshake reserves an
@@ -171,7 +179,7 @@ after loading goes through `/ws`, `/media` and `/artwork` like any guest's.
 | `HEAD` on either | the same status and headers, no body |
 | any other method on either | `405`, `Allow: GET, HEAD` |
 | `GET /web/<anything else>` | `404` |
-| everything else | unchanged: `/ws`, `/media`, `/media/{id}`, `/artwork/{id}`; unknown paths `404` |
+| everything else | unchanged: `/ws`, `/media`, `/media/{id}`, `/artwork/{id}`, `/catalog`, `/catalog/{id}/artwork`; unknown paths `404` |
 
 - **No token.** The page is not a secret: it carries no room name, no
   token and nothing about the session, and the same bundle ships in every
@@ -207,7 +215,7 @@ after loading goes through `/ws`, `/media` and `/artwork` like any guest's.
 - The bundle is built to live under `/web/` (Flutter: `--base-href /web/`),
   so the `index.html` served at `/join` resolves its assets there. Nothing in
   it may need a path outside `/web/`, and none of its paths may collide with
-  `/ws`, `/media` or `/artwork`. It makes no off-origin request of any kind
+  `/ws`, `/media`, `/artwork` or `/catalog`. It makes no off-origin request of any kind
   — fonts and the renderer are bundled — because the room has no internet.
 
 ---
@@ -260,6 +268,10 @@ decodes tolerantly**, so a 1.x peer never breaks a 1.0 peer:
   | capability in `permissions.overrides` (§5.6) | that override is skipped |
   | `request.action` (§5.2) | the request is ignored |
 
+  So a 1.2 peer meets the 1.3 catalog (§6.6) as nothing at all: `catalog` is
+  a type it does not know, `welcome.catalog` a field, `catalog_add` an
+  action and `busy` an error code.
+
 So a 1.x addition must be safe to ignore. Anything a 1.0 peer would have to
 understand to stay correct is a new major version.
 
@@ -295,7 +307,8 @@ H→G  welcome   { sessionId, sessionName,
                  peers: [...], snapshot: <state §5.1>, playlist: [...],
                  permissions: <§5.6>,
                  host: {peerId: "host", clientName, clientKind},
-                 hostAway? }                                       // §3.5; omitted when false
+                 hostAway?,                                        // §3.5; omitted when false
+                 catalog? }                                        // §6.6 {rev, count}; omitted when none
      — or —
 H→G  reject    { reason: "bad_token" | "full" | "version" | "kicked",
                  versions? }                                       // with "version": §2.1
@@ -318,6 +331,10 @@ connection is joined. It is never displayed and never shared.
 
 `welcome.permissions` is the room's permission document (§5.6). A host that
 omits it is treated as listen-only until a `permissions` broadcast arrives.
+
+`welcome.catalog` (1.3) is the host's catalog as it stands, `{ rev, count }`
+(§6.6), so a joiner knows whether there is a library to browse without
+waiting for a `catalog` broadcast. Absent means the host offers none.
 
 `welcome.host` is the host as a *person*: the reserved peer id `"host"` plus
 the display identity the host device carries ("Silky Puffin"), same shape as
@@ -649,11 +666,14 @@ refuses:
 
 ```
 G→H  request { action: "play"|"pause"|"seek"|"set_media"|"next"|"previous"
-                       |"queue_move"|"queue_remove", ... }
+                       |"queue_move"|"queue_remove"
+                       |"catalog_add", ... }                    // catalog_add: 1.3, §6.6
 ```
 
 - `seek` carries `positionUs`; `set_media`, `queue_move`, `queue_remove`
-  carry `mediaId`; `queue_move` also carries `toIndex` (clamped host-side).
+  carry `mediaId`; `queue_move` also carries `toIndex` (clamped host-side);
+  `catalog_add` carries `catalogIds`, the host catalog entries to add, in
+  order (§6.6).
 - `set_media` selects an item and keeps the room doing what it was doing.
   A room that is playing — or starting: a start held by the §6.3 readiness
   gate — plays the selected item from its start (selected, then started
@@ -773,7 +793,8 @@ for attribution — the host is not a joined peer, and is named by
 The id `"host"` is never a remote peer's: no joined peer is ever assigned
 it, and nothing a remote device sends can claim it (§6.4).
 
-**Capabilities.** `add_tracks` (upload, §6.4), `control_playback`
+**Capabilities.** `add_tracks` (upload, §6.4; add from the host's catalog,
+§6.6), `control_playback`
 (play/pause/seek/select/skip), `edit_queue` (reorder; remove *others'*
 tracks), `manage_members` and `change_settings` (host-only in protocol 1,
 reserved on the wire for later delegation).
@@ -851,7 +872,7 @@ key it presents. Nothing a sender merely claims decides either.
 H→*  playlist { rev, items: [ {mediaId, kind: "audio"|"video"|"image",
                                name, mime, sizeBytes, durationUs, sha256,
                                title?, artist?, album?, artworkId?,
-                               addedBy?} ] }
+                               addedBy?, catalogId?} ] }
 ```
 
 `addedBy` attributes the contribution (§5.6): a peerId, the reserved
@@ -867,6 +888,10 @@ cover art servable via §6.5. All four are optional and **host-extracted**:
 the host parses tags itself for both its own files and guest uploads (§6.4),
 so guests never need a tag parser and every client sees identical metadata.
 `name` (the display filename) remains the fallback when tags are absent.
+
+`catalogId` (1.3) names the host catalog entry (§6.6) the item was added
+from, so a client can mark that catalog row as queued; absent for uploads,
+the host's own files, and hosts older than 1.3.
 
 An item whose `kind` a client does not know is one it cannot play: it drops
 that item and keeps the rest of the playlist (§2.1).
@@ -1095,6 +1120,148 @@ Authorization: Bearer <sessionToken>
 - Artwork never gates readiness: `media_status` (§6.3) is about playable
   bytes only. A guest that never fetches artwork is a fully-ready guest.
 
+### 6.6 Catalog (1.3)
+
+A host MAY offer a **catalog**: a list of songs it can add to the room on
+request — in the reference app, the host phone's music library. Guests (and
+the host) browse and search it and add songs from it to the queue; the queue
+stays short and the library stays on the host. A catalog entry is **not** a
+§6.1 item: it has no `mediaId` and no `sha256`, and its bytes are not
+servable. It becomes a playlist item only when someone adds it, and nothing
+is hashed, probed or read for it before then — except its cover, when asked
+(below).
+
+**Control plane.**
+
+```
+H→*  catalog { rev, count }        // the catalog changed, or appeared, or vanished
+```
+
+- `rev` increments on every change: the catalog's contents, or the host
+  turning it on or off. A refresh that leaves the listing exactly as it was
+  is no change — no new `rev`, no broadcast. `count` is how many entries it
+  holds; `count: 0`
+  means the host offers nothing to browse, and guests drop whatever listing
+  they cached.
+- `welcome.catalog?: { rev, count }` (§3.1) carries the same for a joiner.
+  Absent means none.
+- The broadcast is a notification, never the list itself: a guest that
+  wants the contents fetches them over the media plane (below) when `rev`
+  is newer than the listing it holds. Within a session `rev` only grows.
+
+```
+G→H  request { action: "catalog_add", catalogIds: [ ... ] }
+```
+
+- Needs `add_tracks` (§5.6), like an upload. Refused: `error { code:
+  "not_allowed", fatal: false }` (§5.2), and nothing is added.
+- `catalogIds` beyond the host's per-request cap (reference host: 50) are
+  dropped; ids the host does not know, or that are no longer in its catalog,
+  repeats within one request, ids already waiting to be added (anyone's
+  request), and ids whose content is already in the queue are skipped
+  silently — the last two neither take a slot nor cost the host another
+  read of the file. There is no reply per id: the ordinary §6.1 `playlist` broadcasts are the answer, and a
+  client compares. A request with no usable id — or one that arrives while
+  the host offers no catalog — changes nothing.
+- The host adds the ids in order, one at a time, in the background, the way
+  it adds its own files: resolve the file, sha256, and — for content the
+  room does not already have — probe its duration and read its tags and
+  cover (host-extracted, §6.1). Then it appends the item and broadcasts
+  `playlist`. One broadcast per landed item is fine: an item is playable the
+  moment it is in. Where the file carries no tags, the reference host falls
+  back to what the catalog entry said (title, artist, album, duration), so
+  the item reads as the row the guest picked. An add the host no longer
+  wants — see the landing rule below, and turning the catalog off — stops
+  at its next step, mid-hash included, and leaves nothing behind: its cover
+  is registered (§6.5) only when the item lands.
+- The landed item carries `catalogId` (§6.1), so a client can mark the
+  catalog row as queued.
+- The item is credited `addedBy` = **the requesting peer** (§5.6): it is
+  their contribution to the queue — their byline, and their right to remove
+  it — even though the file is the host's. Like an upload's (§6.4), an add
+  is judged again when it lands: it lands only while its requester is still
+  in the room (joined; dropped but inside its §3.3 grace window; or rejoined
+  under a new peerId, which it is credited to) and still holds `add_tracks`.
+  A device kicked meanwhile lands nothing.
+- Idempotent like uploads (§6.4): an id whose content is already in the
+  playlist is a no-op (no broadcast; the queued item keeps whatever
+  `catalogId` it has, none if it was uploaded); one whose content was
+  removed goes back in, credited to the requester, with the metadata it
+  had and this `catalogId`.
+- Bounds (host policy, §9.1): catalog adds pending — queued or landing —
+  are capped across all peers (reference host: 128) and per requesting
+  device, across its rejoins (reference host: 50, so one full request
+  fits whole), and the §9.1 "playlist
+  items from guests" cap counts them from the moment they are queued, as it
+  counts uploads in flight: these items are remote input. The ids that do
+  not fit are dropped, the rest of the request stands, and the requester
+  gets one `error { code: "busy", fatal: false }` (§8; a 1.2 client reads it
+  as a generic error). An add can still find the queue full when it lands —
+  the host's own additions are not held to the cap — and is then dropped
+  too, with a `busy` to its requester: at most one per request, counting
+  the one it may have had when it was queued. The upload byte budget does
+  not count catalog adds: nothing is stored.
+- Turning the catalog off (or replacing it with another provider of songs)
+  drops every add still waiting, and an add under way is abandoned before
+  it lands. A refresh that withdraws an id drops the adds waiting for it.
+
+**Media plane.**
+
+```
+GET /catalog                     Authorization: Bearer <sessionToken>
+200 application/json
+{ rev, items: [ { catalogId, title, artist?, album?, durationUs?,
+                  sizeBytes?, hasArtwork? } ] }
+```
+
+- `catalogId` is opaque and host-local, stable for the session (reference
+  host on Android: `c_<MediaStore id>`), never content-derived, and never
+  reused for a different song within a session. It is a URL path segment
+  (below), so it contains no `/`.
+- `title` and `catalogId` are required; an entry without either is dropped
+  (§2.1), and so are unknown fields. `durationUs` (µs) and `sizeBytes` are
+  the library's word, for display. `hasArtwork: false` says the song has no
+  cover (do not ask); absent means the host does not know until asked.
+- `404` when the host offers no catalog, `401` for a bad or missing token,
+  `405` for anything but `GET`. A full body, no `Range`. Guests bound the
+  body like any media response (§6.2): the reference guest caps it at 16 MB
+  and gives up on a host that stalls for 10 s.
+- Guests cache the listing by `rev` and re-fetch only when a `catalog`
+  broadcast announces a newer one. Search and filtering are client-local.
+
+```
+GET /catalog/{catalogId}/artwork  Authorization: Bearer <sessionToken>
+```
+
+- The song's embedded cover, read from its file **on demand** — never at
+  listing time: a 3,000-song catalog costs the host nothing until someone
+  scrolls. A full-body `200` with the cover's `Content-Type`; `404` when the
+  entry is unknown, has no cover, has one over the §6.5 cap (8 MB), or said
+  `hasArtwork: false`, and while no catalog is offered. The host reads the
+  file's tags under the same budget as an upload's (§6.4) and keeps a small
+  bounded cache (reference host: 64 covers, at most 32 MB, least recently
+  used out first; a song without a cover is remembered too). A cover read
+  while the host replaced or turned off its catalog is `404`.
+- The host reads only a few covers at once (reference host: 3, with up to
+  16 more requests waiting their turn); past that it answers `503` with
+  `Retry-After`, which is not "no cover": the guest may ask again later,
+  and nothing is remembered for it.
+- Guests hold few connections (§6.2) and SHOULD request covers for visible
+  rows only, through the same connection bound as every other media-plane
+  request.
+
+**Listing is not serving.** A catalog id never names bytes the host will
+serve: `/media/{id}` (§6.2) serves only items that have been added, by
+`mediaId` (one since removed from the queue stays servable, §5.6), so an
+entry's bytes are fetchable only once it has been added. A guest cannot
+bulk-download a library by enumerating ids — at most it can add it to the
+queue, one bounded request at a time, in plain view of the room.
+
+**Privacy.** The catalog shows the titles of a person's music to everyone
+holding the room token — on a discoverable room (§1), everyone on the Wi-Fi.
+So it is **host opt-in per room**, default off, and switchable live: each
+switch is a `catalog` broadcast.
+
 ---
 
 ## 7. Output-latency calibration (client-local)
@@ -1134,6 +1301,9 @@ H→G  error { code, message, fatal: bool }
 ```
 
 Codes: `not_allowed` (§5.6, never fatal), `kicked` (§5.6, always fatal),
+`busy` (1.3, §6.6, never fatal: the host is at a bound it will lift later —
+too many catalog adds pending, or the queue at its cap — and added what fit,
+or did not add the one that found the queue full as it landed),
 `media_gone`, `internal`, and `bad_token`, `version_unsupported`,
 `session_full` (reserved: joins are refused with `reject`, §3.1). Fatal
 errors are followed by a close. An unknown code is a generic error; `fatal`
@@ -1168,6 +1338,9 @@ still says whether the connection is ending (§2.1).
   pinned via the `localjam://` QR remains possible later as a
   **hostile-network hardening option for native clients**; it is not a
   prerequisite for anything, the web guest included.
+- A host's catalog (§6.6) is opt-in, because it reveals the titles of a
+  person's music to everyone holding the token. Listing is not serving: a
+  catalog id never fetches bytes; only an added item's `mediaId` does.
 - The page routes (§1.1) are unauthenticated by design and reveal nothing
   about the room: the bundle is the same in every host, the token rides only
   the URL fragment, and a request for the page carries neither.
@@ -1242,13 +1415,19 @@ a reject, a close, or a 4xx/5xx.
 | Time to send a valid `hello` | 10 s | socket dropped |
 | One upload | 512 MB | `413` |
 | Uploads this session | 2 GB | `507` |
-| Playlist items from guests | 500 | `507` |
+| Playlist items from guests — uploads in flight and catalog adds pending included (§6.6) | 500 | `507` (an upload); `busy` (a catalog add) |
 | Uploads in flight, one peer | 2 | `429` |
 | Upload body progress | ≥ 32 KB/s over every 30 s | `408`, upload abandoned |
 | Time to send a page response (§1.1), which needs no token | the longer of 10 s and its size at 32 KB/s | connection destroyed |
 | Body of a refused upload read (and dropped) before answering | 64 MB, within 10 s | answered and closed at once |
 | Cover art in one upload | 8 MB | art dropped, track kept |
 | Tag bytes read from one upload | ≈ 8 MB per read, ≈ 17 MB in all | art (or tags) skipped |
+| Catalog ids in one `catalog_add` (§6.6) | 50 | the rest dropped |
+| Catalog adds pending, all peers (§6.6) | 128 | the rest dropped, `error { busy }` |
+| Catalog adds pending, one peer's device (§6.6) | 50 | the rest dropped, `error { busy }` |
+| Catalog cover (§6.6), and the tag bytes read for it | 8 MB (≈ 17 MB read) | `404` |
+| Catalog covers held in memory (§6.6) | 64 covers, at most 32 MB | least recently used evicted |
+| Catalog covers read at once (§6.6) | 3, and 16 more waiting | `503`, `Retry-After: 1`, not cached |
 
 **What actually bounds memory.** Connections that have proved nothing are
 the ones a host must bound in bytes, and the bound has to be on bytes as

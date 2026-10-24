@@ -64,6 +64,12 @@ enum ErrorCode {
   kicked('kicked'),
   internal('internal'),
 
+  /// The host is at a bound it can lift later and refused the request
+  /// rather than queue more (§6.6: too many catalog adds pending, or the
+  /// queue at its cap). Never fatal; a 1.2 client reads it as a generic
+  /// error (§2.1).
+  busy('busy'),
+
   /// A code from a later protocol version. The error's `fatal` flag still
   /// says whether the connection is ending (§8).
   unknown('unknown');
@@ -165,13 +171,21 @@ enum RequestAction {
   queueMove('queue_move'),
 
   /// Remove [RequestMessage.mediaId] from the queue (§5.6).
-  queueRemove('queue_remove');
+  queueRemove('queue_remove'),
+
+  /// Add the host's catalog entries [RequestMessage.catalogIds] to the queue
+  /// (§6.6, protocol 1.3). Needs `add_tracks`, like an upload.
+  catalogAdd('catalog_add');
 
   const RequestAction(this.wire);
 
   /// Wire string for this action.
   final String wire;
 
+  /// The action [wire] names. Throws [FormatException] for an action this
+  /// version does not know, which makes the codec reject the frame — and a
+  /// host ignores a frame it cannot decode, so an unknown action is ignored
+  /// (§2.1), exactly as a 1.2 host ignores `catalog_add`.
   static RequestAction fromWire(String wire) => values.firstWhere(
     (a) => a.wire == wire,
     orElse: () => throw FormatException('Unknown request action: "$wire"'),
@@ -266,6 +280,7 @@ class MediaItem {
     this.album,
     this.artworkId,
     this.addedBy,
+    this.catalogId,
   });
 
   final String mediaId;
@@ -295,6 +310,12 @@ class MediaItem {
   /// Who contributed the item (§5.6 attribution): a peerId, the reserved
   /// [JamPermissions.hostPeerId], or null for legacy items.
   final String? addedBy;
+
+  /// The host catalog entry (§6.6, protocol 1.3) this item was added from,
+  /// so a client can mark that catalog row as queued. Set by the host when
+  /// a catalog add lands (a guest's `catalog_add` or the host's own);
+  /// null for uploads, the host's own files, and hosts older than 1.3.
+  final String? catalogId;
 
   /// The best display title: [title] when tagged, else the filename with its
   /// media extension stripped ("track1.m4a" reads as "track1"). The untouched
@@ -326,6 +347,7 @@ class MediaItem {
     if (album != null) 'album': album,
     if (artworkId != null) 'artworkId': artworkId,
     if (addedBy != null) 'addedBy': addedBy,
+    if (catalogId != null) 'catalogId': catalogId,
   };
 
   /// Decodes one §6.1 item. Throws for an unknown `kind` or a field of the
@@ -333,9 +355,11 @@ class MediaItem {
   ///
   /// A non-positive `durationUs` decodes as null (unknown): no real item
   /// lasts zero or negative time, and passing one on would make every
-  /// position "past the end" (§5.5).
+  /// position "past the end" (§5.5). An optional `catalogId` (1.3) that is
+  /// not a non-empty string decodes as absent rather than failing the item.
   factory MediaItem.fromJson(Map<String, Object?> json) {
     final durationUs = json['durationUs'] as int?;
+    final catalogId = json['catalogId'];
     return MediaItem(
       mediaId: json['mediaId'] as String,
       kind: MediaKind.fromWire(json['kind'] as String),
@@ -349,6 +373,7 @@ class MediaItem {
       album: json['album'] as String?,
       artworkId: json['artworkId'] as String?,
       addedBy: json['addedBy'] as String?,
+      catalogId: catalogId is String && catalogId.isNotEmpty ? catalogId : null,
     );
   }
 
@@ -380,7 +405,8 @@ class MediaItem {
       other.artist == artist &&
       other.album == album &&
       other.artworkId == artworkId &&
-      other.addedBy == addedBy;
+      other.addedBy == addedBy &&
+      other.catalogId == catalogId;
 
   @override
   int get hashCode => Object.hash(
@@ -396,7 +422,202 @@ class MediaItem {
     album,
     artworkId,
     addedBy,
+    catalogId,
   );
+}
+
+/// What a host's catalog is, as the control plane announces it (§6.6):
+/// `welcome.catalog` and the `catalog` broadcast.
+///
+/// A summary is a notification, never the list: guests fetch the entries
+/// over the media plane (`GET /catalog`) when [rev] changes. [count] 0 means
+/// the host offers nothing to browse.
+@immutable
+class CatalogSummary {
+  const CatalogSummary({required this.rev, required this.count});
+
+  /// Increments on every change to the catalog: its contents, or the host
+  /// turning it on or off.
+  final int rev;
+
+  /// How many entries the catalog holds; 0 when the host offers none.
+  final int count;
+
+  /// Whether there is anything to browse.
+  bool get isOffered => count > 0;
+
+  Map<String, Object?> toJson() => {'rev': rev, 'count': count};
+
+  /// Decodes `{rev, count}`; throws when `rev` is missing or not an int. A
+  /// missing or negative `count` reads as 0.
+  factory CatalogSummary.fromJson(Map<String, Object?> json) {
+    final count = json['count'];
+    return CatalogSummary(
+      rev: json['rev'] as int,
+      count: count is int && count > 0 ? count : 0,
+    );
+  }
+
+  /// [CatalogSummary.fromJson], or null for a value that does not fit.
+  static CatalogSummary? tryFromJson(Map<String, Object?> json) {
+    try {
+      return CatalogSummary.fromJson(json);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      other is CatalogSummary && other.rev == rev && other.count == count;
+
+  @override
+  int get hashCode => Object.hash(rev, count);
+
+  @override
+  String toString() => 'CatalogSummary(rev: $rev, count: $count)';
+}
+
+/// One song a host offers in its catalog (§6.6). NOT a playlist item: it
+/// has no `mediaId` and no `sha256`, and its bytes are not servable. It
+/// becomes a §6.1 [MediaItem] only once someone adds it
+/// ([RequestAction.catalogAdd]).
+@immutable
+class CatalogEntry {
+  const CatalogEntry({
+    required this.catalogId,
+    required this.title,
+    this.artist,
+    this.album,
+    this.durationUs,
+    this.sizeBytes,
+    this.hasArtwork,
+  });
+
+  /// Opaque and host-local, stable for the session and never reused for a
+  /// different song within it (reference host on Android: `c_<MediaStore
+  /// id>`). Not content-derived.
+  final String catalogId;
+
+  /// Display title (the host's library title, which is usually the tag).
+  final String title;
+  final String? artist;
+  final String? album;
+
+  /// The library's duration in µs; null when unknown.
+  final int? durationUs;
+
+  /// File size in bytes; null when unknown.
+  final int? sizeBytes;
+
+  /// Whether the song has an embedded cover the host can serve from
+  /// `GET /catalog/{catalogId}/artwork`: `false` means none (do not ask),
+  /// null means the host does not know until someone asks.
+  final bool? hasArtwork;
+
+  Map<String, Object?> toJson() => {
+    'catalogId': catalogId,
+    'title': title,
+    'artist': ?artist,
+    'album': ?album,
+    'durationUs': ?durationUs,
+    'sizeBytes': ?sizeBytes,
+    'hasArtwork': ?hasArtwork,
+  };
+
+  /// Decodes one entry. Throws when `catalogId` or `title` is missing or of
+  /// the wrong type, or `catalogId` is empty; listing decoders use
+  /// [tryFromJson]. A non-positive `durationUs` and a negative `sizeBytes`
+  /// read as unknown, and an optional field of the wrong type as absent.
+  factory CatalogEntry.fromJson(Map<String, Object?> json) {
+    final catalogId = json['catalogId'] as String;
+    if (catalogId.isEmpty) {
+      throw const FormatException('empty catalogId');
+    }
+    final artist = json['artist'];
+    final album = json['album'];
+    final durationUs = json['durationUs'];
+    final sizeBytes = json['sizeBytes'];
+    final hasArtwork = json['hasArtwork'];
+    return CatalogEntry(
+      catalogId: catalogId,
+      title: json['title'] as String,
+      artist: artist is String ? artist : null,
+      album: album is String ? album : null,
+      durationUs: durationUs is int && durationUs > 0 ? durationUs : null,
+      sizeBytes: sizeBytes is int && sizeBytes >= 0 ? sizeBytes : null,
+      hasArtwork: hasArtwork is bool ? hasArtwork : null,
+    );
+  }
+
+  /// [CatalogEntry.fromJson], or null for an entry that does not fit the
+  /// schema: a listing drops it and keeps the rest (§2.1).
+  static CatalogEntry? tryFromJson(Map<String, Object?> json) {
+    try {
+      return CatalogEntry.fromJson(json);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      other is CatalogEntry &&
+      other.catalogId == catalogId &&
+      other.title == title &&
+      other.artist == artist &&
+      other.album == album &&
+      other.durationUs == durationUs &&
+      other.sizeBytes == sizeBytes &&
+      other.hasArtwork == hasArtwork;
+
+  @override
+  int get hashCode => Object.hash(
+    catalogId,
+    title,
+    artist,
+    album,
+    durationUs,
+    sizeBytes,
+    hasArtwork,
+  );
+
+  @override
+  String toString() => 'CatalogEntry($catalogId, $title)';
+}
+
+/// The body of `GET /catalog` (§6.6): the catalog's [rev] and its
+/// [items]. Media plane, not a control message.
+@immutable
+class CatalogListing {
+  const CatalogListing({required this.rev, this.items = const []});
+
+  final int rev;
+  final List<CatalogEntry> items;
+
+  Map<String, Object?> toJson() => {
+    'rev': rev,
+    'items': [for (final e in items) e.toJson()],
+  };
+
+  /// Decodes a listing; entries that do not fit are dropped (§2.1). Throws
+  /// when `rev` is missing or not an int.
+  factory CatalogListing.fromJson(Map<String, Object?> json) => CatalogListing(
+    rev: json['rev'] as int,
+    items: List.unmodifiable(
+      _tolerantList(json['items'], CatalogEntry.tryFromJson),
+    ),
+  );
+
+  /// [CatalogListing.fromJson], or null for a body that does not fit.
+  static CatalogListing? tryFromJson(Object? json) {
+    if (json is! Map) return null;
+    try {
+      return CatalogListing.fromJson(json.cast<String, Object?>());
+    } catch (_) {
+      return null;
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -490,6 +711,7 @@ class WelcomeMessage extends Message {
     this.host,
     this.uploadKey,
     this.hostAway = false,
+    this.catalog,
   });
 
   static const wireType = 'welcome';
@@ -530,6 +752,10 @@ class WelcomeMessage extends Message {
   /// host that does not send one; clients fall back to the role word.
   final PeerInfo? host;
 
+  /// The host's catalog as it stands (§6.6, protocol 1.3), or null when the
+  /// host offers none (the field is absent). Omitted from the wire when null.
+  final CatalogSummary? catalog;
+
   @override
   String get type => wireType;
 
@@ -544,12 +770,14 @@ class WelcomeMessage extends Message {
     if (permissions != null) 'permissions': permissions!.toJson(),
     if (host != null) 'host': host!.toJson(),
     if (hostAway) 'hostAway': true,
+    if (catalog != null) 'catalog': catalog!.toJson(),
   };
 
   factory WelcomeMessage.fromPayload(Map<String, Object?> json) {
     final you = json['you'] as Map<String, Object?>? ?? const {};
     final rawPermissions = json['permissions'];
     final rawHost = json['host'];
+    final rawCatalog = json['catalog'];
     final uploadKey = you['uploadKey'];
     return WelcomeMessage(
       sessionId: json['sessionId'] as String,
@@ -568,6 +796,9 @@ class WelcomeMessage extends Message {
           : null,
       uploadKey: uploadKey is String && uploadKey.isNotEmpty ? uploadKey : null,
       hostAway: json['hostAway'] == true,
+      catalog: rawCatalog is Map
+          ? CatalogSummary.tryFromJson(rawCatalog.cast<String, Object?>())
+          : null,
     );
   }
 }
@@ -757,13 +988,15 @@ class ClockPongMessage extends Message {
 /// G→H request that the host may apply (PROTOCOL.md §5.2).
 ///
 /// Guests never mutate state directly. [mediaId] accompanies
-/// [RequestAction.setMedia]; [positionUs] accompanies [RequestAction.seek].
+/// [RequestAction.setMedia]; [positionUs] accompanies [RequestAction.seek];
+/// [catalogIds] accompanies [RequestAction.catalogAdd].
 class RequestMessage extends Message {
   const RequestMessage({
     required this.action,
     this.mediaId,
     this.positionUs,
     this.toIndex,
+    this.catalogIds,
   });
 
   static const wireType = 'request';
@@ -775,6 +1008,11 @@ class RequestMessage extends Message {
   /// Target queue index for [RequestAction.queueMove] (§5.6).
   final int? toIndex;
 
+  /// The host catalog entries to add, in order, for
+  /// [RequestAction.catalogAdd] (§6.6). Non-string entries of the wire list
+  /// are dropped on decode; omitted from the wire when null.
+  final List<String>? catalogIds;
+
   @override
   String get type => wireType;
 
@@ -784,15 +1022,19 @@ class RequestMessage extends Message {
     if (mediaId != null) 'mediaId': mediaId,
     if (positionUs != null) 'positionUs': positionUs,
     if (toIndex != null) 'toIndex': toIndex,
+    if (catalogIds != null) 'catalogIds': catalogIds,
   };
 
-  factory RequestMessage.fromPayload(Map<String, Object?> json) =>
-      RequestMessage(
-        action: RequestAction.fromWire(json['action'] as String),
-        mediaId: json['mediaId'] as String?,
-        positionUs: json['positionUs'] as int?,
-        toIndex: json['toIndex'] as int?,
-      );
+  factory RequestMessage.fromPayload(Map<String, Object?> json) {
+    final rawCatalogIds = json['catalogIds'];
+    return RequestMessage(
+      action: RequestAction.fromWire(json['action'] as String),
+      mediaId: json['mediaId'] as String?,
+      positionUs: json['positionUs'] as int?,
+      toIndex: json['toIndex'] as int?,
+      catalogIds: rawCatalogIds is List ? _stringList(rawCatalogIds) : null,
+    );
+  }
 }
 
 /// H→* authoritative playback state broadcast (PROTOCOL.md §5.1).
@@ -862,6 +1104,31 @@ class PermissionsMessage extends Message {
 
   factory PermissionsMessage.fromPayload(Map<String, Object?> json) =>
       PermissionsMessage(permissions: JamPermissions.fromJson(json));
+}
+
+/// H→* the host's catalog changed, appeared or vanished (PROTOCOL.md §6.6,
+/// protocol 1.3). The payload is exactly a [CatalogSummary]: a
+/// notification, never the list — guests re-fetch `GET /catalog` when
+/// [summary]'s rev is newer than what they hold. `count: 0` means the host
+/// offers no catalog any more.
+class CatalogMessage extends Message {
+  const CatalogMessage({required this.summary});
+
+  static const wireType = 'catalog';
+
+  final CatalogSummary summary;
+
+  int get rev => summary.rev;
+  int get count => summary.count;
+
+  @override
+  String get type => wireType;
+
+  @override
+  Map<String, Object?> payloadToJson() => summary.toJson();
+
+  factory CatalogMessage.fromPayload(Map<String, Object?> json) =>
+      CatalogMessage(summary: CatalogSummary.fromJson(json));
 }
 
 /// G→H media readiness report (PROTOCOL.md §6.3, §7).

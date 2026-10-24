@@ -164,6 +164,59 @@ bool jamRejectIsRetryable(RejectReason? reason) => switch (reason) {
   RejectReason.full || RejectReason.unknown || null => true,
 };
 
+/// What the jam says about the host's shared music library (§6.6): sharing
+/// it, adding from it, and the host being told who added what.
+abstract final class JamCatalogStrings {
+  /// A guest's `catalog_add` (or upload) past the host's bounds (§6.6
+  /// `busy`): too many adds waiting, or the queue full.
+  /// Also the queue at its cap for guests' songs, so it says what happened
+  /// rather than promising that a moment will help.
+  static const String busy = 'Some of those songs didn’t fit in the queue.';
+
+  /// The library could not be read when the host turned sharing on — the
+  /// jam goes on without it.
+  static const String shareFailed =
+      'Couldn’t read your music library, so the jam isn’t sharing it.';
+
+  /// Sharing is on, but there is nothing in the library to browse.
+  static const String shareEmpty =
+      'There’s no music on this phone to share yet.';
+
+  /// A guest asked for songs: they land one at a time, so the ask is
+  /// confirmed now and each song shows up in Up Next as it arrives.
+  static String adding(int n, String title) =>
+      n == 1 ? 'Adding “$title”' : 'Adding $n songs';
+
+  /// A pick bigger than one request carries (§6.6: 50 songs): the first
+  /// ones are on their way, the rest are the guest's to add again.
+  static String addingSome(int sent, int picked) =>
+      'Adding $sent of $picked. Add the rest once these are in.';
+
+  /// The host's own add that came to nothing.
+  static String addFailed(int n) =>
+      n == 1 ? 'Couldn’t add that song.' : 'Couldn’t add those songs.';
+
+  /// The host is told who took what from its library: "Mia added Night
+  /// Drive from your library".
+  static String addedFromYourLibrary(String who, String? title) => title == null
+      ? '$who added a song from your library'
+      : '$who added $title from your library';
+
+  /// A burst of adds from one guest, told once.
+  static String addedSongsFromYourLibrary(String who, int n) =>
+      '$who added $n songs from your library';
+}
+
+/// One guest's adds from the host's library waiting to be told as one
+/// notice ([JamSessionController.catalogNoticeWindow]).
+class _CatalogBurst {
+  _CatalogBurst(this.firstTitle);
+
+  final String? firstTitle;
+  int count = 0;
+  Timer? timer;
+}
+
 /// What [JamSessionController.restartArgs] carries: enough to open host
 /// setup on the room that just died, queue and all.
 typedef JamRestartArgs = ({String name, List<String> paths});
@@ -262,8 +315,15 @@ class JamSessionController extends ChangeNotifier {
   /// web guests (§1.1) — the app's own by default; tests hand in a settled
   /// one so what a room serves never depends on whether this checkout ran
   /// `tool/build_web_guest.sh`.
-  JamSessionController({WebGuestBundle? webGuest})
-    : _webGuest = webGuest ?? WebGuestBundle.app {
+  ///
+  /// [librarySource] makes the catalog source a host shares when it shares
+  /// its music library (§6.6) — the device library by default; tests hand
+  /// in their own.
+  JamSessionController({
+    WebGuestBundle? webGuest,
+    JamCatalogSource Function()? librarySource,
+  }) : _webGuest = webGuest ?? WebGuestBundle.app,
+       _librarySource = librarySource ?? JamMediaLibraryCatalogSource.new {
     // Identity can arrive late. `JamIdentity.displayName()` hands out an
     // ephemeral name when `shared_preferences` does not answer inside its
     // timeout, then adopts the stored one in the background — and everything
@@ -277,6 +337,14 @@ class JamSessionController extends ChangeNotifier {
   JamEngine? _engine;
   JamSide? _side;
   final WebGuestBundle _webGuest;
+  final JamCatalogSource Function() _librarySource;
+
+  /// The library the hosted jam shares as its catalog (§6.6), or null.
+  JamCatalogSource? _sharedLibrary;
+
+  /// Bumped by every share/unshare, so a listing that finishes after a
+  /// later toggle (or the end of the room) changes nothing here.
+  int _libraryShareGeneration = 0;
 
   /// See [servesWebPlayer].
   final ValueNotifier<bool> _servesWebPlayer = ValueNotifier<bool>(false);
@@ -729,6 +797,7 @@ class JamSessionController extends ChangeNotifier {
     JamPolicy policy = JamPolicy.jam,
     bool discoverable = true,
     List<String> paths = const [],
+    bool shareLibrary = false,
   }) async {
     if (!_claimStart()) return false;
     // A new room of this device's own: the old one's way back (a guest's
@@ -763,6 +832,10 @@ class JamSessionController extends ChangeNotifier {
       // 00:00 holding a full playlist. Only the host does this: a guest's
       // transport follows the host's authoritative state.
       if (paths.isNotEmpty) _startImport(engine, paths);
+      // The library is listed after the room is up, never in front of it:
+      // a library that cannot be read is a notice, not a jam that would
+      // not start.
+      if (shareLibrary) unawaited(_shareLibrary(engine));
       return true;
     } catch (e) {
       _lastFailure = e;
@@ -1068,6 +1141,154 @@ class JamSessionController extends ChangeNotifier {
     );
   }
 
+  // --- Shared library (§6.6) ---------------------------------------------------
+
+  /// The library the jam this device hosts shares as its catalog, or null —
+  /// what the host's own browse sheet reads covers from.
+  JamCatalogSource? get sharedLibrary => _sharedLibrary;
+
+  /// Turns sharing the host's music library with the jam on or off
+  /// (§6.6). The permission is the caller's to have asked for. True when
+  /// the jam now does what was asked; a library that could not be read is
+  /// reported as a notice and answers false.
+  Future<bool> setLibraryShared(bool share) async {
+    final host = hostEngine;
+    if (host == null || !isLive) return false;
+    if (share) return _shareLibrary(host);
+    _libraryShareGeneration++;
+    _sharedLibrary = null;
+    await host.shareCatalog(null);
+    return true;
+  }
+
+  Future<bool> _shareLibrary(JamHostEngine engine) async {
+    final generation = ++_libraryShareGeneration;
+    final source = _librarySource();
+    try {
+      await engine.shareCatalog(source);
+    } catch (e) {
+      debugPrint('localjam: could not share the music library: $e');
+      if (generation == _libraryShareGeneration && identical(_engine, engine)) {
+        notify(JamCatalogStrings.shareFailed, tone: JamNoticeTone.error);
+      }
+      return false;
+    }
+    // Overtaken by a later toggle, or the room is gone.
+    if (generation != _libraryShareGeneration || !identical(_engine, engine)) {
+      return false;
+    }
+    final shared = engine.catalog.value;
+    if (shared == null) return false;
+    _sharedLibrary = source;
+    if (shared.count == 0) {
+      notify(JamCatalogStrings.shareEmpty, tone: JamNoticeTone.neutral);
+    }
+    return true;
+  }
+
+  /// Adds [entries] of the host's shared library to the queue (§6.6): a
+  /// guest asks the host, which adds them one at a time in the background;
+  /// the host adds them itself. Every outcome says something — a request
+  /// that cannot reach the host, an add that came to nothing, a pick the
+  /// queue already held.
+  Future<void> addFromCatalog(List<CatalogEntry> entries) async {
+    if (entries.isEmpty || !isLive) return;
+    if (!canSendCommands) {
+      notify(_whyNot(), tone: JamNoticeTone.warning);
+      return;
+    }
+    final guest = guestEngine;
+    if (guest != null) {
+      final request = await guest.requestCatalogAddCounted([
+        for (final entry in entries) entry.catalogId,
+      ]);
+      // A jam that ended meanwhile has its own page saying so.
+      if (!identical(_engine, guest) || !isLive) return;
+      if (!request.delivered) {
+        notify(_whyNot(), tone: JamNoticeTone.warning);
+        return;
+      }
+      JamHaptics.queued();
+      // One request carries at most [JamGuestEngine.maxCatalogAddsPerCall]
+      // songs: what did not fit is said, never dropped in silence.
+      notify(
+        request.dropped > 0
+            ? JamCatalogStrings.addingSome(
+                request.sent,
+                request.sent + request.dropped,
+              )
+            : JamCatalogStrings.adding(
+                request.sent,
+                stripAudioExtension(entries.first.title),
+              ),
+        tone: request.dropped > 0
+            ? JamNoticeTone.warning
+            : JamNoticeTone.neutral,
+      );
+      return;
+    }
+    final host = hostEngine;
+    if (host == null) return;
+    // All at once: the server adds them one at a time in order, and each
+    // lands in the queue as it is ready. One summary when they are done.
+    final results = await Future.wait([
+      for (final entry in entries) host.addFromCatalog(entry.catalogId),
+    ]);
+    if (!identical(_engine, host) || !isLive) return;
+    final failed = results.where((r) => r == null).length;
+    final duplicates = results.where((r) => r?.alreadyQueued ?? false).length;
+    if (failed < entries.length) JamHaptics.queued();
+    if (failed > 0) {
+      notify(JamCatalogStrings.addFailed(failed), tone: JamNoticeTone.warning);
+    } else if (duplicates == entries.length) {
+      notify(kJamAlreadyQueued, tone: JamNoticeTone.neutral);
+    }
+  }
+
+  /// A guest's add from the host's library landed: the host is told who
+  /// took what, as for an upload. The host's own adds say nothing — it
+  /// just did them.
+  ///
+  /// A burst from one person is one notice: songs land one at a time, so
+  /// each add waits [catalogNoticeWindow] for the next from the same peer,
+  /// and a dozen become "Mia added 12 songs from your library".
+  void _onCatalogAdd(JamCatalogAdd add) {
+    if (add.byHost) return;
+    final item = _engine?.playlist
+        .where((i) => i.mediaId == add.mediaId)
+        .firstOrNull;
+    final entryTitle = add.entry?.title.trim();
+    final title = item != null
+        ? jamDisplayTitle(item)
+        : (entryTitle == null || entryTitle.isEmpty
+              ? null
+              : stripAudioExtension(entryTitle));
+    final burst = _catalogBursts.putIfAbsent(
+      add.peerId,
+      () => _CatalogBurst(title),
+    );
+    burst.count++;
+    burst.timer?.cancel();
+    burst.timer = Timer(catalogNoticeWindow, () {
+      _catalogBursts.remove(add.peerId);
+      if (!isLive) return;
+      final who = _peerNames[add.peerId] ?? 'Someone';
+      notify(
+        burst.count == 1
+            ? JamCatalogStrings.addedFromYourLibrary(who, burst.firstTitle)
+            : JamCatalogStrings.addedSongsFromYourLibrary(who, burst.count),
+        tone: JamNoticeTone.people,
+      );
+    });
+  }
+
+  /// How long a guest's add from the library waits for the next from the
+  /// same guest before the host is told.
+  static const Duration catalogNoticeWindow = Duration(milliseconds: 1500);
+
+  /// Adds from the library not yet told to the host, by peer.
+  final Map<String, _CatalogBurst> _catalogBursts = {};
+
   /// Starts the host's background import of [paths] — see [startHost].
   void _startImport(JamHostEngine engine, List<String> paths) {
     final job = engine.importFiles(paths.map(File.new), autoPlay: true);
@@ -1269,7 +1490,8 @@ class JamSessionController extends ChangeNotifier {
     if (host != null) {
       _subs
         ..add(host.events.listen(_onHostEvent))
-        ..add(host.mediaUploads.listen(_onUpload));
+        ..add(host.mediaUploads.listen(_onUpload))
+        ..add(host.catalogAdds.listen(_onCatalogAdd));
     }
     notifyListeners();
   }
@@ -1286,6 +1508,12 @@ class JamSessionController extends ChangeNotifier {
     // An import still running belongs to the room being left.
     _import?.cancel();
     _import = null;
+    _sharedLibrary = null;
+    _libraryShareGeneration++;
+    for (final burst in _catalogBursts.values) {
+      burst.timer?.cancel();
+    }
+    _catalogBursts.clear();
     for (final sub in _subs) {
       unawaited(sub.cancel());
     }
@@ -1354,6 +1582,9 @@ class JamSessionController extends ChangeNotifier {
       ErrorCode.mediaGone => 'That song is no longer in the jam.',
       ErrorCode.internal => 'The host hit a problem with that.',
       ErrorCode.sessionFull => 'The jam is full.',
+      // Past the host's bounds (§6.6): too many adds waiting, or the queue
+      // full. The ids that fit are still on their way.
+      ErrorCode.busy => JamCatalogStrings.busy,
       ErrorCode.versionUnsupported => kJamVersionMismatch,
       // A code from a newer host (§2 tolerant decoding): nothing specific
       // to say about it, and nothing to retry automatically either.

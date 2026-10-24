@@ -197,6 +197,11 @@ Future<int> _runLoop(JamHostServer server, StatusScreen screen) async {
           '+ upload: ${event.mediaId}'
           '${event.peerId != null ? ' from ${event.peerId}' : ''}',
         );
+      case JamHostEventKind.catalogAdded:
+        screen.log(
+          '+ catalog add: ${event.catalogId} -> ${event.mediaId}'
+          '${event.peerId != null ? ' by ${event.peerId}' : ''}',
+        );
       case JamHostEventKind.permissionsBroadcast:
         screen.log('> permissions rev=${event.permissions!.rev}');
       case JamHostEventKind.requestDenied:

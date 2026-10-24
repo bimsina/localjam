@@ -39,6 +39,8 @@ import '../design/typography.dart';
 import '../state/session_controller.dart';
 import '../util/format.dart';
 import '../util/jam_cover.dart';
+import '../util/media_picking.dart'
+    show JamPickerStrings, ensureLibraryAccess, jamLibraryAvailable;
 import '../util/network.dart';
 import 'buttons.dart';
 import 'dialogs.dart';
@@ -80,6 +82,15 @@ abstract final class RoomSheetStrings {
       'People on this Wi‑Fi can see and join this jam.';
   static const String nearbyOffFooter =
       'Only people with the link or the code can join.';
+
+  // The host's music library offered to the jam (§6.6). Same words as
+  // Start a Jam's switch.
+  static const String shareLibrary = JamPickerStrings.shareLibrary;
+  static String shareLibraryDetail(JamPolicy policy, bool discoverable) =>
+      JamPickerStrings.shareLibraryDetail(
+        addTracks: policy.addTracks,
+        discoverable: discoverable,
+      );
 
   // The per-guest menu.
   static const String makeCohost = 'Make co-host';
@@ -448,6 +459,9 @@ class _RoomPanelState extends State<RoomPanel> {
           ],
         ),
       if (isHost) _Nearby(host: host, plain: plain),
+      // Only where there is a library to share (Android), as in Start a Jam.
+      if (isHost && jamLibraryAvailable)
+        _ShareLibrary(host: host, policy: permissions.policy, plain: plain),
       _LeaveSection(
         isHost: isHost,
         plain: plain,
@@ -843,6 +857,70 @@ class _Nearby extends StatelessWidget {
           onChanged: (value) => unawaited(host.setDiscoverable(value)),
         ),
       ],
+    ),
+  );
+}
+
+/// The host's Share My Music Library switch (§6.6), live: on asks for the
+/// music library (rationale, OS) and shares it; off stops at once. Follows
+/// the engine, so a change made from the docked panel shows in the sheet
+/// too. Its line says who sees the titles, true to [policy] and the nearby
+/// switch.
+class _ShareLibrary extends StatefulWidget {
+  const _ShareLibrary({
+    required this.host,
+    required this.policy,
+    this.plain = false,
+  });
+
+  final JamHostEngine host;
+  final JamPolicy policy;
+  final bool plain;
+
+  @override
+  State<_ShareLibrary> createState() => _ShareLibraryState();
+}
+
+class _ShareLibraryState extends State<_ShareLibrary> {
+  /// The answer a toggle in flight is heading for, shown meanwhile.
+  bool? _pending;
+
+  Future<void> _set(bool share) async {
+    final session = JamSession.read(context);
+    setState(() => _pending = share);
+    try {
+      if (share) {
+        if (await ensureLibraryAccess(session)) {
+          await session.setLibraryShared(true);
+        }
+      } else {
+        await session.setLibraryShared(false);
+      }
+    } finally {
+      if (mounted) setState(() => _pending = null);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => _whileLive(
+    widget.host,
+    widget.host.discoveryEnabledListenable,
+    (context, shown) => _whileLive(
+      widget.host,
+      widget.host.catalog,
+      (context, catalog) => _section(
+        plain: widget.plain,
+        children: [
+          JamRow.toggle(
+            title: RoomSheetStrings.shareLibrary,
+            subtitle: RoomSheetStrings.shareLibraryDetail(widget.policy, shown),
+            value: _pending ?? catalog != null,
+            onChanged: _pending != null
+                ? null
+                : (value) => unawaited(_set(value)),
+          ),
+        ],
+      ),
     ),
   );
 }

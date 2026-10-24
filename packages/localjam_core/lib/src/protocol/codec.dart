@@ -169,6 +169,8 @@ class MessageCodec {
         return PlaylistMessage.fromPayload(payload);
       case PermissionsMessage.wireType:
         return PermissionsMessage.fromPayload(payload);
+      case CatalogMessage.wireType:
+        return CatalogMessage.fromPayload(payload);
       case MediaStatusMessage.wireType:
         return MediaStatusMessage.fromPayload(payload);
       case ErrorMessage.wireType:

@@ -56,9 +56,13 @@ void mockNativeChannels({int durationUs = 60000000}) {
 /// Its rooms serve no browser player unless [webGuest] brings one: the
 /// app's own is whatever this checkout last built into `assets/web/`, and a
 /// test must not pass on one laptop and fail on a clean clone.
+///
+/// [librarySource] stands in for the device music library a host shares
+/// (§6.6); without one, sharing lists the real (here: empty) library.
 JamSessionController testSession({
   String identity = 'Silky Puffin',
   WebGuestBundle? webGuest,
+  JamCatalogSource Function()? librarySource,
 }) {
   mockNativeChannels();
   SharedPreferences.setMockInitialValues({'localjam.displayName': identity});
@@ -66,6 +70,7 @@ JamSessionController testSession({
   JamEngine.historyStoreProvider = () async => null;
   final controller = JamSessionController(
     webGuest: webGuest ?? WebGuestBundle.loaded(null),
+    librarySource: librarySource,
   );
   addTearDown(() async {
     await controller.leave();

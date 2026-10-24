@@ -13,6 +13,7 @@ import 'package:localjam_audio/localjam_audio.dart';
 import 'package:localjam_net/localjam_net.dart';
 
 import 'audio_sync_controller.dart';
+import 'catalog_source.dart';
 import 'engine_notifier.dart';
 import 'jam_discovery.dart';
 import 'jam_engine.dart';
@@ -785,8 +786,14 @@ class JamHostEngine extends JamEngine {
   /// to nothing at all: the host's controller parked waiting for a path
   /// that never came, and the host was silent for every guest's track
   /// while the room played on (2026-10-17 run).
+  ///
+  /// A catalog add (§6.6) plays from the file the registry holds for it
+  /// ([JamHostServer.mediaFile]) — the library file — whether or not its
+  /// `catalogAdded` event has been handled yet.
   String? _playablePathFor(String mediaId) =>
-      _server.storedUploadFile(mediaId)?.path ?? _mediaPaths[mediaId];
+      _server.storedUploadFile(mediaId)?.path ??
+      _mediaPaths[mediaId] ??
+      _server.mediaFile(mediaId)?.path;
 
   /// Latest in-flight fetch progress per peer (§6.3); entries are removed
   /// when the peer's report leaves `fetching` or the peer drops.
@@ -800,6 +807,8 @@ class JamHostEngine extends JamEngine {
       StreamController<String?>.broadcast();
   final StreamController<({String mediaId, String? peerId})> _mediaUploads =
       StreamController<({String mediaId, String? peerId})>.broadcast();
+  final StreamController<JamCatalogAdd> _catalogAdds =
+      StreamController<JamCatalogAdd>.broadcast();
 
   // --- Server mirror -----------------------------------------------------------
 
@@ -851,7 +860,9 @@ class JamHostEngine extends JamEngine {
   @override
   String get selfPeerId => JamPermissions.hostPeerId;
 
-  /// The file this host added [item] from; null for a guest's upload.
+  /// The file this host added [item] from — one of its own files, or a song
+  /// of its shared library (a catalog add, §6.6, whoever asked for it);
+  /// null for a guest's upload.
   ///
   /// An upload is played from the server's own upload store, but that store
   /// is the room's: it is deleted when the room closes. Reporting it here
@@ -1158,6 +1169,124 @@ class JamHostEngine extends JamEngine {
     }
   }
 
+  // --- Catalog (§6.6) ---------------------------------------------------------
+
+  /// The provider the server reads the source [shareCatalog] last shared
+  /// through (one per source, so a refresh keeps adds waiting).
+  _SourceCatalogProvider? _catalogProvider;
+
+  /// Bumped by every [shareCatalog] call: a listing that finishes after a
+  /// later call (or [close]) is dropped.
+  int _catalogShareGeneration = 0;
+
+  final ValueNotifier<CatalogSummary?> _catalog =
+      EngineValueNotifier<CatalogSummary?>(null);
+
+  /// The catalog this host offers the room (§6.6): its `rev` and entry
+  /// count while [shareCatalog] has a source shared — `count` may be 0 for
+  /// an empty library, which guests read as "nothing to browse" — and null
+  /// while it shares none.
+  @override
+  ValueListenable<CatalogSummary?> get catalog => _catalog;
+
+  /// The entries the room can browse, as listed at the last [shareCatalog]
+  /// (empty while none is shared): what the host's own "add from my
+  /// library" sheet shows.
+  List<CatalogEntry> get catalogEntries => _server.catalogEntries;
+
+  /// Each catalog add that landed (§6.6): a guest's `catalog_add`, or the
+  /// host's own [addFromCatalog] ([JamCatalogAdd.byHost]). By the time one
+  /// is delivered the item is in [playlist]. An add whose content was
+  /// already queued does not fire; one that put removed content back in
+  /// does.
+  Stream<JamCatalogAdd> get catalogAdds => _catalogAdds.stream;
+
+  /// Offers [source]'s songs to the room as a catalog (§6.6) — or, with
+  /// null, stops offering one. Off by default: the catalog shows the titles
+  /// of the host's music to everyone holding the room token, so it is the
+  /// host's to opt in to, per room.
+  ///
+  /// Lists [source] now ([JamCatalogSource.list]) and publishes the result:
+  /// guests get a `catalog` broadcast with the new `rev` and fetch the
+  /// listing when they browse. Call it again with the same source to
+  /// refresh: re-listed, and republished under a new `rev` only when the
+  /// listing changed (an unchanged one is a no-op for the room); adds
+  /// already waiting keep their place, except for songs no longer listed.
+  /// A different source replaces the old one and drops its waiting adds.
+  /// Added songs are probed with the host's own player and typed from
+  /// their extension, exactly as [addMedia] does for the host's files.
+  ///
+  /// When [source]'s listing throws, the error is passed on and the room's
+  /// catalog is left as it was. A call overtaken by a later one (or by
+  /// [close]) while still listing changes nothing. A no-op after [close].
+  Future<void> shareCatalog(JamCatalogSource? source) async {
+    if (_closed) return;
+    final generation = ++_catalogShareGeneration;
+    if (source == null) {
+      _catalogProvider = null;
+      _server.setCatalog(null);
+      _catalog.value = _server.catalog;
+      return;
+    }
+    final entries = await source.list();
+    if (_closed || generation != _catalogShareGeneration) return;
+    final held = _catalogProvider;
+    final provider = held != null && identical(held.source, source)
+        ? held
+        : _SourceCatalogProvider(source, _probeDurationUs);
+    provider.entries = List.unmodifiable(entries);
+    _catalogProvider = provider;
+    _server.setCatalog(provider);
+    _catalog.value = _server.catalog;
+  }
+
+  /// Adds catalog entry [catalogId] to the queue for the host itself — its
+  /// own "add from my library" — credited to [JamPermissions.hostPeerId],
+  /// through the same path a guest's add takes (§6.6), behind any adds
+  /// already waiting.
+  ///
+  /// Completes with what the add did ([JamAddOutcome.alreadyQueued] when
+  /// the same content is already in the queue), or null when nothing could
+  /// be added: no catalog is shared, [catalogId] is not in it (any more),
+  /// its file could not be opened, or sharing stopped meanwhile. Never
+  /// throws.
+  Future<JamAddResult?> addFromCatalog(String catalogId) async {
+    if (_closed) return null;
+    final ({MediaItem item, bool added})? result;
+    try {
+      result = await _server.addFromCatalog(catalogId);
+    } catch (error) {
+      debugPrint(
+        'localjam: could not add $catalogId from the library ($error)',
+      );
+      return null;
+    }
+    if (result == null) return null;
+    _adoptCatalogFile(result.item.mediaId);
+    return JamAddResult(
+      result.item,
+      result.added ? JamAddOutcome.added : JamAddOutcome.alreadyQueued,
+    );
+  }
+
+  /// Records the file a catalog add landed with as the host's own copy of
+  /// [mediaId] ([localPathFor], what the player plays) — unless the
+  /// registry holds a guest's upload of the same content, which stays the
+  /// room's (see [localPathFor]).
+  void _adoptCatalogFile(String mediaId) {
+    if (_mediaPaths.containsKey(mediaId)) return;
+    if (_server.storedUploadFile(mediaId) != null) return;
+    final file = _server.mediaFile(mediaId);
+    if (file != null) _mediaPaths[mediaId] = file.path;
+  }
+
+  CatalogEntry? _catalogEntryFor(String catalogId) {
+    for (final entry in _server.catalogEntries) {
+      if (entry.catalogId == catalogId) return entry;
+    }
+    return null;
+  }
+
   // --- Transport (§5) ----------------------------------------------------------
   //
   // The raw room mutations, synchronous, throwing for what cannot be done.
@@ -1375,6 +1504,23 @@ class JamHostEngine extends JamEngine {
         unawaited(sync.notifyMediaAvailable(mediaId));
         if (!_mediaUploads.isClosed) {
           _mediaUploads.add((mediaId: mediaId, peerId: event.peerId));
+        }
+      case JamHostEventKind.catalogAdded:
+        final mediaId = event.mediaId!;
+        _adoptCatalogFile(mediaId);
+        // In the registry by now: if the room had already picked this id,
+        // the host's player can load it.
+        unawaited(sync.notifyMediaAvailable(mediaId));
+        if (!_catalogAdds.isClosed) {
+          final catalogId = event.catalogId!;
+          _catalogAdds.add(
+            JamCatalogAdd(
+              peerId: event.peerId ?? JamPermissions.hostPeerId,
+              mediaId: mediaId,
+              catalogId: catalogId,
+              entry: _catalogEntryFor(catalogId),
+            ),
+          );
         }
       case JamHostEventKind.peerJoined:
       case JamHostEventKind.permissionsBroadcast:
@@ -1622,6 +1768,7 @@ class JamHostEngine extends JamEngine {
     _disposed = true;
     _readinessPoll?.cancel();
     _readinessPoll = null;
+    _catalog.dispose();
     _away.dispose();
     _awaitingReadiness.dispose();
     _kicked.dispose();
@@ -1649,6 +1796,8 @@ class JamHostEngine extends JamEngine {
 
   Future<void> _runTeardown(JamSessionEndReason reason) async {
     _closed = true;
+    _catalogShareGeneration++; // A shareCatalog still listing lands nowhere.
+    _catalogProvider = null;
     publishSessionEnd(reason);
     _syncAwaitingReadiness(); // Nothing is held by a room that is over.
     _addressTimer?.cancel();
@@ -1681,6 +1830,7 @@ class JamHostEngine extends JamEngine {
       await _playlists.close();
       await _mediaEnded.close();
       await _mediaUploads.close();
+      await _catalogAdds.close();
     });
   }
 
@@ -1691,4 +1841,31 @@ class JamHostEngine extends JamEngine {
       debugPrint('localjam: closing the room: $what failed ($error)');
     }
   }
+}
+
+/// A [JamCatalogSource] as the server reads it (§6.6): the source's listing
+/// as of the last [JamHostEngine.shareCatalog], its files, and the host's
+/// own probe and MIME mapping for what gets added.
+class _SourceCatalogProvider extends JamCatalogProvider {
+  _SourceCatalogProvider(this.source, this._probe);
+
+  final JamCatalogSource source;
+  final Future<int?> Function(String path) _probe;
+
+  @override
+  List<CatalogEntry> entries = const [];
+
+  @override
+  Future<File?> open(String catalogId) => source.open(catalogId);
+
+  @override
+  Future<File?> openForArtwork(String catalogId) =>
+      source.openForArtwork(catalogId);
+
+  @override
+  Future<int?> probeDurationUs(String catalogId, File file) =>
+      _probe(file.path);
+
+  @override
+  String mimeFor(String catalogId, File file) => mimeForPath(file.path);
 }

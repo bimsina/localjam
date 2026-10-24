@@ -41,6 +41,27 @@ abstract final class JamPickerStrings {
       'pick from Downloads or cloud storage.';
   static const String openFailedOne = 'Couldn’t open that song.';
   static const String openFailedMany = 'Couldn’t open those songs.';
+
+  /// The host's shared library, as a guest sees it: "Silky Puffin’s
+  /// library", named as the host's byline is.
+  static String catalogOf(String host) => '$host’s library';
+  static String catalogDetail(String host) => 'Songs on $host’s phone';
+
+  /// The host's switch for sharing its library (§6.6), in Start a Jam and
+  /// People alike.
+  static const String shareLibrary = 'Share my music library';
+
+  /// Who will see the host's song titles, and whether they can add them —
+  /// true to the jam's policy and whether it is shown to people nearby.
+  static String shareLibraryDetail({
+    required bool addTracks,
+    required bool discoverable,
+  }) {
+    final who = discoverable
+        ? 'Anyone on this Wi‑Fi who joins can see your song titles'
+        : 'People in the jam can see your song titles';
+    return addTracks ? '$who and add them' : who;
+  }
 }
 
 /// A song picked for a jam that has not started yet: its file, and what to
@@ -186,54 +207,98 @@ XTypeGroup jamAudioTypeGroup() => XTypeGroup(
   mimeTypes: jamAudioMimeTypes,
 );
 
+/// Stands in for [JamMediaLibrary.isSupported] in tests (null: the real
+/// answer), so the library rows can be tested off Android.
+@visibleForTesting
+bool? debugJamLibraryAvailable;
+
 /// Whether this platform can list the device's music library.
-bool get jamLibraryAvailable => JamMediaLibrary.isSupported;
+bool get jamLibraryAvailable =>
+    debugJamLibraryAvailable ?? JamMediaLibrary.isSupported;
+
+/// How the music-library permission is asked for: the rationale, then the
+/// OS. Tests stand in their own answer.
+@visibleForTesting
+Future<JamPermissionOutcome> Function() jamAudioPermissionRequest =
+    requestAudioLibraryPermission;
 
 /// Where a track is coming from.
-enum JamAddSource { library, files }
+enum JamAddSource {
+  library,
+  files,
+
+  /// The host's shared library (§6.6): nothing is picked from this device.
+  catalog,
+}
+
+/// What the add-source sheet calls the host's shared library: its title and
+/// the line under it.
+typedef JamCatalogLabel = ({String title, String detail});
 
 /// Asks which source to add from, or answers [JamAddSource.files] outright on
-/// platforms with no library to offer. Null means the user backed out.
-Future<JamAddSource?> chooseAddSource(BuildContext context) async {
-  if (!jamLibraryAvailable) return JamAddSource.files;
+/// platforms with no library to offer and no shared library in the jam.
+/// [catalog] names the host's shared library when the jam has one (§6.6).
+/// Null means the user backed out.
+Future<JamAddSource?> chooseAddSource(
+  BuildContext context, {
+  JamCatalogLabel? catalog,
+}) async {
+  if (!jamLibraryAvailable && catalog == null) return JamAddSource.files;
   _dismissKeyboard();
-  return showJamAddSourceSheet(context);
+  return showJamAddSourceSheet(
+    context,
+    catalog: catalog,
+    library: jamLibraryAvailable,
+  );
 }
 
 /// The choice itself, on the app's own sheet rather than the system's grey
-/// action sheet: sized to its two rows, floating like every other short
+/// action sheet: sized to its rows, floating like every other short
 /// sheet, the xmark to back out. Each row says where its songs come from.
-/// Resolves to the source picked, or null when dismissed.
-Future<JamAddSource?> showJamAddSourceSheet(BuildContext context) =>
-    showJamSheet<JamAddSource>(
-      context,
-      title: JamPickerStrings.addFrom,
-      actions: const JamSheetActions.done(),
-      grouped: true,
-      scrollable: false,
-      builder: (context) {
-        void pick(JamAddSource source) => Navigator.of(context).pop(source);
-        // Scrolls rather than clips at the largest text sizes.
-        return SingleChildScrollView(
-          child: JamSection(
-            children: [
-              JamRow(
-                icon: CupertinoIcons.music_albums,
-                title: JamPickerStrings.library,
-                subtitle: JamPickerStrings.libraryDetail,
-                onTap: () => pick(JamAddSource.library),
-              ),
-              JamRow(
-                icon: CupertinoIcons.folder,
-                title: JamPickerStrings.files,
-                subtitle: JamPickerStrings.filesDetail,
-                onTap: () => pick(JamAddSource.files),
-              ),
-            ],
+/// The host's shared library comes first when there is one: it is the
+/// jam's own; the device library only where [library] (this platform has
+/// one). Resolves to the source picked, or null when dismissed.
+Future<JamAddSource?> showJamAddSourceSheet(
+  BuildContext context, {
+  JamCatalogLabel? catalog,
+  bool library = true,
+}) => showJamSheet<JamAddSource>(
+  context,
+  title: JamPickerStrings.addFrom,
+  actions: const JamSheetActions.done(),
+  grouped: true,
+  scrollable: false,
+  builder: (context) {
+    void pick(JamAddSource source) => Navigator.of(context).pop(source);
+    // Scrolls rather than clips at the largest text sizes.
+    return SingleChildScrollView(
+      child: JamSection(
+        children: [
+          if (catalog != null)
+            JamRow(
+              icon: CupertinoIcons.music_house,
+              title: catalog.title,
+              subtitle: catalog.detail,
+              onTap: () => pick(JamAddSource.catalog),
+            ),
+          if (library)
+            JamRow(
+              icon: CupertinoIcons.music_albums,
+              title: JamPickerStrings.library,
+              subtitle: JamPickerStrings.libraryDetail,
+              onTap: () => pick(JamAddSource.library),
+            ),
+          JamRow(
+            icon: CupertinoIcons.folder,
+            title: JamPickerStrings.files,
+            subtitle: JamPickerStrings.filesDetail,
+            onTap: () => pick(JamAddSource.files),
           ),
-        );
-      },
+        ],
+      ),
     );
+  },
+);
 
 /// Opens the system file picker. Returns the chosen paths, empty when the
 /// user cancelled or the picker could not open (which is reported as a
@@ -272,20 +337,7 @@ Future<List<JamPickedTrack>> pickLibraryTrackDetails(
   final session = JamSession.read(context);
   _dismissKeyboard();
 
-  final outcome = await requestAudioLibraryPermission();
-  // "Not now" on the rationale sheet is the user answering us, not the OS
-  // refusing them: nothing to report, and nothing Settings could fix.
-  if (outcome == JamPermissionOutcome.dismissed) return const [];
-  if (outcome != JamPermissionOutcome.granted) {
-    final permanent = outcome == JamPermissionOutcome.permanentlyDenied;
-    session.notify(
-      JamPermissionCopy.audioLibraryDenied,
-      actionLabel: permanent ? JamPermissionCopy.openSettings : null,
-      onAction: permanent ? () => unawaited(openAppSettings()) : null,
-      tone: JamNoticeTone.warning,
-    );
-    return const [];
-  }
+  if (!await ensureLibraryAccess(session)) return const [];
 
   final List<JamLibraryTrack> tracks;
   try {
@@ -337,6 +389,26 @@ Future<List<JamPickedTrack>> pickLibraryTrackDetails(
     );
   }
   return picked;
+}
+
+/// Asks for the music library (the rationale, then the OS) and answers
+/// whether it may be read. A denial says so through [session]'s notices —
+/// with Open Settings when only Settings can undo it; "Not now" on the
+/// rationale is the user answering us, and says nothing.
+Future<bool> ensureLibraryAccess(JamSessionController session) async {
+  final outcome = await jamAudioPermissionRequest();
+  if (outcome == JamPermissionOutcome.granted) return true;
+  // "Not now" on the rationale sheet is the user answering us, not the OS
+  // refusing them: nothing to report, and nothing Settings could fix.
+  if (outcome == JamPermissionOutcome.dismissed) return false;
+  final permanent = outcome == JamPermissionOutcome.permanentlyDenied;
+  session.notify(
+    JamPermissionCopy.audioLibraryDenied,
+    actionLabel: permanent ? JamPermissionCopy.openSettings : null,
+    onAction: permanent ? () => unawaited(openAppSettings()) : null,
+    tone: JamNoticeTone.warning,
+  );
+  return false;
 }
 
 /// Drops focus so a picker or sheet does not open over a live keyboard — and,
