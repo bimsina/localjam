@@ -65,6 +65,54 @@ iPhone Safari guest): see `docs/design/WEB_GUEST.md`.
   dropped from the address bar with `history.replaceState`; a reload reads
   it back.
 
+### Host's library as a catalog (engine)
+
+Protocol 1.3 (additive, `v` stays 1; PROTOCOL.md §6.6, brief in
+`docs/design/LIBRARY_CATALOG.md`). Engine and protocol only so far: the
+app's "Share my music library" switch and the browse sheet are still to
+come.
+
+- A host can offer a catalog — a list of songs (on Android, its music
+  library) the room can browse and add from. Off by default and switchable
+  live; each switch broadcasts `catalog { rev, count }`, and
+  `welcome.catalog` tells a joiner. Guests fetch the list from
+  `GET /catalog` only when `rev` changes, and covers from
+  `GET /catalog/{id}/artwork` only for the rows they show; the host reads a
+  cover from the file when first asked — at most 3 at once, `503` past a
+  short wait line — and keeps a small cache. A refresh that changes nothing
+  broadcasts nothing.
+- `request { action: "catalog_add", catalogIds }` adds songs to the queue,
+  one at a time in the background, the way the host adds its own files
+  (sha256, probe, tags, cover), credited to the guest who asked. Needs
+  "Add songs"; at most 50 ids a request, 128 adds pending in the room and 50
+  per guest (one full request), past which the host answers the new `busy` error. Re-adding a
+  song already queued, or already on its way, changes nothing and is not
+  read or hashed again; an add the room no longer wants (catalog off, the
+  guest kicked or without "Add songs") stops midway and leaves nothing
+  behind. A catalog-added playlist item carries the new optional
+  `catalogId` (§6.1), so a guest can mark that row as queued; uploads and
+  the host's own files carry none.
+- Listing is not serving: a song's bytes can be fetched only once it is in
+  the queue, so nobody can download a library by its ids.
+- `localjam_core`: `MediaItem.catalogId`, `CatalogSummary`, `CatalogEntry`,
+  `CatalogListing`, `CatalogMessage`, `WelcomeMessage.catalog`,
+  `RequestAction.catalogAdd`, `RequestMessage.catalogIds`, `ErrorCode.busy`. `localjam_net`:
+  `JamCatalogProvider` (with `openForArtwork`), `JamHostServer.setCatalog`
+  / `addFromCatalog` / `mediaFile` / `maxPendingCatalogAddsPerPeer`, `JamHostEventKind.catalogAdded`, and on `JamGuestSession`
+  `catalog`, `catalogChanges`, `fetchCatalog`, `requestCatalogAdd`,
+  `fetchCatalogArtwork`.
+- `localjam_client`: `JamCatalogSource` and `JamMediaLibraryCatalogSource`
+  (the Android library: `c_<MediaStore id>`, copied out of scoped storage
+  only when a song is added; covers are read in place or not at all,
+  `openForArtwork`); `JamHostEngine.shareCatalog`,
+  `catalog`, `catalogEntries`, `addFromCatalog` and `catalogAdds` ("Mia
+  added Night Drive from your library"); `JamGuestEngine.catalog`,
+  `fetchCatalog`, `requestCatalogAdd` (big selections sent 50 ids a
+  request) and `catalogArtworkFor` (memoised, bounded, dropped on a new
+  rev); `busy` arrives on `errors` like `not_allowed`. The host plays a
+  catalog-added song from the library file itself. The CLI host logs
+  catalog adds.
+
 ### Design
 
 - **Identity v4.1** — LocalJam's own look: Apple-inspired ease without

@@ -16,7 +16,9 @@ import 'package:localjam_app/src/design/tokens.dart';
 import 'package:localjam_app/src/state/session_controller.dart';
 import 'package:localjam_app/src/state/web_guest_bundle.dart';
 import 'package:localjam_app/src/util/format.dart';
+import 'package:localjam_app/src/util/media_picking.dart';
 import 'package:localjam_app/src/util/network.dart';
+import 'package:localjam_app/src/util/permissions.dart';
 import 'package:localjam_app/src/widgets/avatar.dart';
 import 'package:localjam_app/src/widgets/guests_can.dart';
 import 'package:localjam_app/src/widgets/jam_mark.dart';
@@ -112,6 +114,45 @@ Future<JamSessionController> _hostWithGuest(
   return guest;
 }
 
+/// A music library of one song, for the share switch.
+class _Library extends JamCatalogSource {
+  @override
+  Future<List<CatalogEntry>> list() async => const [
+    CatalogEntry(catalogId: 'c_1', title: 'Low Tide'),
+  ];
+
+  @override
+  Future<File?> open(String catalogId) async => null;
+}
+
+/// This platform has a library, and the permission ask answers [outcome].
+void _libraryHere(JamPermissionOutcome outcome, {void Function()? onAsk}) {
+  debugJamLibraryAvailable = true;
+  jamAudioPermissionRequest = () async {
+    onAsk?.call();
+    return outcome;
+  };
+  addTearDown(() {
+    debugJamLibraryAvailable = null;
+    jamAudioPermissionRequest = requestAudioLibraryPermission;
+  });
+}
+
+Finder _shareSwitch() => find.descendant(
+  of: find.widgetWithText(JamRow, RoomSheetStrings.shareLibrary),
+  matching: find.byType(JamSwitch),
+);
+
+/// Lets the engine's own work (listing, broadcasting) run until [done].
+Future<void> _settle(WidgetTester tester, bool Function() done) async {
+  for (var i = 0; i < 50 && !done(); i++) {
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 5)),
+    );
+    await tester.pump();
+  }
+}
+
 /// A pull-down item by its title (the toggle rows share some titles).
 Finder _menuItem(String title) => find.widgetWithText(JamMenuRow, title);
 
@@ -139,13 +180,24 @@ void main() {
     // The preset and the three switches it stands for, summarised in a
     // sentence — `jam` is what `startHost` defaults to.
     expect(find.text(JamPresetStrings.guestsCan), findsOneWidget);
-    // The three guest switches, then Show to People Nearby.
-    expect(find.byType(JamSwitch), findsNWidgets(4));
+    // The three guest switches, Show to People Nearby, then Share My Music
+    // Library.
+    expect(find.byType(JamSwitch), findsNWidgets(5));
     expect(find.text(JamPresetStrings.summary(JamPolicy.jam)), findsOneWidget);
     // An invite-only jam, which the host can still show mid-jam.
     expect(find.text(RoomSheetStrings.nearby), findsOneWidget);
     expect(find.text(RoomSheetStrings.nearbyOffFooter), findsOneWidget);
-    expect(tester.widget<JamSwitch>(find.byType(JamSwitch).last).value, false);
+    expect(
+      tester
+          .widget<JamSwitch>(
+            find.descendant(
+              of: find.widgetWithText(JamRow, RoomSheetStrings.nearby),
+              matching: find.byType(JamSwitch),
+            ),
+          )
+          .value,
+      false,
+    );
 
     // The way out, a row a screen reader can press.
     expect(find.text(RoomSheetStrings.endJam), findsOneWidget);
@@ -1058,5 +1110,98 @@ void main() {
 
     await tester.runAsync(guest.leave);
     await tester.runAsync(host.leave);
+  });
+
+  group('Share my music library', () {
+    testWidgets('is the host’s, and live: on asks for the library and '
+        'shares it, off stops at once', (tester) async {
+      var asked = 0;
+      _libraryHere(JamPermissionOutcome.granted, onAsk: () => asked++);
+      final host = testSession(librarySource: _Library.new);
+      await tester.runAsync(
+        () => host.startHost(sessionName: 'Van Jam', discoverable: false),
+      );
+      await tester.pump();
+      await _pump(tester, host, _panel(host));
+      final engine = host.hostEngine!;
+
+      // An invite-only jam where guests add songs.
+      expect(
+        find.text('People in the jam can see your song titles and add them'),
+        findsOneWidget,
+      );
+      expect(tester.widget<JamSwitch>(_shareSwitch()).value, isFalse);
+      expect(engine.catalog.value, isNull, reason: 'off by default');
+
+      await tester.tap(_shareSwitch());
+      await _settle(tester, () => engine.catalog.value != null);
+      await tester.pump();
+      expect(asked, 1);
+      expect(engine.catalog.value?.count, 1);
+      expect(tester.widget<JamSwitch>(_shareSwitch()).value, isTrue);
+
+      await tester.tap(_shareSwitch());
+      await _settle(tester, () => engine.catalog.value == null);
+      await tester.pump();
+      expect(engine.catalog.value, isNull);
+      expect(tester.widget<JamSwitch>(_shareSwitch()).value, isFalse);
+      expect(asked, 1, reason: 'turning it off asks for nothing');
+
+      await tester.runAsync(host.leave);
+    });
+
+    testWidgets('a denied permission leaves it off, and says so', (
+      tester,
+    ) async {
+      _libraryHere(JamPermissionOutcome.permanentlyDenied);
+      final host = testSession(librarySource: _Library.new);
+      final heard = <JamNotice>[];
+      final sub = host.notices.listen(heard.add);
+      addTearDown(sub.cancel);
+      await tester.runAsync(
+        () => host.startHost(sessionName: 'Van Jam', discoverable: false),
+      );
+      await tester.pump();
+      await _pump(tester, host, _panel(host));
+
+      await tester.tap(_shareSwitch());
+      await _settle(tester, () => heard.isNotEmpty);
+      await tester.pump();
+      expect(host.hostEngine!.catalog.value, isNull);
+      expect(tester.widget<JamSwitch>(_shareSwitch()).value, isFalse);
+      final notice = heard.singleWhere(
+        (n) => n.message == JamPermissionCopy.audioLibraryDenied,
+      );
+      expect(notice.actionLabel, JamPermissionCopy.openSettings);
+
+      await tester.runAsync(host.leave);
+    });
+
+    testWidgets('is not offered where the phone has no library to share', (
+      tester,
+    ) async {
+      debugJamLibraryAvailable = false;
+      addTearDown(() => debugJamLibraryAvailable = null);
+      final host = testSession(librarySource: _Library.new);
+      await tester.runAsync(
+        () => host.startHost(sessionName: 'Van Jam', discoverable: false),
+      );
+      await tester.pump();
+      await _pump(tester, host, _panel(host));
+      expect(find.text(RoomSheetStrings.shareLibrary), findsNothing);
+      await tester.runAsync(host.leave);
+    });
+
+    testWidgets('a guest has no such switch', (tester) async {
+      _libraryHere(JamPermissionOutcome.granted);
+      final host = testSession();
+      final guest = await _hostWithGuest(tester, host);
+      await _pump(tester, guest, _panel(guest, self: 'Ana'));
+      expect(find.text(RoomSheetStrings.shareLibrary), findsNothing);
+      await tester.runAsync(() async {
+        await guest.leave();
+        await host.leave();
+      });
+    });
   });
 }

@@ -107,6 +107,11 @@ class JamGuestClient {
   /// small enough to hold in memory on a phone.
   static const int maxArtworkBytes = 8 * 1024 * 1024;
 
+  /// Ceiling on one `GET /catalog` body (§6.6): a catalog of tens of
+  /// thousands of songs fits, and the guest holds the whole body in memory
+  /// to parse it, so the host's word alone is no bound.
+  static const int maxCatalogBytes = 16 * 1024 * 1024;
+
   /// How far past a playlist item's declared `sizeBytes` a media response may
   /// run before [fetchMediaToSink] abandons it. Non-zero only so a host that
   /// pads a response (a trailing newline, a re-encode that grew a few bytes)
@@ -276,6 +281,7 @@ class JamGuestClient {
   final Map<String, PeerInfo> _peers = {};
   PeerInfo? _hostPeer;
   SessionEndedMessage? _sessionEnded;
+  CatalogSummary? _catalog;
 
   /// Until the host says otherwise, assume nothing is allowed (§5.6).
   JamPermissions _permissions = const JamPermissions.initial(
@@ -293,6 +299,8 @@ class JamGuestClient {
       StreamController<JamPermissions>.broadcast();
   final StreamController<ErrorMessage> _errors =
       StreamController<ErrorMessage>.broadcast();
+  final StreamController<CatalogSummary?> _catalogUpdates =
+      StreamController<CatalogSummary?>.broadcast();
 
   late final String _selfPeerId;
   late final String _sessionId;
@@ -355,6 +363,19 @@ class JamGuestClient {
   /// Host error reports (§8), both transient (`not_allowed`, `media_gone`)
   /// and fatal.
   Stream<ErrorMessage> get errors => _errors.stream;
+
+  /// The host's catalog (§6.6): from `welcome.catalog`, then every
+  /// `catalog` broadcast. Null while the host offers none — it sent none,
+  /// or announced `count: 0`.
+  CatalogSummary? get catalog {
+    final summary = _catalog;
+    return summary != null && summary.isOffered ? summary : null;
+  }
+
+  /// Changes to [catalog] after the handshake (§6.6): a new `rev` (the
+  /// listing changed: fetch it again), the catalog appearing, or it going
+  /// away (null).
+  Stream<CatalogSummary?> get catalogUpdates => _catalogUpdates.stream;
 
   /// The fatal error that ended (or is about to end) this connection, if
   /// any — e.g. `kicked` (§5.6), which reconnect layers must treat as
@@ -460,6 +481,7 @@ class JamGuestClient {
     _hostPeer = welcome.host;
     _uploadKey = welcome.uploadKey;
     _hostAway = welcome.hostAway;
+    _catalog = welcome.catalog;
     for (final peer in welcome.peers) {
       _peers[peer.peerId] = peer;
     }
@@ -620,6 +642,15 @@ class JamGuestClient {
         // §3.4: the host ended the room on purpose. Remember it so the
         // reconnect layer knows this close is not a drop to retry.
         _sessionEnded = message;
+      case CatalogMessage(:final summary):
+        // §6.6: the host's rev only grows within a session; an older one is
+        // a stale frame, not news.
+        final before = catalog;
+        final held = _catalog;
+        if (held == null || summary.rev >= held.rev) _catalog = summary;
+        if (catalog != before && !_catalogUpdates.isClosed) {
+          _catalogUpdates.add(catalog);
+        }
       case HostStatusMessage(:final away):
         // §3.5: the host is about to nap (or is back).
         if (away != _hostAway) {
@@ -688,6 +719,19 @@ class JamGuestClient {
   /// [JamCapability.editQueue].
   Future<void> requestQueueRemove(String mediaId) async => _send(
     RequestMessage(action: RequestAction.queueRemove, mediaId: mediaId),
+  );
+
+  /// Asks the host to add its catalog entries [catalogIds] to the queue, in
+  /// order (§6.6). Needs [JamCapability.addTracks]: without it the host
+  /// answers `not_allowed` on [errors]. The host takes at most its
+  /// per-request cap (reference host: 50), skips ids it does not know, and
+  /// answers `busy` for what it has no room for; what landed arrives as
+  /// ordinary playlist broadcasts, credited to this peer.
+  Future<void> requestCatalogAdd(List<String> catalogIds) async => _send(
+    RequestMessage(
+      action: RequestAction.catalogAdd,
+      catalogIds: List.unmodifiable(catalogIds),
+    ),
   );
 
   // --- Media plane (§6.2, §6.3) ----------------------------------------------------
@@ -981,6 +1025,93 @@ class JamGuestClient {
     return builder.takeBytes();
   }
 
+  /// Fetches `GET /catalog` (§6.6): the host's catalog listing, or null when
+  /// the host offers none (`404`). The body is held whole to parse it, so it
+  /// is bounded by [maxBytes] (default [maxCatalogBytes]) and, like every
+  /// media request, by `mediaTimeout` to the response and between chunks.
+  ///
+  /// Throws [JamHttpStatusException] on any other non-200 response,
+  /// [TimeoutException] when the host stops answering, [StateError] for a
+  /// body over [maxBytes], and [FormatException] for one that is not a
+  /// listing. Entries that do not fit the schema are dropped (§2.1).
+  Future<CatalogListing?> fetchCatalogListing({
+    int maxBytes = maxCatalogBytes,
+  }) async {
+    final uri = Uri(scheme: 'http', host: _host, port: _port, path: '/catalog');
+    final response = await _get(uri);
+    if (response.statusCode == _httpNotFound) {
+      await _discard(response);
+      return null;
+    }
+    if (response.statusCode != _httpOk) {
+      await _discard(response);
+      throw JamHttpStatusException(
+        response.statusCode,
+        'GET $uri failed with ${response.statusCode}',
+        uri: uri,
+      );
+    }
+    if (response.contentLength > maxBytes) {
+      response.abort();
+      throw StateError('catalog exceeds the $maxBytes byte cap');
+    }
+    final body = await _boundedBody(response, maxBytes, 'catalog');
+    final listing = CatalogListing.tryFromJson(jsonDecode(utf8.decode(body)));
+    if (listing == null) {
+      throw const FormatException('GET /catalog: not a catalog listing');
+    }
+    return listing;
+  }
+
+  /// Fetches `GET /catalog/{catalogId}/artwork` (§6.6): the cover of one
+  /// catalog entry, or null when it has none (`404`: no cover, an id the
+  /// host does not know, or no catalog). Capped at [maxArtworkBytes] like
+  /// any cover (§6.5), and through the same connection bound as every
+  /// media-plane request — ask for visible rows only.
+  ///
+  /// Throws [JamHttpStatusException] on any other non-200 response,
+  /// [TimeoutException] when the host stops answering, and [StateError]
+  /// when the body exceeds [maxArtworkBytes].
+  Future<Uint8List?> fetchCatalogArtwork(String catalogId) async {
+    final uri = Uri(
+      scheme: 'http',
+      host: _host,
+      port: _port,
+      pathSegments: ['catalog', catalogId, 'artwork'],
+    );
+    final response = await _get(uri);
+    if (response.statusCode == _httpNotFound) {
+      await _discard(response);
+      return null;
+    }
+    if (response.statusCode != _httpOk) {
+      await _discard(response);
+      throw JamHttpStatusException(
+        response.statusCode,
+        'GET $uri failed with ${response.statusCode}',
+        uri: uri,
+      );
+    }
+    return _boundedBody(response, maxArtworkBytes, 'catalog cover');
+  }
+
+  /// [response]'s whole body, abandoned past [maxBytes].
+  Future<Uint8List> _boundedBody(
+    JamMediaResponse response,
+    int maxBytes,
+    String what,
+  ) async {
+    final builder = BytesBuilder(copy: false);
+    await for (final chunk in _idleBounded(response)) {
+      if (builder.length + chunk.length > maxBytes) {
+        builder.clear();
+        throw StateError('$what exceeds the $maxBytes byte cap');
+      }
+      builder.add(chunk);
+    }
+    return builder.takeBytes();
+  }
+
   /// Uploads [length] bytes from [body] to the host over the media plane
   /// (`POST /media`, §6.4) as [name]. Metadata travels in `X-LocalJam-*`
   /// headers; the host computes the sha256 and mediaId itself, adds the
@@ -1068,6 +1199,7 @@ class JamGuestClient {
 
   static const int _httpOk = 200;
   static const int _httpCreated = 201;
+  static const int _httpNotFound = 404;
 
   /// `GET [uri]` with Bearer auth, bounded by `mediaTimeout` from connect to
   /// response headers (the transport's own bound).
@@ -1115,6 +1247,7 @@ class JamGuestClient {
     await _permissionUpdates.close();
     await _errors.close();
     await _hostAwayChanges.close();
+    await _catalogUpdates.close();
   }
 
   // --- Wire helper -----------------------------------------------------------------

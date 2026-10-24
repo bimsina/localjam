@@ -132,6 +132,14 @@ abstract class JamEngine {
   /// own registry; guests fetch once and cache. Never throws.
   Future<Uint8List?> artworkFor(MediaItem item);
 
+  /// The host's music library offered to the room as a catalog (§6.6): its
+  /// `rev` and entry count, or null while none is offered. A host reports
+  /// what it shares ([JamHostEngine.shareCatalog]; `count` may be 0 for an
+  /// empty library); a guest what the host announced (null for an empty
+  /// one). Offer "add from the host's library" while
+  /// [CatalogSummary.isOffered].
+  ValueListenable<CatalogSummary?> get catalog;
+
   /// This side's peer id: the guest's assigned id, or the reserved
   /// [JamPermissions.hostPeerId] on a host.
   String get selfPeerId;

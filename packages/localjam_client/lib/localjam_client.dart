@@ -15,6 +15,7 @@ export 'package:localjam_audio/localjam_audio.dart';
 export 'package:localjam_net/localjam_net.dart';
 
 export 'src/audio_sync_controller.dart';
+export 'src/catalog_source.dart';
 export 'src/guest_engine.dart';
 export 'src/host_engine.dart';
 export 'src/jam_app_roots.dart';

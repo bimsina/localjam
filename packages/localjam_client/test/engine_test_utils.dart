@@ -4,6 +4,7 @@
 /// that hands a guest's session clock to the test.
 library;
 
+import 'dart:async';
 import 'dart:convert' show ascii;
 import 'dart:io';
 import 'dart:math';
@@ -12,6 +13,8 @@ import 'dart:typed_data' show BytesBuilder, Uint8List;
 import 'package:audio_metadata_reader/audio_metadata_reader.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:localjam_client/localjam_client.dart'
+    show CatalogEntry, JamCatalogSource;
 import 'package:localjam_net/localjam_net.dart' show JoinLink;
 
 const audioChannel = MethodChannel('localjam_audio');
@@ -195,6 +198,81 @@ Future<File> makeTaggedMp3({
     );
   });
   return file;
+}
+
+/// A [JamCatalogSource] over files on disk (a temp dir of generated media):
+/// what a host's library looks like to the engine, without Android. Each
+/// file is listed under its own `c_<n>` id with the [CatalogEntry] given;
+/// [add] and [remove] change what the next [list] says; [opens] counts
+/// [open] calls per id; [failList] makes the next [list] throw it;
+/// [openGate] holds every [open] and [artGate] every [openForArtwork]
+/// until completed.
+class FakeCatalogSource extends JamCatalogSource {
+  final List<({CatalogEntry entry, File file})> _songs = [];
+  final Map<String, int> opens = {};
+  Object? failList;
+  Completer<void>? openGate;
+  Completer<void>? artGate;
+  var _next = 1;
+
+  /// Lists [file] as a new song; returns its catalog id.
+  String add(
+    File file, {
+    String? title,
+    String? artist,
+    String? album,
+    int? durationUs,
+    bool? hasArtwork,
+  }) {
+    final id = 'c_${_next++}';
+    _songs.add((
+      entry: CatalogEntry(
+        catalogId: id,
+        title: title ?? file.uri.pathSegments.last,
+        artist: artist,
+        album: album,
+        durationUs: durationUs,
+        sizeBytes: file.lengthSync(),
+        hasArtwork: hasArtwork,
+      ),
+      file: file,
+    ));
+    return id;
+  }
+
+  void remove(String catalogId) =>
+      _songs.removeWhere((s) => s.entry.catalogId == catalogId);
+
+  File fileOf(String catalogId) =>
+      _songs.firstWhere((s) => s.entry.catalogId == catalogId).file;
+
+  @override
+  Future<List<CatalogEntry>> list() async {
+    final failure = failList;
+    if (failure != null) {
+      failList = null;
+      throw failure;
+    }
+    return [for (final s in _songs) s.entry];
+  }
+
+  @override
+  Future<File?> openForArtwork(String catalogId) async {
+    await artGate?.future;
+    return open(catalogId);
+  }
+
+  @override
+  Future<File?> open(String catalogId) async {
+    opens[catalogId] = (opens[catalogId] ?? 0) + 1;
+    await openGate?.future;
+    for (final s in _songs) {
+      if (s.entry.catalogId == catalogId) {
+        return s.file.existsSync() ? s.file : null;
+      }
+    }
+    return null;
+  }
 }
 
 /// A fresh temp directory (cleaned up after the test).

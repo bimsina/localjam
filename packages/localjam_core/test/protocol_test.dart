@@ -464,6 +464,59 @@ void main() {
       expect(bare.toJson().containsKey('addedBy'), isFalse);
     });
 
+    test('playlist item catalogId (1.3) round-trips, is omitted when null, '
+        'and decodes tolerantly', () {
+      const item = MediaItem(
+        mediaId: 'm_1',
+        kind: MediaKind.audio,
+        name: 'a.mp3',
+        mime: 'audio/mpeg',
+        sizeBytes: 10,
+        sha256: '00000000',
+        addedBy: 'p_4',
+        catalogId: 'c_42',
+      );
+      expect(item.toJson()['catalogId'], 'c_42');
+      final back = MediaItem.fromJson(item.toJson());
+      expect(back, item);
+      expect(back.catalogId, 'c_42');
+      // Through a whole playlist message too.
+      final playlist = PlaylistMessage.fromPayload({
+        'rev': 3,
+        'items': [item.toJson()],
+      });
+      expect(playlist.items.single.catalogId, 'c_42');
+
+      const upload = MediaItem(
+        mediaId: 'm_1',
+        kind: MediaKind.audio,
+        name: 'a.mp3',
+        mime: 'audio/mpeg',
+        sizeBytes: 10,
+        sha256: '00000000',
+        addedBy: 'p_4',
+      );
+      expect(upload.toJson().containsKey('catalogId'), isFalse);
+      expect(upload == item, isFalse, reason: 'catalogId is part of ==');
+
+      // A 1.2 host sends none; a bad value reads as absent, not a bad item.
+      final base = upload.toJson();
+      expect(MediaItem.fromJson(base).catalogId, isNull);
+      for (final bad in <Object?>[
+        null,
+        7,
+        true,
+        '',
+        ['c_1'],
+        {'id': 'c_1'},
+      ]) {
+        final decoded = MediaItem.tryFromJson({...base, 'catalogId': bad});
+        expect(decoded, isNotNull, reason: 'catalogId: $bad');
+        expect(decoded!.catalogId, isNull);
+        expect(decoded, upload);
+      }
+    });
+
     test('media_status', () {
       final m = roundTrip(
         const MediaStatusMessage(
@@ -899,6 +952,189 @@ void main() {
       expect(roundTrip(const HostStatusMessage(away: true)).away, isTrue);
       expect(roundTrip(const HostStatusMessage(away: false)).away, isFalse);
       expect(HostStatusMessage.fromPayload(const {}).away, isFalse);
+    });
+  });
+
+  group('catalog (§6.6, protocol 1.3)', () {
+    String frame(String type, Map<String, Object?> payload) =>
+        jsonEncode({'v': 1, 'type': type, 'seq': 1, 'payload': payload});
+
+    test('catalog broadcast round-trips', () {
+      final m = roundTrip(
+        const CatalogMessage(summary: CatalogSummary(rev: 3, count: 120)),
+      );
+      expect(m.rev, 3);
+      expect(m.count, 120);
+      expect(m.summary.isOffered, isTrue);
+      expect(m.payloadToJson(), {'rev': 3, 'count': 120});
+    });
+
+    test('count 0 (or missing, or negative) means no catalog', () {
+      final off = codec.decode(frame('catalog', {'rev': 4, 'count': 0}));
+      expect((off.message as CatalogMessage).summary.isOffered, isFalse);
+      final missing = codec.decode(frame('catalog', {'rev': 4}));
+      expect((missing.message as CatalogMessage).count, 0);
+      final negative = codec.decode(frame('catalog', {'rev': 4, 'count': -2}));
+      expect((negative.message as CatalogMessage).count, 0);
+    });
+
+    test('a catalog frame without a rev is malformed', () {
+      expect(
+        () => codec.decode(frame('catalog', {'count': 2})),
+        throwsA(isA<ProtocolException>()),
+      );
+    });
+
+    test('welcome carries the catalog summary; absent = null', () {
+      final m = roundTrip(
+        WelcomeMessage(
+          sessionId: 's',
+          sessionName: 'n',
+          selfPeerId: 'p_1',
+          snapshot: PlaybackSnapshot.initial,
+          catalog: const CatalogSummary(rev: 2, count: 7),
+        ),
+      );
+      expect(m.catalog, const CatalogSummary(rev: 2, count: 7));
+
+      final bare = roundTrip(
+        WelcomeMessage(
+          sessionId: 's',
+          sessionName: 'n',
+          selfPeerId: 'p_1',
+          snapshot: PlaybackSnapshot.initial,
+        ),
+      );
+      expect(bare.catalog, isNull);
+      expect(bare.payloadToJson().containsKey('catalog'), isFalse);
+    });
+
+    test('a welcome with a catalog this guest cannot read still joins', () {
+      final decoded = codec.decode(
+        jsonEncode({
+          'v': 1,
+          'type': 'welcome',
+          'seq': 1,
+          'payload': {
+            'sessionId': 's',
+            'sessionName': 'n',
+            'you': {'peerId': 'p_1'},
+            'snapshot': PlaybackSnapshot.initial.toJson(),
+            'catalog': {'count': 'lots'},
+          },
+        }),
+      );
+      final welcome = decoded.message as WelcomeMessage;
+      expect(welcome.selfPeerId, 'p_1');
+      expect(welcome.catalog, isNull);
+    });
+
+    test('request catalog_add round-trips its ids', () {
+      final m = roundTrip(
+        const RequestMessage(
+          action: RequestAction.catalogAdd,
+          catalogIds: ['c_1', 'c_22'],
+        ),
+      );
+      expect(m.action, RequestAction.catalogAdd);
+      expect(m.action.wire, 'catalog_add');
+      expect(m.catalogIds, ['c_1', 'c_22']);
+      expect(
+        const RequestMessage(action: RequestAction.play).payloadToJson(),
+        isNot(contains('catalogIds')),
+      );
+    });
+
+    test('catalog_add ids that are not strings are dropped', () {
+      final decoded = codec.decode(
+        frame('request', {
+          'action': 'catalog_add',
+          'catalogIds': ['c_1', 7, null, 'c_2'],
+        }),
+      );
+      expect((decoded.message as RequestMessage).catalogIds, ['c_1', 'c_2']);
+      final none = codec.decode(frame('request', {'action': 'catalog_add'}));
+      expect((none.message as RequestMessage).catalogIds, isNull);
+    });
+
+    test('a request with an unknown action is a frame a host ignores', () {
+      // A 1.2 host meets `catalog_add` exactly like this 1.3 host meets a
+      // later action: the frame does not decode, and is ignored (§2.1).
+      expect(
+        () => codec.decode(frame('request', {'action': 'queue_shuffle'})),
+        throwsA(isA<ProtocolException>()),
+      );
+    });
+
+    test('busy is an error code; a 1.2 client reads it as unknown', () {
+      final m = roundTrip(
+        const ErrorMessage(code: ErrorCode.busy, message: 'later'),
+      );
+      expect(m.code, ErrorCode.busy);
+      expect(m.fatal, isFalse);
+      expect(ErrorCode.busy.wire, 'busy');
+    });
+
+    test('catalog entries round-trip; optional fields omitted when null', () {
+      const full = CatalogEntry(
+        catalogId: 'c_42',
+        title: 'Night Drive',
+        artist: 'The Localhosts',
+        album: 'Loopback Sessions',
+        durationUs: 215_000_000,
+        sizeBytes: 4_200_000,
+        hasArtwork: true,
+      );
+      expect(CatalogEntry.fromJson(full.toJson()), full);
+      const bare = CatalogEntry(catalogId: 'c_1', title: 'Untitled');
+      expect(bare.toJson(), {'catalogId': 'c_1', 'title': 'Untitled'});
+      expect(CatalogEntry.fromJson(bare.toJson()), bare);
+    });
+
+    test('entries missing their id or title are dropped from a listing; '
+        'bad optional fields read as unknown', () {
+      final listing = CatalogListing.tryFromJson({
+        'rev': 5,
+        'items': [
+          {'catalogId': 'c_1', 'title': 'One'},
+          {'title': 'No id'},
+          {'catalogId': 'c_3'},
+          {'catalogId': '', 'title': 'Empty id'},
+          'not an object',
+          {
+            'catalogId': 'c_5',
+            'title': 'Five',
+            'artist': 5,
+            'durationUs': 0,
+            'sizeBytes': -1,
+            'hasArtwork': 'yes',
+            'future': {'field': true},
+          },
+        ],
+      })!;
+      expect(listing.rev, 5);
+      expect([for (final e in listing.items) e.catalogId], ['c_1', 'c_5']);
+      final five = listing.items.last;
+      expect(five.artist, isNull);
+      expect(five.durationUs, isNull);
+      expect(five.sizeBytes, isNull);
+      expect(five.hasArtwork, isNull);
+    });
+
+    test('a listing round-trips, and one without a rev is not one', () {
+      const listing = CatalogListing(
+        rev: 9,
+        items: [
+          CatalogEntry(catalogId: 'c_1', title: 'One', hasArtwork: false),
+        ],
+      );
+      final back = CatalogListing.tryFromJson(
+        jsonDecode(jsonEncode(listing.toJson())),
+      )!;
+      expect(back.rev, 9);
+      expect(back.items, listing.items);
+      expect(CatalogListing.tryFromJson({'items': []}), isNull);
+      expect(CatalogListing.tryFromJson('nope'), isNull);
     });
   });
 }

@@ -516,6 +516,7 @@ class JamAddSongsRow extends StatelessWidget implements JamSelfSeparatingRow {
     super.key,
     required this.onTap,
     this.title = JamListStrings.addSongs,
+    this.icon = CupertinoIcons.plus,
     this.busy = false,
     this.onBackdrop = false,
     this.horizontalPadding = kJamRowInset,
@@ -527,6 +528,9 @@ class JamAddSongsRow extends StatelessWidget implements JamSelfSeparatingRow {
 
   /// Sentence case; also what a screen reader hears.
   final String title;
+
+  /// The glyph in the cover's slot: the plus, or what the row opens.
+  final IconData icon;
 
   /// Something is being added: a spinner replaces the plus and taps are
   /// ignored.
@@ -583,11 +587,7 @@ class JamAddSongsRow extends StatelessWidget implements JamSelfSeparatingRow {
               ),
               child: busy
                   ? JamProgressRing(color: accent)
-                  : Icon(
-                      CupertinoIcons.plus,
-                      size: JamIconSize.row,
-                      color: accent,
-                    ),
+                  : Icon(icon, size: JamIconSize.row, color: accent),
             ),
             const SizedBox(width: kJamRowLeadingGap),
             Expanded(

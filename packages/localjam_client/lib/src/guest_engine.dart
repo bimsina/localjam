@@ -7,6 +7,7 @@
 library;
 
 import 'dart:async';
+import 'dart:collection';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
@@ -14,6 +15,7 @@ import 'package:localjam_audio/localjam_audio.dart';
 import 'package:localjam_net/localjam_net.dart';
 
 import 'audio_sync_controller.dart';
+import 'catalog_source.dart';
 import 'engine_notifier.dart';
 import 'jam_engine.dart';
 import 'jam_identity.dart';
@@ -219,6 +221,7 @@ class JamGuestEngine extends JamEngine {
       acknowledgeClockStep: () => _session.clock.acknowledgeHardResync(),
     );
     _hostAway.value = _session.hostAway;
+    _catalog.value = _session.catalog;
     _lastPlanMediaId = _session.snapshot.mediaId;
     _sleepMarkWall = wallClock();
     _sleepMarkLocalUs = monotonicNowUs();
@@ -231,6 +234,7 @@ class JamGuestEngine extends JamEngine {
       _session.playlistUpdates.listen((_) => _reevaluatePrefetch()),
       _session.connectionStates.listen(_onConnectionState),
       _session.hostAwayChanges.listen(_onHostAwayChanged),
+      _session.catalogChanges.listen(_onCatalogChanged),
     ];
     _reevaluatePrefetch();
     // Late join (§5.3): converge on whatever the host is doing right now, as
@@ -700,6 +704,62 @@ class JamGuestEngine extends JamEngine {
   Future<bool> requestQueueRemove(String mediaId) =>
       _request(() => _session.requestQueueRemove(mediaId));
 
+  /// The most catalog ids one [requestCatalogAddCounted] sends: what the
+  /// reference host takes in one request and holds pending for one device
+  /// at once (§6.6, §9.1), so a call that is sent is taken whole unless
+  /// other adds of this device are still landing or the queue is full.
+  static const int maxCatalogAddsPerCall =
+      JamHostServer.defaultMaxCatalogIdsPerRequest <
+          JamHostServer.defaultMaxPendingCatalogAddsPerPeer
+      ? JamHostServer.defaultMaxCatalogIdsPerRequest
+      : JamHostServer.defaultMaxPendingCatalogAddsPerPeer;
+
+  /// Asks the host to add its catalog entries [catalogIds] to the queue, in
+  /// order (§6.6), and says how many of them were asked for.
+  ///
+  /// Repeats are dropped, and so is everything past the first
+  /// [maxCatalogAddsPerCall] distinct ids — reported as
+  /// [JamCatalogAddRequest.dropped], never sent, so the UI can say "50 of
+  /// 55 added; add the rest once these are in" instead of the host
+  /// dropping them unanswered. The rest go in one request
+  /// ([JamCatalogAddRequest.sent]).
+  ///
+  /// The host is the judge of what lands: needs [JamCapability.addTracks]
+  /// (refused with a non-fatal `not_allowed` on [errors]); ids past its
+  /// bounds — this device's adds still landing, the room's, or the queue
+  /// full — are answered with one non-fatal `busy` on [errors], the ids
+  /// that fit still added; ids the catalog no longer holds are skipped
+  /// silently. Each landed song arrives as an ordinary playlist broadcast,
+  /// credited to this guest.
+  ///
+  /// Nothing is sent ([JamCatalogAddRequest.delivered] false) for no ids,
+  /// or while [canSendCommands] is false. Never throws.
+  Future<JamCatalogAddRequest> requestCatalogAddCounted(
+    List<String> catalogIds,
+  ) async {
+    final distinct = <String>[];
+    final seen = <String>{};
+    for (final id in catalogIds) {
+      if (seen.add(id)) distinct.add(id);
+    }
+    if (distinct.isEmpty) return const JamCatalogAddRequest(sent: 0);
+    final ids = distinct.length > maxCatalogAddsPerCall
+        ? distinct.sublist(0, maxCatalogAddsPerCall)
+        : distinct;
+    final dropped = distinct.length - ids.length;
+    if (!await _request(() => _session.requestCatalogAdd(ids))) {
+      return const JamCatalogAddRequest(sent: 0);
+    }
+    return JamCatalogAddRequest(sent: ids.length, dropped: dropped);
+  }
+
+  /// [requestCatalogAddCounted], answering only whether the request was
+  /// sent (§6.6). False when nothing could be sent — no ids, or
+  /// [canSendCommands] false. Ids past [maxCatalogAddsPerCall] are not
+  /// sent; use [requestCatalogAddCounted] to say so.
+  Future<bool> requestCatalogAdd(List<String> catalogIds) async =>
+      (await requestCatalogAddCounted(catalogIds)).delivered;
+
   // --- Intents (guest = §5.2/§5.6 requests) -------------------------------
 
   /// Ends a local output suspension, and asks the host to play unless the
@@ -916,6 +976,115 @@ class JamGuestEngine extends JamEngine {
       _artworkLoads.remove(artworkId); // Not sticky: retry next call.
       return null;
     }
+  }
+
+  // --- Catalog (§6.6) ---------------------------------------------------------
+
+  final ValueNotifier<CatalogSummary?> _catalog =
+      EngineValueNotifier<CatalogSummary?>(null);
+
+  /// The host's catalog (§6.6): its `rev` and how many songs it offers, or
+  /// null while it offers none (an empty catalog included). Kept through a
+  /// reconnect; every new `rev` means [fetchCatalog] has something newer.
+  @override
+  ValueListenable<CatalogSummary?> get catalog => _catalog;
+
+  /// The host's catalog listing (§6.6), fetched over the media plane only
+  /// when [catalog]'s rev is newer than the last listing fetched (otherwise
+  /// the cached one, at once); concurrent calls share one request. Empty
+  /// when the host offers none. Search and filtering are the caller's.
+  ///
+  /// Throws [JamNotConnectedException] while requests cannot reach the
+  /// host ([canSendCommands]), and otherwise what the fetch throws — an
+  /// [HttpException] for a refused request, a [TimeoutException], a
+  /// [FormatException] for a body that is not a listing — so a browse sheet
+  /// can offer a retry.
+  Future<List<CatalogEntry>> fetchCatalog() async {
+    if (!canSendCommands) throw _notConnected();
+    try {
+      return await _session.fetchCatalog();
+    } on StateError {
+      // The session left `connected` between the check and the fetch.
+      if (canSendCommands) rethrow;
+      throw _notConnected();
+    }
+  }
+
+  /// Covers of catalog entries (§6.6) by catalogId, least recently asked
+  /// first: in flight, fetched, or known to be absent (null). Bounded by
+  /// [catalogArtworkCacheSize] and [catalogArtworkCacheBytes]; cleared when
+  /// the catalog's rev changes.
+  final LinkedHashMap<String, Future<Uint8List?>> _catalogArt =
+      LinkedHashMap<String, Future<Uint8List?>>();
+
+  /// Bytes held per fetched cover in [_catalogArt].
+  final Map<String, int> _catalogArtSizes = {};
+  int _catalogArtBytes = 0;
+
+  /// How many catalog covers [catalogArtworkFor] keeps in memory.
+  static const int catalogArtworkCacheSize = 128;
+
+  /// The most cover bytes [catalogArtworkFor] keeps in memory (a cover may
+  /// be up to 8 MB, §6.5).
+  static const int catalogArtworkCacheBytes = 32 * 1024 * 1024;
+
+  /// The cover of catalog [entry] (§6.6), or null when it has none
+  /// ([CatalogEntry.hasArtwork] false: never asked for), the fetch failed,
+  /// or requests cannot reach the host ([canSendCommands]). Fetched through
+  /// the same connection bound as every media-plane request, so ask for
+  /// visible rows only. Memoised per catalogId — concurrent and repeated
+  /// calls share one fetch, and "no cover" (the host's `404`) is remembered
+  /// too — in a bounded cache dropped when the catalog's rev changes. A
+  /// failure is not sticky: a `503` (the host busy reading covers, its
+  /// `Retry-After`), a timeout or a dropped connection answers null now and
+  /// the next call asks again. Never throws.
+  Future<Uint8List?> catalogArtworkFor(CatalogEntry entry) {
+    if (entry.hasArtwork == false) return Future.value();
+    final id = entry.catalogId;
+    final held = _catalogArt.remove(id);
+    if (held != null) {
+      _catalogArt[id] = held; // Most recently asked for.
+      return held;
+    }
+    if (!canSendCommands) return Future.value();
+    final done = Completer<Uint8List?>();
+    final load = done.future;
+    _catalogArt[id] = load;
+    _trimCatalogArtwork();
+    unawaited(() async {
+      try {
+        final bytes = await _session.fetchCatalogArtwork(id);
+        if (identical(_catalogArt[id], load) && bytes != null) {
+          _catalogArtSizes[id] = bytes.length;
+          _catalogArtBytes += bytes.length;
+          _trimCatalogArtwork();
+        }
+        done.complete(bytes);
+      } catch (_) {
+        // Not sticky: the next call asks again.
+        if (identical(_catalogArt[id], load)) _catalogArt.remove(id);
+        done.complete(null);
+      }
+    }());
+    return load;
+  }
+
+  /// Drops the least recently asked-for covers until the cache is within
+  /// both bounds; the newest entry always stays.
+  void _trimCatalogArtwork() {
+    while (_catalogArt.length > 1 &&
+        (_catalogArt.length > catalogArtworkCacheSize ||
+            _catalogArtBytes > catalogArtworkCacheBytes)) {
+      final oldest = _catalogArt.keys.first;
+      _catalogArt.remove(oldest);
+      _catalogArtBytes -= _catalogArtSizes.remove(oldest) ?? 0;
+    }
+  }
+
+  void _clearCatalogArtwork() {
+    _catalogArt.clear();
+    _catalogArtSizes.clear();
+    _catalogArtBytes = 0;
   }
 
   // --- Snapshot plumbing ----------------------------------------------------
@@ -1148,6 +1317,14 @@ class JamGuestEngine extends JamEngine {
   void _onHostAwayChanged(bool away) {
     if (_closed) return;
     _hostAway.value = away;
+  }
+
+  void _onCatalogChanged(CatalogSummary? summary) {
+    if (_closed) return;
+    // A new rev may have changed what an id's cover is; and a catalog that
+    // went away has no covers to keep.
+    if (summary?.rev != _catalog.value?.rev) _clearCatalogArtwork();
+    _catalog.value = summary;
   }
 
   /// Arms the host-gone countdown for the current reconnect: the remainder
@@ -1812,9 +1989,11 @@ class JamGuestEngine extends JamEngine {
     } catch (_) {
       // Best effort: nothing else holds it.
     }
+    _clearCatalogArtwork();
     _prefetchStates.dispose();
     _uploadProgress.dispose();
     _hostAway.dispose();
+    _catalog.dispose();
     disposeEngineState();
   }
 }

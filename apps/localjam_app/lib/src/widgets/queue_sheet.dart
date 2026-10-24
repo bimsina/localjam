@@ -28,6 +28,7 @@ import '../design/typography.dart';
 import '../state/session_controller.dart';
 import '../util/format.dart';
 import '../util/media_picking.dart';
+import 'catalog_sheet.dart';
 import 'list.dart' show JamAddSongsRow;
 import 'menu.dart';
 import 'pressable.dart';
@@ -50,7 +51,11 @@ abstract final class QueueSheetStrings {
   static const String undo = 'Undo';
   static const String uploading = 'Sending your song to the jam';
   static const String importing = 'Adding your music to the jam';
-  static const String hostRunsQueue = 'Only the host can add songs.';
+  static const String hostRunsQueue = CatalogSheetStrings.cantAdd;
+
+  /// For a guest who may not add, while the host shares its library
+  /// (§6.6): it can still be browsed.
+  static String browseCatalog(String library) => 'Browse $library';
 
   /// Why "Add songs" is grey while the host cannot be reached — the same
   /// rule as the transport's: a control that stops working says why.
@@ -191,6 +196,9 @@ class _QueuePanelState extends State<QueuePanel> {
       ..add(_engine.permissionUpdates.listen(refresh));
     final guest = _engine;
     if (guest is JamGuestEngine) guest.prefetchStates.addListener(_onPrefetch);
+    // The host's shared library coming and going changes what Add Songs
+    // offers, and whether a guest who may not add can browse it.
+    _engine.catalog.addListener(_onCatalog);
   }
 
   void _unbind(JamEngine engine) {
@@ -201,9 +209,14 @@ class _QueuePanelState extends State<QueuePanel> {
     if (engine is JamGuestEngine) {
       engine.prefetchStates.removeListener(_onPrefetch);
     }
+    engine.catalog.removeListener(_onCatalog);
   }
 
   void _onPrefetch() {
+    if (mounted) setState(() {});
+  }
+
+  void _onCatalog() {
     if (mounted) setState(() {});
   }
 
@@ -310,7 +323,13 @@ class _QueuePanelState extends State<QueuePanel> {
       ),
     );
 
-    final String? gate = !canAdd
+    // Browsing needs no `add_tracks`: a guest who may not add can still see
+    // what the host's library holds.
+    final catalog = canAdd ? null : jamCatalogLabel(_engine);
+
+    // A guest who may only browse is told so — unless the Browse row is
+    // grey because the host cannot be reached, which is the reason then.
+    final String? gate = !canAdd && (catalog == null || canSend)
         ? QueueSheetStrings.hostRunsQueue
         : !canSend
         ? (session.hostAway
@@ -404,11 +423,24 @@ class _QueuePanelState extends State<QueuePanel> {
                       separator: false,
                       onTap: canSend ? () => unawaited(_add()) : null,
                     ),
+                  )
+                else if (catalog != null)
+                  SliverToBoxAdapter(
+                    child: JamAddSongsRow(
+                      title: QueueSheetStrings.browseCatalog(catalog.title),
+                      icon: CupertinoIcons.music_house,
+                      onBackdrop: true,
+                      horizontalPadding: pad,
+                      separator: false,
+                      onTap: canSend && guest != null
+                          ? () => unawaited(jamAddFromCatalog(context, guest))
+                          : null,
+                    ),
                   ),
                 // Empty: with Add Songs above, that row is the whole story —
                 // no second sentence on another axis. Without it, one centred
                 // line is all there is.
-                if (upNext.isEmpty && !canAdd)
+                if (upNext.isEmpty && !canAdd && catalog == null)
                   SliverToBoxAdapter(
                     child: Padding(
                       padding: EdgeInsets.fromLTRB(
@@ -1176,15 +1208,36 @@ class _RowMenuLayout extends MultiChildLayoutDelegate {
 ///
 /// Shared by the queue's "Add songs" row and the empty Now Playing, so both
 /// report failures the same way — once, as a summary, rather than one notice
-/// per bad file.
+/// per bad file. While the host shares its library (§6.6) the choice offers
+/// it first, and what is chosen there is added by catalog id, not uploaded.
+///
+/// One at a time, app-wide: the queue's row and the empty Now Playing's
+/// button are two ways into the same flow, and a second tap while the first
+/// is still picking or adding does nothing rather than run it twice.
 Future<void> jamAddToQueue(BuildContext context, JamEngine engine) async {
-  // Same choice host setup offers. On Android most music lives in
-  // MediaStore, which DocumentsUI will not show you.
-  final source = await chooseAddSource(context);
-  if (source == null || !context.mounted) return;
-  final paths = source == JamAddSource.library
-      ? await pickLibraryTracks(context)
-      : await pickAudioFiles(context);
-  if (paths.isEmpty || !context.mounted) return;
-  await JamSession.read(context).addFiles(paths.map(File.new));
+  if (_jamAddInFlight) return;
+  _jamAddInFlight = true;
+  try {
+    // Same choice host setup offers. On Android most music lives in
+    // MediaStore, which DocumentsUI will not show you.
+    final source = await chooseAddSource(
+      context,
+      catalog: jamCatalogLabel(engine),
+    );
+    if (source == null || !context.mounted) return;
+    if (source == JamAddSource.catalog && engine is JamGuestEngine) {
+      await jamAddFromCatalog(context, engine);
+      return;
+    }
+    final paths = source == JamAddSource.library
+        ? await pickLibraryTracks(context)
+        : await pickAudioFiles(context);
+    if (paths.isEmpty || !context.mounted) return;
+    await JamSession.read(context).addFiles(paths.map(File.new));
+  } finally {
+    _jamAddInFlight = false;
+  }
 }
+
+/// Whether a [jamAddToQueue] is running.
+bool _jamAddInFlight = false;

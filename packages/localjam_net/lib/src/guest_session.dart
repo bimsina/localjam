@@ -117,6 +117,7 @@ class JamGuestSession {
     JamGuestClient client,
   ) {
     _hostAway = client.hostAway;
+    _catalog = client.catalog;
     _adopt(client);
   }
 
@@ -189,6 +190,17 @@ class JamGuestSession {
   bool _hostAway = false;
   RejectReason? _lastRejectReason;
 
+  CatalogSummary? _catalog;
+
+  /// The last catalog listing fetched (§6.6), by the rev it was served at.
+  ({int rev, List<CatalogEntry> items})? _catalogCache;
+
+  /// A [fetchCatalog] under way, shared by concurrent callers.
+  Future<List<CatalogEntry>>? _catalogFetch;
+
+  /// The [catalog] rev the current round of [_catalogFetch] fetches for.
+  int? _catalogFetchRev;
+
   JamConnectionState _state = JamConnectionState.connected;
 
   Timer? _retryTimer;
@@ -208,6 +220,8 @@ class JamGuestSession {
       StreamController<ErrorMessage>.broadcast();
   final StreamController<bool> _hostAwayChanges =
       StreamController<bool>.broadcast();
+  final StreamController<CatalogSummary?> _catalogChanges =
+      StreamController<CatalogSummary?>.broadcast();
 
   // --- Connection state ------------------------------------------------------
 
@@ -298,6 +312,113 @@ class JamGuestSession {
 
   /// Changes to [hostAway], continuous across reconnects (§3.5).
   Stream<bool> get hostAwayChanges => _hostAwayChanges.stream;
+
+  /// The host's catalog (§6.6): its `rev` and how many songs it offers, or
+  /// null while it offers none. Kept through a drop; every reconnect's
+  /// `welcome` says again.
+  CatalogSummary? get catalog => _catalog;
+
+  /// Changes to [catalog], continuous across reconnects (§6.6): a newer
+  /// `rev` (fetch the listing again — [fetchCatalog] knows), the catalog
+  /// appearing, or it going away (null).
+  Stream<CatalogSummary?> get catalogChanges => _catalogChanges.stream;
+
+  /// The host's catalog listing (§6.6), fetched over the media plane only
+  /// when [catalog]'s rev is newer than the last listing fetched; concurrent
+  /// calls share one request. Empty when the host offers no catalog (or
+  /// turned it off meanwhile). Search and filtering are the caller's.
+  ///
+  /// What it returns is never older than the [catalog] rev known when it
+  /// was called: a fetch that is overtaken by a newer `catalog` broadcast
+  /// while it is under way fetches again (a few rounds at most, for a host
+  /// whose library keeps changing), and callers joining it get the newer
+  /// listing too.
+  ///
+  /// Throws [StateError] unless connected, and otherwise as
+  /// [JamGuestClient.fetchCatalogListing] does.
+  Future<List<CatalogEntry>> fetchCatalog() {
+    _ensureConnected();
+    final summary = _catalog;
+    if (summary == null) {
+      _catalogCache = null;
+      return Future.value(const []);
+    }
+    final cached = _catalogCache;
+    if (cached != null && cached.rev >= summary.rev) {
+      return Future.value(cached.items);
+    }
+    final inFlight = _catalogFetch;
+    if (inFlight != null) {
+      final fetchingFor = _catalogFetchRev;
+      if (fetchingFor == null || fetchingFor >= summary.rev) return inFlight;
+      // Under way for an older rev: it catches up when its round ends,
+      // unless that was its last — so ask again once it is done.
+      return inFlight.then(
+        (_) => fetchCatalog(),
+        onError: (Object _) => fetchCatalog(),
+      );
+    }
+    final fetch = _fetchCatalogFresh();
+    _catalogFetch = fetch;
+    unawaited(
+      fetch.then<void>((_) {}, onError: (Object _) {}).whenComplete(() {
+        if (identical(_catalogFetch, fetch)) _catalogFetch = null;
+      }),
+    );
+    return fetch;
+  }
+
+  /// Rounds of `GET /catalog` one [fetchCatalog] may spend catching up
+  /// with `catalog` broadcasts that arrive while it is under way.
+  static const int _maxCatalogFetchRounds = 4;
+
+  Future<List<CatalogEntry>> _fetchCatalogFresh() async {
+    for (var round = 1; ; round++) {
+      // The rev this round fetches for: a broadcast newer than it, seen by
+      // the time the listing arrives, means the listing may be stale.
+      final wanted = _catalog?.rev;
+      if (wanted == null) {
+        _catalogCache = null;
+        return const <CatalogEntry>[];
+      }
+      _catalogFetchRev = wanted;
+      final listing = await _client.fetchCatalogListing();
+      if (listing == null) {
+        _catalogCache = null;
+        return const <CatalogEntry>[];
+      }
+      final held = _catalogCache;
+      if (held == null || listing.rev >= held.rev) {
+        _catalogCache = (rev: listing.rev, items: listing.items);
+      }
+      final now = _catalog;
+      if (now == null) {
+        // Turned off while the listing was on its way.
+        _catalogCache = null;
+        return const <CatalogEntry>[];
+      }
+      if (listing.rev >= now.rev || round >= _maxCatalogFetchRounds) {
+        return listing.items;
+      }
+    }
+  }
+
+  /// Asks the host to add its catalog entries [catalogIds] to the queue
+  /// (§6.6; see [JamGuestClient.requestCatalogAdd]). Throws [StateError]
+  /// unless connected.
+  Future<void> requestCatalogAdd(List<String> catalogIds) {
+    _ensureConnected();
+    return _client.requestCatalogAdd(catalogIds);
+  }
+
+  /// The cover of catalog entry [catalogId] (§6.6), or null when it has
+  /// none; through the same connection bound as every media-plane request
+  /// (see [JamGuestClient.fetchCatalogArtwork]). Throws [StateError] unless
+  /// connected.
+  Future<Uint8List?> fetchCatalogArtwork(String catalogId) {
+    _ensureConnected();
+    return _client.fetchCatalogArtwork(catalogId);
+  }
 
   /// The CURRENT client's clock-offset estimator (§4). Replaced on every
   /// reconnect (a new connection re-runs the join burst).
@@ -483,8 +604,10 @@ class JamGuestSession {
       client.permissionUpdates.listen(_permissionUpdates.add),
       client.errors.listen(_errors.add),
       client.hostAwayChanges.listen(_setHostAway),
+      client.catalogUpdates.listen(_setCatalog),
     ];
     _setHostAway(client.hostAway);
+    _setCatalog(client.catalog);
     unawaited(client.done.then((_) => _onClientDone(client)));
   }
 
@@ -492,6 +615,14 @@ class JamGuestSession {
     if (away == _hostAway) return;
     _hostAway = away;
     if (!_hostAwayChanges.isClosed) _hostAwayChanges.add(away);
+  }
+
+  void _setCatalog(CatalogSummary? summary) {
+    if (summary == _catalog) return;
+    _catalog = summary;
+    // A listing of a catalog that is gone is nothing to keep.
+    if (summary == null) _catalogCache = null;
+    if (!_catalogChanges.isClosed) _catalogChanges.add(summary);
   }
 
   void _onClientDone(JamGuestClient client) {
@@ -631,5 +762,6 @@ class JamGuestSession {
     await _permissionUpdates.close();
     await _errors.close();
     await _hostAwayChanges.close();
+    await _catalogChanges.close();
   }
 }

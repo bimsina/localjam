@@ -71,6 +71,69 @@ void main() {
     });
   });
 
+  group('the host’s shared library in the choice', () {
+    Future<Future<JamAddSource?>> open(
+      WidgetTester tester, {
+      required bool library,
+    }) async {
+      late Future<JamAddSource?> answer;
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: jamLightTheme(),
+          home: Builder(
+            builder: (context) => Center(
+              child: GestureDetector(
+                onTap: () => answer = showJamAddSourceSheet(
+                  context,
+                  catalog: (
+                    title: JamPickerStrings.catalogOf('Silky Puffin'),
+                    detail: JamPickerStrings.catalogDetail('Silky Puffin'),
+                  ),
+                  library: library,
+                ),
+                child: const Text('Go'),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.tap(find.text('Go'));
+      await tester.pumpAndSettle();
+      return answer;
+    }
+
+    testWidgets('comes first, named after the host', (tester) async {
+      final answer = await open(tester, library: true);
+      final rows = tester.widgetList<JamRow>(find.byType(JamRow)).toList();
+      expect(rows.map((r) => r.title), [
+        'Silky Puffin’s library',
+        JamPickerStrings.library,
+        JamPickerStrings.files,
+      ]);
+      expect(find.text('Songs on Silky Puffin’s phone'), findsOneWidget);
+      await tester.tap(find.text('Silky Puffin’s library'));
+      await tester.pumpAndSettle();
+      expect(await answer, JamAddSource.catalog);
+    });
+
+    testWidgets('a phone with no library of its own still gets the choice', (
+      tester,
+    ) async {
+      await open(tester, library: false);
+      expect(
+        tester.widgetList<JamRow>(find.byType(JamRow)).map((r) => r.title),
+        ['Silky Puffin’s library', JamPickerStrings.files],
+      );
+    });
+
+    testWidgets('names the library after the host', (tester) async {
+      expect(
+        JamPickerStrings.catalogOf('Silky Puffin'),
+        'Silky Puffin’s library',
+      );
+    });
+  });
+
   group('jamAudioTypeGroup', () {
     tearDown(() => debugDefaultTargetPlatformOverride = null);
 

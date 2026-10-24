@@ -70,6 +70,16 @@ abstract final class HostSetupStrings {
       policy.addTracks ? songsFooterGuests : songsFooterHost;
   static const String remove = 'Remove';
 
+  /// The host's music library offered to the jam (§6.6) — off unless the
+  /// host turns it on, and the line under it says who will see it, true to
+  /// the preset and the nearby switch.
+  static const String shareLibrary = JamPickerStrings.shareLibrary;
+  static String shareLibraryDetail(JamPolicy policy, bool discoverable) =>
+      JamPickerStrings.shareLibraryDetail(
+        addTracks: policy.addTracks,
+        discoverable: discoverable,
+      );
+
   static const String discoverable = 'Show to people nearby';
   static const String discoverableOn =
       'People on this Wi‑Fi can see and join this jam.';
@@ -134,6 +144,13 @@ class _HostSetupScreenState extends State<HostSetupScreen> {
   // button.
   JamPolicy _policy = JamPolicy.jam;
   bool _discoverable = true;
+
+  /// Share my music library: off by default — it shows the titles of the
+  /// host's music to everyone holding the jam's link (§6.6).
+  bool _shareLibrary = false;
+
+  /// The permission ask behind turning it on is in flight.
+  bool _askingLibrary = false;
   bool _starting = false;
   bool _scanning = false;
   bool _scrolledUnder = false;
@@ -276,6 +293,23 @@ class _HostSetupScreenState extends State<HostSetupScreen> {
     setState(() => _tracks[index] = read);
   }
 
+  /// Turning sharing on asks for the music library first, through the same
+  /// rationale and notice as the library picker; a denial leaves it off.
+  Future<void> _setShareLibrary(bool share) async {
+    if (!share) {
+      setState(() => _shareLibrary = false);
+      return;
+    }
+    _dismissKeyboard();
+    setState(() => _askingLibrary = true);
+    final granted = await ensureLibraryAccess(JamSession.read(context));
+    if (!mounted) return;
+    setState(() {
+      _askingLibrary = false;
+      _shareLibrary = granted;
+    });
+  }
+
   void _remove(String path) =>
       setState(() => _tracks.removeWhere((t) => t.path == path));
 
@@ -305,6 +339,7 @@ class _HostSetupScreenState extends State<HostSetupScreen> {
       policy: _policy,
       discoverable: _discoverable,
       paths: [for (final track in _tracks) track.path],
+      shareLibrary: _shareLibrary && jamLibraryAvailable,
     );
     if (!mounted) return;
     setState(() => _starting = false);
@@ -367,6 +402,25 @@ class _HostSetupScreenState extends State<HostSetupScreen> {
         ),
         const SizedBox(height: JamSpace.section),
         _songsSection(),
+        // Only where there is a library to share (Android).
+        if (jamLibraryAvailable) ...[
+          const SizedBox(height: JamSpace.section),
+          JamSection(
+            children: [
+              JamRow.toggle(
+                title: HostSetupStrings.shareLibrary,
+                subtitle: HostSetupStrings.shareLibraryDetail(
+                  _policy,
+                  _discoverable,
+                ),
+                value: _shareLibrary,
+                onChanged: _askingLibrary
+                    ? null
+                    : (value) => unawaited(_setShareLibrary(value)),
+              ),
+            ],
+          ),
+        ],
         const SizedBox(height: JamSpace.section),
         JamSection(
           footer: JamPresetStrings.summary(_policy),
