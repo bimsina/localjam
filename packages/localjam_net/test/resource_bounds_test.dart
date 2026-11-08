@@ -892,6 +892,229 @@ void main() {
       expect(item.artworkId, isNull);
     });
   });
+
+  group('a joined peer is bounded too (§9.1)', () {
+    // Review 2026-11 (release audit): after `hello` the guard stopped
+    // counting, and the 256 KB cap was applied only to messages `dart:io`
+    // had already reassembled — so anyone holding the token (which a
+    // discoverable room hands to every neighbour) could stream one
+    // fragmented message until the host ran out of memory.
+
+    test('a message declaring more than the cap is cut off at its header, '
+        'before the payload arrives', () async {
+      final host = await startHost();
+      final conn = await rawJoined(host);
+      // A text fragment, then a continuation that declares a gigabyte: the
+      // host must not wait for (or buffer) any of it.
+      await conn.send([
+        ...wsFrame(0x1, List.filled(1000, 0x78), fin: false),
+        ...wsFrameHeader(0x0, 1024 * 1024 * 1024),
+      ]);
+      try {
+        for (var i = 0; i < 4 && !conn.closed.isCompleted; i++) {
+          await conn.send(Uint8List(16 * 1024));
+        }
+      } catch (_) {
+        // Destroyed under our feet: the point.
+      }
+      await conn.closed.future.timeout(const Duration(seconds: 4));
+      expect(closeCodeOf(conn), WebSocketStatus.policyViolation);
+      expect(host.peers, isEmpty);
+      await waitFor(() => host.debugOpenConnections == 0, reason: 'released');
+    });
+
+    test('fragments that add up past the cap are cut off too', () async {
+      final host = await startHost(maxControlFrameBytes: 32 * 1024);
+      final conn = await rawJoined(host);
+      // Each fragment alone is small; the message they make is not.
+      final fragment = List.filled(4 * 1024, 0x78);
+      final write = BytesBuilder()..add(wsFrame(0x1, fragment, fin: false));
+      for (var i = 0; i < 10; i++) {
+        write.add(wsFrame(0x0, fragment, fin: false));
+      }
+      try {
+        await conn.send(write.takeBytes());
+      } catch (_) {}
+      await conn.closed.future.timeout(const Duration(seconds: 4));
+      expect(closeCodeOf(conn), WebSocketStatus.policyViolation);
+      expect(host.peers, isEmpty);
+    });
+
+    test('a fragmented message under the cap is still served', () async {
+      final host = await startHost(maxControlFrameBytes: 32 * 1024);
+      final conn = await rawJoined(host);
+      final ping = utf8.encode(
+        jsonEncode({
+          'v': 1,
+          'type': 'clock_ping',
+          'seq': 1,
+          'payload': {'t0': 4242},
+        }),
+      );
+      final third = ping.length ~/ 3;
+      await conn.send([
+        ...wsFrame(0x1, ping.sublist(0, third), fin: false),
+        // A WebSocket ping between fragments is allowed (RFC 6455 §5.4).
+        ...wsFrame(0x9, const []),
+        ...wsFrame(0x0, ping.sublist(third, 2 * third), fin: false),
+        ...wsFrame(0x0, ping.sublist(2 * third)),
+      ]);
+      await waitFor(
+        () => conn.text.contains('"clock_pong"'),
+        reason: 'the pong',
+      );
+      // And full-size messages, one after another, are fine as well.
+      final padded = jsonEncode({
+        'v': 1,
+        'type': 'clock_ping',
+        'seq': 2,
+        'payload': {'t0': 4343, 'pad': 'x' * (31 * 1024)},
+      });
+      for (var i = 0; i < 3; i++) {
+        await conn.send(wsTextFrame(padded));
+      }
+      await waitFor(
+        () => conn.text.contains('4343'),
+        reason: 'the padded pong',
+      );
+      expect(host.peers, hasLength(1));
+      expect(conn.closed.isCompleted, isFalse);
+    });
+
+    test('a joined peer that floods bytes is closed', () async {
+      final host = await startHost(maxInboundBytesPerSecond: 8 * 1024);
+      final conn = await rawJoined(host);
+      // 64 KB of small, valid frames: eight seconds' worth at once, twice
+      // the burst allowance.
+      final junk = wsTextFrame(jsonEncode({'pad': 'x' * 1000}));
+      final write = BytesBuilder();
+      for (var i = 0; i < 64; i++) {
+        write.add(junk);
+      }
+      try {
+        await conn.send(write.takeBytes());
+      } catch (_) {}
+      await conn.closed.future.timeout(const Duration(seconds: 4));
+      expect(closeCodeOf(conn), WebSocketStatus.policyViolation);
+      expect(host.peers, isEmpty);
+    });
+
+    test('a joined peer that floods frames (WebSocket pings included) is '
+        'closed', () async {
+      final host = await startHost(maxInboundFramesPerSecond: 10);
+      final conn = await rawJoined(host);
+      final write = BytesBuilder();
+      for (var i = 0; i < 100; i++) {
+        write.add(wsFrame(0x9, const []));
+      }
+      try {
+        await conn.send(write.takeBytes());
+      } catch (_) {}
+      await conn.closed.future.timeout(const Duration(seconds: 4));
+      expect(closeCodeOf(conn), WebSocketStatus.policyViolation);
+      expect(host.peers, isEmpty);
+    });
+
+    test('an honest guest\'s join burst and chatter stay well inside the '
+        'rates', () async {
+      // The tightest rates a host should ever run with still admit what a
+      // real guest does: a join, its eight-ping burst, and requests.
+      final host = await startHost(
+        maxInboundBytesPerSecond: 4 * 1024,
+        maxInboundFramesPerSecond: 10,
+      );
+      await addTrack(host);
+      final guest = await joinGuest(
+        host,
+        pingInterval: const Duration(milliseconds: 200),
+      );
+      for (var i = 0; i < 5; i++) {
+        await guest.requestPause();
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+      }
+      await Future<void>.delayed(const Duration(seconds: 1));
+      expect(host.peers, hasLength(1));
+    });
+  });
+}
+
+/// A raw control socket that has said `hello` and been welcomed.
+Future<RawConn> rawJoined(
+  JamHostServer host, {
+  String clientId = 'c_raw',
+}) async {
+  final conn = await RawConn.open(host);
+  await conn.send([
+    ...upgradeRequest(),
+    ...helloFrame(host.token, clientId: clientId),
+  ]);
+  await waitFor(() => conn.text.contains('"welcome"'), reason: 'a welcome');
+  return conn;
+}
+
+/// A masked client frame header for [opcode] declaring [length] bytes of
+/// payload, under an all-zero mask (so the payload goes as it is).
+Uint8List wsFrameHeader(int opcode, int length, {bool fin = true}) {
+  final header = BytesBuilder()..addByte((fin ? 0x80 : 0) | opcode);
+  if (length < 126) {
+    header.addByte(0x80 | length);
+  } else if (length < 65536) {
+    header.add([0x80 | 126, length >> 8, length & 0xff]);
+  } else {
+    header
+      ..addByte(0x80 | 127)
+      ..add((ByteData(8)..setUint64(0, length)).buffer.asUint8List());
+  }
+  header.add(const [0, 0, 0, 0]);
+  return header.takeBytes();
+}
+
+/// One whole masked client frame (all-zero mask).
+Uint8List wsFrame(int opcode, List<int> payload, {bool fin = true}) =>
+    (BytesBuilder()
+          ..add(wsFrameHeader(opcode, payload.length, fin: fin))
+          ..add(payload))
+        .takeBytes();
+
+/// The frames the host sent on [conn] after its upgrade response, as
+/// (opcode, payload) — server frames are never masked.
+List<(int, List<int>)> serverFrames(RawConn conn) {
+  final bytes = conn.received;
+  var i = conn.text.indexOf('\r\n\r\n');
+  if (i < 0) return const [];
+  i += 4;
+  final frames = <(int, List<int>)>[];
+  while (i + 2 <= bytes.length) {
+    final opcode = bytes[i] & 0x0f;
+    var length = bytes[i + 1] & 0x7f;
+    var at = i + 2;
+    if (length == 126) {
+      if (at + 2 > bytes.length) break;
+      length = (bytes[at] << 8) | bytes[at + 1];
+      at += 2;
+    } else if (length == 127) {
+      if (at + 8 > bytes.length) break;
+      length = 0;
+      for (var k = 0; k < 8; k++) {
+        length = (length << 8) | bytes[at + k];
+      }
+      at += 8;
+    }
+    if (at + length > bytes.length) break;
+    frames.add((opcode, bytes.sublist(at, at + length)));
+    i = at + length;
+  }
+  return frames;
+}
+
+/// The status code of the close frame the host sent on [conn], if any.
+int? closeCodeOf(RawConn conn) {
+  for (final (opcode, payload) in serverFrames(conn)) {
+    if (opcode == 0x8 && payload.length >= 2) {
+      return (payload[0] << 8) | payload[1];
+    }
+  }
+  return null;
 }
 
 /// An ID3v2.3-tagged MP3: a TIT2 [title] frame, an APIC frame carrying

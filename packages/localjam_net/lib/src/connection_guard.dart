@@ -11,11 +11,21 @@
 /// ~900 MB (measured); eight pre-`hello` sockets each streaming a 100 MB
 /// frame, ~540 MB. The guard sits between the listening socket and
 /// `HttpServer` and counts raw bytes, the only place the count is honest.
+///
+/// The same holds after `hello`: a joined peer's WebSocket would still be
+/// reassembled whole, so the guard reads every frame header on the raw
+/// stream and cuts a connection off the moment a message it is sending
+/// declares more than the cap — before the payload arrives, not after
+/// `dart:io` has buffered it — and holds joined sockets to a byte and frame
+/// rate (see [GuardedSocket.trust]). Outbound, it counts the bytes the
+/// kernel has actually taken ([GuardedSocket.bytesWritten]), which is what
+/// lets the host see a peer that has stopped reading.
 library;
 
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 import 'dart:typed_data';
 
 /// Counts and admits connections; see the library comment.
@@ -157,10 +167,12 @@ enum _Phase {
   request,
 
   /// An upgraded WebSocket that has not authenticated yet: every byte
-  /// counts against the budget given to [GuardedSocket.limitUntilTrusted].
+  /// counts against the budget given to [GuardedSocket.limitUntilTrusted],
+  /// and every message against its message cap.
   preAuth,
 
-  /// Proved the token. Nothing is counted.
+  /// Proved the token: every message counts against the cap given to
+  /// [GuardedSocket.trust], and bytes and frames against its rates.
   trusted,
 }
 
@@ -212,6 +224,18 @@ class GuardedSocket extends Stream<Uint8List> implements Socket {
   /// WebSocket as they are — so [limitUntilTrusted] has to count them.
   int _afterHeaders = 0;
 
+  /// Frame headers of the WebSocket stream, read from the first byte after
+  /// the upgrade's headers on (see [_FrameMeter]).
+  final _FrameMeter _frames = _FrameMeter();
+
+  /// The trusted phase's rates (see [trust]); null means unlimited.
+  RateBucket? _byteRate;
+  RateBucket? _frameRate;
+  int _framesCharged = 0;
+
+  /// Bytes handed to the kernel so far (see [bytesWritten]).
+  int _written = 0;
+
   /// Set once a budget is blown: input is dropped from then on.
   bool _discarding = false;
   void Function()? _onExceeded;
@@ -225,10 +249,12 @@ class GuardedSocket extends Stream<Uint8List> implements Socket {
   bool _sawLine = false;
 
   /// From now until [trust], at most [budget] bytes may arrive — counting
-  /// those that came in the same read as the end of the request's headers.
-  /// For an upgraded control socket that has not said `hello` yet (§3.1).
+  /// those that came in the same read as the end of the request's headers —
+  /// and no WebSocket message may declare more than [maxMessageBytes] of
+  /// payload. For an upgraded control socket that has not said `hello` yet
+  /// (§3.1).
   ///
-  /// Past the budget nothing more is passed on — the bytes are dropped as
+  /// Past either limit nothing more is passed on — the bytes are dropped as
   /// they arrive, so whatever was being reassembled stops growing — and
   /// [onExceeded] is called so the owner can say why (a WebSocket close
   /// frame); the connection is destroyed [closeGrace] later regardless.
@@ -240,6 +266,7 @@ class GuardedSocket extends Stream<Uint8List> implements Socket {
   /// from it is not to upgrade at all.
   bool limitUntilTrusted(
     int budget, {
+    required int maxMessageBytes,
     void Function()? onExceeded,
     Duration closeGrace = const Duration(seconds: 2),
   }) {
@@ -247,9 +274,10 @@ class GuardedSocket extends Stream<Uint8List> implements Socket {
     _phase = _Phase.preAuth;
     _counted = _afterHeaders;
     _budget = budget;
+    _frames.maxMessageBytes = maxMessageBytes;
     _onExceeded = onExceeded;
     _closeGrace = closeGrace;
-    if (_counted > budget) {
+    if (_counted > budget || _frames.peakMessageBytes > maxMessageBytes) {
       _discarding = true;
       destroy();
       return false;
@@ -257,10 +285,66 @@ class GuardedSocket extends Stream<Uint8List> implements Socket {
     return true;
   }
 
-  /// The connection proved the token: stop counting.
-  void trust() {
+  /// The connection proved the token. The pre-`hello` byte budget is gone;
+  /// from now on:
+  ///
+  /// - no WebSocket message may declare more than [maxMessageBytes] of
+  ///   payload, summed over its fragments, checked at each frame's header —
+  ///   so a message over the cap is cut off before its payload arrives, not
+  ///   after `dart:io` has reassembled it;
+  /// - raw bytes may arrive at [bytesPerSecond] on average, with bursts of
+  ///   up to [burstSeconds] worth;
+  /// - frames, WebSocket control frames included, may arrive at
+  ///   [framesPerSecond] on average, with the same bursts.
+  ///
+  /// Breaking any of them is handled like a blown pre-`hello` budget (see
+  /// [limitUntilTrusted]): input is dropped and the owner told. A null rate
+  /// is not limited.
+  void trust({
+    required int maxMessageBytes,
+    int? bytesPerSecond,
+    int? framesPerSecond,
+    int burstSeconds = 4,
+  }) {
     _phase = _Phase.trusted;
     _headerClock?.cancel();
+    _frames.maxMessageBytes = maxMessageBytes;
+    _byteRate = bytesPerSecond == null
+        ? null
+        : RateBucket(
+            perSecond: bytesPerSecond,
+            capacity: bytesPerSecond * burstSeconds,
+          );
+    _frameRate = framesPerSecond == null
+        ? null
+        : RateBucket(
+            perSecond: framesPerSecond,
+            capacity: framesPerSecond * burstSeconds,
+          );
+    _framesCharged = _frames.frames;
+  }
+
+  /// Bytes this side has handed to the kernel to send. A writer that keeps
+  /// its own count of what it queued (the host, per WebSocket message) can
+  /// subtract this to see how much is still waiting in `dart:io`'s buffers:
+  /// `dart:io` hands the socket a chunk only once the previous one has been
+  /// written, so a peer that stops reading stops this count, while what is
+  /// queued for it keeps growing in memory.
+  int get bytesWritten => _written;
+
+  /// Breaks the current phase's limits: drops input from now on, and either
+  /// destroys the connection or tells the owner and destroys it after the
+  /// grace. Returns false, for [_accept].
+  bool _exceed() {
+    _discarding = true;
+    final onExceeded = _onExceeded;
+    if (onExceeded == null) {
+      destroy();
+    } else {
+      Timer(_closeGrace, destroy);
+      onExceeded();
+    }
+    return false;
   }
 
   /// Accounts [chunk]; returns false (having destroyed the connection) when
@@ -269,20 +353,22 @@ class GuardedSocket extends Stream<Uint8List> implements Socket {
     if (_discarding) return false;
     switch (_phase) {
       case _Phase.request:
-      case _Phase.trusted:
         return true;
       case _Phase.preAuth:
         _counted += chunk.length;
-        if (_counted > _budget) {
-          _discarding = true;
-          final onExceeded = _onExceeded;
-          if (onExceeded == null) {
-            destroy();
-          } else {
-            Timer(_closeGrace, destroy);
-            onExceeded();
-          }
-          return false;
+        if (_counted > _budget || !_frames.feed(chunk, 0)) return _exceed();
+        return true;
+      case _Phase.trusted:
+        if (!_frames.feed(chunk, 0)) return _exceed();
+        final byteRate = _byteRate;
+        if (byteRate != null && !byteRate.take(chunk.length)) {
+          return _exceed();
+        }
+        final frameRate = _frameRate;
+        if (frameRate != null) {
+          final frames = _frames.frames - _framesCharged;
+          _framesCharged = _frames.frames;
+          if (frames > 0 && !frameRate.take(frames)) return _exceed();
         }
         return true;
       case _Phase.headers:
@@ -296,6 +382,12 @@ class GuardedSocket extends Stream<Uint8List> implements Socket {
               _phase = _Phase.request;
               _headerClock?.cancel();
               _afterHeaders = chunk.length - i - 1;
+              // If this was an upgrade, these are the first WebSocket
+              // bytes, and `dart:io` reads nothing more until the upgrade
+              // is done — so read their frame headers now, in case
+              // [limitUntilTrusted] follows. (For any other request it is
+              // a few header reads of body bytes, never consulted.)
+              _frames.feed(chunk, i + 1);
               break;
             }
             if (_lineLength > 0) _sawLine = true;
@@ -404,14 +496,25 @@ class GuardedSocket extends Stream<Uint8List> implements Socket {
       _socket.writeAll(objects, separator);
 
   @override
-  void add(List<int> data) => _socket.add(data);
+  void add(List<int> data) {
+    _written += data.length;
+    _socket.add(data);
+  }
 
   @override
   void addError(Object error, [StackTrace? stackTrace]) =>
       _socket.addError(error, stackTrace);
 
+  /// Counts each chunk as the socket takes it ([bytesWritten]). The socket
+  /// pauses [stream] while a write is pending, so a chunk is counted when
+  /// the previous one has gone to the kernel — not when it was queued.
   @override
-  Future addStream(Stream<List<int>> stream) => _socket.addStream(stream);
+  Future addStream(Stream<List<int>> stream) => _socket.addStream(
+    stream.map((chunk) {
+      _written += chunk.length;
+      return chunk;
+    }),
+  );
 
   @override
   Future flush() => _socket.flush();
@@ -441,6 +544,123 @@ class GuardedSocket extends Stream<Uint8List> implements Socket {
 
   @override
   void setRawOption(RawSocketOption option) => _socket.setRawOption(option);
+}
+
+/// Reads WebSocket frame headers (RFC 6455 §5.2) off a client's raw byte
+/// stream, skipping payloads, to cap what one message may declare before
+/// `dart:io` buffers any of it. Without permessage-deflate (which the host
+/// never negotiates, §1) a frame's declared length is exactly what it adds
+/// to the reassembled message — UTF-8 bytes, for a text frame.
+///
+/// It never holds more than a frame header (14 bytes). Malformed framing is
+/// not its business: `dart:io` closes the connection on that by itself.
+class _FrameMeter {
+  /// Upper bound on one message's payload, summed over its fragments.
+  int maxMessageBytes = _clamp;
+
+  /// The largest message seen so far (also before a cap was set: see
+  /// [GuardedSocket.limitUntilTrusted]).
+  int peakMessageBytes = 0;
+
+  /// Frames seen so far, control frames included.
+  int frames = 0;
+
+  /// Lengths are clamped here so sums cannot overflow: no cap is near it.
+  static const int _clamp = 1 << 53;
+
+  final Uint8List _head = Uint8List(14);
+  int _headLength = 0;
+  int _headNeeded = 2;
+  int _payloadLeft = 0;
+  int _messageBytes = 0;
+
+  /// Reads [bytes] from [start]; false once a message is over the cap.
+  bool feed(Uint8List bytes, int start) {
+    var i = start;
+    final end = bytes.length;
+    while (i < end) {
+      if (_payloadLeft > 0) {
+        final skip = min(_payloadLeft, end - i);
+        _payloadLeft -= skip;
+        i += skip;
+        continue;
+      }
+      _head[_headLength++] = bytes[i++];
+      if (_headLength == 2) {
+        final length7 = _head[1] & 0x7f;
+        _headNeeded =
+            2 +
+            (length7 == 126 ? 2 : (length7 == 127 ? 8 : 0)) +
+            ((_head[1] & 0x80) != 0 ? 4 : 0);
+      }
+      if (_headLength < _headNeeded) continue;
+      _headLength = 0;
+      _headNeeded = 2;
+      if (!_frame()) return false;
+    }
+    return true;
+  }
+
+  /// Accounts the frame whose header is in [_head]; false if over the cap.
+  bool _frame() {
+    frames++;
+    final opcode = _head[0] & 0x0f;
+    final fin = (_head[0] & 0x80) != 0;
+    final length7 = _head[1] & 0x7f;
+    var length = length7;
+    if (length7 == 126) {
+      length = (_head[2] << 8) | _head[3];
+    } else if (length7 == 127) {
+      length = 0;
+      for (var k = 2; k < 10; k++) {
+        if (length >= _clamp >> 8) {
+          length = _clamp;
+          break;
+        }
+        length = (length << 8) | _head[k];
+      }
+    }
+    _payloadLeft = length;
+    if (opcode >= 0x8) {
+      // Control frames (close, ping, pong) carry at most 125 bytes and are
+      // not part of a message.
+      return length <= 125;
+    }
+    _messageBytes = min(_messageBytes + length, _clamp);
+    if (_messageBytes > peakMessageBytes) peakMessageBytes = _messageBytes;
+    final over = _messageBytes > maxMessageBytes;
+    if (fin) _messageBytes = 0;
+    return !over;
+  }
+}
+
+/// A token bucket: [take] spends from a balance that refills at [perSecond]
+/// up to [capacity], on the monotonic clock. For rate limits that must let
+/// an honest burst through and stop a sustained flood.
+class RateBucket {
+  RateBucket({required this.perSecond, required this.capacity})
+    : _tokens = capacity.toDouble();
+
+  final int perSecond;
+  final int capacity;
+
+  double _tokens;
+  int _lastUs = _clock.elapsedMicroseconds;
+
+  static final Stopwatch _clock = Stopwatch()..start();
+
+  /// Spends [n] if the balance holds it; false (spending nothing) if not.
+  bool take([int n = 1]) {
+    final now = _clock.elapsedMicroseconds;
+    _tokens = min(
+      capacity.toDouble(),
+      _tokens + (now - _lastUs) * perSecond / Duration.microsecondsPerSecond,
+    );
+    _lastUs = now;
+    if (_tokens < n) return false;
+    _tokens -= n;
+    return true;
+  }
 }
 
 /// A [GuardedSocket]'s read subscription, reporting when its reader stops

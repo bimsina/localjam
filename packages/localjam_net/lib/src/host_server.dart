@@ -266,6 +266,8 @@ class JamHostServer {
     this.maxPeers = defaultMaxPeers,
     this.maxPendingConnections = 8,
     this.maxControlFrameBytes = 256 * 1024,
+    this.maxInboundBytesPerSecond = defaultMaxInboundBytesPerSecond,
+    this.maxInboundFramesPerSecond = defaultMaxInboundFramesPerSecond,
     this.maxPreHelloFrameBytes = 16 * 1024,
     this.helloTimeout = const Duration(seconds: 10),
     this.restrictToLanRemotes = true,
@@ -301,6 +303,8 @@ class JamHostServer {
   static const int defaultMaxConnectionsPerRemote = 32;
   static const int defaultMaxCatalogIdsPerRequest = 50;
   static const int defaultMaxPendingCatalogAdds = 128;
+  static const int defaultMaxInboundBytesPerSecond = 256 * 1024;
+  static const int defaultMaxInboundFramesPerSecond = 100;
 
   /// One device's share of [defaultMaxPendingCatalogAdds]: a full
   /// [defaultMaxCatalogIdsPerRequest] selection fits whole.
@@ -387,19 +391,35 @@ class JamHostServer {
   /// the token; over-cap upgrades are refused with 503.
   final int maxPendingConnections;
 
-  /// Upper bound on one control frame from a joined peer (§1), counted in
-  /// UTF-8 bytes.
+  /// Upper bound on one control message from a joined peer (§1, §9.1),
+  /// counted in UTF-8 bytes and summed over its WebSocket fragments.
   ///
-  /// What this bounds is parse-and-act cost, not buffering: `dart:io`'s
-  /// WebSocket has no maximum-message option and reassembles a message
-  /// completely before handing it over, so by the time the cap is applied the
-  /// bytes have already been received. What it does buy is that nothing
-  /// large is ever JSON-parsed or dispatched, and that the sender does not
-  /// get to do it twice: the socket is closed with `policyViolation` (1008).
-  /// A joined peer has proved the token, and within the room §9 trusts it
-  /// not to stream a gigabyte into one frame; the sockets that have proved
-  /// nothing are held to a raw byte count instead ([maxPreHelloFrameBytes]).
+  /// `dart:io`'s WebSocket has no maximum-message option and reassembles a
+  /// message completely before handing it over, so the cap is enforced on
+  /// the raw stream instead: the connection guard reads each frame header
+  /// as it arrives and closes the socket with `policyViolation` (1008) the
+  /// moment a message declares more — before its payload is received, let
+  /// alone buffered. Holding the token does not exempt a peer: discoverable
+  /// rooms hand it to every LAN neighbour that asks.
   final int maxControlFrameBytes;
+
+  /// The average rate, in raw bytes per second, at which a joined peer's
+  /// control socket may send (§9.1), with bursts of four seconds' worth;
+  /// past it the socket is closed with `policyViolation`. An honest guest
+  /// sends a few hundred bytes a second at most — pings, the odd request —
+  /// so the default of 256 KB/s (1 MB bursts, four maximum-size messages)
+  /// only ever meets a flood. Null disables it.
+  final int? maxInboundBytesPerSecond;
+
+  /// The average rate, in WebSocket frames per second (control frames such
+  /// as pings included), at which a joined peer's control socket may send
+  /// (§9.1), with bursts of four seconds' worth; past it the socket is
+  /// closed with `policyViolation`. An honest guest sends one ping every
+  /// two seconds, a burst of eight on (re)join, and a frame per tap; the
+  /// default of 100/s bounds the cost of a flood of tiny frames — each a
+  /// parse, and a WebSocket ping a pong the host must queue — that the
+  /// byte rate alone would let through. Null disables it.
+  final int? maxInboundFramesPerSecond;
 
   /// Upper bound on what a control socket may send before it completes the
   /// §3.1 handshake (default 16 KB): the cap on one pre-hello frame, and —
@@ -1694,6 +1714,7 @@ class JamHostServer {
     final withinBudget =
         socket?.limitUntilTrusted(
           maxPreHelloFrameBytes + _preHelloFramingSlack,
+          maxMessageBytes: maxPreHelloFrameBytes,
           onExceeded: () {
             final c = conn;
             if (c == null) return; // Still upgrading: destroyed shortly.
@@ -3402,7 +3423,14 @@ class JamHostServer {
     conn.peerId = peerId;
     conn.info = info;
     conn.uploadKey = _randomHex(16); // §6.4: a fresh credential per join.
-    conn.socket?.trust(); // §9.1: proved the token; no more byte budget.
+    // §9.1: proved the token, so the pre-hello byte budget is lifted — but
+    // not every bound: messages stay capped as they arrive, and bytes and
+    // frames rate-limited.
+    conn.socket?.trust(
+      maxMessageBytes: maxControlFrameBytes,
+      bytesPerSecond: maxInboundBytesPerSecond,
+      framesPerSecond: maxInboundFramesPerSecond,
+    );
     _peers[peerId] = conn;
     _session.upsertPeer(peerId);
 
