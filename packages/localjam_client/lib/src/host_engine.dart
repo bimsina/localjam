@@ -1037,11 +1037,18 @@ class JamHostEngine extends JamEngine {
   /// sides. Media ids are content-derived, so re-adding a file that is
   /// already in the queue changes nothing and reports
   /// [JamAddOutcome.alreadyQueued] rather than silently succeeding.
+  ///
+  /// Throws [StateError] once the room has ended — including when it ends
+  /// while this add is still probing, reading tags or hashing: an add that
+  /// outlives its room registers nothing and leaves no artwork behind.
   @override
   Future<JamAddResult> addMedia(File file, {String? name}) async {
+    _ensureOpenForAdd();
     final knownBefore = {for (final item in playlist) item.mediaId};
     final durationUs = await _probeDurationUs(file.path);
+    _ensureOpenForAdd();
     final tags = await readAudioTags(file);
+    _ensureOpenForAdd();
     String? artworkId;
     final artworkBytes = tags.artworkBytes;
     if (tags.hasArtwork) {
@@ -1050,18 +1057,30 @@ class JamHostEngine extends JamEngine {
         mime: tags.artworkMime!,
       );
     }
-    final item = await JamHostServer.describeFile(
-      file,
-      kind: MediaKind.audio,
-      name: name,
-      mime: mimeForPath(file.path),
-      durationUs: durationUs ?? tags.durationUs,
-      title: tags.title,
-      artist: tags.artist,
-      album: tags.album,
-      artworkId: artworkId,
-      addedBy: JamPermissions.hostPeerId,
-    );
+    final MediaItem item;
+    try {
+      _ensureOpenForAdd();
+      item = await JamHostServer.describeFile(
+        file,
+        kind: MediaKind.audio,
+        name: name,
+        mime: mimeForPath(file.path),
+        durationUs: durationUs ?? tags.durationUs,
+        title: tags.title,
+        artist: tags.artist,
+        album: tags.album,
+        artworkId: artworkId,
+        addedBy: JamPermissions.hostPeerId,
+      );
+      // The last await is behind us: from this check to the registration
+      // below nothing yields, so a room that is still open here is open
+      // when the item lands, and one that closed during the hash gets
+      // nothing.
+      _ensureOpenForAdd();
+    } catch (_) {
+      if (_closed) await _discardArtwork(artworkId);
+      rethrow;
+    }
     if (knownBefore.contains(item.mediaId) ||
         playlist.any((i) => i.mediaId == item.mediaId)) {
       // Same bytes, same id: the registry already points at a copy, and
@@ -1071,6 +1090,25 @@ class JamHostEngine extends JamEngine {
     _mediaPaths[item.mediaId] = file.path;
     _server.addMedia(item, file);
     return JamAddResult(item, JamAddOutcome.added);
+  }
+
+  /// Throws the [StateError] a host add meets once the room has ended.
+  void _ensureOpenForAdd() {
+    if (_closed) throw StateError('The room has ended; nothing was added.');
+  }
+
+  /// Deletes the cover an add abandoned by the end of the room wrote
+  /// ([addMedia]), unless a track that made it into the queue shows the
+  /// same cover. Best-effort: the server's own upload directory goes with
+  /// the room anyway; this covers a write that landed after it was swept.
+  Future<void> _discardArtwork(String? artworkId) async {
+    if (artworkId == null) return;
+    if (playlist.any((i) => i.artworkId == artworkId)) return;
+    try {
+      await _server.artworkFile(artworkId)?.delete();
+    } catch (_) {
+      // Already gone with the upload directory.
+    }
   }
 
   /// Adds [files] in the background, one at a time, while the room is
@@ -1262,7 +1300,8 @@ class JamHostEngine extends JamEngine {
       return null;
     }
     if (result == null) return null;
-    _adoptCatalogFile(result.item.mediaId);
+    // A room that ended while the add ran keeps no new paths.
+    if (!_closed) _adoptCatalogFile(result.item.mediaId);
     return JamAddResult(
       result.item,
       result.added ? JamAddOutcome.added : JamAddOutcome.alreadyQueued,

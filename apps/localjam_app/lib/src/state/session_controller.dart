@@ -385,6 +385,11 @@ class JamSessionController extends ChangeNotifier {
   /// its way out, and closes any room it reached.
   int _startGeneration = 0;
 
+  /// Set by [dispose]: the app-level owner is gone, so nothing may start,
+  /// attach or browse any more, and a start still in flight closes whatever
+  /// it reaches. Not the same as leaving a room, which keeps the controller.
+  bool _disposed = false;
+
   /// The host's background import of the files it started with.
   JamImport? _import;
 
@@ -710,6 +715,7 @@ class JamSessionController extends ChangeNotifier {
     /// (and [JamRoomBrowser.probe]) without an mDNS daemon.
     @visibleForTesting JamRoomBrowser? browser,
   }) async {
+    if (_disposed) return;
     _browseWanted = true;
     // Never browse while in a room — nor while getting into one. A start
     // awaits the OS permission prompts, and a screen rebuilding behind that
@@ -775,7 +781,8 @@ class JamSessionController extends ChangeNotifier {
     // Detach first: stop() disposes the notifier we are listening to.
     browser.rooms.removeListener(_onRoomsChanged);
     await browser.stop();
-    _nearby.value = const [];
+    // [dispose] stops the browse too, and disposes this on its way out.
+    if (!_disposed) _nearby.value = const [];
   }
 
   // --- Session lifecycle ----------------------------------------------------
@@ -800,6 +807,10 @@ class JamSessionController extends ChangeNotifier {
     bool shareLibrary = false,
   }) async {
     if (!_claimStart()) return false;
+    final attempt = _startGeneration;
+    // Overtaken while it ran: the controller was disposed (or a later
+    // start claimed it). Nothing here is this start's to touch any more.
+    bool abandoned() => attempt != _startGeneration || _disposed;
     // A new room of this device's own: the old one's way back (a guest's
     // rejoin link, a dead room's restart) is not this one's, and a draft
     // for host setup has been used.
@@ -811,11 +822,14 @@ class JamSessionController extends ChangeNotifier {
       // An `ended` session still holding an engine is closed on the way past,
       // so a terminal state never blocks the next one.
       await _teardown();
+      if (abandoned()) return false;
       await _stopBrowsing();
+      if (abandoned()) return false;
       // Normally a no-op by now: the screen that got the user here calls
       // [prepareForSession] first, so the prompts land before any spinner.
       // Kept as the backstop for entry points that did not.
       await _requestSessionPermissions();
+      if (abandoned()) return false;
       final engine = await JamHostEngine.start(
         sessionName: sessionName,
         policy: policy,
@@ -824,6 +838,12 @@ class JamSessionController extends ChangeNotifier {
         // request. Otherwise [_serveWebPlayer] hands it over once it loads.
         staticSite: _webGuest.site,
       );
+      if (abandoned()) {
+        // Up after all, but its owner is gone: a room nobody can see or
+        // end must not keep serving, playing and holding the keep-alive.
+        unawaited(engine.close().catchError((Object _) {}));
+        return false;
+      }
       _attach(engine, JamSide.host);
       _serveWebPlayer(engine);
       // Cued and started by the import itself (cueFirst + autoPlay): "Start
@@ -838,6 +858,7 @@ class JamSessionController extends ChangeNotifier {
       if (shareLibrary) unawaited(_shareLibrary(engine));
       return true;
     } catch (e) {
+      if (abandoned()) return false;
       _lastFailure = e;
       _error = _describe(e);
       _phase = JamSessionPhase.idle;
@@ -867,7 +888,7 @@ class JamSessionController extends ChangeNotifier {
     // Given up on while it ran ([cancelRejoin]): the session is someone
     // else's now, and browsing comes back if nothing else is running.
     bool abandoned() {
-      if (attempt == _startGeneration) return false;
+      if (attempt == _startGeneration && !_disposed) return false;
       unawaited(_resumeBrowsing());
       return true;
     }
@@ -1085,8 +1106,12 @@ class JamSessionController extends ChangeNotifier {
     var duplicates = 0;
     for (final file in files) {
       attempted++;
+      // Left (or replaced) while the pick was being added: what is left of
+      // it belongs to no room, and a failure notice would land on home.
+      if (!identical(_engine, engine)) return failures;
       try {
         final result = await engine.addMedia(file);
+        if (!identical(_engine, engine)) return failures;
         if (result.alreadyQueued) duplicates++;
       } on JamNotConnectedException catch (e) {
         // The link went (or the host went to sleep) mid-pick: the rest would
@@ -1099,6 +1124,7 @@ class JamSessionController extends ChangeNotifier {
         );
         return failures;
       } catch (e) {
+        if (!identical(_engine, engine)) return failures;
         debugPrint('localjam: could not add ${file.path}: $e');
         failures.add(JamAddFailure.of(file.path, e));
       }
@@ -1436,6 +1462,12 @@ class JamSessionController extends ChangeNotifier {
   // --- Wiring ---------------------------------------------------------------
 
   void _attach(JamEngine engine, JamSide side) {
+    // Every caller checks first; this is the backstop that keeps a late
+    // start from wiring a live engine to an owner that is gone.
+    if (_disposed) {
+      unawaited(engine.close().catchError((Object _) {}));
+      return;
+    }
     _engine = engine;
     _side = side;
     _phase = JamSessionPhase.live;
@@ -1787,12 +1819,34 @@ class JamSessionController extends ChangeNotifier {
   /// showing a name should read it again.
   void _onIdentityChanged() => notifyListeners();
 
+  /// Silent once disposed: a late callback (a cover read for the ended
+  /// page, an import finishing, a start overtaken by [dispose]) has nobody
+  /// left to tell, and [ChangeNotifier] would assert.
+  @override
+  void notifyListeners() {
+    if (_disposed) return;
+    super.notifyListeners();
+  }
+
+  /// Disposes the app-level owner, which is not the same as leaving a room
+  /// ([leave]): the engine is closed — its server, its playback and the
+  /// foreground service must not outlive the one object that can end them —
+  /// and any start still in flight is invalidated, so whatever it reaches
+  /// is closed on arrival rather than attached.
   @override
   void dispose() {
+    _disposed = true;
+    _startGeneration++;
+    _rejoinAttempt = null;
+    _rejoinReason = null;
     // A cover still being read for the ended page lands on nothing.
     _endedJam = null;
     JamIdentity.changes.removeListener(_onIdentityChanged);
+    final engine = _engine;
     unawaited(_detach());
+    if (engine != null) {
+      unawaited(engine.close().catchError((Object _) {}));
+    }
     unawaited(_stopBrowsing());
     unawaited(_notices.close());
     _nearby.dispose();

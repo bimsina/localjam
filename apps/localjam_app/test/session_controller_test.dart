@@ -1167,4 +1167,72 @@ void main() {
       });
     });
   });
+
+  group('disposing the app-level owner', () {
+    // Leaving a room screen keeps the controller and its jam; disposing the
+    // controller (the app root going away while the process lives on) used
+    // to detach the engine without closing it, so the server, the playback
+    // and the foreground service outlived the only thing that could end
+    // them.
+    testWidgets('closes the live room', (tester) async {
+      final host = testSession();
+      final guest = testSession();
+      await tester.runAsync(() async {
+        await host.startHost(sessionName: 'Owned Room', discoverable: false);
+        await guest.join(host.joinUri!, mediaCacheDir: tempCache());
+        final engine = host.hostEngine!;
+        expect(engine.isListening, isTrue);
+
+        host.dispose();
+
+        expect(
+          await waitFor(() => engine.sessionEnded.value != null),
+          isTrue,
+          reason: 'the engine was closed, not abandoned',
+        );
+        expect(engine.sessionEnded.value, JamSessionEndReason.closedLocally);
+        expect(engine.isListening, isFalse);
+        expect(
+          await waitFor(() => guest.phase == JamSessionPhase.ended),
+          isTrue,
+          reason: 'the guest heard the room end',
+        );
+        await guest.leave();
+      });
+    });
+
+    testWidgets('a host start in flight lands on nothing', (tester) async {
+      final host = testSession();
+      await tester.runAsync(() async {
+        final starting = host.startHost(
+          sessionName: 'Late Room',
+          discoverable: false,
+        );
+        host.dispose();
+        expect(await starting, isFalse);
+        expect(host.engine, isNull);
+      });
+    });
+
+    testWidgets('a join in flight is closed on arrival, not attached', (
+      tester,
+    ) async {
+      final host = testSession();
+      final guest = testSession();
+      await tester.runAsync(() async {
+        await host.startHost(sessionName: 'Late Join', discoverable: false);
+        final joining = guest.join(host.joinUri!, mediaCacheDir: tempCache());
+        guest.dispose();
+        expect(await joining, isFalse);
+        expect(guest.engine, isNull);
+        // Whatever got in has left again.
+        expect(
+          await waitFor(() => host.hostEngine!.peers.isEmpty),
+          isTrue,
+          reason: 'the late guest engine was closed',
+        );
+        await host.leave();
+      });
+    });
+  });
 }
