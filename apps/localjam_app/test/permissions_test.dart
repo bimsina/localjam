@@ -48,6 +48,33 @@ void main() {
     expect(answers, [false, false]);
   });
 
+  testWidgets(
+    '"Not now" holds for the run, and the sheet returns next launch',
+    (tester) async {
+      // The bug: the shell's ask got "Not now", then the session's backstop
+      // ask found the kind already explained and went straight to the OS.
+      final shown = installPresenter(answer: false);
+      expect(
+        await jamExplainPermission(JamPermissionKind.localNetworkApple),
+        false,
+      );
+      expect(
+        await jamExplainPermission(JamPermissionKind.localNetworkApple),
+        false,
+      );
+      expect(shown, hasLength(1));
+
+      // A new process: the user is asked again, by the sheet, not cold.
+      resetExplainedPermissionsForTesting();
+      final next = installPresenter();
+      expect(
+        await jamExplainPermission(JamPermissionKind.localNetworkApple),
+        true,
+      );
+      expect(next, [JamPermissionKind.localNetworkApple]);
+    },
+  );
+
   group('local network on iOS and macOS', () {
     testWidgets('is explained before the first jam, and only once', (
       tester,

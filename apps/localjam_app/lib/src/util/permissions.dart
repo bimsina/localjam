@@ -125,6 +125,10 @@ final Map<JamPermissionKind, Future<bool>> _explaining = {};
 Future<bool> _explain(JamPermissionKind kind) async {
   final presenter = jamRationalePresenter;
   if (presenter == null) return true;
+  // "Not now" holds for the rest of this run: the session code asks again as
+  // a backstop right after the shell's ask, and that second ask must not go
+  // to the OS behind the user's back.
+  if (_declined.contains(kind)) return false;
   if (_explained.contains(kind)) return true;
   final permission = _permissionFor(kind);
   try {
@@ -155,8 +159,24 @@ Future<bool> _explain(JamPermissionKind kind) async {
     return true;
   }
   _explained.add(kind);
-  return presenter(kind);
+  final proceed = await presenter(kind);
+  if (!proceed) {
+    // Not explained after all: the next launch shows the sheet again rather
+    // than taking the stored flag as leave to prompt cold.
+    _explained.remove(kind);
+    _declined.add(kind);
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool(_rationaleKey(kind), false);
+    } catch (e) {
+      debugPrint('localjam: could not forget rationale for ${kind.name}: $e');
+    }
+  }
+  return proceed;
 }
+
+/// Kinds the user answered "Not now" for in this process.
+final Set<JamPermissionKind> _declined = <JamPermissionKind>{};
 
 /// Kinds already explained in this process, so a prefs failure can never
 /// turn a once-only sheet into one that appears before every jam.
@@ -164,7 +184,10 @@ final Set<JamPermissionKind> _explained = <JamPermissionKind>{};
 
 /// Forgets the in-process "already explained" latch (tests).
 @visibleForTesting
-void resetExplainedPermissionsForTesting() => _explained.clear();
+void resetExplainedPermissionsForTesting() {
+  _explained.clear();
+  _declined.clear();
+}
 
 /// Prepares local-network access before hosting or joining.
 ///
