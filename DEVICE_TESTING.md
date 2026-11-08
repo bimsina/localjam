@@ -25,8 +25,9 @@ devices, iOS + Android).
 
 - iOS: `cd apps/localjam_app && flutter run --release -d <iphone>` (needs your
   dev cert; add your team in Xcode Runner signing once).
-- Android: `flutter build apk --release` and install the APK, or `flutter run
-  --release -d <device>`.
+- Android: `LOCALJAM_ALLOW_DEBUG_SIGNING=1 flutter build apk --release` and
+  install the APK, or `LOCALJAM_ALLOW_DEBUG_SIGNING=1 flutter run --release -d
+  <device>` (without a release key, release builds otherwise refuse to build).
 - Put a few real songs in the host phone's app Documents (iOS: Files app →
   LocalJam) or use "Add files".
 - Both phones on the same Wi-Fi, or host runs a hotspot and the guest joins it.

@@ -80,10 +80,13 @@ those files and must be re-applied if the generator stomps them:
 
 ## Release signing
 
-Debug and profile builds sign themselves. A release build looks for
-`android/key.properties`; without it Gradle prints a warning and falls back to
-the debug key, so `flutter run --release` and local `flutter build apk --release`
-still work — but the artifact is not distributable.
+Debug and profile builds sign themselves. A release build needs
+`android/key.properties` and **fails without it**, so a debug-signed artifact
+can never be uploaded by accident. For a local release build (`flutter run
+--release`, R8 checks), opt in to the debug key with
+`LOCALJAM_ALLOW_DEBUG_SIGNING=1`. The full Play process (upload key, Play App
+Signing, permissions, Data safety) is in
+[`docs/release/ANDROID_RELEASE.md`](../../docs/release/ANDROID_RELEASE.md).
 
 ```sh
 keytool -genkey -v -keystore ~/localjam-upload.jks \
