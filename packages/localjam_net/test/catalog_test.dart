@@ -381,6 +381,20 @@ void main() {
       expect(item.name, 'c_1.mp3');
     });
 
+    test('a library title that is a filename loses its extension', () async {
+      final host = await _startHost();
+      host.setCatalog(
+        _TestCatalog(
+          await _untagged(['c_1']),
+          entries: const [CatalogEntry(catalogId: 'c_1', title: 'memo.mp3')],
+        ),
+      );
+      final guest = await _join(host);
+      await guest.requestCatalogAdd(['c_1']);
+      await _waitFor(() => guest.playlist.isNotEmpty, reason: 'the add');
+      expect(guest.playlist.single.title, 'memo');
+    });
+
     test('without add_tracks: not_allowed, and nothing is opened', () async {
       final host = await _startHost(policy: JamPolicy.listenOnly);
       final catalog = _TestCatalog(await _untagged(['c_1']));
@@ -758,6 +772,52 @@ void main() {
         expect(host.debugCatalogCoversCached, 2);
       },
     );
+
+    test('the listing says hasArtwork once the host knows, without a new '
+        'rev', () async {
+      final host = await _startHost();
+      final catalog = _TestCatalog(
+        {
+          'c_art': await makeTaggedMp3(name: 'art.mp3'),
+          'c_bare': await makeTaggedMp3(withArtwork: false, name: 'bare.mp3'),
+          'c_added': await makeTaggedMp3(title: 'Added', name: 'added.mp3'),
+          'c_said': await makeTaggedMp3(name: 'said.mp3'),
+        },
+        entries: const [
+          CatalogEntry(catalogId: 'c_art', title: 'Art'),
+          CatalogEntry(catalogId: 'c_bare', title: 'Bare'),
+          CatalogEntry(catalogId: 'c_added', title: 'Added'),
+          CatalogEntry(catalogId: 'c_said', title: 'Said', hasArtwork: false),
+        ],
+      );
+      host.setCatalog(catalog);
+      final guest = await _join(host);
+      Map<String, bool?> known(CatalogListing listing) => {
+        for (final e in listing.items) e.catalogId: e.hasArtwork,
+      };
+
+      final first = (await guest.fetchCatalogListing())!;
+      expect(known(first), {
+        'c_art': null,
+        'c_bare': null,
+        'c_added': null,
+        'c_said': false,
+      });
+
+      await guest.fetchCatalogArtwork('c_art');
+      await guest.fetchCatalogArtwork('c_bare');
+      await guest.requestCatalogAdd(['c_added']);
+      await _waitFor(() => guest.playlist.isNotEmpty, reason: 'the add');
+
+      final later = (await guest.fetchCatalogListing())!;
+      expect(later.rev, first.rev, reason: 'the same songs');
+      expect(known(later), {
+        'c_art': true,
+        'c_bare': false,
+        'c_added': true,
+        'c_said': false, // The provider's word stands.
+      });
+    });
 
     test('the cover cache is bounded', () async {
       final host = JamHostServer(

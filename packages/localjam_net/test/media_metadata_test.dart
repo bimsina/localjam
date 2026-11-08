@@ -56,4 +56,149 @@ void main() {
     expect(tags.title, isNull);
     expect(tags.hasArtwork, isFalse);
   });
+
+  group('ID3v2.3 with UTF-16 frames (real-world rips)', () {
+    for (final bounded in [false, true]) {
+      final label = bounded ? 'bounded read' : 'full read';
+      test('the cover comes out as the image alone ($label)', () async {
+        for (final description in ['Cover', 'Cover (front)', '']) {
+          final file = await makeId3v23Mp3(
+            picture: fakeJpegBytes,
+            pictureDescription: description,
+          );
+          final tags = readAudioTagsSync(
+            file,
+            maxMetadataBytes: bounded ? 8 * 1024 * 1024 : null,
+          );
+          expect(tags.artworkBytes, equals(fakeJpegBytes), reason: description);
+          expect(tags.artworkMime, 'image/jpeg');
+        }
+      });
+
+      test('the artist is the track artist, not the album artist '
+          '($label)', () async {
+        final file = await makeId3v23Mp3(picture: fakeJpegBytes);
+        final tags = readAudioTagsSync(
+          file,
+          maxMetadataBytes: bounded ? 8 * 1024 * 1024 : null,
+        );
+        expect(tags.title, 'Kun Faya Kun');
+        expect(tags.artist, 'A.R. Rahman, Javed Ali, Mohit Chauhan');
+        expect(tags.album, 'Rockstar');
+      });
+    }
+
+    test('with no track artist, the album artist stands in', () async {
+      final file = await makeId3v23Mp3(leadPerformer: null);
+      final tags = await readAudioTags(file);
+      expect(tags.artist, 'A.R. Rahman');
+    });
+
+    test('a declared MIME type the bytes contradict loses', () async {
+      final file = await makeId3v23Mp3(
+        picture: tinyPngBytes,
+        pictureMime: 'image/jpg',
+      );
+      final tags = await readAudioTags(file);
+      expect(tags.artworkBytes, equals(tinyPngBytes));
+      expect(tags.artworkMime, 'image/png');
+    });
+
+    test('a picture that is not an image is no cover', () async {
+      final file = await makeId3v23Mp3(
+        picture: Uint8List.fromList('http://example.com/c.jpg'.codeUnits),
+        pictureMime: '-->',
+      );
+      final tags = await readAudioTags(file);
+      expect(tags.hasArtwork, isFalse);
+      expect(tags.artworkMime, isNull);
+      expect(tags.title, 'Kun Faya Kun');
+    });
+  });
+
+  group('sniffArtwork', () {
+    test('drops a UTF-16 description left in front of a JPEG', () {
+      // What audio_metadata_reader 1.7.1 returned for a cover described
+      // "Cover": the description's tail and terminator, then the image.
+      final corrupted = Uint8List.fromList([
+        0x6F, 0x00, 0x76, 0x00, 0x65, 0x00, 0x72, 0x00, 0x00, 0x00, //
+        ...fakeJpegBytes,
+      ]);
+      final sniffed = sniffArtwork(corrupted)!;
+      expect(sniffed.bytes, equals(fakeJpegBytes));
+      expect(sniffed.mime, 'image/jpeg');
+    });
+
+    test('drops a prefix in front of a PNG', () {
+      final sniffed = sniffArtwork(
+        Uint8List.fromList([0x43, 0x00, 0x00, 0x00, ...tinyPngBytes]),
+      )!;
+      expect(sniffed.bytes, equals(tinyPngBytes));
+      expect(sniffed.mime, 'image/png');
+    });
+
+    test('keeps a clean image as it is', () {
+      final sniffed = sniffArtwork(fakeJpegBytes)!;
+      expect(identical(sniffed.bytes, fakeJpegBytes), isTrue);
+    });
+
+    test('knows GIF and WebP', () {
+      expect(
+        sniffArtwork(Uint8List.fromList([...'GIF89a'.codeUnits, 1, 0]))?.mime,
+        'image/gif',
+      );
+      expect(
+        sniffArtwork(
+          Uint8List.fromList([
+            ...'RIFF'.codeUnits,
+            0x10, 0, 0, 0, //
+            ...'WEBPVP8 '.codeUnits,
+          ]),
+        )?.mime,
+        'image/webp',
+      );
+    });
+
+    test('rejects bytes with no image signature', () {
+      expect(sniffArtwork(Uint8List(0)), isNull);
+      expect(
+        sniffArtwork(Uint8List.fromList('not a picture'.codeUnits)),
+        isNull,
+      );
+    });
+
+    test('looks only so far for the image', () {
+      final late = Uint8List.fromList([...Uint8List(600), ...fakeJpegBytes]);
+      expect(sniffArtwork(late), isNull);
+    });
+  });
+
+  group('normalizeArtistCredit', () {
+    test('splits ID3 slash and NUL separators into one comma list', () {
+      expect(
+        normalizeArtistCredit('A.R. Rahman/Javed Ali/Mohit Chauhan'),
+        'A.R. Rahman, Javed Ali, Mohit Chauhan',
+      );
+      expect(
+        normalizeArtistCredit('Alka Yagnik\u0000Udit Narayan'),
+        'Alka Yagnik, Udit Narayan',
+      );
+      expect(normalizeArtistCredit('Mano / Swarnalatha'), 'Mano, Swarnalatha');
+    });
+
+    test('keeps a name with a slash in it whole', () {
+      expect(normalizeArtistCredit('AC/DC'), 'AC/DC');
+      expect(normalizeArtistCredit('N/A'), 'N/A');
+    });
+
+    test('never splits commas, drops repeats and blanks', () {
+      expect(normalizeArtistCredit('Earth, Wind & Fire'), 'Earth, Wind & Fire');
+      expect(
+        normalizeArtistCredit('A.R. Rahman/a.r. rahman/Javed Ali'),
+        'A.R. Rahman, Javed Ali',
+      );
+      expect(normalizeArtistCredit('﻿  \u0000 '), isNull);
+      expect(normalizeArtistCredit(null), isNull);
+    });
+  });
 }

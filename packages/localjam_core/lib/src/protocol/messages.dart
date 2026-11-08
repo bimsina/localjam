@@ -264,6 +264,18 @@ const Set<String> _strippableMediaExtensions = {
   'wma',
 };
 
+/// [name] without a trailing known media extension ("track1.m4a" →
+/// "track1"): the title a file stands in for when it carries none. Only the
+/// extensions in a fixed whitelist are taken off — `Vol. 2` keeps its
+/// number — and a name that is all extension (`.mp3`) is returned whole.
+String stripMediaExtension(String name) {
+  final dot = name.lastIndexOf('.');
+  if (dot <= 0) return name;
+  final extension = name.substring(dot + 1).toLowerCase();
+  if (!_strippableMediaExtensions.contains(extension)) return name;
+  return name.substring(0, dot);
+}
+
 /// One playlist entry (PROTOCOL.md §6.1).
 @immutable
 class MediaItem {
@@ -327,11 +339,7 @@ class MediaItem {
   String get displayTitle {
     final tagged = title;
     if (tagged != null && tagged.isNotEmpty) return tagged;
-    final dot = name.lastIndexOf('.');
-    if (dot <= 0) return name;
-    final extension = name.substring(dot + 1).toLowerCase();
-    if (!_strippableMediaExtensions.contains(extension)) return name;
-    return name.substring(0, dot);
+    return stripMediaExtension(name);
   }
 
   Map<String, Object?> toJson() => {

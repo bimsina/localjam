@@ -887,7 +887,16 @@ display name, falling back to the role word only when the host shared none.
 cover art servable via §6.5. All four are optional and **host-extracted**:
 the host parses tags itself for both its own files and guest uploads (§6.4),
 so guests never need a tag parser and every client sees identical metadata.
-`name` (the display filename) remains the fallback when tags are absent.
+`name` (the display filename) remains the fallback when tags are absent;
+the reference host fills an untagged audio item's `title` in itself (the
+library's title, else `name` without its media extension), so a client
+that shows `title ?? name` still never shows `track1.mp3`. `artist` is
+the track artist (ID3 `TPE1`, Vorbis `ARTIST`, MP4 `©ART`), the album
+artist only when there is none, with several artists — ID3's `/` or NUL
+separators, repeated Vorbis fields — given as one `"A, B, C"` credit; a `/`
+splits only when every name around it is at least three characters
+(`AC/DC` stays whole). `artworkId` covers are image bytes only: a
+picture frame whose data has no image signature is no cover.
 
 `catalogId` (1.3) names the host catalog entry (§6.6) the item was added
 from, so a client can mark that catalog row as queued; absent for uploads,
@@ -1221,7 +1230,11 @@ GET /catalog                     Authorization: Bearer <sessionToken>
 - `title` and `catalogId` are required; an entry without either is dropped
   (§2.1), and so are unknown fields. `durationUs` (µs) and `sizeBytes` are
   the library's word, for display. `hasArtwork: false` says the song has no
-  cover (do not ask); absent means the host does not know until asked.
+  cover (do not ask); absent means the host does not know until asked. The
+  reference host fills `hasArtwork` in for entries its library said
+  nothing about once it has read the song's file (a cover request, an add),
+  without a new `rev`: the songs are the same, so a guest holding the
+  listing keeps learning it by asking, and a later fetch is told up front.
 - `404` when the host offers no catalog, `401` for a bad or missing token,
   `405` for anything but `GET`. A full body, no `Range`. Guests bound the
   body like any media response (§6.2): the reference guest caps it at 16 MB

@@ -10,6 +10,14 @@ a release heading carries the day it shipped.
   join still in flight instead of attaching it; and a host add that is still
   probing, reading tags or hashing when the room ends registers nothing and
   leaves no cover behind.
+- Song metadata from real-world libraries (E2E 2026-11): covers from
+  UTF-16-tagged ID3v2.3 files decode again (audio_metadata_reader 1.8.1, and
+  the host keeps only bytes with an image signature); the artist is the
+  track artist (`TPE1`), not the album artist, with several artists shown as
+  "A, B, C"; an untagged file is titled without its extension and loses
+  MediaStore's folder-name album; `/catalog` says `hasArtwork` once the
+  host knows; and join links no longer advertise `127.0.0.1` when the host
+  has a LAN address.
 
 ## 1.0.0 (Android): not yet released
 

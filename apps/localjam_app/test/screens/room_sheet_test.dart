@@ -102,7 +102,18 @@ Future<JamSessionController> _hostWithGuest(
       policy: policy,
       discoverable: false,
     );
-    final link = viaDeepLink ? host.hostEngine!.localjamUri : host.joinUri!;
+    // The room's own link, pointed at loopback: tests here may fake a LAN
+    // (fakeLan) that this machine cannot be dialled on, and a link names
+    // loopback only when there is no LAN at all.
+    final shared = host.hostEngine!.joinLink;
+    final local = JoinLink(
+      v: shared.v,
+      token: shared.token,
+      name: shared.name,
+      hosts: [InternetAddress.loopbackIPv4.address],
+      port: shared.port,
+    );
+    final link = viaDeepLink ? local.toLocaljamUri() : local.toHttpUri();
     expect(
       await guest.join(link, clientName: name, mediaCacheDir: cache),
       isTrue,

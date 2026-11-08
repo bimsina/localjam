@@ -769,6 +769,13 @@ class JamHostServer {
       LinkedHashMap<String, _CatalogCover?>();
   int _coverCacheBytes = 0;
 
+  /// What the host has learned about catalog entries' covers since the
+  /// listing (a cover read, an add that read the tags): catalogId → whether
+  /// it has one. Carried as `hasArtwork` in `GET /catalog` for entries the
+  /// provider did not say (§6.6). Unlike [_coverCache] never evicted (a
+  /// bool per song), only cleared with the provider or the entry.
+  final Map<String, bool> _catalogArtworkKnown = {};
+
   /// Cover reads under way, so concurrent requests for one song share one.
   final Map<String, Future<_CatalogCover?>> _coverLoads = {};
 
@@ -2014,6 +2021,8 @@ class JamHostServer {
       _coverCache.clear();
       _coverCacheBytes = 0;
       _coverLoads.clear();
+      _catalogArtworkKnown.clear();
+      _catalogBody = null;
     }
     _catalogProvider = provider;
     if (!listingChanged) return;
@@ -2072,6 +2081,35 @@ class JamHostServer {
     for (final id in gone) {
       _coverCacheBytes -= _coverCache.remove(id)?.bytes.length ?? 0;
     }
+    _catalogArtworkKnown.removeWhere((id, _) => !offered.containsKey(id));
+  }
+
+  /// Records that [catalogId] has a cover or not ([_catalogArtworkKnown]),
+  /// re-encoding `GET /catalog`'s body when that is news. The rev does not
+  /// move — the listing is the same songs — so a guest holding this rev
+  /// keeps learning it the way it always could (asking for the cover);
+  /// whoever fetches the listing next is told up front.
+  void _learnCatalogArtwork(String catalogId, bool hasArtwork) {
+    if (_catalogArtworkKnown[catalogId] == hasArtwork) return;
+    _catalogArtworkKnown[catalogId] = hasArtwork;
+    _catalogBody = null;
+  }
+
+  /// [entry] with what the host has learned about its cover, when the
+  /// provider did not say.
+  CatalogEntry _withKnownArtwork(CatalogEntry entry) {
+    if (entry.hasArtwork != null) return entry;
+    final known = _catalogArtworkKnown[entry.catalogId];
+    if (known == null) return entry;
+    return CatalogEntry(
+      catalogId: entry.catalogId,
+      title: entry.title,
+      artist: entry.artist,
+      album: entry.album,
+      durationUs: entry.durationUs,
+      sizeBytes: entry.sizeBytes,
+      hasArtwork: known,
+    );
   }
 
   /// Adds the catalog entry [catalogId] to the queue for the host itself —
@@ -2327,6 +2365,7 @@ class JamHostServer {
           );
           if (!wanted()) return null;
         }
+        _learnCatalogArtwork(id, staged != null);
         item = MediaItem(
           mediaId: item.mediaId,
           kind: item.kind,
@@ -2341,7 +2380,10 @@ class JamHostServer {
           // §6.1: host-extracted tags; what the library said is the
           // fallback for a file that carries none (it is what the guest
           // browsed).
-          title: tags.title ?? _nonBlank(entry.title),
+          title:
+              tags.title ??
+              _nonBlank(stripMediaExtension(entry.title)) ??
+              stripMediaExtension(item.name),
           artist: tags.artist ?? _nonBlank(entry.artist),
           album: tags.album ?? _nonBlank(entry.album),
           artworkId: staged?.artworkId,
@@ -2508,7 +2550,12 @@ class JamHostServer {
       return;
     }
     final body = _catalogBody ??= utf8.encode(
-      jsonEncode(CatalogListing(rev: _catalogRev, items: _catalogList)),
+      jsonEncode(
+        CatalogListing(
+          rev: _catalogRev,
+          items: [for (final entry in _catalogList) _withKnownArtwork(entry)],
+        ),
+      ),
     );
     res.headers.contentType = ContentType.json;
     res.headers.set(HttpHeaders.cacheControlHeader, 'no-store');
@@ -2660,6 +2707,7 @@ class JamHostServer {
     if (generation == _catalogGeneration &&
         _catalogById.containsKey(catalogId)) {
       _cacheCover(catalogId, cover);
+      _learnCatalogArtwork(catalogId, cover != null);
     }
     return cover;
   }
@@ -2925,7 +2973,11 @@ class JamHostServer {
           // decoder probe beats a tag claim).
           durationUs: durationUs ?? plausibleDurationUs(tags.durationUs),
           sha256: digest,
-          title: tags.title,
+          // §6.1: an untagged audio file is titled after its name, without
+          // the media extension, so every guest reads the same title.
+          title:
+              tags.title ??
+              (kind == MediaKind.audio ? stripMediaExtension(name) : null),
           artist: tags.artist,
           album: tags.album,
           artworkId: artworkId,
@@ -4071,7 +4123,10 @@ class JamHostServer {
   /// Builds a [MediaItem] for [file]: computes [MediaItem.sizeBytes] and the
   /// streaming sha256 digest (§6.1). [mediaId] defaults to `m_` + the first
   /// 12 hex chars of the digest (stable across sessions, which is what makes
-  /// guest-side caching by sha256 work); [name] defaults to the file name.
+  /// guest-side caching by sha256 work); [name] defaults to the file name,
+  /// and an audio item's missing [title] to that name without its media
+  /// extension ([stripMediaExtension]), so an untagged file reads the same
+  /// on every guest whichever field it shows.
   ///
   /// This never probes the file for its duration — duration extraction is
   /// platform-dependent (afinfo, ffprobe, the app's audio engine), so callers
@@ -4092,15 +4147,18 @@ class JamHostServer {
   }) async {
     final size = await file.length();
     final digest = (await sha256.bind(file.openRead()).first).toString();
+    final itemName = name ?? Uri.file(file.path).pathSegments.last;
     return MediaItem(
       mediaId: mediaId ?? 'm_${digest.substring(0, 12)}',
       kind: kind,
-      name: name ?? Uri.file(file.path).pathSegments.last,
+      name: itemName,
       mime: mime,
       sizeBytes: size,
       durationUs: durationUs,
       sha256: digest,
-      title: title,
+      title:
+          _nonBlank(title) ??
+          (kind == MediaKind.audio ? stripMediaExtension(itemName) : null),
       artist: artist,
       album: album,
       artworkId: artworkId,
