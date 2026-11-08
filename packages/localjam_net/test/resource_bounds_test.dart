@@ -1101,6 +1101,80 @@ void main() {
       expect(busyCount(conn), inInclusiveRange(55, 62));
     });
   });
+
+  group('what the host queues for one peer is bounded (§9.1)', () {
+    test('a peer that stops reading is dropped once its backlog passes the '
+        'bound; one that reads is not', () async {
+      final host = await startHost(maxOutboundBacklogBytes: 64 * 1024);
+      final item = await addTrack(host);
+      host.setMedia(item.mediaId);
+      final honest = await joinGuest(host, clientId: 'c_honest');
+
+      // A joined peer that never reads again: everything the host sends it
+      // waits in host memory, behind a full kernel buffer.
+      final socket = await Socket.connect(
+        InternetAddress.loopbackIPv4,
+        host.port,
+      );
+      addTearDown(socket.destroy);
+      socket.done.catchError((Object _) {});
+      final received = <int>[];
+      final subscription = socket.listen(
+        received.addAll,
+        onError: (Object _) {},
+      );
+      socket.add([
+        ...upgradeRequest(),
+        ...helloFrame(host.token, clientId: 'c_stalled'),
+      ]);
+      await waitFor(
+        () => latin1.decode(received).contains('"welcome"'),
+        reason: 'the stalled peer\'s welcome',
+      );
+      subscription.pause();
+      expect(host.peers, hasLength(2));
+
+      // State broadcasts, a few hundred bytes each, with the event loop
+      // let through between batches so honest sockets drain.
+      var position = 0;
+      for (var batch = 0; batch < 400 && host.peers.length == 2; batch++) {
+        for (var i = 0; i < 50; i++) {
+          host.seek(position += 1000);
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 2));
+      }
+      await waitFor(
+        () => host.peers.length == 1,
+        reason: 'the stalled peer dropped',
+      );
+      expect(host.peers.single.peerId, honest.selfPeerId);
+      await waitFor(
+        () => honest.snapshot.rev == host.snapshot.rev,
+        reason: 'the honest guest caught up',
+      );
+    });
+
+    test('one large frame always fits, and what was written is not '
+        'backlog', () async {
+      // A bound far under one welcome: the welcome still goes, and once it
+      // has been written the next frames go too.
+      final host = await startHost(maxOutboundBacklogBytes: 1024);
+      for (var seed = 1; seed <= 20; seed++) {
+        await addTrack(host, seed: seed);
+      }
+      final guest = await joinGuest(host);
+      expect(guest.playlist, hasLength(20));
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      host.setMedia(host.playlist.first.mediaId);
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      host.seek(5000);
+      await waitFor(
+        () => guest.snapshot.rev == host.snapshot.rev,
+        reason: 'the guest kept up',
+      );
+      expect(host.peers, hasLength(1));
+    });
+  });
 }
 
 /// A raw control socket that has said `hello` and been welcomed.
