@@ -84,10 +84,10 @@ Future<JamAudioTags> readAudioTags(File file, {int? maxMetadataBytes}) async {
 /// than [readAudioTags] must catch.
 @visibleForTesting
 JamAudioTags readAudioTagsSync(File file, {int? maxMetadataBytes}) {
-  final amr.AudioMetadata parsed;
+  final Object parsed;
   if (maxMetadataBytes == null) {
     try {
-      parsed = amr.readMetadata(file, getImage: true);
+      parsed = amr.readAllMetadata(file, getImage: true);
     } catch (_) {
       return const JamAudioTags();
     }
@@ -96,33 +96,191 @@ JamAudioTags readAudioTagsSync(File file, {int? maxMetadataBytes}) {
     if (bounded == null) return const JamAudioTags();
     parsed = bounded;
   }
-  amr.Picture? picture;
-  for (final candidate in parsed.pictures) {
-    if (candidate.bytes.isEmpty) continue;
-    picture ??= candidate;
+  final fields = _fieldsOf(parsed);
+  if (fields == null) return const JamAudioTags();
+
+  // The front cover preferred, else the first picture — either only once
+  // its bytes are recognisably an image ([sniffArtwork]).
+  ({Uint8List bytes, String mime})? artwork;
+  for (final candidate in fields.pictures) {
+    final sniffed = sniffArtwork(candidate.bytes);
+    if (sniffed == null) continue;
+    artwork ??= sniffed;
     if (candidate.pictureType == amr.PictureType.coverFront) {
-      picture = candidate;
+      artwork = sniffed;
       break;
     }
   }
-  String? clean(String? value) {
-    final trimmed = value?.trim();
-    return (trimmed == null || trimmed.isEmpty) ? null : trimmed;
-  }
 
-  final duration = parsed.duration;
+  final duration = fields.duration;
   return JamAudioTags(
-    title: clean(parsed.title),
-    artist: clean(parsed.artist),
-    album: clean(parsed.album),
+    title: _clean(fields.title),
+    artist: fields.artist,
+    album: _clean(fields.album),
     durationUs: (duration == null || duration <= Duration.zero)
         ? null
         : duration.inMicroseconds,
-    artworkBytes: picture?.bytes,
-    artworkMime: picture == null
-        ? null
-        : (clean(picture.mimetype) ?? 'application/octet-stream'),
+    artworkBytes: artwork?.bytes,
+    artworkMime: artwork?.mime,
   );
+}
+
+/// [value] trimmed, or null when nothing is left. A UTF-16 tag can leave
+/// its byte-order mark in the text; it is not part of the name.
+String? _clean(String? value) {
+  final trimmed = value?.replaceAll('﻿', '').trim();
+  return (trimmed == null || trimmed.isEmpty) ? null : trimmed;
+}
+
+/// What [readAudioTagsSync] takes from one parsed file.
+typedef _TagFields = ({
+  String? title,
+  String? artist,
+  String? album,
+  Duration? duration,
+  List<amr.Picture> pictures,
+});
+
+/// The display fields of [parsed] (one of the parser's format-specific
+/// results, `readAllMetadata`). The artist is the track's own — ID3 `TPE1`,
+/// Vorbis and APE `ARTIST`, MP4 `©ART`, RIFF `IART` — with the album artist
+/// (`TPE2`, `ALBUMARTIST`) only its fallback. The parser's summary
+/// (`readMetadata`) prefers `TPE2` for MP3, which put a soundtrack's
+/// composer on every song instead of who sings it.
+_TagFields? _fieldsOf(Object parsed) => switch (parsed) {
+  amr.Mp3Metadata m => (
+    title: m.songName,
+    artist:
+        normalizeArtistCredit(m.leadPerformer) ??
+        normalizeArtistCredit(m.bandOrOrchestra) ??
+        normalizeArtistCredit(m.originalArtist),
+    album: m.album,
+    duration: m.duration,
+    pictures: m.pictures,
+  ),
+  amr.VorbisMetadata m => (
+    title: m.title.firstOrNull,
+    artist:
+        normalizeArtistCredit(m.artist.join('\u0000')) ??
+        normalizeArtistCredit(m.albumArtist.join('\u0000')),
+    album: m.album.firstOrNull,
+    duration: m.duration,
+    pictures: m.pictures,
+  ),
+  amr.Mp4Metadata m => (
+    title: m.title,
+    artist: normalizeArtistCredit(m.artist),
+    album: m.album,
+    duration: m.duration,
+    pictures: [?m.picture],
+  ),
+  amr.ApeMetadata m => (
+    title: m.title,
+    artist:
+        normalizeArtistCredit(m.artist) ?? normalizeArtistCredit(m.albumArtist),
+    album: m.album,
+    duration: m.duration,
+    pictures: m.pictures,
+  ),
+  amr.RiffMetadata m => (
+    title: m.title,
+    artist: normalizeArtistCredit(m.artist),
+    album: m.album,
+    duration: m.duration,
+    pictures: m.pictures,
+  ),
+  _ => null,
+};
+
+/// One artist credit for display, from a tag — or a library column copied
+/// from one — that may name several artists: ID3v2.4 separates them with
+/// NUL, ID3v2.3 (and most taggers, and Android's MediaStore after them)
+/// with `/`, and Vorbis comments repeat the field (the caller joins the
+/// repeats with NUL). Each artist once, in order, joined with ", ":
+/// `A.R. Rahman/Javed Ali/Mohit Chauhan` reads "A.R. Rahman, Javed Ali,
+/// Mohit Chauhan". Null when nothing is left.
+///
+/// A `/` splits only when every piece around it is at least three
+/// characters long, so a name with a slash in it — `AC/DC`, `N/A` — stays
+/// whole (a three-letter-a-side name like `Foo/Bar` cannot be told apart
+/// from two artists, and splits). Commas are never split: "Earth, Wind &
+/// Fire" is one artist.
+String? normalizeArtistCredit(String? raw) {
+  if (raw == null) return null;
+  final parts = <String>[];
+  final seen = <String>{};
+  for (final value in raw.replaceAll('﻿', '').split('\u0000')) {
+    final trimmed = value.trim();
+    if (trimmed.isEmpty) continue;
+    final pieces = [for (final p in trimmed.split('/')) p.trim()];
+    final split = pieces.length > 1 && pieces.every((p) => p.runes.length >= 3);
+    for (final piece in split ? pieces : [trimmed]) {
+      if (seen.add(piece.toLowerCase())) parts.add(piece);
+    }
+  }
+  return parts.isEmpty ? null : parts.join(', ');
+}
+
+/// How far into a picture [sniffArtwork] looks for where the image starts.
+const int _artworkSniffWindow = 512;
+
+/// [bytes] as an image a guest can decode, with the MIME type its own
+/// signature gives (JPEG, PNG, GIF, WebP, BMP, AVIF), or null when it is
+/// not recognisably one.
+///
+/// A picture frame's description is sometimes left in front of the image:
+/// audio_metadata_reader before 1.8 ended a UTF-16 description at the
+/// first zero byte, so a cover described "Cover" came out as
+/// `6f 00 76 00 65 00 72 00 00 00 ff d8 …`, which no decoder reads. The
+/// image is looked for within the first [_artworkSniffWindow] bytes and
+/// whatever precedes it dropped; a picture with no image signature there
+/// (an ID3 `-->` URL, garbage) is no cover rather than bytes every guest
+/// fails to decode. The signature's MIME type wins over the declared one,
+/// which taggers get wrong (`image/jpg`, `jpeg`, empty).
+@visibleForTesting
+({Uint8List bytes, String mime})? sniffArtwork(Uint8List bytes) {
+  bool at(int offset, List<int> signature) {
+    if (offset < 0 || offset + signature.length > bytes.length) return false;
+    for (var i = 0; i < signature.length; i++) {
+      if (bytes[offset + i] != signature[i]) return false;
+    }
+    return true;
+  }
+
+  ({Uint8List bytes, String mime}) from(int offset, String mime) => (
+    bytes: offset == 0 ? bytes : Uint8List.fromList(bytes.sublist(offset)),
+    mime: mime,
+  );
+
+  // Only at the very start: signatures too short or too generic to hunt
+  // for inside a prefix.
+  if (at(0, const [0x42, 0x4D]) && bytes.length > 26) {
+    return from(0, 'image/bmp');
+  }
+  if (at(4, const [0x66, 0x74, 0x79, 0x70, 0x61, 0x76, 0x69])) {
+    return from(0, 'image/avif'); // `....ftypavif` / `....ftypavis`
+  }
+  final window = bytes.length < _artworkSniffWindow
+      ? bytes.length
+      : _artworkSniffWindow;
+  for (var offset = 0; offset < window; offset++) {
+    if (at(offset, const [0xFF, 0xD8, 0xFF])) {
+      return from(offset, 'image/jpeg');
+    }
+    if (at(offset, const [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])) {
+      return from(offset, 'image/png');
+    }
+    if (at(offset, const [0x47, 0x49, 0x46, 0x38]) &&
+        (at(offset + 4, const [0x37, 0x61]) ||
+            at(offset + 4, const [0x39, 0x61]))) {
+      return from(offset, 'image/gif');
+    }
+    if (at(offset, const [0x52, 0x49, 0x46, 0x46]) &&
+        at(offset + 8, const [0x57, 0x45, 0x42, 0x50])) {
+      return from(offset, 'image/webp');
+    }
+  }
+  return null;
 }
 
 /// What a picture frame may add on top of the image it carries (its MIME
@@ -132,14 +290,17 @@ const int _pictureFrameSlack = 64 * 1024;
 
 /// [readAudioTagsSync] under a read budget of [maxMetadataBytes] (see
 /// [readAudioTags]): with artwork if that fits, else without, else null.
-amr.AudioMetadata? _readBounded(File file, int maxMetadataBytes) {
+Object? _readBounded(File file, int maxMetadataBytes) {
   for (final getImage in const [true, false]) {
     final budget = _ReadBudget(
       maxSingleRead: maxMetadataBytes + _pictureFrameSlack,
       maxTotal: 2 * maxMetadataBytes + 1024 * 1024,
     );
     try {
-      return amr.readMetadata(_BudgetedFile(file, budget), getImage: getImage);
+      return amr.readAllMetadata(
+        _BudgetedFile(file, budget),
+        getImage: getImage,
+      );
     } catch (_) {
       // Only a blown budget is worth a second try without artwork; any
       // other failure would just fail again.

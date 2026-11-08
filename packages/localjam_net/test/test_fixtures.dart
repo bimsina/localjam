@@ -62,3 +62,84 @@ Future<File> makeTaggedMp3({
   });
   return file;
 }
+
+/// A small stand-in JPEG: SOI, an APP0 segment, EOI. Never decoded — what
+/// matters is that it starts with the JPEG signature and ends where it ends.
+final Uint8List fakeJpegBytes = Uint8List.fromList([
+  0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46, 0x00, 0x01, //
+  0x01, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0xFF, 0xD9,
+]);
+
+/// [text] as an ID3v2 text value in encoding 1: UTF-16LE with a BOM and a
+/// UTF-16 NUL terminator.
+List<int> _id3Utf16(String text) => [
+  0xFF, 0xFE, //
+  for (final unit in text.codeUnits) ...[unit & 0xFF, unit >> 8],
+  0x00, 0x00,
+];
+
+/// One ID3v2.3 frame: id, big-endian size (not synchsafe in 2.3), no flags.
+List<int> _id3v23Frame(String id, List<int> body) => [
+  ...id.codeUnits,
+  (body.length >> 24) & 0xFF,
+  (body.length >> 16) & 0xFF,
+  (body.length >> 8) & 0xFF,
+  body.length & 0xFF,
+  0x00,
+  0x00,
+  ...body,
+];
+
+/// A generated MP3 tagged the way real-world rips are: ID3v2.3, every text
+/// frame UTF-16 (encoding 1), and the cover an APIC frame whose description
+/// is UTF-16 too ("Cover" by default) — the layout audio_metadata_reader
+/// 1.7 left part of in front of the image. A null value leaves its frame
+/// out; a null [picture] leaves the APIC out.
+Future<File> makeId3v23Mp3({
+  String? title = 'Kun Faya Kun',
+  String? leadPerformer = 'A.R. Rahman/Javed Ali/Mohit Chauhan',
+  String? bandOrOrchestra = 'A.R. Rahman',
+  String? album = 'Rockstar',
+  Uint8List? picture,
+  String pictureMime = 'image/jpeg',
+  String pictureDescription = 'Cover',
+  String name = 'id3v23.mp3',
+}) async {
+  final dir = await Directory.systemTemp.createTemp('localjam_fixture');
+  addTearDown(() => dir.delete(recursive: true));
+  final frames = <int>[
+    if (title != null) ..._id3v23Frame('TIT2', [0x01, ..._id3Utf16(title)]),
+    if (leadPerformer != null)
+      ..._id3v23Frame('TPE1', [0x01, ..._id3Utf16(leadPerformer)]),
+    if (bandOrOrchestra != null)
+      ..._id3v23Frame('TPE2', [0x01, ..._id3Utf16(bandOrOrchestra)]),
+    if (album != null) ..._id3v23Frame('TALB', [0x01, ..._id3Utf16(album)]),
+    if (picture != null)
+      ..._id3v23Frame('APIC', [
+        0x01, // UTF-16 description
+        ...pictureMime.codeUnits,
+        0x00,
+        0x03, // front cover
+        ..._id3Utf16(pictureDescription),
+        ...picture,
+      ]),
+  ];
+  final size = frames.length;
+  final builder = BytesBuilder()
+    ..add([0x49, 0x44, 0x33, 0x03, 0x00, 0x00])
+    // Synchsafe tag size.
+    ..add([
+      (size >> 21) & 0x7F,
+      (size >> 14) & 0x7F,
+      (size >> 7) & 0x7F,
+      size & 0x7F,
+    ])
+    ..add(frames);
+  final frame = Uint8List(417)..setRange(0, 4, [0xFF, 0xFB, 0x90, 0x00]);
+  for (var i = 0; i < 40; i++) {
+    builder.add(frame);
+  }
+  final file = File('${dir.path}/$name');
+  await file.writeAsBytes(builder.takeBytes());
+  return file;
+}
