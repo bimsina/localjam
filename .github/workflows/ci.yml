@@ -97,9 +97,15 @@ jobs:
         run: test -z "$(git status --porcelain)" || { git status; exit 1; }
       - run: flutter pub get
         working-directory: apps/localjam_app
+      # No signing secrets in CI: release builds refuse the debug key unless
+      # this opt-in is set (see docs/release/ANDROID_RELEASE.md).
       - run: flutter build apk --release
+        env:
+          LOCALJAM_ALLOW_DEBUG_SIGNING: '1'
         working-directory: apps/localjam_app
       - run: flutter build appbundle --release
+        env:
+          LOCALJAM_ALLOW_DEBUG_SIGNING: '1'
         working-directory: apps/localjam_app
       - uses: actions/upload-artifact@v4
         with:
