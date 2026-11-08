@@ -371,6 +371,9 @@ class _LibraryRowState extends State<_LibraryRow> {
     final track = widget.track;
     final selected = widget.selected;
     final ms = track.durationMs;
+    // Credited the way the jam will show it once added: "A, B" artists, and
+    // no MediaStore folder-name album on an untagged file.
+    final entry = JamMediaLibraryCatalogSource.entryFor(track);
     final cover = _cover;
     final px = (JamArtworkSize.row * MediaQuery.devicePixelRatioOf(context))
         .round();
@@ -379,10 +382,7 @@ class _LibraryRowState extends State<_LibraryRow> {
       child: JamTrackRow(
         title: stripAudioExtension(track.title),
         // The one second line (N8): no "Unknown artist" filler.
-        byline: jamSongByline(
-          artist: normalizeArtistCredit(track.artist),
-          album: track.album,
-        ),
+        byline: jamSongByline(artist: entry.artist, album: entry.album),
         duration: ms == null ? null : Duration(milliseconds: ms),
         // Decoded at the size it is drawn, not at the file's 1400 px.
         artworkImage: cover == null

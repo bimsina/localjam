@@ -216,6 +216,33 @@ void main() {
       expect(picked.tagsRead, isFalse);
     });
 
+    test('credits like the jam: "A, B" artists, no folder-name album', () {
+      const multi = JamLibraryTrack(
+        id: 8,
+        title: 'Kun Faya Kun',
+        artist: 'A.R. Rahman/Javed Ali/Mohit Chauhan',
+        album: 'Rockstar',
+        sizeBytes: 1,
+        contentUri: 'content://media/8',
+        path: '/storage/emulated/0/Music/Rockstar/kfk.mp3',
+      );
+      final a = JamPickedTrack.fromLibrary(multi, '/cache/kfk.mp3');
+      expect(a.artist, 'A.R. Rahman, Javed Ali, Mohit Chauhan');
+      expect(a.album, 'Rockstar');
+
+      const untagged = JamLibraryTrack(
+        id: 9,
+        title: 'track2',
+        album: 'Music',
+        sizeBytes: 1,
+        contentUri: 'content://media/9',
+        path: '/storage/emulated/0/Music/track2.m4a',
+      );
+      final b = JamPickedTrack.fromLibrary(untagged, '/cache/track2.m4a');
+      expect(b.artist, isNull);
+      expect(b.album, isNull);
+    });
+
     test('falls back to the file name, without its extension', () {
       expect(
         const JamPickedTrack(path: '/music/Night Drive.mp3').displayTitle,

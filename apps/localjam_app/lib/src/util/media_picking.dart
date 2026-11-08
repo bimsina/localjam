@@ -87,11 +87,14 @@ class JamPickedTrack {
   factory JamPickedTrack.fromLibrary(JamLibraryTrack track, String path) {
     final ms = track.durationMs;
     final title = track.title.trim();
+    // Cleaned up as the jam's catalog is ("A, B" artists, no MediaStore
+    // folder-name album), so the song reads the same before and after.
+    final entry = JamMediaLibraryCatalogSource.entryFor(track);
     return JamPickedTrack(
       path: path,
       title: title.isEmpty ? null : stripAudioExtension(title),
-      artist: track.artist,
-      album: track.album,
+      artist: entry.artist,
+      album: entry.album,
       duration: ms == null || ms <= 0 ? null : Duration(milliseconds: ms),
     );
   }
@@ -127,7 +130,7 @@ class JamPickedTrack {
     return JamPickedTrack(
       path: path,
       title: title ?? tags.title,
-      artist: artist ?? tags.artist,
+      artist: artist ?? normalizeArtistCredit(tags.artist),
       album: album ?? tags.album,
       duration: duration ?? (us == null ? null : Duration(microseconds: us)),
       artworkBytes:
