@@ -100,6 +100,15 @@ Future<int> runJoinCommand(ArgResults args) async {
   }
 }
 
+/// What to say when the host's socket closes: a deliberate end (the host
+/// sent `session_ended` first, §3.4) is not a dropped connection.
+String describeHostClose(SessionEndedMessage? ended) => switch (ended?.reason) {
+  SessionEndedReason.hostEnded => 'The host ended the jam',
+  // Terminal whatever the reason; one this build predates is still an end.
+  SessionEndedReason.unknown => 'The jam ended',
+  null => 'connection closed by host',
+};
+
 Future<int> _runLoop(
   JamGuestClient client,
   StatusScreen screen, {
@@ -165,7 +174,7 @@ Future<int> _runLoop(
   unawaited(
     client.done.then((_) {
       if (quit.isCompleted) return;
-      screen.log('connection closed by host');
+      screen.log(describeHostClose(client.sessionEnded));
       finish(0);
     }),
   );

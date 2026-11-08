@@ -77,7 +77,7 @@ class JamPermissionRationale {
   /// Apple one: the same permission and the same promise.
   static const String _localNetworkDoesHeading = 'Finds phones nearby';
   static const String _localNetworkDoes =
-      'So everyone hears the same second of the same song.';
+      'Phones in the jam find each other and play every song in time.';
   static const String _localNetworkNeverHeading = 'Stays off the internet';
   static const String _localNetworkNever =
       'A jam never leaves the network you’re on.';
@@ -131,6 +131,26 @@ class JamPermissionRationale {
     neverBullet: 'Songs you don’t add never leave this phone.',
   );
 
+  /// The same permission, asked by turning on "Share my music library".
+  ///
+  /// Not the picker's promise: sharing publishes the library's titles,
+  /// artists and covers to the jam, so "nothing leaves this phone" would be
+  /// false. It says what is shared, with whom, and for how long.
+  static const JamPermissionRationale audioLibraryShare =
+      JamPermissionRationale(
+        icon: CupertinoIcons.music_house,
+        title: JamPermissionSheetStrings.audioLibraryShareTitle,
+        body: JamPermissionSheetStrings.audioLibraryShareBody,
+        doesHeading: 'Only while the jam runs',
+        doesBullet:
+            'People in this jam see each song’s title, artist and cover. '
+            'Sharing stops when the jam ends.',
+        neverHeading: 'Only the songs that play',
+        neverBullet:
+            'A song is sent to their phones only once it’s added to the '
+            'queue.',
+      );
+
   /// The camera, asked before the first QR scan.
   static const JamPermissionRationale camera = JamPermissionRationale(
     icon: CupertinoIcons.qrcode_viewfinder,
@@ -150,6 +170,7 @@ class JamPermissionRationale {
         JamPermissionKind.localNetworkApple => localNetworkApple,
         JamPermissionKind.notifications => notifications,
         JamPermissionKind.audioLibrary => audioLibrary,
+        JamPermissionKind.audioLibraryShare => audioLibraryShare,
         JamPermissionKind.camera => camera,
       };
 }
@@ -181,6 +202,10 @@ abstract final class JamPermissionSheetStrings {
   static const String audioLibraryTitle = 'Reach your music';
   static const String audioLibraryBody =
       'Pick songs that are already on this phone and add them to a jam.';
+
+  static const String audioLibraryShareTitle = 'Share your music library';
+  static const String audioLibraryShareBody =
+      'Let people in this jam browse the songs on this phone.';
 
   static const String cameraTitle = 'Scan to join';
   static const String cameraDetail =

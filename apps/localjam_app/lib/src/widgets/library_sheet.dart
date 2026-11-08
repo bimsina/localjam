@@ -80,10 +80,15 @@ abstract final class _LibraryCovers {
 }
 
 /// Opens the library picker. Pops the chosen tracks, or null when cancelled.
+///
+/// [reload] reads the library again: it runs whenever the app comes back to
+/// the foreground with the sheet open, so songs that arrived meanwhile (a
+/// download, a file copied over) show up without closing it.
 Future<List<JamLibraryTrack>?> showJamLibrarySheet(
   BuildContext context,
-  List<JamLibraryTrack> tracks,
-) {
+  List<JamLibraryTrack> tracks, {
+  Future<List<JamLibraryTrack>> Function()? reload,
+}) {
   // The shared sheet pieces, assembled here rather than through
   // `showJamSheet`: the header's title and Done follow the selection, so the
   // picker owns its own header.
@@ -94,7 +99,11 @@ Future<List<JamLibraryTrack>?> showJamLibrarySheet(
       maxChildSize: kJamSheetLargeSize,
       minChildSize: kJamSheetMinSize,
       builder: (context, controller) => JamSheetSurface(
-        child: JamLibraryPicker(tracks: tracks, scrollController: controller),
+        child: JamLibraryPicker(
+          tracks: tracks,
+          reload: reload,
+          scrollController: controller,
+        ),
       ),
     ),
   );
@@ -105,10 +114,15 @@ class JamLibraryPicker extends StatefulWidget {
   const JamLibraryPicker({
     super.key,
     required this.tracks,
+    this.reload,
     this.scrollController,
   });
 
+  /// The library as it was when the sheet opened.
   final List<JamLibraryTrack> tracks;
+
+  /// Reads the library again, on every return to the foreground.
+  final Future<List<JamLibraryTrack>> Function()? reload;
 
   /// The sheet's scroll controller, so a drag at the top of the list moves
   /// the sheet.
@@ -121,15 +135,50 @@ class JamLibraryPicker extends StatefulWidget {
 class _JamLibraryPickerState extends State<JamLibraryPicker> {
   final Set<int> _selected = {};
   final TextEditingController _query = TextEditingController();
+  late List<JamLibraryTrack> _tracks = widget.tracks;
+  AppLifecycleListener? _lifecycle;
+  bool _reloading = false;
 
   @override
   void initState() {
     super.initState();
     _query.addListener(_onQuery);
+    if (widget.reload != null) {
+      _lifecycle = AppLifecycleListener(onResume: () => unawaited(_reload()));
+    }
+  }
+
+  @override
+  void didUpdateWidget(JamLibraryPicker oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!identical(oldWidget.tracks, widget.tracks)) _tracks = widget.tracks;
+  }
+
+  /// Picks up songs added to the library while the sheet was open. The
+  /// selection keeps every song still there; one that has gone drops out.
+  Future<void> _reload() async {
+    final reload = widget.reload;
+    if (reload == null || _reloading) return;
+    _reloading = true;
+    try {
+      final fresh = await reload();
+      if (!mounted || fresh.isEmpty) return;
+      setState(() {
+        _tracks = fresh;
+        final ids = {for (final t in fresh) t.id};
+        _selected.retainAll(ids);
+      });
+    } catch (e) {
+      // The list on screen is still a fine list to pick from.
+      debugPrint('localjam: library refresh failed: $e');
+    } finally {
+      _reloading = false;
+    }
   }
 
   @override
   void dispose() {
+    _lifecycle?.dispose();
     _query
       ..removeListener(_onQuery)
       ..dispose();
@@ -140,10 +189,10 @@ class _JamLibraryPickerState extends State<JamLibraryPicker> {
 
   List<JamLibraryTrack> get _visible {
     final q = _query.text.trim().toLowerCase();
-    if (q.isEmpty) return widget.tracks;
+    if (q.isEmpty) return _tracks;
     bool has(String? s) => s != null && s.toLowerCase().contains(q);
     return [
-      for (final t in widget.tracks)
+      for (final t in _tracks)
         if (has(t.title) || has(t.artist) || has(t.album)) t,
     ];
   }
@@ -162,7 +211,7 @@ class _JamLibraryPickerState extends State<JamLibraryPicker> {
   });
 
   void _submit() => Navigator.of(context).pop([
-    for (final track in widget.tracks)
+    for (final track in _tracks)
       if (_selected.contains(track.id)) track,
   ]);
 

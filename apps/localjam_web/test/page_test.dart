@@ -61,9 +61,9 @@ Future<void> pumpPage(WidgetTester tester, Harness h) async {
 }
 
 Future<void> listen(WidgetTester tester) async {
-  await tester.ensureVisible(find.text('Tap to Listen'));
+  await tester.ensureVisible(find.text('Tap to listen'));
   await tester.pump();
-  await tester.tap(find.text('Tap to Listen'));
+  await tester.tap(find.text('Tap to listen'));
   await tester.pump();
   await tester.pump();
 }
@@ -76,7 +76,7 @@ Future<void> unmount(WidgetTester tester) async {
 void main() {
   group('JoinTarget', () {
     test('joins its own origin with the fragment\'s token and keeps every '
-        'candidate for Open in App', () {
+        'candidate for Open in app', () {
       final t = JoinTarget.fromPageUrl(pageUrl);
       expect(t.canJoin, isTrue);
       expect(t.jamName, 'Road Trip');
@@ -126,7 +126,7 @@ void main() {
       expect(JoinLink.fromUri(target.appLink!)!.hosts, [
         '192.168.1.7',
         '192.168.43.1',
-      ], reason: 'Open in App keeps every candidate after a reload');
+      ], reason: 'Open in app keeps every candidate after a reload');
 
       // A new link in the same tab replaces the remembered one.
       final other = Uri.parse('http://192.168.1.7:44100/join#v=1&token=n3w');
@@ -171,8 +171,8 @@ void main() {
     await pumpPage(tester, h);
     expect(find.text('LocalJam'), findsOneWidget);
     expect(find.text('Road Trip'), findsOneWidget);
-    expect(find.text('Tap to Listen'), findsOneWidget);
-    expect(find.text('Open in App'), findsOneWidget);
+    expect(find.text('Tap to listen'), findsOneWidget);
+    expect(find.text('Open in app'), findsOneWidget);
     final field = tester.widget<TextField>(find.byType(TextField));
     expect(field.controller!.text, 'Neon Walrus');
 
@@ -194,12 +194,12 @@ void main() {
     await unmount(tester);
   });
 
-  testWidgets('Open in App opens the localjam:// link with every candidate', (
+  testWidgets('Open in app opens the localjam:// link with every candidate', (
     tester,
   ) async {
     final h = Harness(room: FakeRoom());
     await pumpPage(tester, h);
-    await tester.tap(find.text('Open in App'));
+    await tester.tap(find.text('Open in app'));
     expect(h.opened.single.scheme, 'localjam');
     expect(h.opened.single.queryParameters['host'], '192.168.1.7,192.168.43.1');
   });
@@ -209,8 +209,8 @@ void main() {
   ) async {
     final h = Harness(url: Uri.parse('http://192.168.1.7:44100/join'));
     await pumpPage(tester, h);
-    expect(find.text('No Invite in This Link'), findsOneWidget);
-    expect(find.text('Tap to Listen'), findsNothing);
+    expect(find.text('No invite in this link'), findsOneWidget);
+    expect(find.text('Tap to listen'), findsNothing);
   });
 
   testWidgets('joined and synced: cover, title, artist, the sync line, '
@@ -232,6 +232,47 @@ void main() {
     expect(find.text('Mia'), findsOneWidget);
     expect(find.text('Keep this page open', findRichText: true), findsNothing);
     expect(find.textContaining('Keep this page open'), findsOneWidget);
+    await unmount(tester);
+  });
+
+  testWidgets('the generated name is selected on first tap, so typing '
+      'replaces it', (tester) async {
+    // It used to append: "Polka Yak" + "Web Tester" = "Polka YakWeb Tester".
+    final h = Harness(room: FakeRoom());
+    await pumpPage(tester, h);
+    final field = tester.widget<TextField>(find.byType(TextField));
+    await tester.tap(find.byType(TextField));
+    await tester.pump();
+    expect(
+      field.controller!.selection,
+      const TextSelection(baseOffset: 0, extentOffset: 'Neon Walrus'.length),
+    );
+    // Only the first time: a second tap places the caret as usual.
+    await tester.tapAt(
+      tester.getTopLeft(find.byType(TextField)) + const Offset(20, 20),
+    );
+    await tester.pump(const Duration(milliseconds: 500));
+    expect(field.controller!.selection.isCollapsed, isTrue);
+  });
+
+  testWidgets('an untagged song is its file name without the extension; a '
+      'real title is never touched', (tester) async {
+    final room = FakeRoom(
+      queue: [
+        track('m_a'),
+        // A host that filled the title from the file name.
+        track('m_b', title: 'm_b.mp3'),
+        track('m_c', title: "Pappu Can't Dance.mp3 remix"),
+      ],
+    );
+    await pumpPage(tester, Harness(room: room));
+    await listen(tester);
+    expect(find.text('m_a'), findsWidgets);
+    expect(find.text('m_a.mp3'), findsNothing);
+    expect(find.text('m_b'), findsWidgets);
+    expect(find.text("Pappu Can't Dance.mp3 remix"), findsWidgets);
+    expect(stripAudioExtension('Road.FLAC'), 'Road');
+    expect(stripAudioExtension('notes.txt'), 'notes.txt');
     await unmount(tester);
   });
 
@@ -415,7 +456,7 @@ void main() {
       await pumpPage(tester, Harness(room: room));
       await listen(tester);
       expect(find.text('Sound paused on this page'), findsOneWidget);
-      await tester.tap(find.text('Tap to Resume'));
+      await tester.tap(find.text('Tap to resume'));
       expect(room.calls, ['resume']);
       await unmount(tester);
     });
@@ -496,7 +537,7 @@ void main() {
     final room = FakeRoom();
     final h = Harness(room: room);
     await pumpPage(tester, h);
-    final listenButton = find.bySemanticsLabel('Tap to Listen');
+    final listenButton = find.bySemanticsLabel('Tap to listen');
     expect(
       tester
           .getSemantics(listenButton)
@@ -504,7 +545,7 @@ void main() {
           .hasAction(SemanticsAction.tap),
       isTrue,
     );
-    tester.semantics.tap(find.semantics.byLabel('Tap to Listen'));
+    tester.semantics.tap(find.semantics.byLabel('Tap to listen'));
     await tester.pump();
     await tester.pump();
     expect(h.events.first, 'unlock');
@@ -525,15 +566,15 @@ void main() {
     semantics.dispose();
   });
 
-  testWidgets('a double tap on Tap to Listen starts one join', (tester) async {
+  testWidgets('a double tap on Tap to listen starts one join', (tester) async {
     final h = Harness(room: FakeRoom())..holdJoin = Completer<void>();
     await pumpPage(tester, h);
     // An empty name: the join first asks for the generated one (an await).
     await tester.enterText(find.byType(TextField), '');
-    await tester.ensureVisible(find.text('Tap to Listen'));
+    await tester.ensureVisible(find.text('Tap to listen'));
     await tester.pump();
-    await tester.tap(find.text('Tap to Listen'));
-    await tester.tap(find.text('Tap to Listen'));
+    await tester.tap(find.text('Tap to listen'));
+    await tester.tap(find.text('Tap to listen'));
     await tester.pump();
     await tester.pump();
     expect(h.events.where((e) => e == 'unlock'), hasLength(1));
@@ -575,7 +616,7 @@ void main() {
   });
 
   testWidgets('a failed song says "trying again" only while it is, then '
-      'offers Try Again', (tester) async {
+      'offers Try again', (tester) async {
     final room = FakeRoom(
       prefetch: {
         'm_a': const JamPrefetchState(
@@ -588,7 +629,7 @@ void main() {
     await pumpPage(tester, Harness(room: room));
     await listen(tester);
     expect(find.text("Couldn't get this song. Trying again…"), findsOneWidget);
-    expect(find.text('Try Again'), findsNothing);
+    expect(find.text('Try again'), findsNothing);
     room
       ..prefetch = {
         'm_a': const JamPrefetchState(
@@ -599,7 +640,7 @@ void main() {
       ..changed();
     await tester.pump();
     expect(find.text("Couldn't get this song"), findsOneWidget);
-    await tester.tap(find.text('Try Again'));
+    await tester.tap(find.text('Try again'));
     expect(room.calls, ['retry m_a']);
     await unmount(tester);
   });
@@ -652,7 +693,7 @@ void main() {
       await tester.pump();
       expect(find.text(title), findsOneWidget, reason: '$reason');
       expect(find.byType(CupertinoActivityIndicator), findsNothing);
-      expect(find.text('Try Again'), tryAgain ? findsOneWidget : findsNothing);
+      expect(find.text('Try again'), tryAgain ? findsOneWidget : findsNothing);
       expect(find.byType(RoomPage), findsNothing);
       await unmount(tester);
     }
@@ -661,7 +702,7 @@ void main() {
       await expectEnded(
         tester,
         JamSessionEndReason.hostEnded,
-        'The Jam Has Ended',
+        'The jam has ended',
       );
     });
 
@@ -671,7 +712,7 @@ void main() {
       await expectEnded(
         tester,
         JamSessionEndReason.listenerFailed,
-        'Listening Stopped',
+        'Listening stopped',
       );
       expect(
         find.text('The host ended the jam. Thanks for listening.'),
@@ -683,20 +724,20 @@ void main() {
       await expectEnded(
         tester,
         JamSessionEndReason.hostGone,
-        'The Host Disappeared',
+        'The host disappeared',
         tryAgain: true,
       );
     });
 
     testWidgets('removed by the host', (tester) async {
-      await expectEnded(tester, JamSessionEndReason.kicked, 'You Were Removed');
+      await expectEnded(tester, JamSessionEndReason.kicked, 'You were removed');
     });
 
     testWidgets('a reconnect refused (the room restarted)', (tester) async {
       await expectEnded(
         tester,
         JamSessionEndReason.rejected,
-        'This Jam Has Ended',
+        'This jam has ended',
         reject: RejectReason.badToken,
       );
     });
@@ -714,44 +755,44 @@ void main() {
       await listen(tester);
       expect(find.text(title), findsOneWidget, reason: reason.wire);
       expect(find.byType(CupertinoActivityIndicator), findsNothing);
-      expect(find.text('Try Again'), tryAgain ? findsOneWidget : findsNothing);
+      expect(find.text('Try again'), tryAgain ? findsOneWidget : findsNothing);
       await unmount(tester);
     }
 
     testWidgets('bad token', (tester) async {
-      await expectRejected(tester, RejectReason.badToken, 'This Jam Has Ended');
+      await expectRejected(tester, RejectReason.badToken, 'This jam has ended');
     });
 
     testWidgets('full: the one reason worth another try', (tester) async {
       await expectRejected(
         tester,
         RejectReason.full,
-        'This Jam Is Full',
+        'This jam is full',
         tryAgain: true,
       );
     });
 
     testWidgets('version', (tester) async {
-      await expectRejected(tester, RejectReason.version, "Can't Join This Jam");
+      await expectRejected(tester, RejectReason.version, "Can't join this jam");
     });
 
     testWidgets('kicked', (tester) async {
-      await expectRejected(tester, RejectReason.kicked, 'You Were Removed');
+      await expectRejected(tester, RejectReason.kicked, 'You were removed');
     });
 
     testWidgets('a reason from a later version', (tester) async {
-      await expectRejected(tester, RejectReason.unknown, "Couldn't Join");
+      await expectRejected(tester, RejectReason.unknown, "Couldn't join");
     });
   });
 
-  testWidgets('an unreachable host offers Try Again, which joins again', (
+  testWidgets('an unreachable host offers Try again, which joins again', (
     tester,
   ) async {
     final h = Harness(joinError: TimeoutException('no host'));
     await pumpPage(tester, h);
     await listen(tester);
-    expect(find.text("Couldn't Reach the Jam"), findsOneWidget);
-    await tester.tap(find.text('Try Again'));
+    expect(find.text("Couldn't reach the jam"), findsOneWidget);
+    await tester.tap(find.text('Try again'));
     await tester.pump();
     expect(h.events.where((e) => e == 'unlock'), hasLength(2));
     expect(h.events.where((e) => e.startsWith('join')), hasLength(2));

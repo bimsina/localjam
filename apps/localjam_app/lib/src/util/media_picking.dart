@@ -219,8 +219,8 @@ bool get jamLibraryAvailable =>
 /// How the music-library permission is asked for: the rationale, then the
 /// OS. Tests stand in their own answer.
 @visibleForTesting
-Future<JamPermissionOutcome> Function() jamAudioPermissionRequest =
-    requestAudioLibraryPermission;
+Future<JamPermissionOutcome> Function({bool sharing})
+jamAudioPermissionRequest = requestAudioLibraryPermission;
 
 /// Where a track is coming from.
 enum JamAddSource {
@@ -361,7 +361,11 @@ Future<List<JamPickedTrack>> pickLibraryTrackDetails(
   // The shared sheet chrome, not a bare `showModalBottomSheet`: the picker
   // is the same kind of surface as Queue and People and should not arrive
   // with a different header, radius and handle.
-  final chosen = await showJamLibrarySheet(context, tracks);
+  final chosen = await showJamLibrarySheet(
+    context,
+    tracks,
+    reload: JamMediaLibrary.queryAudio,
+  );
   // Closing the sheet hands focus back to whatever had it — on host setup
   // that is the room-name field, and the keyboard shoots up over the result.
   _dismissKeyboard();
@@ -395,8 +399,14 @@ Future<List<JamPickedTrack>> pickLibraryTrackDetails(
 /// whether it may be read. A denial says so through [session]'s notices —
 /// with Open Settings when only Settings can undo it; "Not now" on the
 /// rationale is the user answering us, and says nothing.
-Future<bool> ensureLibraryAccess(JamSessionController session) async {
-  final outcome = await jamAudioPermissionRequest();
+///
+/// [sharing]: asked to share the library with the jam, which has its own
+/// rationale (see [JamPermissionKind.audioLibraryShare]).
+Future<bool> ensureLibraryAccess(
+  JamSessionController session, {
+  bool sharing = false,
+}) async {
+  final outcome = await jamAudioPermissionRequest(sharing: sharing);
   if (outcome == JamPermissionOutcome.granted) return true;
   // "Not now" on the rationale sheet is the user answering us, not the OS
   // refusing them: nothing to report, and nothing Settings could fix.

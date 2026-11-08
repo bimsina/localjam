@@ -58,6 +58,12 @@ enum JamPermissionKind {
   /// Android's `READ_MEDIA_AUDIO`, before the first library browse.
   audioLibrary,
 
+  /// The same `READ_MEDIA_AUDIO`, asked by turning on "Share my music
+  /// library". A kind of its own because the promise is different: the
+  /// picker's "nothing leaves this phone" is untrue of a library whose titles
+  /// the jam is about to see.
+  audioLibraryShare,
+
   /// The camera, before the first QR scan.
   camera,
 }
@@ -74,7 +80,8 @@ Permission? _permissionFor(JamPermissionKind kind) => switch (kind) {
   // Nothing to ask for; the sheet is all there is.
   JamPermissionKind.localNetworkApple => null,
   JamPermissionKind.notifications => Permission.notification,
-  JamPermissionKind.audioLibrary => Permission.audio,
+  JamPermissionKind.audioLibrary ||
+  JamPermissionKind.audioLibraryShare => Permission.audio,
   JamPermissionKind.camera => Permission.camera,
 };
 
@@ -99,7 +106,23 @@ String _rationaleKey(JamPermissionKind kind) =>
 ///
 /// Returns false only when the user actually said "Not now": that is the one
 /// answer that must stop the OS prompt from ever appearing.
-Future<bool> jamExplainPermission(JamPermissionKind kind) async {
+///
+/// Concurrent asks for one kind share a single answer. Two at once used to
+/// race: the first set the "explained" flag and showed the sheet, the second
+/// read the flag and went straight to the OS prompt — so "Not now" on the
+/// sheet was answered by the system dialog anyway.
+Future<bool> jamExplainPermission(JamPermissionKind kind) {
+  final pending = _explaining[kind];
+  if (pending != null) return pending;
+  final answer = _explain(kind);
+  _explaining[kind] = answer;
+  return answer.whenComplete(() => _explaining.remove(kind));
+}
+
+/// Rationales on screen (or being decided), so a second ask joins the first.
+final Map<JamPermissionKind, Future<bool>> _explaining = {};
+
+Future<bool> _explain(JamPermissionKind kind) async {
   final presenter = jamRationalePresenter;
   if (presenter == null) return true;
   if (_explained.contains(kind)) return true;
@@ -186,7 +209,14 @@ Future<void> ensureLocalNetworkPermission() async {
 ///
 /// Non-fatal by design: playback runs either way, so a denial costs the
 /// lock-screen controls and nothing else. Returns whether it is granted.
-Future<bool> ensureNotificationPermission() async {
+///
+/// Callers that overlap share one ask: one sheet, one OS prompt, one answer.
+Future<bool> ensureNotificationPermission() => _notificationAsk ??=
+    _askNotifications().whenComplete(() => _notificationAsk = null);
+
+Future<bool>? _notificationAsk;
+
+Future<bool> _askNotifications() async {
   if (!Platform.isAndroid) return true;
   if (!await jamExplainPermission(JamPermissionKind.notifications)) {
     return false;
@@ -217,9 +247,18 @@ enum JamPermissionOutcome {
 
 /// Requests audio-library access (Android `READ_MEDIA_AUDIO` on 13+,
 /// `READ_EXTERNAL_STORAGE` below).
-Future<JamPermissionOutcome> requestAudioLibraryPermission() async {
+///
+/// [sharing]: asked by turning on "Share my music library", whose rationale
+/// says what the jam will see rather than the picker's "nothing leaves this
+/// phone".
+Future<JamPermissionOutcome> requestAudioLibraryPermission({
+  bool sharing = false,
+}) async {
   if (!Platform.isAndroid) return JamPermissionOutcome.unsupported;
-  if (!await jamExplainPermission(JamPermissionKind.audioLibrary)) {
+  final kind = sharing
+      ? JamPermissionKind.audioLibraryShare
+      : JamPermissionKind.audioLibrary;
+  if (!await jamExplainPermission(kind)) {
     return JamPermissionOutcome.dismissed;
   }
   try {

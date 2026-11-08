@@ -302,7 +302,10 @@ class _HostSetupScreenState extends State<HostSetupScreen> {
     }
     _dismissKeyboard();
     setState(() => _askingLibrary = true);
-    final granted = await ensureLibraryAccess(JamSession.read(context));
+    final granted = await ensureLibraryAccess(
+      JamSession.read(context),
+      sharing: true,
+    );
     if (!mounted) return;
     setState(() {
       _askingLibrary = false;

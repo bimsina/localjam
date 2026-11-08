@@ -134,6 +134,9 @@ class _QueuePanelState extends State<QueuePanel> {
   bool _drawnOnce = false;
   bool _adding = false;
 
+  /// The mediaId of the row being dragged, from pick-up to drop.
+  String? _draggingId;
+
   /// Rows swiped away whose removal the room has not confirmed yet.
   ///
   /// A swiped row has to leave the tree once it has collapsed,
@@ -462,8 +465,21 @@ class _QueuePanelState extends State<QueuePanel> {
                   const SliverToBoxAdapter(child: SizedBox.shrink())
                 else if (canEdit)
                   SliverReorderableList(
+                    // Keyed by the rows it holds, in order: when the queue
+                    // changes under a held row (the track advances, a song
+                    // leaves), the list — and any drag in it, started or
+                    // pending — is dropped and rebuilt, rather than finishing
+                    // against indices that now name other rows. Flutter only
+                    // cancels on a count change, and even then not a drag
+                    // still waiting to start (an uncaught null check).
+                    key: ValueKey<String>(
+                      'queue-${[for (final item in upNext) item.mediaId].join('\u0000')}',
+                    ),
                     itemCount: upNext.length,
-                    onReorderStart: (_) => JamHaptics.reorder(),
+                    onReorderStart: (index) {
+                      _draggingId = upNext[index].mediaId;
+                      JamHaptics.reorder();
+                    },
                     onReorderEnd: (_) => JamHaptics.reorder(),
                     proxyDecorator: (child, index, animation) => DecoratedBox(
                       decoration: BoxDecoration(
@@ -473,6 +489,15 @@ class _QueuePanelState extends State<QueuePanel> {
                       child: child,
                     ),
                     onReorderItem: (oldIndex, newIndex) {
+                      final dragged = _draggingId;
+                      _draggingId = null;
+                      // A drop is acted on only for the row that was picked
+                      // up, still where it was: stale indices are ignored.
+                      if (oldIndex < 0 ||
+                          oldIndex >= upNext.length ||
+                          upNext[oldIndex].mediaId != dragged) {
+                        return;
+                      }
                       final move = queueReorderTarget(
                         playlist: playlist,
                         currentId: currentId,

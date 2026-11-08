@@ -33,6 +33,21 @@ void main() {
     SharedPreferences.setMockInitialValues({});
   });
 
+  testWidgets('two asks at once share one sheet and its "Not now"', (
+    tester,
+  ) async {
+    // The bug: the second ask read the flag the first had just set and went
+    // straight to the OS prompt, so "Not now" was answered by the system
+    // dialog anyway. Both now wait on the one sheet.
+    final shown = installPresenter(answer: false);
+    final answers = await Future.wait([
+      jamExplainPermission(JamPermissionKind.localNetworkApple),
+      jamExplainPermission(JamPermissionKind.localNetworkApple),
+    ]);
+    expect(shown, [JamPermissionKind.localNetworkApple]);
+    expect(answers, [false, false]);
+  });
+
   group('local network on iOS and macOS', () {
     testWidgets('is explained before the first jam, and only once', (
       tester,

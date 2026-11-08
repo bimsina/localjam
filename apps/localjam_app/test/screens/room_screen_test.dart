@@ -1149,6 +1149,44 @@ void main() {
     await leaveTestSession(tester, session);
   });
 
+  testWidgets('with the queue open, the scrubber reads as itself, not the '
+      'queue header', (tester) async {
+    // TalkBack read "… Up next Up next 2 songs Playback position": the
+    // header's text was merged into the slider's node.
+    final handle = tester.ensureSemantics();
+    final session = testSession();
+    await tester.runAsync(() async {
+      await session.startHost(
+        sessionName: 'Queue Jam',
+        discoverable: false,
+        paths: makeTestTracks(),
+      );
+      await session.hostImport!.done;
+      session.hostEngine!.pause();
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+    });
+    await resize(tester, const Size(390, 844));
+    await pumpRoom(tester, session);
+    await tester.tap(find.bySemanticsLabel(JamRoomStrings.queue));
+    await tester.pumpAndSettle();
+    expect(find.byType(QueuePanel), findsOneWidget);
+
+    final slider = tester.getSemantics(
+      find.descendant(
+        of: find.byType(JamScrubber),
+        matching: find.byWidgetPredicate(
+          (w) => w is Semantics && w.properties.slider == true,
+        ),
+      ),
+    );
+    expect(slider.label, JamTransportStrings.position);
+    // The header is still there, as its own heading.
+    expect(find.bySemanticsLabel(QueueSheetStrings.title), findsOneWidget);
+
+    await leaveTestSession(tester, session);
+    handle.dispose();
+  });
+
   testWidgets('a paused cover springs back to 0.96', (tester) async {
     final session = testSession();
     await tester.runAsync(() async {

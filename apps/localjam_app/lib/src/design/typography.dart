@@ -26,6 +26,16 @@ import 'package:flutter/rendering.dart';
 
 import 'tokens.dart';
 
+/// Manrope's OpenType features, as every Manrope style sets them.
+///
+/// Its contextual alternates (`calt`) draw a straight apostrophe between
+/// letters as a curly one, so "Pappu Can't Dance" read as "Can’t" in the
+/// Now Playing title while every row (in the system face), the web and
+/// history kept the straight one. Song titles, jam names and people's names
+/// are other people's text, set as written: the substitution is off. App
+/// copy that wants a curly apostrophe types ’ itself.
+const List<FontFeature> kJamManropeFeatures = [FontFeature.disable('calt')];
+
 /// Whether [platform] renders in SF and so takes SF's tracking table.
 bool jamIsApple(TargetPlatform platform) =>
     platform == TargetPlatform.iOS || platform == TargetPlatform.macOS;
@@ -193,30 +203,26 @@ JamTypeScale buildJamTypeScale({
   }
 
   return JamTypeScale(
-    largeTitle: style(
-      34,
-      41,
-      FontWeight.w700,
-      0,
-    ).copyWith(fontFamily: 'Manrope', letterSpacing: -1.2),
-    title1: style(
-      28,
-      36,
-      FontWeight.w700,
-      0,
-    ).copyWith(fontFamily: 'Manrope', letterSpacing: -0.8),
-    title2: style(
-      22,
-      29,
-      FontWeight.w700,
-      0,
-    ).copyWith(fontFamily: 'Manrope', letterSpacing: -0.5),
-    title3: style(
-      20,
-      27,
-      FontWeight.w600,
-      0,
-    ).copyWith(fontFamily: 'Manrope', letterSpacing: -0.4),
+    largeTitle: style(34, 41, FontWeight.w700, 0).copyWith(
+      fontFamily: 'Manrope',
+      letterSpacing: -1.2,
+      fontFeatures: kJamManropeFeatures,
+    ),
+    title1: style(28, 36, FontWeight.w700, 0).copyWith(
+      fontFamily: 'Manrope',
+      letterSpacing: -0.8,
+      fontFeatures: kJamManropeFeatures,
+    ),
+    title2: style(22, 29, FontWeight.w700, 0).copyWith(
+      fontFamily: 'Manrope',
+      letterSpacing: -0.5,
+      fontFeatures: kJamManropeFeatures,
+    ),
+    title3: style(20, 27, FontWeight.w600, 0).copyWith(
+      fontFamily: 'Manrope',
+      letterSpacing: -0.4,
+      fontFeatures: kJamManropeFeatures,
+    ),
     headline: style(17, 22, FontWeight.w600, -0.43),
     body: style(17, 22, FontWeight.w400, -0.43),
     callout: style(16, 21, FontWeight.w400, -0.31),
@@ -248,8 +254,11 @@ TextTheme jamTextThemeFrom(JamTypeScale s) => TextTheme(
 );
 
 /// Fixed-width digits for timers, durations, counts.
-TextStyle jamTabular(TextStyle style) =>
-    style.copyWith(fontFeatures: const [FontFeature.tabularFigures()]);
+TextStyle jamTabular(TextStyle style) => style.copyWith(
+  // Added to, not replacing, what the face already sets
+  // ([kJamManropeFeatures]).
+  fontFeatures: [...?style.fontFeatures, const FontFeature.tabularFigures()],
+);
 
 /// Footnote-sized tabular figures in [color], for code that has a palette but
 /// no context (painters, tests).
