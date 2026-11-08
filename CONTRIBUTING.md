@@ -17,6 +17,7 @@ packages/
 apps/
   localjam_cli         headless demo client
   localjam_app         the Flutter app
+  localjam_web         the browser listener page a host serves
 ```
 
 Dependencies point one way: `core → net → client`, with `audio` beside them and
@@ -33,6 +34,7 @@ cd packages/localjam_client && flutter test
 cd packages/localjam_audio  && flutter test
 cd apps/localjam_cli        && dart test
 cd apps/localjam_app        && flutter test
+cd apps/localjam_web        && flutter test
 ```
 
 All of it runs offline and in seconds. Flutter 3.47.5 / Dart 3.13.4 is what CI
@@ -83,6 +85,19 @@ numbers) is a genuinely useful contribution.
   `## Unreleased`.
 - Keep the docs honest. If a platform is build-verified rather than
   run-verified, `README.md` and `DEVICE_TESTING.md` should say so.
+
+## Security issues
+
+Do not open a public issue for a vulnerability; see [`SECURITY.md`](SECURITY.md).
+
+## Privacy
+
+LocalJam promises in [`PRIVACY.md`](PRIVACY.md) and on its Play listing that it
+collects no data and talks to nothing beyond the local network. A dependency
+that phones home (analytics, crash reporting, remote config, a model
+download) breaks that promise. Call out any new dependency with network,
+camera or storage access in the PR, and update `PRIVACY.md` and
+`docs/release/DATA_SAFETY.md` in the same PR if anything changes.
 
 ## License
 

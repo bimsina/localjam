@@ -1,8 +1,40 @@
 # Changelog
 
-Notable changes to LocalJam. Dates are the day the work landed on `main`.
+Notable changes to LocalJam. Dates are the day the work landed on `main`;
+a release heading carries the day it shipped.
 
 ## Unreleased
+
+## 1.0.0 (Android): not yet released
+
+The first public release, on Google Play, Android first (iOS and desktop run
+from source). Everything below, down to the end of this file, is in it.
+
+- Listen together over local Wi-Fi or a hotspot: host a jam, guests join from
+  Nearby, a QR code or a link, and every phone plays in sync. No internet, no
+  accounts, no data collected.
+- A shared queue with "added by", room presets (Open, Jam, Listen-only),
+  co-hosts and per-person permissions, background playback with a media
+  card, jam history, and a browser listener page for guests without the app.
+
+### Release readiness (Android, open source)
+
+- A release build without `android/key.properties` now **fails** instead of
+  silently signing with the debug key. `LOCALJAM_ALLOW_DEBUG_SIGNING=1` (or
+  `--android-project-arg=localjam.allowDebugSigning=true`) opts in to a
+  local, non-distributable debug-signed release build.
+- `targetSdk` is pinned to 36 (Play's requirement from 2026-08-31) instead of
+  following the Flutter tool, so a Flutter upgrade cannot move it silently.
+- A network-security config keeps cleartext HTTP off for the platform
+  (Java/Kotlin) networking stack. The jam's own LAN traffic goes through
+  `dart:io` and is unaffected.
+- ML Kit's usage-statistics upload (pulled in by the QR scanner) is disabled
+  by removing the `datatransport` backend from the merged manifest, so the
+  app sends nothing to Google.
+- Verified 16 KB page-size compatibility of every bundled native library.
+- New `PRIVACY.md`, `SECURITY.md`, `docs/release/` (Android release and
+  signing guide, Play Data safety answers, store listing draft), feature
+  request and device-test issue templates, and a rewritten `README.md`.
 
 ### Join from a browser
 

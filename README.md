@@ -1,229 +1,218 @@
-# LocalJam
-
 <p align="center">
-  <em>Listen together, in sync, over local Wi-Fi — no internet, no accounts.</em>
+  <img src="apps/localjam_app/assets/brand/icon_1024.png" width="96" alt="LocalJam icon">
 </p>
 
-One person hosts a jam and shares the files; everyone nearby joins over the LAN
-or the host's hotspot and hears the same thing at the same instant, in their own
-headphones, fully offline. No servers, no sign-in, nothing leaves the room.
-Spotify Jam, but local — in the spirit of LocalSend.
+<h1 align="center">LocalJam</h1>
 
-Measured between devices on a real LAN socket: **±5 ms drift**, corrected
-silently with pitch-corrected **±0.5 %** rate slews — inaudible nudges, never
-audible seeks. On macOS a joining device settled at **−0.4 ms**.
+<p align="center">
+  <em>Listen together, in sync, over local Wi-Fi. No internet, no accounts.</em>
+</p>
+
+One person hosts a jam and picks the songs; everyone nearby joins over the
+same Wi-Fi or the host's hotspot and hears the same thing at the same moment,
+in their own headphones. No servers, no sign-in, nothing leaves the room.
+Think Spotify Jam, but local, in the spirit of LocalSend.
+
+**Status: 1.0.0, Android first.** The Android app is heading to Google Play.
+iOS and macOS run from source and come next; Windows and Linux build but are
+not runtime-verified. See [Platforms](#platforms) and
+[Known limitations](#known-limitations) before you rely on it.
+
+<p align="center">
+  <img src="docs/screenshots/home.png" width="200" alt="Home screen with a nearby jam">
+  <img src="docs/screenshots/room-light.png" width="200" alt="A jam in progress">
+  <img src="docs/screenshots/queue.png" width="200" alt="The shared queue">
+  <img src="docs/screenshots/people.png" width="200" alt="People in the jam and the invite QR">
+</p>
+
+<p align="center"><sub>Design captures from simulators and emulators. Store screenshots from real phones are still to come.</sub></p>
 
 ## What it does
 
-- **Rooms.** Host a named jam; guests join three ways — nearby-room discovery
-  (mDNS), a QR scan, or a join link shared from anywhere (the QR and the
-  link are an ordinary `http://…/join#…` URL; `localjam://join?…` works
-  too). Every device carries a persistent, quirky identity ("Silky Puffin")
-  so the room knows who is who across sessions.
-- **Join from a browser, no app needed.** The host phone serves a small
-  listener page on the same port, so a phone camera that opens the join link
-  lands in a browser that joins, listens in sync and — when the room allows —
-  controls playback. Browsers are guests only: they cannot add songs or host.
-  Best-effort until it has been tested on real phones; Safari cannot play
-  Ogg Vorbis/Opus. See [`docs/design/WEB_GUEST.md`](docs/design/WEB_GUEST.md).
-- **Permissions that read like a decision, not a form.** Three presets —
-  **Open**, **Jam**, **Listen-only** — over a per-capability policy, plus
-  co-host promotion, per-peer overrides, and kick. The host validates every
-  guest request; there is exactly one state writer.
-- **A shared queue.** Anyone allowed can add (file picker on every platform, the
-  MediaStore library on Android), reorder, and remove. Items carry
-  host-extracted tags, content-addressed artwork, and **"added by"**
-  attribution — including the host, under their own name.
-- **Background playback with a real media card.** Lock-screen / notification
-  metadata and transport on iOS, Android and macOS, gated by the same
-  capabilities as the in-app controls: a listen-only guest gets a card with no
-  transport, and grows one live the moment the host promotes them. An Android
-  foreground service keeps a backgrounded host's server alive.
-- **Ending a jam is a thing you do, not a thing that happens.** The host's
-  "End jam" broadcasts a goodbye and guests land on *"The host ended the jam"*
-  immediately, instead of waiting out a 90-second timeout. An unannounced death
-  still degrades gracefully.
-- **Jam history.** Every session leaves a local record — the queue, the
-  attribution, who was in the room. Tracks still in the cache are one tap from
-  being hosted again.
-- **Onboarding and permission rationale.** A three-card first run explains what
-  the app is, and every OS permission (local network, camera, media library,
-  notifications) is asked for behind a sheet that says why — before the system
-  prompt, never after it.
+- **Rooms.** Host a named jam; guests join from "Nearby" (mDNS discovery), by
+  scanning a QR code, or with a link shared any way you like. Every device
+  gets a friendly random name ("Silky Puffin") you can change.
+- **Join from a browser.** The host phone serves a small listener page on the
+  local network, so a friend without the app scans the QR and listens in
+  their browser. Browser guests cannot add songs or host.
+- **A shared queue.** Anyone allowed can add songs (file picker, or the phone's
+  music library on Android, or browse the host's library), reorder and skip.
+  Every song shows who added it.
+- **Permissions that read like a decision.** Three room presets, **Open**,
+  **Jam** and **Listen-only**, plus co-hosts, per-person overrides and kick.
+- **Background playback** with lock-screen and notification controls, gated by
+  the same permissions as the in-app ones.
+- **Jam history**, kept on the device: what played, who added it, who was
+  there.
+- **Private by design.** No accounts, no analytics, no ads, no server. See
+  [`PRIVACY.md`](PRIVACY.md).
+
+## How it works
+
+The host phone runs a small server on the local network: a WebSocket for
+control and HTTP for the audio files. Guests fetch each song ahead of time
+and synchronise their clocks with the host's (NTP-style). The host then
+broadcasts an **anchor**, "position P at session time T"; every device
+computes `position(t) = P + (t − T) × rate` and starts audio natively at that
+exact instant. Small drift is corrected with inaudible ±0.5 % speed changes,
+never audible jumps.
+
+The wire protocol is specified in [`PROTOCOL.md`](PROTOCOL.md), which is the
+place to start if you want to understand or extend the engine.
 
 ## Platforms
 
 | Platform | Status |
 | --- | --- |
-| **iOS** | Live-verified on simulators (host + guest, mDNS join, background audio, media card pushes). Physical-device checks are the open list in [`DEVICE_TESTING.md`](DEVICE_TESTING.md). |
-| **Android** | Live-verified on a Pixel 9 Pro emulator (API 36): MediaStore library, foreground-service media card with a working pause round-trip, background playback, process-death recovery. |
-| **macOS** | Live-verified — the app joined a session at −0.4 ms drift. Full format support via `AVAudioEngine`. |
-| **Linux** | **Build-verified** in an Ubuntu 24.04 (arm64) container; plugin glue compiles clean under `-Wall -Werror`. Runtime audio (PulseAudio/ALSA) has not been exercised on real hardware. |
-| **Browser (guest only)** | **Built, pending device testing.** The page the host serves at `/join` (`apps/localjam_web`), checked in headless Chrome against a CLI host. Not yet tried as an iPhone Safari guest of an Android host. |
-| **Windows** | **Build-unverified.** Shares the miniaudio core measured at ≤0.01 ms start error on CoreAudio; the Windows plugin glue has never been compiled. First task on a Windows machine is `flutter build windows`. |
+| **Android** | 1.0.0 target. Verified on an API 36 emulator: host and guest, MediaStore library, foreground-service media card, background playback, process-death recovery. Physical-device verification is in progress ([`DEVICE_TESTING.md`](DEVICE_TESTING.md)). |
+| **iOS** | Runs from source. Verified on simulators (host + guest, mDNS join, background audio, media card). Not yet on the App Store. |
+| **macOS** | Runs from source; joined a live session at −0.4 ms measured drift. |
+| **Browser (guest only)** | Built, checked in headless Chrome against a CLI host. Not yet tried on real phones. Safari cannot play Ogg Vorbis/Opus. |
+| **Linux** | Builds (Ubuntu 24.04 arm64 container). Runtime audio not exercised on hardware. |
+| **Windows** | Never compiled. The first task on a Windows machine is `flutter build windows`. |
 
-Desktop v1 decodes mp3 / flac / wav / ogg. `m4a`/AAC returns
-`unsupported_format` on Windows and Linux (OS-codec decode is a later add);
-iOS, Android and macOS handle it natively.
+iOS, Android and macOS decode everything the OS does (mp3, m4a/AAC, flac,
+wav, ogg). Windows and Linux decode mp3, flac, wav and ogg; m4a/AAC returns
+`unsupported_format` there.
 
-## Screenshots
+## Known limitations
 
-> Not captured yet — these paths are the shot list.
+Honest list, for 1.0.0:
 
-| | |
-| --- | --- |
-| `docs/screenshots/home.png` — home with nearby jams | `docs/screenshots/room-light.png` — the room, light |
-| `docs/screenshots/room-dark.png` — the room, dark | `docs/screenshots/queue.png` — shared queue with attribution |
-| `docs/screenshots/people-invite.png` — people, roles and the invite QR | `docs/screenshots/onboarding.png` — first run |
+- **Sync has been measured on simulators, emulators and a macOS desktop, not
+  yet across a matrix of physical phones.** On a shared machine clock the
+  engine holds drift within ±5–10 ms; real Wi-Fi with independent clocks is
+  exactly what [`DEVICE_TESTING.md`](DEVICE_TESTING.md) still has to confirm.
+  A non-accelerated Android emulator has been seen to fall out of sync.
+- **Bluetooth latency** is compensated only as far as the OS reports it; a
+  "Nudge sync" control fixes the rest by hand.
+- **Same network required.** Guests must be on the host's Wi-Fi or hotspot.
+  Guest Wi-Fi and many office or public networks isolate devices from each
+  other, and then nobody can join.
+- **Plain HTTP on the LAN, by design.** A random 128-bit session token gates
+  every request, but traffic is not encrypted. Use networks you trust. See
+  [Security model](#security-model).
+- **Browser guests** must keep the tab open and in front; a backgrounded or
+  locked tab may stop playing.
+- **One host per room.** If the host leaves, the jam ends.
 
-## Architecture
+## Install
+
+- **Android:** Google Play listing coming with 1.0.0. Until then, build from
+  source (below).
+- **iOS / macOS:** build from source with your own Apple developer team.
+
+## Build from source
+
+You need Flutter **3.47.x** (CI pins 3.47.5) and, for Android, the Android SDK
+with API 37 platform and NDK 28.2 (Flutter installs what it is missing).
+
+```sh
+git clone https://github.com/bimsina/localjam.git
+cd localjam
+
+# Optional: the browser listener page that hosts serve to guests without the
+# app. Without it the app still builds, and rooms serve an "install the app"
+# page instead.
+tool/build_web_guest.sh
+
+cd apps/localjam_app
+flutter run                 # debug, on whatever device is attached
+flutter build apk --debug   # an installable debug APK
+```
+
+A **release** build needs a signing key and fails without one. To try a
+release build locally with the debug key:
+
+```sh
+LOCALJAM_ALLOW_DEBUG_SIGNING=1 flutter build apk --release
+```
+
+Signing for Play, the permission list and the store checklist are in
+[`docs/release/ANDROID_RELEASE.md`](docs/release/ANDROID_RELEASE.md).
+
+Two devices on the same network are the point: host on one, join on the
+other. Without a second phone, the headless CLI can stand in as a host or a
+guest:
+
+```sh
+cd apps/localjam_cli
+dart run bin/localjam.dart host <audio files...>          # prints a join link
+dart run bin/localjam.dart join "<join link>" --skew-ppm 5000
+```
+
+### Tests
+
+```sh
+cd packages/localjam_core   && dart test
+cd packages/localjam_net    && dart test
+cd packages/localjam_client && flutter test
+cd packages/localjam_audio  && flutter test
+cd apps/localjam_cli        && dart test
+cd apps/localjam_app        && flutter test
+cd apps/localjam_web        && flutter test
+```
+
+All of them run offline in seconds, with no device attached.
+
+### Repository layout
 
 ```
 PROTOCOL.md            the wire protocol (start here)
 packages/
-  localjam_core        pure Dart: messages + codec, NTP-style clock sync,
-                       anchor playback state machine, drift policy (no I/O)
-  localjam_net         transport: JamHostServer (WS control + HTTP media
-                       planes), JamGuestClient, JamGuestSession (auto-
-                       reconnect), end-of-media policies
-  localjam_audio       Flutter plugin: sample-accurate scheduled playback on
-                       the native clock (AVAudioEngine on iOS/macOS, Android,
-                       miniaudio on Windows/Linux), interruption/route
-                       events, plus the OS media session — lock-screen /
-                       notification metadata + transport controls, and the
-                       Android foreground-service keep-alive
-  localjam_client      the embeddable engine: JamHostEngine + JamGuestEngine —
-                       transport + prefetch + clock calibration + drift
-                       correction + OS media session + room discovery +
-                       device identity + jam history behind one API. UI apps
-                       depend on this only.
-  third_party/
-    bonsoir_darwin     vendored fork of bonsoir_darwin 7.1.1 (MIT, Skyost)
+  localjam_core        pure Dart: messages, codec, clock sync, anchors, permissions
+  localjam_net         transport: host server (WebSocket + HTTP), guest client, reconnect
+  localjam_audio       Flutter plugin: sample-accurate native playback + OS media session
+  localjam_client      the embeddable engine the apps depend on
+  third_party/         vendored forks, each with its LICENSE and PATCHES.md
+                       (bonsoir_darwin: mDNS registration moved off the
+                       iOS main thread, which upstream can wedge)
 apps/
-  localjam_cli         headless demo client (simulated playback, telemetry)
-  localjam_app         Flutter app (iOS/Android/macOS/Windows/Linux) — thin
-                       UI over localjam_client
-  localjam_web         the browser listener page a host serves to guests
-                       without the app (Flutter web, guest only)
+  localjam_app         the Flutter app (Android, iOS, macOS, Windows, Linux)
+  localjam_web         the browser listener page a host serves (guest only)
+  localjam_cli         headless host/guest for testing
+docs/
+  design/              design specs
+  release/             store and release docs
 ```
 
-The sync model in one line: the host broadcasts an **anchor**
-(`position P at session-clock time T`); every client computes
-`position(t) = P + (t − T) × rate` against an NTP-synced clock and schedules
-audio natively at the exact instant — drift is corrected with inaudible
-±0.5 % slews, never audible seeks.
-
-**Why `third_party/bonsoir_darwin`:** upstream 7.1.1 confirms a DNS-SD
-registration with a synchronous `DNSServiceProcessResult` on the platform main
-thread. Since Flutter merged the UI thread onto the platform thread on iOS, a
-daemon that never answers — which is *always* on the Simulator, and possible on
-hardware while the Local Network prompt is unanswered — wedges the Dart isolate
-and takes the whole app down. The vendored copy moves the registration to a
-background queue and changes nothing else; see
-[`packages/third_party/bonsoir_darwin/PATCHES.md`](packages/third_party/bonsoir_darwin/PATCHES.md).
-It is wired in through `dependency_overrides` (which do not propagate, so every
-consumer that builds for Apple platforms repeats the entry).
+More on the app itself (icons, splash screen, per-platform notes) is in
+[`apps/localjam_app/README.md`](apps/localjam_app/README.md).
 
 ## Security model
 
-LocalJam v1 is *honest-guest, hostile-network-lite* — the threat model of a
-living room, not a coffee shop. In full: [`PROTOCOL.md` §9](PROTOCOL.md).
+LocalJam is built for the threat model of a living room, not a coffee shop.
+In full: [`PROTOCOL.md` §9](PROTOCOL.md); to report a vulnerability, see
+[`SECURITY.md`](SECURITY.md).
 
 - **A token gates everything.** A 128-bit random session token, carried in the
-  QR / join link, guards both the WebSocket control plane and the HTTP media
-  plane. It is compared in constant time, so a wrong guess leaks nothing about
-  how wrong it was.
-- **Discoverable means invited.** A host that opts into mDNS is deliberately
-  broadcasting that token to its network segment — "everyone on this Wi-Fi is
-  welcome, for this session". Turning discovery off makes the QR or the link
-  the only way in.
-- **LAN only.** The host refuses requests from non-LAN remote addresses with a
-  403 on both planes — loopback, RFC1918 v4, link-local and v6 ULA pass,
-  everything else does not. Binding a LAN interface is only half of §9's rule;
-  this is the other half.
-- **Honest should not mean unbounded.** The host caps peers (32), half-open
-  sockets awaiting `hello` (16), control frames (256 KB), queue length (500)
-  and a single upload (512 MB), and drops sockets that never authenticate.
-- **Nothing leaves the device.** No accounts, no telemetry, no network calls off
-  the LAN. On Android, `allowBackup="false"` plus backup rules keep the media
-  cache, artwork, history and identity out of cloud backup and device transfer.
-
-Traffic is plaintext, by decision — for browser guests too: listening in a
-browser needs no secure context, and a self-signed certificate on a LAN IP
-would put a warning page in front of every guest with nothing a browser could
-pin. TLS stays a possible hardening option for hostile networks, not a
-prerequisite (`PROTOCOL.md` §9).
-
-## Development
-
-Flutter **3.47.5** / Dart **3.13.4** (see `.github/workflows/ci.yml` for the
-pinned CI toolchain).
-
-```sh
-cd packages/localjam_core   && dart test      # protocol, clock, anchors, permissions
-cd packages/localjam_net    && dart test      #  99 tests — transport, robustness, integration
-cd packages/localjam_client && flutter test   #  91 tests — engines, discovery, history, lifecycle
-cd packages/localjam_audio  && flutter test   #  13 tests — plugin surface
-cd apps/localjam_cli        && dart test      #  12 tests — headless sync smoke
-cd apps/localjam_app        && flutter test   # 251 tests — screens, widgets, state
-cd apps/localjam_web        && flutter test   #  30 tests — the browser listener page
-```
-
-607 tests in total, all green, no network required.
-
-```sh
-# two-terminal demo without audio
-cd apps/localjam_cli
-dart run bin/localjam.dart host <files...>
-dart run bin/localjam.dart join "<join-uri>" --skew-ppm 5000
-
-# the real thing
-cd apps/localjam_app
-flutter run              # whatever device is attached
-flutter run -d macos
-flutter run -d windows
-flutter run -d linux
-```
-
-Two devices on the same network are the point: host on one, join on the other.
-
-The browser listener page is built into the app's assets, never committed:
-
-```sh
-tool/build_web_guest.sh          # before building the app for release
-# or serve it from the CLI host:
-dart run apps/localjam_cli/bin/localjam.dart host --web-dir apps/localjam_app/assets/web <files...>
-```
-
-Regenerating the app icon and launch screen after touching `assets/brand/`:
-
-```sh
-cd apps/localjam_app
-dart run flutter_launcher_icons
-dart run flutter_native_splash:create
-```
-
-Both generators are configured from `pubspec.yaml`, and
-`flutter_native_splash:create` stomps two hand-made edits every time — see
-[`apps/localjam_app/README.md`](apps/localjam_app/README.md), which also covers
-Android release signing (`android/key.properties`), R8 rules, and the
-per-platform notes.
-
-Before pushing hardware changes, work through
-[`DEVICE_TESTING.md`](DEVICE_TESTING.md) — the checklist of everything
-simulators cannot prove.
+  QR code and join link, guards both the control and media planes, compared
+  in constant time.
+- **Discoverable means invited.** A host that leaves nearby discovery on is
+  announcing the room to its network segment. Turn it off and only the QR
+  code or link gets people in.
+- **LAN only.** The host refuses requests from non-private addresses with a
+  403, and caps peers, queue length, frame and upload sizes.
+- **Plaintext, by decision.** Browsers would show a certificate warning for a
+  self-signed certificate on a LAN IP, with nothing they could pin. TLS stays a
+  possible hardening for hostile networks.
 
 ## Contributing
 
-Bug reports, device-test results (especially on Windows and Linux hardware) and
-patches are all welcome. Start with [`CONTRIBUTING.md`](CONTRIBUTING.md) and
-[`PROTOCOL.md`](PROTOCOL.md); recent changes are in
-[`CHANGELOG.md`](CHANGELOG.md).
+Bug reports, real-device test results (especially physical Android phones,
+Windows and Linux) and patches are welcome. Start with
+[`CONTRIBUTING.md`](CONTRIBUTING.md) and [`PROTOCOL.md`](PROTOCOL.md); changes
+are tracked in [`CHANGELOG.md`](CHANGELOG.md).
 
 ## License
 
-[MIT](LICENSE) © Bibek Timsina. Vendored third-party code keeps its own
-licenses — `packages/third_party/bonsoir_darwin/LICENSE` (MIT, Skyost),
-`packages/localjam_audio/src/third_party/LICENSES.md` (miniaudio, dr_libs,
-stb_vorbis), and Manrope under the OFL 1.1
-(`apps/localjam_app/assets/fonts/OFL.txt`).
+[MIT](LICENSE) © Bibek Timsina.
+
+Vendored and bundled third-party code keeps its own licence:
+`packages/third_party/bonsoir_darwin` (MIT, Skyost),
+`packages/localjam_audio/src/third_party/` (miniaudio, dr_libs, stb_vorbis:
+public domain or MIT-0/MIT, see its `LICENSES.md`), and the Manrope font
+(SIL OFL 1.1, `apps/localjam_app/assets/fonts/OFL.txt`). The app lists every
+dependency's licence under Settings → Licenses.
+
+Only share music you have the right to share.

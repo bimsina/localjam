@@ -18,7 +18,7 @@ labels: bug
 
 - Host device / OS:
 - Guest device(s) / OS:
-- App version (Settings → About):
+- App version (Settings → Version):
 - Network: same Wi-Fi / host hotspot / other
 
 **Sync numbers, if relevant** (Diagnostics: drift, slews, resyncs)
