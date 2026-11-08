@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# Regenerates the MP3 fixtures of the Android gapless/frame-index tests
+# (android/src/test/resources/gapless). 3 s of deterministic noise, so the
+# gapless lengths the tests expect are 3 s exactly; frame counts depend only
+# on length and encoder settings. Needs ffmpeg with libmp3lame.
+set -euo pipefail
+out="$(cd "$(dirname "$0")/.." && pwd)/android/src/test/resources/gapless"
+mkdir -p "$out"
+src() { echo "anoisesrc=d=3:c=pink:r=$1:a=0.3:seed=1234"; }
+ffmpeg -v error -y -f lavfi -i "$(src 22050)" -ac 1 -c:a libmp3lame -q:a 6 \
+  -metadata title=gapless-vbr "$out/lame_vbr_22050_mono.mp3"
+ffmpeg -v error -y -f lavfi -i "$(src 44100)" -ac 2 -c:a libmp3lame -b:a 96k \
+  "$out/lame_cbr_44100_stereo.mp3"
+ffmpeg -v error -y -f lavfi -i "$(src 44100)" -ac 1 -c:a libmp3lame -b:a 64k \
+  -write_xing 0 -metadata title=no-xing "$out/noxing_44100_mono.mp3"
+for f in "$out"/*.mp3; do
+  ffprobe -v error -count_packets -show_entries stream=nb_read_packets \
+    -of default=nw=1:nk=1 "$f" | sed "s|^|$(basename "$f"): packets |"
+done

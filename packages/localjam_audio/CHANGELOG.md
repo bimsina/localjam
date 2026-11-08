@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Android plays the same sample at media position P as Apple and the browser:
+  P is the gapless frame (AAC priming from `elst`/iTunSMPB and the LAME delay
+  excluded). The platform's own delay trim is off (it trimmed from wherever
+  decoding started and left pts describing other PCM): seeks pre-roll and
+  drop to the exact frame, and a decode that resumes past the target is
+  padded with silence instead of starting late. MP3s are decoded from a frame
+  index (MediaExtractor's MP3 seeks are TOC/bitrate estimates). Before, AAC
+  m4a seeks played up to one AAC frame behind (iTunSMPB files) or one to two
+  frames ahead (`elst` files, also from 0), and VBR MP3 seeks were off by an
+  unbounded estimate error. README "Media position".
 - Android `setRate` never answers success for a speed the playing track
   refused: `rate_needs_reanchor` for a low-latency track (re-anchor with
   `playAt`; its track can time-stretch), `bad_args` as before otherwise.
