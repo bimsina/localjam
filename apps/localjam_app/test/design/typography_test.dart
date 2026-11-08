@@ -49,6 +49,22 @@ void main() {
     }
   });
 
+  test('Manrope never rewrites a straight apostrophe into a curly one', () {
+    // Its `calt` did, in the Now Playing title only: "Pappu Can't Dance"
+    // read "Can’t" there and "Can't" everywhere else. Titles are set as
+    // written.
+    for (final platform in [TargetPlatform.android, TargetPlatform.iOS]) {
+      final s = buildJamTypeScale(
+        platform: platform,
+        color: JamColors.light.label,
+      );
+      for (final style in [s.largeTitle, s.title1, s.title2, s.title3]) {
+        expect(style.fontFamily, 'Manrope');
+        expect(style.fontFeatures, contains(const FontFeature.disable('calt')));
+      }
+    }
+  });
+
   test('the scale matches the spec table', () {
     final s = buildJamTypeScale(
       platform: TargetPlatform.iOS,
