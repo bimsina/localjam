@@ -208,9 +208,14 @@ class _LocalJamAppState extends State<LocalJamApp> {
       final go = await confirmLinkJoin(context, roomName: joinUriName(parsed));
       if (!go) return;
     }
+    // The root can go while a dialog or a prompt is up: a disposed session
+    // starts nothing, and there is no router left to push.
+    if (!mounted) return;
     // Permission prompts before the join, not through its spinner.
     await _session.prepareForSession();
+    if (!mounted) return;
     final joined = await _session.join(parsed, roomName: joinUriName(parsed));
+    if (!mounted) return;
     if (joined) {
       _router.push('/room');
     } else {
@@ -230,6 +235,8 @@ class _LocalJamAppState extends State<LocalJamApp> {
     _onboarding.removeListener(_links.readyChanged);
     _session.removeListener(_links.readyChanged);
     unawaited(_linkSub?.cancel());
+    // The app-level owner, not a room screen: this closes the jam itself
+    // (server, playback, foreground service) and drops any start in flight.
     _session.dispose();
     _settings.dispose();
     _onboarding.dispose();
