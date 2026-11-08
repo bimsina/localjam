@@ -39,6 +39,50 @@ Future<void> _pump(WidgetTester tester, {bool dark = false}) {
 }
 
 void main() {
+  testWidgets('songs scanned while the sheet is open appear when the app '
+      'comes back, keeping the selection', (tester) async {
+    var reads = 0;
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: jamLightTheme(),
+        home: Scaffold(
+          body: JamLibraryPicker(
+            tracks: _tracks,
+            reload: () async {
+              reads++;
+              return [
+                ..._tracks,
+                const JamLibraryTrack(
+                  id: 3,
+                  title: 'Pappu Can\'t Dance',
+                  sizeBytes: 1,
+                  contentUri: 'content://media/3',
+                ),
+              ];
+            },
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('Low Tide'));
+    await tester.pump();
+    expect(find.text(LibrarySheetStrings.selectedCount(1)), findsOneWidget);
+
+    // Off to the Files app to copy a song over, and back.
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await tester.pumpAndSettle();
+
+    expect(reads, 1);
+    expect(find.text('Pappu Can\'t Dance'), findsOneWidget);
+    expect(find.text(LibrarySheetStrings.available(3)), findsOneWidget);
+    expect(find.text(LibrarySheetStrings.selectedCount(1)), findsOneWidget);
+  });
+
   testWidgets('rows carry title, artist and length; the count is sentence '
       'case; selecting retitles the sheet', (tester) async {
     await _pump(tester);

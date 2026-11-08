@@ -361,7 +361,11 @@ Future<List<JamPickedTrack>> pickLibraryTrackDetails(
   // The shared sheet chrome, not a bare `showModalBottomSheet`: the picker
   // is the same kind of surface as Queue and People and should not arrive
   // with a different header, radius and handle.
-  final chosen = await showJamLibrarySheet(context, tracks);
+  final chosen = await showJamLibrarySheet(
+    context,
+    tracks,
+    reload: JamMediaLibrary.queryAudio,
+  );
   // Closing the sheet hands focus back to whatever had it — on host setup
   // that is the room-name field, and the keyboard shoots up over the result.
   _dismissKeyboard();
