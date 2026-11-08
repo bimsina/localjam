@@ -368,13 +368,18 @@ class _RoomPageState extends State<RoomPage> {
         children: [
           ClipRRect(
             borderRadius: BorderRadius.circular(3),
+            // Full width and tight, so the fill is sized against the track
+            // (a loose Stack sized itself to the fill: a centred dot).
             child: SizedBox(
+              width: double.infinity,
               height: 6,
               child: Stack(
                 children: [
                   Positioned.fill(child: ColoredBox(color: c.fill)),
                   FractionallySizedBox(
                     widthFactor: fraction,
+                    heightFactor: 1,
+                    alignment: Alignment.centerLeft,
                     child: ColoredBox(color: c.secondaryLabel),
                   ),
                 ],
