@@ -341,12 +341,14 @@ void main() {
     expect(artwork, isNotNull);
     expect(artwork, isNotEmpty);
 
-    // An untagged file yields an item with null tags and no artwork.
+    // An untagged file yields an item with no artist, album or artwork,
+    // titled after its name without the extension (§6.1).
     final untagged = await engine.addMediaFile(
       await writeTempMedia(makeMediaBytes(4096)),
       name: 'Untitled.mp3',
     );
-    expect(untagged.title, isNull);
+    expect(untagged.title, 'Untitled');
+    expect(untagged.artist, isNull);
     expect(untagged.artworkId, isNull);
     // The filename fallback drops the extension but keeps `name` intact.
     expect(untagged.name, 'Untitled.mp3');

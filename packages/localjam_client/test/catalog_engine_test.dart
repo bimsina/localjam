@@ -547,6 +547,48 @@ void main() {
       );
     });
 
+    test('cleans up library metadata the way the host reads tags', () {
+      final multi = JamMediaLibraryCatalogSource.entryFor(
+        track(
+          1,
+          title: 'Kun Faya Kun',
+          artist: 'A.R. Rahman/Javed Ali/Mohit Chauhan',
+          album: 'Rockstar',
+          path: '/storage/emulated/0/Music/Rockstar/04 Kun Faya Kun.mp3',
+        ),
+      );
+      expect(multi.artist, 'A.R. Rahman, Javed Ali, Mohit Chauhan');
+      expect(
+        multi.album,
+        'Rockstar',
+        reason: 'a tagged album that names its folder is still the album',
+      );
+
+      // An untagged file: MediaStore titles it after the file and albums it
+      // after the folder.
+      final untagged = JamMediaLibraryCatalogSource.entryFor(
+        track(
+          2,
+          title: 'voice memo.mp3',
+          artist: '<unknown>',
+          album: 'Music',
+          path: '/storage/emulated/0/Music/voice memo.mp3',
+        ),
+      );
+      expect(untagged.title, 'voice memo');
+      expect(untagged.artist, isNull);
+      expect(untagged.album, isNull, reason: "the folder's name, not an album");
+
+      final blank = JamMediaLibraryCatalogSource.entryFor(
+        track(3, title: '  ', path: '/sdcard/Music/Night Drive.flac'),
+      );
+      expect(blank.title, 'Night Drive');
+      expect(
+        JamMediaLibraryCatalogSource.entryFor(track(4, title: 'Vol. 2')).title,
+        'Vol. 2',
+      );
+    });
+
     test('lists through the query and opens through resolve, once per '
         'song', () async {
       final dir = await makeTempDir();

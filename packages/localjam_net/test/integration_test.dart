@@ -1024,6 +1024,31 @@ void main() {
       expect(item.durationUs, 1_234_567);
     });
 
+    test('an untagged audio file is titled after its name, without the '
+        'extension', () async {
+      final host = await startHost();
+      final uploader = await joinGuest(host);
+      final uploaded = await uploader.uploadMedia(
+        await makeUntaggedMp3(name: 'voice memo.mp3'),
+        kind: MediaKind.audio,
+        mime: 'audio/mpeg',
+      );
+      expect(uploaded.name, 'voice memo.mp3');
+      expect(uploaded.title, 'voice memo');
+
+      final described = await JamHostServer.describeFile(
+        await makeUntaggedMp3(name: 'Night Drive.flac'),
+        kind: MediaKind.audio,
+      );
+      expect(described.title, 'Night Drive');
+      final tagged = await JamHostServer.describeFile(
+        await makeUntaggedMp3(name: 'x.mp3'),
+        kind: MediaKind.audio,
+        title: 'Tagged',
+      );
+      expect(tagged.title, 'Tagged');
+    });
+
     test('a non-audio upload skips tag extraction', () async {
       final host = await startHost();
       final uploader = await joinGuest(host);

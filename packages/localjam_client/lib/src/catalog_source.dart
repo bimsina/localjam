@@ -87,13 +87,39 @@ class JamMediaLibraryCatalogSource extends JamCatalogSource {
   /// The catalog entry for [track]: its library metadata, nothing read from
   /// the file. A MediaStore placeholder (`<unknown>`) or blank artist or
   /// album reads as absent, as do a zero duration or size.
+  ///
+  /// Cleaned up the way the host's own tag reading is, so a song reads the
+  /// same browsed as queued: the artist through [normalizeArtistCredit]
+  /// ("A/B/C" → "A, B, C"); a title that is a filename (an untagged file —
+  /// MediaStore titles it after the file) loses its media extension
+  /// ([stripMediaExtension]), and a blank one falls back to the file's
+  /// name. An untagged file's album is MediaStore's own guess — the name of
+  /// the folder it sits in, "Music" — not the song's: an album equal to the
+  /// parent folder's name on a track with no artist reads as absent.
   static CatalogEntry entryFor(JamLibraryTrack track) {
     final durationMs = track.durationMs;
+    final path = track.path;
+    final segments = path == null
+        ? const <String>[]
+        : path.split('/').where((s) => s.isNotEmpty).toList();
+    final fileName = segments.isEmpty ? null : segments.last;
+    final folder = segments.length < 2 ? null : segments[segments.length - 2];
+    final artist = normalizeArtistCredit(_known(track.artist));
+    var album = _known(track.album);
+    if (artist == null &&
+        album != null &&
+        folder != null &&
+        album.toLowerCase() == folder.toLowerCase()) {
+      album = null;
+    }
+    final title = track.title.trim();
     return CatalogEntry(
       catalogId: catalogIdFor(track),
-      title: track.title,
-      artist: _known(track.artist),
-      album: _known(track.album),
+      title: stripMediaExtension(
+        title.isNotEmpty ? title : (fileName ?? track.title),
+      ),
+      artist: artist,
+      album: album,
       durationUs: durationMs != null && durationMs > 0
           ? durationMs * 1000
           : null,

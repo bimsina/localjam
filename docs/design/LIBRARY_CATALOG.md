@@ -227,7 +227,15 @@ what is open in, the brief above. PROTOCOL.md §6.6 is written to match.
   a no-op and does not set it); removed content put back by a catalog add
   carries the id, and put back by an upload carries none.
 - **`hasArtwork` is tri-state** (`bool?`): `false` = no cover (never asked
-  for), absent = unknown until asked.
+  for), absent = unknown until asked. The Android library cannot say
+  (MediaStore has no art column), so the host fills it in on `GET /catalog`
+  once it has read a song's file — a cover request or an add — without a
+  new rev (2026-11 E2E fix).
+- **Library metadata is cleaned like tags** (2026-11 E2E fix): the artist
+  through `normalizeArtistCredit` (`A/B/C` → `A, B, C`), a filename title
+  without its extension, and an untagged file's MediaStore album — the
+  parent folder's name, e.g. "Music" — dropped when the track has no artist
+  and the album equals that folder name.
 - **Extra engine surface** the client layer can use: core `CatalogListing`
   (the `/catalog` body); `JamHostServer.catalog`, `catalogEntries`,
   `addFromCatalog(catalogId)` (the host's own add, credited `"host"`,
