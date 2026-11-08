@@ -107,6 +107,30 @@ void main() {
     expect(log, [isMethodCall('positionUs', arguments: null)]);
   });
 
+  test('positionSample asks for the sample instant and decodes both '
+      'answers', () async {
+    // Android: the position with the native instant it was computed for.
+    mockChannel({
+      'positionUs': {'positionUs': 7500000, 'nativeTimeUs': 123456789},
+    });
+    final audio = LocaljamAudio();
+    final timed = await audio.positionSample();
+    expect(timed?.positionUs, 7500000);
+    expect(timed?.nativeTimeUs, 123456789);
+    expect(log, [
+      isMethodCall('positionUs', arguments: {'withTime': true}),
+    ]);
+
+    // Platforms that ignore the argument: a bare position.
+    mockChannel({'positionUs': 7500000});
+    final bare = await audio.positionSample();
+    expect(bare?.positionUs, 7500000);
+    expect(bare?.nativeTimeUs, isNull);
+
+    mockChannel({'positionUs': null});
+    expect(await audio.positionSample(), isNull);
+  });
+
   test('outputLatencyUs maps a value and coerces null to 0', () async {
     mockChannel({'outputLatencyUs': 14000});
     final audio = LocaljamAudio();

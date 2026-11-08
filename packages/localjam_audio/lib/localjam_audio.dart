@@ -30,6 +30,26 @@ class NativeClockCalibration {
   final int rttUs;
 }
 
+/// One [LocaljamAudio.positionSample]: the heard position and, where the
+/// platform reports it, the native-clock instant it was computed for.
+class LocaljamPositionSample {
+  const LocaljamPositionSample({required this.positionUs, this.nativeTimeUs});
+
+  /// The heard media position (µs), as [LocaljamAudio.positionUs].
+  final int positionUs;
+
+  /// The native-clock instant (µs, [LocaljamAudio.nativeNowUs]'s clock)
+  /// [positionUs] was computed for. Null when the platform answers a bare
+  /// position (iOS, macOS, desktop, web today): the caller can only take it
+  /// as "about now".
+  final int? nativeTimeUs;
+
+  @override
+  String toString() =>
+      'LocaljamPositionSample($positionUs'
+      '${nativeTimeUs == null ? '' : ' @ $nativeTimeUs'})';
+}
+
 /// What a [LocaljamAudioEvent] reports.
 enum LocaljamAudioEventKind {
   /// The audio output route changed (headphones plugged/unplugged, Bluetooth
@@ -381,19 +401,55 @@ class LocaljamAudio {
   /// node-time mapping at now − [outputLatencyUs] (as read at [playAt]).
   Future<int?> positionUs() => _ch.invokeMethod<int>('positionUs');
 
+  /// [positionUs] together with the native instant it was computed for, so
+  /// a drift check can compare it with where the room was at THAT instant
+  /// rather than when the reply arrived — a busy platform thread delays the
+  /// reply by milliseconds (more under load), which a bare position reads
+  /// as the player running behind. Null when nothing is playing or
+  /// scheduled.
+  ///
+  /// Channel: `positionUs {withTime: true}`. Android answers
+  /// `{positionUs, nativeTimeUs}`; platforms that ignore the argument answer
+  /// a bare position, which comes back with a null
+  /// [LocaljamPositionSample.nativeTimeUs].
+  Future<LocaljamPositionSample?> positionSample() async {
+    final raw = await _ch.invokeMethod<Object?>('positionUs', {
+      'withTime': true,
+    });
+    if (raw is int) return LocaljamPositionSample(positionUs: raw);
+    if (raw is Map) {
+      final positionUs = raw['positionUs'];
+      final nativeTimeUs = raw['nativeTimeUs'];
+      if (positionUs is int) {
+        return LocaljamPositionSample(
+          positionUs: positionUs,
+          nativeTimeUs: nativeTimeUs is int ? nativeTimeUs : null,
+        );
+      }
+    }
+    return null;
+  }
+
   /// Adjusts playback rate without re-anchoring (drift slew, §5.4).
   /// Implementations must keep pitch unaffected for small changes
   /// (|rate - 1| <= 0.01) if the platform allows. [rate] must lie in
-  /// [1/32, 32] (`PlatformException(bad_args)` otherwise). Android may keep
-  /// the previous rate when its output cannot play [rate] (see [playAt]):
-  /// `bad_args`, or silently on a low-latency track that cannot
-  /// time-stretch. [positionUs] stays true either way, so drift correction
-  /// sees the miss and can re-anchor with [playAt] instead.
+  /// [1/32, 32] (`PlatformException(bad_args)` otherwise). Android keeps
+  /// the previous rate when the playing track cannot play [rate] and says
+  /// so — never success: `bad_args` when its output cannot play that rate
+  /// at all (see [playAt]), `rate_needs_reanchor` when only this track
+  /// cannot (a low-latency track has no time-stretcher; the next [playAt]
+  /// uses a track that has). [positionUs] stays true either way; re-anchor
+  /// with [playAt] to correct instead.
   Future<void> setRate(double rate) =>
       _ch.invokeMethod<void>('setRate', {'rate': rate});
 
-  /// The platform-reported output latency (µs) of the current route
-  /// (§7 calibration starting point). 0 when unknown.
+  /// How long after a [playAt] anchor's `nativeTimeUs` its frame is HEARD
+  /// on the current route (µs): what callers subtract from anchors (§7).
+  /// iOS/macOS/web schedule the frame due at `nativeTimeUs` and report the
+  /// route's output latency; Android schedules the frame presented at
+  /// `nativeTimeUs` (AudioTimestamp includes the pipeline latency) and so
+  /// always reports 0 — its device-claimed latency is diagnostic only
+  /// ([debugLatencyInfo]). 0 when unknown.
   Future<int> outputLatencyUs() async =>
       (await _ch.invokeMethod<int>('outputLatencyUs')) ?? 0;
 
@@ -412,6 +468,9 @@ class LocaljamAudio {
 
   /// iOS/macOS debug builds only: every latency quantity the platform
   /// reports for the current output (µs and frames), for measurement.
+  /// Android (any build): `schedulingLatencyUs` (what [outputLatencyUs]
+  /// reports, 0) and `propertyOutputLatencyUs` (the device's hidden
+  /// AudioManager latency property, 0 when absent).
   @visibleForTesting
   Future<Map<String, Object?>> debugLatencyInfo() async =>
       (await _ch.invokeMapMethod<String, Object?>('debugLatencyInfo')) ??

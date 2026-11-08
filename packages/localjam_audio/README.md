@@ -17,7 +17,8 @@ identically on every platform, the web included (see [Web](#web)).
 | `probeDurationUs(path)` → `int?` µs | `probeDuration {path}` | what `load` would report; null if `load` would refuse the file. Touches no engine, file, play state or session — safe while playing and concurrently; answered off the UI thread |
 | `playAt(nativeTimeUs, positionUs, rate)` | `playAt {…}` | rate ∈ [1/32, 32]; anchor ≤ 1 h ahead. If the OS refuses audio (call in progress) it completes without playing and emits `interruptionBegan` — on every refused call. See [Platform differences](#platform-differences) |
 | `pause()` / `stop()` / `positionUs()` / `setRate(rate)` | same names | `positionUs` is null unless playing/scheduled |
-| `outputLatencyUs()` | `outputLatencyUs` | 0 when unknown |
+| `positionSample()` → `LocaljamPositionSample?` | `positionUs {withTime: true}` | the heard position plus the native instant it was computed for (Android answers `{positionUs, nativeTimeUs}`; other platforms ignore the argument and answer a bare position, `nativeTimeUs` null) |
+| `outputLatencyUs()` | `outputLatencyUs` | how long after `playAt`'s `nativeTimeUs` the frame is heard — what callers subtract from anchors. Android: always 0 (it schedules presented frames; see [Latency contract](#latency-contract)). 0 when unknown |
 | `currentRouteId()` → `String?` | `currentRouteId` | opaque, stable per output device (key per-route calibration with it); answered off the UI thread |
 | `dispose()` | `dispose` | |
 
@@ -26,7 +27,9 @@ Error codes (`PlatformException.code`): `bad_args`, `no_file`, `load_failed`,
 engine / output device would not start), `engine_not_running` (Apple: no render
 cycle within 1 s, or the engine stopped mid-schedule), `engine_error` (Apple:
 AVFoundation raised; the engine is rebuilt on the next call), `internal`
-(desktop: out of memory or threads), `disposed`. A failed `playAt` leaves
+(desktop: out of memory or threads), `disposed`, `rate_needs_reanchor`
+(Android `setRate`: the playing low-latency track cannot time-stretch; a
+`playAt` can). A failed `playAt` leaves
 nothing scheduled; the next one starts from scratch.
 
 ### Untrusted files
@@ -60,7 +63,7 @@ ignored, missing keys take defaults, so either side may be newer.
 | --- | --- | --- | --- | --- |
 | `playAt` refused by the OS (completes, no sound, `interruptionBegan` on every refused call) | session activation refused (call, higher-priority session) | never | audio focus refused, or a call owns the audio path | never |
 | `playAt` within ~2 s of an unplug | — | — | held the same way, re-emitting `routeChanged{oldDeviceUnavailable: true}` (the reroute to the speaker is still pending) | — |
-| In-range rate refused (`bad_args`) | never | never | when the output cannot time-stretch it (API 36 emulator: 0.1–4 plays, ≤ 1/16 and ≥ 8 do not); `setRate` then keeps the old rate — silently on a low-latency track — and `positionUs` stays true | never |
+| In-range rate refused (`bad_args`) | never | never | when the output cannot time-stretch it (API 36 emulator: 0.1–4 plays, ≤ 1/16 and ≥ 8 do not); `setRate` then keeps the old rate and answers `bad_args` — or `rate_needs_reanchor` when only the playing low-latency track cannot time-stretch (the next `playAt` uses a normal track that can) — and `positionUs` stays true | never |
 | Rate change | time-stretch, pitch kept | same | `PlaybackParams` speed, pitch kept | resample, pitch shifts (~9 cents at ±0.5 %) |
 | `engineRestarted` | engine reconfigured; held 200 ms, dropped for an unplug | same | AudioTrack died | never |
 | `playbackError` codes | `engine_start_failed` | `engine_start_failed` | `decode_failed`, `writer_failed` | `decode_failed` |
@@ -86,6 +89,20 @@ Objective-C catcher (`localjam_audio_objc` target), and an engine that raised is
 rebuilt on the next `playAt`, so a bad file or an unlucky route change surfaces
 as an error, never a crash. The plugin's `PrivacyInfo.xcprivacy` declares
 `mach_absolute_time` (System boot time, reason `35F9.1`).
+
+### Latency contract
+
+On every platform `outputLatencyUs()` is how long after a `playAt` anchor's
+`nativeTimeUs` its frame is heard, and `positionUs` is the position heard now:
+a caller that schedules anchors `outputLatencyUs()` early reads the room's
+position back when the schedule landed on time. iOS, macOS and web schedule
+the frame *due* at `nativeTimeUs` and report the route's latency. Android
+primes against a mature `AudioTimestamp` — the frame *presented* at an
+instant, pipeline latency included — so its frame is heard at `nativeTimeUs`
+and it reports **0**. The device's hidden `OUTPUT_LATENCY` AudioManager
+property is read for diagnostics only (`debugLatencyInfo`); reporting it
+made callers subtract it on top, so every Android schedule was heard that
+much early (`OutputLatencyTest` pins this with a 40 ms device latency).
 
 Apple `positionUs` is the position HEARD now, as on Android and web: the
 player's node-time mapping (the one `play(at:)` schedules through) gives the
