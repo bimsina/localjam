@@ -182,6 +182,14 @@ class _GuestConn {
   /// credited to its device (§5.6).
   String? uploadKey;
 
+  /// This peer's `request` budget (§9.1), set when it joins; null when the
+  /// host sets no rate.
+  RateBucket? requests;
+
+  /// How many requests over [requests] this peer may send before it is
+  /// taken for a flood rather than an eager thumb (§9.1).
+  RateBucket? throttled;
+
   /// Monotonic µs of the last received frame, for liveness (§3.3).
   int lastFrameUs;
 
@@ -268,6 +276,7 @@ class JamHostServer {
     this.maxControlFrameBytes = 256 * 1024,
     this.maxInboundBytesPerSecond = defaultMaxInboundBytesPerSecond,
     this.maxInboundFramesPerSecond = defaultMaxInboundFramesPerSecond,
+    this.maxRequestsPerSecond = defaultMaxRequestsPerSecond,
     this.maxPreHelloFrameBytes = 16 * 1024,
     this.helloTimeout = const Duration(seconds: 10),
     this.restrictToLanRemotes = true,
@@ -305,6 +314,7 @@ class JamHostServer {
   static const int defaultMaxPendingCatalogAdds = 128;
   static const int defaultMaxInboundBytesPerSecond = 256 * 1024;
   static const int defaultMaxInboundFramesPerSecond = 100;
+  static const int defaultMaxRequestsPerSecond = 10;
 
   /// One device's share of [defaultMaxPendingCatalogAdds]: a full
   /// [defaultMaxCatalogIdsPerRequest] selection fits whole.
@@ -420,6 +430,19 @@ class JamHostServer {
   /// parse, and a WebSocket ping a pong the host must queue — that the
   /// byte rate alone would let through. Null disables it.
   final int? maxInboundFramesPerSecond;
+
+  /// The average rate at which one joined peer's `request`s are acted on
+  /// (§5.2, §9.1), with bursts of three seconds' worth (30 at the default
+  /// of 10/s). A request applies a change and usually broadcasts the result
+  /// to every peer — a reorder sends the whole playlist — so this is what
+  /// stops one guest turning a loop of small frames into the host's whole
+  /// uplink. A request over the rate is not acted on and is answered
+  /// `error { code: "busy" }` (never fatal); a peer that keeps going —
+  /// six seconds' worth of requests over the rate, net of the same refill —
+  /// is taken for a flood and closed with `policyViolation`. Honest bursts
+  /// (a run of skips, dragging the queue around, scrubbing) fit the burst.
+  /// Null disables it.
+  final int? maxRequestsPerSecond;
 
   /// Upper bound on what a control socket may send before it completes the
   /// §3.1 handshake (default 16 KB): the cap on one pre-hello frame, and —
@@ -3272,7 +3295,7 @@ class JamHostServer {
           ClockPongMessage(t0: t0, t1: receivedUs, t2: _nowUs()),
         );
       case RequestMessage():
-        _onRequest(conn, message);
+        if (_requestWithinRate(conn)) _onRequest(conn, message);
       case MediaStatusMessage():
         _onMediaStatus(conn, message);
       case HelloMessage():
@@ -3280,6 +3303,29 @@ class JamHostServer {
       default:
         break; // Unknown/unexpected types are ignored (§2).
     }
+  }
+
+  /// Whether [conn] may have one more request acted on now (§9.1, see
+  /// [maxRequestsPerSecond]). A request over the rate is answered `busy`;
+  /// one over the rate after a run of them closes the socket.
+  bool _requestWithinRate(_GuestConn conn) {
+    final requests = conn.requests;
+    if (requests == null || requests.take()) return true;
+    if (!(conn.throttled?.take() ?? true)) {
+      unawaited(
+        conn.ws.close(WebSocketStatus.policyViolation).catchError((_) {}),
+      );
+      _dropConn(conn);
+      return false;
+    }
+    _sendTo(
+      conn.ws,
+      const ErrorMessage(
+        code: ErrorCode.busy,
+        message: 'too many requests: try again in a moment',
+      ),
+    );
+    return false;
   }
 
   /// Whether [data] is larger than [cap] bytes on the wire.
@@ -3431,6 +3477,17 @@ class JamHostServer {
       bytesPerSecond: maxInboundBytesPerSecond,
       framesPerSecond: maxInboundFramesPerSecond,
     );
+    final requestRate = maxRequestsPerSecond;
+    if (requestRate != null) {
+      conn.requests = RateBucket(
+        perSecond: requestRate,
+        capacity: requestRate * 3,
+      );
+      conn.throttled = RateBucket(
+        perSecond: requestRate,
+        capacity: requestRate * 6,
+      );
+    }
     _peers[peerId] = conn;
     _session.upsertPeer(peerId);
 

@@ -1036,6 +1036,71 @@ void main() {
       expect(host.peers, hasLength(1));
     });
   });
+
+  group('a joined peer\'s requests are rate-limited (§9.1)', () {
+    /// A raw `request` frame for [action].
+    Uint8List requestFrame(String action, int seq) => wsTextFrame(
+      jsonEncode({
+        'v': 1,
+        'type': 'request',
+        'seq': seq,
+        'payload': {'action': action},
+      }),
+    );
+
+    int busyCount(RawConn conn) =>
+        RegExp('"code":"busy"').allMatches(conn.text).length;
+
+    test('a burst within the allowance is all acted on; past it, requests '
+        'are answered busy and the peer stays', () async {
+      final host = await startHost(maxRequestsPerSecond: 10);
+      final conn = await rawJoined(host);
+      // 30 at once is the allowance (three seconds' worth): none is busy.
+      final burst = BytesBuilder();
+      for (var i = 0; i < 30; i++) {
+        burst.add(requestFrame(i.isEven ? 'pause' : 'play', i + 1));
+      }
+      await conn.send(burst.takeBytes());
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+      expect(busyCount(conn), 0);
+      // Ten more, at once: over the allowance, each answered busy (one may
+      // have refilled while they were sent).
+      final over = BytesBuilder();
+      for (var i = 0; i < 10; i++) {
+        over.add(requestFrame('pause', 100 + i));
+      }
+      await conn.send(over.takeBytes());
+      await waitFor(() => busyCount(conn) >= 8, reason: 'busy answers');
+      expect(busyCount(conn), inInclusiveRange(8, 10));
+      // Not a flood: the peer is still here, and after a pause its
+      // requests are acted on again.
+      await Future<void>.delayed(const Duration(milliseconds: 500));
+      final before = busyCount(conn);
+      await conn.send(requestFrame('play', 200));
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+      expect(busyCount(conn), before);
+      expect(host.peers, hasLength(1));
+      expect(conn.closed.isCompleted, isFalse);
+    });
+
+    test('a sustained flood is closed', () async {
+      final host = await startHost(maxRequestsPerSecond: 10);
+      final conn = await rawJoined(host);
+      final flood = BytesBuilder();
+      for (var i = 0; i < 200; i++) {
+        flood.add(requestFrame('next', i + 1));
+      }
+      try {
+        await conn.send(flood.takeBytes());
+      } catch (_) {}
+      await conn.closed.future.timeout(const Duration(seconds: 4));
+      expect(closeCodeOf(conn), WebSocketStatus.policyViolation);
+      expect(host.peers, isEmpty);
+      // The 30 allowed and 60 answered busy, at most: nothing past that
+      // was acted on or answered.
+      expect(busyCount(conn), inInclusiveRange(55, 62));
+    });
+  });
 }
 
 /// A raw control socket that has said `hello` and been welcomed.
