@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Platform (Java/Kotlin) networking: HTTPS only, system CAs only.
+
+     LocalJam's own traffic is plain HTTP and WebSocket on the local network, by
+     decision (PROTOCOL.md §9): the host's server listens on a LAN address and
+     guests connect to it, with no internet involved. All of that runs through
+     Dart's dart:io sockets, which this file does not govern (the Flutter
+     embedding does not hand Android's cleartext policy to Dart). Android cannot
+     scope cleartext to private address ranges (domain-config takes host names,
+     not CIDRs), so rather than open cleartext to every host for every library,
+     this keeps it shut for the platform stack: no plugin or SDK in the APK can
+     speak cleartext HTTP, and the jam, which never touches that stack, is
+     unaffected. -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>
