@@ -559,6 +559,73 @@ void main() {
     await tester.runAsync(host.leave);
   });
 
+  // The host's queue moves under a finger: the track auto-advances, or a
+  // song leaves, while a row is held. The drag is dropped rather than
+  // replayed against rows that are no longer where they were — and nothing
+  // throws (an uncaught null check once did, in a release build).
+  for (final change in ['advance', 'remove', 'remove-pending']) {
+    testWidgets('a drag survives the queue changing under it ($change)', (
+      tester,
+    ) async {
+      final host = testSession();
+      await tester.runAsync(() async {
+        await host.startHost(
+          sessionName: 'Van Jam',
+          discoverable: false,
+          paths: makeTestTracks(count: 5),
+        );
+        await host.hostImport!.done;
+        host.hostEngine!.pause();
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+      });
+      await tester.pump();
+      final engine = host.hostEngine!;
+
+      await _pump(tester, host, QueuePanel(engine: engine));
+      await tester.pump();
+
+      // The grip on the last Up Next row.
+      final grip = find.byIcon(CupertinoIcons.line_horizontal_3).last;
+      final drag = await tester.startGesture(tester.getCenter(grip));
+      if (change != 'remove-pending') {
+        await tester.pump(const Duration(milliseconds: 200));
+        await drag.moveBy(const Offset(0, -kJamTrackRowHeight * 1.5));
+        await tester.pump();
+      }
+
+      final before = [for (final item in engine.playlist) item.mediaId];
+      await tester.runAsync(() async {
+        if (change == 'advance') {
+          engine.next();
+        } else {
+          await engine.queueRemove(engine.playlist.last.mediaId);
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+      });
+      await tester.pump();
+
+      if (change == 'remove-pending') {
+        await drag.moveBy(const Offset(0, -kJamTrackRowHeight * 1.5));
+        await tester.pump();
+      }
+      await drag.moveBy(const Offset(0, -kJamTrackRowHeight));
+      await tester.pump();
+      await drag.up();
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+
+      // The drop was not replayed against the list that replaced it.
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 100)),
+      );
+      final after = [for (final item in engine.playlist) item.mediaId];
+      if (change == 'advance') expect(after, before);
+      expect(find.byType(JamTrackRow), findsWidgets);
+
+      await tester.runAsync(host.leave);
+    });
+  }
+
   testWidgets('a removal the room refuses springs back instead of vanishing '
       'from this phone only', (tester) async {
     // The host's phone is asleep (§3.5): the request cannot go anywhere, so
