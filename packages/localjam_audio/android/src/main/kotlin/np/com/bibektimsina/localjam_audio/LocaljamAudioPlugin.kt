@@ -283,12 +283,13 @@ internal class AudioTrackGate(private val track: AudioTrack) {
  * writer failure is `playbackError{writer_failed}`.
  *
  * ## outputLatencyUs
- * Android has no public output-latency API; we best-effort the hidden
- * "android.media.property.OUTPUT_LATENCY" AudioManager property (ms) that
- * some devices honor, else 0. This is fine: getTimestamp-based scheduling
+ * Always 0 ([OutputLatency.SCHEDULING_US]): getTimestamp-based scheduling
  * already includes the full pipeline latency (the HAL timestamps the frame
- * *presented at the output*), so this value is only the §7 calibration
- * starting point for the UI nudge.
+ * *presented at the output*), so the frame scheduled for nativeTimeUs is
+ * heard at nativeTimeUs — and `outputLatencyUs` is, on every platform, how
+ * much later than nativeTimeUs it is heard (Dart subtracts it from anchors).
+ * The hidden "android.media.property.OUTPUT_LATENCY" AudioManager property
+ * some devices honor is read for diagnostics only (`debugLatencyInfo`).
  *
  * ## Interruptions, unplugs and routes (localjam_audio contract items 2–5)
  * Native output is only ever STOPPED by the OS-driven paths — audio focus
@@ -797,9 +798,10 @@ class LocaljamAudioPlugin :
                     "playAt" -> handlePlayAt(call, result)
                     "pause" -> handlePause(result)
                     "stop" -> handleStop(result)
-                    "positionUs" -> handlePositionUs(result)
+                    "positionUs" -> handlePositionUs(call, result)
                     "setRate" -> handleSetRate(call, result)
-                    "outputLatencyUs" -> replySuccess(result, currentOutputLatencyUs())
+                    "outputLatencyUs" -> replySuccess(result, OutputLatency.SCHEDULING_US)
+                    "debugLatencyInfo" -> replySuccess(result, latencyInfo())
                     "currentRouteId" -> replySuccess(result, currentRoute()?.id)
                     "dispose" -> handleDispose(result)
                     else -> mainHandler.post { result.notImplemented() }
@@ -966,7 +968,7 @@ class LocaljamAudioPlugin :
             // ACTION_AUDIO_BECOMING_NOISY just fired: the output is about to
             // vanish and media would reroute to the speaker within ~1 s.
             Log.i(TAG, "playAt held back: the output device is going away")
-            emit(AudioEvents.routeChanged(currentOutputLatencyUs(), hold.routeId, true))
+            emit(AudioEvents.routeChanged(OutputLatency.SCHEDULING_US, hold.routeId, true))
             replySuccess(result, null)
             return
         }
@@ -1094,13 +1096,25 @@ class LocaljamAudioPlugin :
         replySuccess(result, null)
     }
 
-    private fun handlePositionUs(result: Result) {
+    /**
+     * `positionUs {withTime?}`: the heard position, or null when nothing is
+     * playing or scheduled. With `withTime: true` the answer is
+     * `{positionUs, nativeTimeUs}` — the native instant the position was
+     * computed for — so the caller compares it with the room's position at
+     * that instant rather than after the reply's trip back (Dart side:
+     * `LocaljamAudio.positionSample`).
+     */
+    private fun handlePositionUs(call: MethodCall, result: Result) {
+        val withTime = call.argument<Boolean>("withTime") == true
         // Contract: null when nothing is playing or scheduled (paused/finished
         // included — matching iOS's `guard state == .playing`).
+        var sampledNs = 0L
         val value: Long? = synchronized(lock) {
             val sched = schedule
             if (state != State.PLAYING || sched == null) return@synchronized null
+            // The instant the position below is computed for.
             val nowNs = System.nanoTime()
+            sampledNs = nowNs
             if (!sched.refValid) {
                 // Still priming: the anchor formula itself (identical line,
                 // just not yet expressed in frames). Extrapolates below the
@@ -1127,7 +1141,11 @@ class LocaljamAudioPlugin :
                 ((fNow - sched.silenceFrames) * 1e6 / sched.sampleRate).roundToLong()
             clampToDuration(us)
         }
-        replySuccess(result, value)
+        if (withTime && value != null) {
+            replySuccess(result, mapOf("positionUs" to value, "nativeTimeUs" to sampledNs / 1000))
+        } else {
+            replySuccess(result, value)
+        }
     }
 
     private fun handleSetRate(call: MethodCall, result: Result) {
@@ -1141,25 +1159,30 @@ class LocaljamAudioPlugin :
             )
             return
         }
-        val refused: String? = synchronized(lock) {
+        val refused: Pair<String, String>? = synchronized(lock) {
             val sched = schedule ?: return@synchronized null
             val nowNs = System.nanoTime()
             // Gated: a released track is a no-op (null), never a throw.
             val applied = sched.useTrack { TrackSpeed.apply(it, rate) }
             if (applied == false) {
                 // The track refused the speed. The math stays on the rate the
-                // track REALLY plays, so positions stay true. A low-latency
-                // track cannot time-stretch on many devices: not the caller's
-                // fault — the drift check re-anchors if it must, and that
-                // re-anchor's track is created without low latency. A normal
-                // track refusing means this output cannot play the rate.
+                // track REALLY plays, so positions stay true — and the caller
+                // is told, never answered success: it would wait out a slew
+                // that never happens. A low-latency track cannot time-stretch
+                // on many devices: `rate_needs_reanchor`, a playAt fixes it
+                // (its track is created without low latency from now on). A
+                // normal track refusing means this output cannot play the
+                // rate: `bad_args`.
                 Log.w(TAG, "setRate($rate) refused by the track; still playing at ${sched.rate}")
-                if (sched.useTrack(::isLowLatencyTrack) == true) {
-                    lowLatencyRefusesSpeed = true
-                    null
-                } else {
-                    "setRate $rate is not supported by this audio output"
-                }
+                val lowLatency = sched.useTrack(::isLowLatencyTrack) == true
+                if (lowLatency) lowLatencyRefusesSpeed = true
+                TrackSpeed.setRateRefusalCode(lowLatency) to
+                    if (lowLatency) {
+                        "setRate $rate refused by a low-latency track; re-anchor with playAt " +
+                            "(it uses a normal track that can)"
+                    } else {
+                        "setRate $rate is not supported by this audio output"
+                    }
             } else {
                 // Re-anchor the extrapolation mapping AT the instant of the
                 // rate change: frames before this instant were consumed at
@@ -1176,7 +1199,7 @@ class LocaljamAudioPlugin :
             }
         }
         if (refused != null) {
-            replyError(result, "bad_args", refused)
+            replyError(result, refused.first, refused.second)
         } else {
             replySuccess(result, null)
         }
@@ -2327,7 +2350,7 @@ class LocaljamAudioPlugin :
         // (the removal callback that follows reports the real new route).
         val going = currentRoute()
         val next = currentRoute(exclude = setOfNotNull(going?.id))
-        val latencyUs = currentOutputLatencyUs()
+        val latencyUs = OutputLatency.SCHEDULING_US
         val decision = synchronized(lock) {
             supervisor.onBecomingNoisy(System.nanoTime(), going?.id, next?.id)
                 .also { if (it.stopOutput) stopOutputLocked() }
@@ -2357,7 +2380,7 @@ class LocaljamAudioPlugin :
                         .map(::deviceOf)
                     if (sinks.isEmpty()) return@runGuarded
                     val route = routeAfterAddition(sinks.map { it.id }.toSet())
-                    val latencyUs = currentOutputLatencyUs()
+                    val latencyUs = OutputLatency.SCHEDULING_US
                     val decision = synchronized(lock) { supervisor.onDevicesAdded(route) }
                     emit(AudioEvents.routeChanged(latencyUs, decision.routeId, false))
                 }) { t -> Log.e(TAG, "route (added) callback failed", t) }
@@ -2370,7 +2393,7 @@ class LocaljamAudioPlugin :
                         .map(::deviceOf)
                     if (sinks.isEmpty()) return@runGuarded
                     val route = currentRoute(exclude = sinks.map { it.id }.toSet())
-                    val latencyUs = currentOutputLatencyUs()
+                    val latencyUs = OutputLatency.SCHEDULING_US
                     val decision = synchronized(lock) {
                         supervisor.onDevicesRemoved(System.nanoTime(), sinks, route)
                             .also { if (it.stopOutput) stopOutputLocked() } // FIRST
@@ -2461,18 +2484,14 @@ class LocaljamAudioPlugin :
         am.getDevices(AudioManager.GET_DEVICES_OUTPUTS).map(::deviceOf)
 
     /**
-     * Best-effort platform output latency (§7). Android has no public API;
-     * some devices honor this hidden AudioManager property (milliseconds).
-     * 0 = unknown, which is fine: getTimestamp-based scheduling already
-     * includes the full pipeline latency, so this is only the calibration
-     * starting point for the manual nudge.
+     * `debugLatencyInfo`: the latency the plugin reports for scheduling (0,
+     * see [OutputLatency]) next to the device's own claim — the hidden
+     * AudioManager property, diagnostic only.
      */
-    private fun currentOutputLatencyUs(): Long {
-        val ms = audioManager
-            ?.getProperty("android.media.property.OUTPUT_LATENCY")
-            ?.toDoubleOrNull()
-            ?: return 0
-        if (!ms.isFinite() || ms < 0) return 0
-        return (ms * 1000).roundToLong()
-    }
+    private fun latencyInfo(): Map<String, Any> = mapOf(
+        "schedulingLatencyUs" to OutputLatency.SCHEDULING_US,
+        "propertyOutputLatencyUs" to OutputLatency.propertyUs(
+            audioManager?.getProperty("android.media.property.OUTPUT_LATENCY")
+        ),
+    )
 }
