@@ -468,6 +468,11 @@ class _JamScrubberState extends State<JamScrubber> {
       builder: (context, constraints) {
         final width = constraints.maxWidth;
         return Semantics(
+          // Its own node: without one the slider's config merged up into
+          // its parent's, which also collected whatever text sat beside it
+          // ("Queue Jam Up next 2 songs Playback position" with the queue
+          // open).
+          container: true,
           slider: true,
           enabled: _interactive,
           label: JamTransportStrings.position,
