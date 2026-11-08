@@ -222,6 +222,13 @@ class _GuestConn {
   bool get joined => peerId != null;
 }
 
+/// The `error { busy }` message this host sends when a peer's requests go
+/// past its rate budget (§9.1), as opposed to a catalog add that did not fit
+/// (§6.6). The message is free text on the wire; clients built from this
+/// repo match it to choose their copy, anything else treats it as plain busy.
+const String kRateLimitedBusyMessage =
+    'too many requests: try again in a moment';
+
 /// The LocalJam host: one [HttpServer] serving both protocol planes
 /// (PROTOCOL.md §1), the join/presence/liveness lifecycle (§3), clock-sync
 /// pong duty (§4), request application via [HostSession] (§5.2), and media
@@ -3353,7 +3360,7 @@ class JamHostServer {
       conn,
       const ErrorMessage(
         code: ErrorCode.busy,
-        message: 'too many requests: try again in a moment',
+        message: kRateLimitedBusyMessage,
       ),
     );
     return false;

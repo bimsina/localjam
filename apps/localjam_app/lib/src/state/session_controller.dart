@@ -1616,6 +1616,9 @@ class JamSessionController extends ChangeNotifier {
       ErrorCode.sessionFull => 'The jam is full.',
       // Past the host's bounds (§6.6): too many adds waiting, or the queue
       // full. The ids that fit are still on their way.
+      // Or this guest's requests went past the host's rate budget (§9.1).
+      ErrorCode.busy when error.message == kRateLimitedBusyMessage =>
+        'Slow down a little — try that again in a moment.',
       ErrorCode.busy => JamCatalogStrings.busy,
       ErrorCode.versionUnsupported => kJamVersionMismatch,
       // A code from a newer host (§2 tolerant decoding): nothing specific
