@@ -9,9 +9,9 @@ permissions:
   contents: read
 
 env:
-  FLUTTER_VERSION: 3.47.5
+  FLUTTER_VERSION: 3.47.9
   # The Dart SDK that FLUTTER_VERSION ships, for the pure-Dart jobs.
-  DART_VERSION: 3.13.4
+  DART_VERSION: 3.13.7
 
 jobs:
   # Pure Dart: no Flutter SDK, no platform toolchain, so these are cheap.
@@ -34,13 +34,15 @@ jobs:
         working-directory: ${{ matrix.package }}
       - run: dart format --output=none --set-exit-if-changed .
         working-directory: ${{ matrix.package }}
-      - run: dart analyze
+      - run: dart analyze --fatal-infos
         working-directory: ${{ matrix.package }}
       - run: dart test
         working-directory: ${{ matrix.package }}
 
   # Flutter packages. macOS because localjam_audio and the app pull in Darwin
   # plugin code (including the vendored bonsoir_darwin) that only resolves here.
+  # Tests run on a clean checkout: no test-media/, and no built web player in
+  # apps/localjam_app/assets/web/ (only the committed .gitkeep placeholders).
   flutter:
     name: flutter · ${{ matrix.package }}
     runs-on: macos-latest
@@ -51,6 +53,7 @@ jobs:
           - packages/localjam_client
           - packages/localjam_audio
           - apps/localjam_app
+          - apps/localjam_web
     steps:
       - uses: actions/checkout@v4
       - uses: subosito/flutter-action@v2
@@ -62,14 +65,20 @@ jobs:
         working-directory: ${{ matrix.package }}
       - run: dart format --output=none --set-exit-if-changed .
         working-directory: ${{ matrix.package }}
-      - run: flutter analyze
+      - run: flutter analyze --fatal-infos
         working-directory: ${{ matrix.package }}
       - run: flutter test
         working-directory: ${{ matrix.package }}
 
-  build-apple:
-    name: build · android + ios simulator
-    runs-on: macos-latest
+  # The Android release: the browser player built and bundled first
+  # (tool/build_web_guest.sh; its output is git-ignored, so a clean checkout
+  # has only the .gitkeep placeholders), then the APK and the App Bundle.
+  # Without android/key.properties (git-ignored) Gradle signs the release
+  # with the debug key and says so; store signing happens on the release
+  # machine, so these artifacts are for testing only.
+  build-android:
+    name: build · android release
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -81,11 +90,38 @@ jobs:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: stable
           cache: true
+      - run: tool/build_web_guest.sh
+      # The script promises a build leaves the tree clean (output ignored,
+      # placeholders put back).
+      - name: The web player build left the checkout clean
+        run: test -z "$(git status --porcelain)" || { git status; exit 1; }
       - run: flutter pub get
         working-directory: apps/localjam_app
-      # Debug, unsigned: release signing needs android/key.properties, which is
-      # git-ignored (see apps/localjam_app/README.md).
-      - run: flutter build apk --debug
+      - run: flutter build apk --release
+        working-directory: apps/localjam_app
+      - run: flutter build appbundle --release
+        working-directory: apps/localjam_app
+      - uses: actions/upload-artifact@v4
+        with:
+          name: localjam-android-debug-signed
+          path: |
+            apps/localjam_app/build/app/outputs/flutter-apk/app-release.apk
+            apps/localjam_app/build/app/outputs/bundle/release/app-release.aab
+          retention-days: 7
+
+  # Built without the web player: the app must build (its rooms then serve
+  # the built-in "install the app" page) with only the placeholders.
+  build-ios:
+    name: build · ios simulator
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      - run: flutter pub get
         working-directory: apps/localjam_app
       - run: flutter build ios --simulator --no-codesign
         working-directory: apps/localjam_app
