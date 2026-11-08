@@ -61,7 +61,7 @@ class ListenerApp extends StatelessWidget {
   /// Wakes the page's audio; called synchronously inside the tap.
   final VoidCallback unlockAudio;
 
-  /// Navigates to [Uri] ("Open in App").
+  /// Navigates to [Uri] ("Open in app").
   final void Function(Uri uri) openUrl;
 
   static const String title = 'LocalJam';
@@ -144,7 +144,7 @@ class _ListenerShellState extends State<ListenerShell> {
     if (mounted) setState(() {});
   }
 
-  /// "Tap to Listen" / "Try Again": the tap is the user gesture the page's
+  /// "Tap to listen" / "Try again": the tap is the user gesture the page's
   /// audio needs, so the unlock happens first, before any await. A second
   /// tap while a join is under way does nothing: [_joining] is set here,
   /// synchronously, not after [_join]'s first await.
@@ -345,34 +345,34 @@ class _ListenerShellState extends State<ListenerShell> {
 
 /// The shell's copy (DESIGN_SPEC_V3 §3 copy rules, v3.1 §9 glossary).
 abstract final class Copy {
-  static const String tryAgain = 'Try Again';
-  static const String backToStart = 'Start Over';
-  static const String noInviteTitle = 'No Invite in This Link';
+  static const String tryAgain = 'Try again';
+  static const String backToStart = 'Start over';
+  static const String noInviteTitle = 'No invite in this link';
   static const String noInviteMessage =
       "Scan the jam's code again, or ask the host to share the link.";
-  static const String unreachableTitle = "Couldn't Reach the Jam";
+  static const String unreachableTitle = "Couldn't reach the jam";
   static const String unreachableMessage =
       "Make sure you're on the same Wi-Fi as the host, then try again.";
-  static const String badTokenTitle = 'This Jam Has Ended';
+  static const String badTokenTitle = 'This jam has ended';
   static const String badTokenMessage =
       'The link is from a jam that is over. Ask the host for the new code.';
-  static const String fullTitle = 'This Jam Is Full';
+  static const String fullTitle = 'This jam is full';
   static const String fullMessage = 'Try again when someone leaves.';
-  static const String versionTitle = "Can't Join This Jam";
+  static const String versionTitle = "Can't join this jam";
   static const String versionMessage =
       "The host's LocalJam is a different version. Ask them to update it.";
-  static const String kickedTitle = 'You Were Removed';
+  static const String kickedTitle = 'You were removed';
   static const String kickedMessage = 'The host removed you from this jam.';
-  static const String refusedTitle = "Couldn't Join";
+  static const String refusedTitle = "Couldn't join";
   static const String refusedMessage = "The host's jam didn't let you in.";
-  static const String endedTitle = 'The Jam Has Ended';
+  static const String endedTitle = 'The jam has ended';
   static const String endedMessage =
       'The host ended the jam. Thanks for '
       'listening.';
-  static const String stoppedTitle = 'Listening Stopped';
+  static const String stoppedTitle = 'Listening stopped';
   static const String stoppedMessage =
       'This page lost the jam. Start over to join it again.';
-  static const String hostGoneTitle = 'The Host Disappeared';
+  static const String hostGoneTitle = 'The host disappeared';
   static const String hostGoneMessage =
       "Their phone may have left the Wi-Fi or run out of battery.";
 }

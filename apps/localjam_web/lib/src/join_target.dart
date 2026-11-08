@@ -7,7 +7,7 @@
 /// a browser can only talk to the origin that served it — a `fetch` with a
 /// bearer token to another address is a cross-origin request the host never
 /// answers for — so the page joins its origin, and keeps the full candidate
-/// list only for the "Open in App" link (`localjam://join?…`), where a
+/// list only for the "Open in app" link (`localjam://join?…`), where a
 /// native joiner tries each one.
 library;
 
@@ -25,7 +25,7 @@ class JoinTarget {
   /// page's own origin as the only candidate. Null without an invitation.
   final JoinLink? link;
 
-  /// "Open in App": the `localjam://` form of the link as it came, every
+  /// "Open in app": the `localjam://` form of the link as it came, every
   /// candidate included (§1). Null without an invitation.
   final Uri? appLink;
 

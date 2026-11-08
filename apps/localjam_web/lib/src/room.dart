@@ -157,7 +157,7 @@ class RoomStatus {
   final double? progress;
 
   /// A [RoomStatusKind.fetchFailed] that nothing will retry on its own: the
-  /// page offers "Try Again" ([ListenerRoom.retryFetch]).
+  /// page offers "Try again" ([ListenerRoom.retryFetch]).
   final bool retryable;
 
   /// Whether this is trouble worth a glyph (anything but synced/waiting).

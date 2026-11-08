@@ -4,7 +4,7 @@
 /// grants `control_playback` (§5.6) — this page's mute and sync nudge
 /// (§7), the queue with the current song marked and songs this browser
 /// cannot play marked as such, who's here (named per §3.1 `welcome.host`),
-/// "Open in App" and the "keep this page open" hint.
+/// "Open in app" and the "keep this page open" hint.
 library;
 
 import 'dart:async';
@@ -31,7 +31,7 @@ class RoomPage extends StatefulWidget {
   static const String next = 'Next';
   static const String mute = 'Mute';
   static const String unmute = 'Unmute';
-  static const String resume = 'Tap to Resume';
+  static const String resume = 'Tap to resume';
   static const String offsetHeader = 'Sound offset';
   static const String offsetFooter =
       "If this page sounds behind everyone else (Bluetooth headphones do "
@@ -44,13 +44,13 @@ class RoomPage extends StatefulWidget {
   static const String cantPlay = "Can't play in this browser";
   static const String tooLong = 'Too long to play in a browser';
   static const String tooBig = 'Too big to play in a browser';
-  static const String retry = 'Try Again';
+  static const String retry = 'Try again';
   static const String nowPlaying = 'Now playing';
   static const String peopleHeader = "Who's here";
   static const String hostRole = 'Host';
   static const String youRole = 'You';
   static const String guestFallback = 'Guest';
-  static const String openApp = 'Open in App';
+  static const String openApp = 'Open in app';
   static const String keepOpen =
       'Keep this page open while you listen. Closing it, or leaving it in '
       'the background for long, can stop the music.';
@@ -605,9 +605,14 @@ class _RoomPageState extends State<RoomPage> {
     );
   }
 
+  /// A song's title as the app shows it: its tag title, else its file name
+  /// without the audio extension. A "title" that is just the file name (a
+  /// host that filled the tag from it) gets the same treatment — "track1.m4a"
+  /// reads as a bug — while a real title is never touched.
   static String _titleOf(MediaItem item) {
     final title = item.title?.trim();
-    return title == null || title.isEmpty ? item.name : title;
+    if (title != null && title.isNotEmpty && title != item.name) return title;
+    return stripAudioExtension(item.name);
   }
 
   static String _clock(int us) {
@@ -616,4 +621,30 @@ class _RoomPageState extends State<RoomPage> {
     final seconds = (total % 60).toString().padLeft(2, '0');
     return '$minutes:$seconds';
   }
+}
+
+const Set<String> _audioExtensions = {
+  'mp3',
+  'm4a',
+  'aac',
+  'wav',
+  'wave',
+  'flac',
+  'ogg',
+  'oga',
+  'opus',
+  'aiff',
+  'aif',
+  'alac',
+  'wma',
+};
+
+/// [name] without a trailing audio extension ("track1.m4a" is "track1");
+/// anything else is returned whole.
+@visibleForTesting
+String stripAudioExtension(String name) {
+  final dot = name.lastIndexOf('.');
+  if (dot <= 0 || dot == name.length - 1) return name;
+  final ext = name.substring(dot + 1).toLowerCase();
+  return _audioExtensions.contains(ext) ? name.substring(0, dot) : name;
 }
