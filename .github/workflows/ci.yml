@@ -67,6 +67,32 @@ jobs:
       - run: flutter test
         working-directory: ${{ matrix.package }}
 
+  # JVM unit tests of the Android plugin (packages/localjam_audio/android/
+  # src/test): the scheduling, latency, focus, route and speed policies. A
+  # plugin has no Gradle wrapper of its own, so they run as the
+  # :localjam_audio subproject of the example app; `--config-only` generates
+  # that app's gradlew and local.properties without building it.
+  kotlin-tests:
+    name: kotlin · localjam_audio unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      - run: flutter pub get
+        working-directory: packages/localjam_audio/example
+      - run: flutter build apk --config-only
+        working-directory: packages/localjam_audio/example
+      - run: ./gradlew :localjam_audio:testDebugUnitTest
+        working-directory: packages/localjam_audio/example/android
+
   build-apple:
     name: build · android + ios simulator
     runs-on: macos-latest
