@@ -149,7 +149,8 @@ class JamHostEvent {
 class _GuestConn {
   _GuestConn(this.ws, {required int nowUs, this.socket})
     : lastFrameUs = nowUs,
-      openedUs = nowUs;
+      openedUs = nowUs,
+      _writtenBefore = socket?.bytesWritten ?? 0;
 
   final WebSocket ws;
 
@@ -157,6 +158,26 @@ class _GuestConn {
   /// until a valid `hello` (§9.1). Null only if the connection was already
   /// gone when the upgrade finished.
   final GuardedSocket? socket;
+
+  /// Wire bytes of every frame the host has queued on [ws] (§9.1).
+  int queuedBytes = 0;
+
+  /// What [socket] had written before [ws] existed (the upgrade response).
+  final int _writtenBefore;
+
+  /// Set once this peer's backlog went past the host's bound: nothing more
+  /// is sent to it, and it is being dropped.
+  bool overflowed = false;
+
+  /// How many of [queuedBytes] the kernel has not taken yet — still held in
+  /// the WebSocket's buffers. Null without a [socket] to ask. An estimate,
+  /// on the low side: frames `dart:io` writes by itself (pongs, the close
+  /// frame) count as written but were never queued here.
+  int? get outboundBacklog {
+    final socket = this.socket;
+    if (socket == null) return null;
+    return queuedBytes - (socket.bytesWritten - _writtenBefore);
+  }
 
   /// Assigned after a valid `hello`; null while the handshake is pending.
   String? peerId;
@@ -181,6 +202,14 @@ class _GuestConn {
   /// (joined, or dropped and inside its §3.3 grace window), and are
   /// credited to its device (§5.6).
   String? uploadKey;
+
+  /// This peer's `request` budget (§9.1), set when it joins; null when the
+  /// host sets no rate.
+  RateBucket? requests;
+
+  /// How many requests over [requests] this peer may send before it is
+  /// taken for a flood rather than an eager thumb (§9.1).
+  RateBucket? throttled;
 
   /// Monotonic µs of the last received frame, for liveness (§3.3).
   int lastFrameUs;
@@ -266,6 +295,10 @@ class JamHostServer {
     this.maxPeers = defaultMaxPeers,
     this.maxPendingConnections = 8,
     this.maxControlFrameBytes = 256 * 1024,
+    this.maxInboundBytesPerSecond = defaultMaxInboundBytesPerSecond,
+    this.maxInboundFramesPerSecond = defaultMaxInboundFramesPerSecond,
+    this.maxRequestsPerSecond = defaultMaxRequestsPerSecond,
+    this.maxOutboundBacklogBytes = defaultMaxOutboundBacklogBytes,
     this.maxPreHelloFrameBytes = 16 * 1024,
     this.helloTimeout = const Duration(seconds: 10),
     this.restrictToLanRemotes = true,
@@ -301,6 +334,10 @@ class JamHostServer {
   static const int defaultMaxConnectionsPerRemote = 32;
   static const int defaultMaxCatalogIdsPerRequest = 50;
   static const int defaultMaxPendingCatalogAdds = 128;
+  static const int defaultMaxInboundBytesPerSecond = 256 * 1024;
+  static const int defaultMaxInboundFramesPerSecond = 100;
+  static const int defaultMaxRequestsPerSecond = 10;
+  static const int defaultMaxOutboundBacklogBytes = 4 * 1024 * 1024;
 
   /// One device's share of [defaultMaxPendingCatalogAdds]: a full
   /// [defaultMaxCatalogIdsPerRequest] selection fits whole.
@@ -387,19 +424,59 @@ class JamHostServer {
   /// the token; over-cap upgrades are refused with 503.
   final int maxPendingConnections;
 
-  /// Upper bound on one control frame from a joined peer (§1), counted in
-  /// UTF-8 bytes.
+  /// Upper bound on one control message from a joined peer (§1, §9.1),
+  /// counted in UTF-8 bytes and summed over its WebSocket fragments.
   ///
-  /// What this bounds is parse-and-act cost, not buffering: `dart:io`'s
-  /// WebSocket has no maximum-message option and reassembles a message
-  /// completely before handing it over, so by the time the cap is applied the
-  /// bytes have already been received. What it does buy is that nothing
-  /// large is ever JSON-parsed or dispatched, and that the sender does not
-  /// get to do it twice: the socket is closed with `policyViolation` (1008).
-  /// A joined peer has proved the token, and within the room §9 trusts it
-  /// not to stream a gigabyte into one frame; the sockets that have proved
-  /// nothing are held to a raw byte count instead ([maxPreHelloFrameBytes]).
+  /// `dart:io`'s WebSocket has no maximum-message option and reassembles a
+  /// message completely before handing it over, so the cap is enforced on
+  /// the raw stream instead: the connection guard reads each frame header
+  /// as it arrives and closes the socket with `policyViolation` (1008) the
+  /// moment a message declares more — before its payload is received, let
+  /// alone buffered. Holding the token does not exempt a peer: discoverable
+  /// rooms hand it to every LAN neighbour that asks.
   final int maxControlFrameBytes;
+
+  /// The average rate, in raw bytes per second, at which a joined peer's
+  /// control socket may send (§9.1), with bursts of four seconds' worth;
+  /// past it the socket is closed with `policyViolation`. An honest guest
+  /// sends a few hundred bytes a second at most — pings, the odd request —
+  /// so the default of 256 KB/s (1 MB bursts, four maximum-size messages)
+  /// only ever meets a flood. Null disables it.
+  final int? maxInboundBytesPerSecond;
+
+  /// The average rate, in WebSocket frames per second (control frames such
+  /// as pings included), at which a joined peer's control socket may send
+  /// (§9.1), with bursts of four seconds' worth; past it the socket is
+  /// closed with `policyViolation`. An honest guest sends one ping every
+  /// two seconds, a burst of eight on (re)join, and a frame per tap; the
+  /// default of 100/s bounds the cost of a flood of tiny frames — each a
+  /// parse, and a WebSocket ping a pong the host must queue — that the
+  /// byte rate alone would let through. Null disables it.
+  final int? maxInboundFramesPerSecond;
+
+  /// The average rate at which one joined peer's `request`s are acted on
+  /// (§5.2, §9.1), with bursts of three seconds' worth (30 at the default
+  /// of 10/s). A request applies a change and usually broadcasts the result
+  /// to every peer — a reorder sends the whole playlist — so this is what
+  /// stops one guest turning a loop of small frames into the host's whole
+  /// uplink. A request over the rate is not acted on and is answered
+  /// `error { code: "busy" }` (never fatal); a peer that keeps going —
+  /// six seconds' worth of requests over the rate, net of the same refill —
+  /// is taken for a flood and closed with `policyViolation`. Honest bursts
+  /// (a run of skips, dragging the queue around, scrubbing) fit the burst.
+  /// Null disables it.
+  final int? maxRequestsPerSecond;
+
+  /// Upper bound on the bytes queued for one peer that it has not read yet
+  /// (§9.1, default 4 MB). `dart:io`'s WebSocket has no backpressure: what
+  /// the host sends a peer that stops reading — a hostile one, or a phone
+  /// that walked out of range without a FIN — waits in host memory, and
+  /// every broadcast adds to it. A peer whose backlog is past this when
+  /// the next frame is due is dropped (keeping its §3.3 grace slot, so a
+  /// phone that comes back resumes). The kernel's send buffer comes on top,
+  /// and one frame always fits however large it is, so a big `welcome` is
+  /// never the reason. Null disables it.
+  final int? maxOutboundBacklogBytes;
 
   /// Upper bound on what a control socket may send before it completes the
   /// §3.1 handshake (default 16 KB): the cap on one pre-hello frame, and —
@@ -1694,6 +1771,7 @@ class JamHostServer {
     final withinBudget =
         socket?.limitUntilTrusted(
           maxPreHelloFrameBytes + _preHelloFramingSlack,
+          maxMessageBytes: maxPreHelloFrameBytes,
           onExceeded: () {
             final c = conn;
             if (c == null) return; // Still upgrading: destroyed shortly.
@@ -2077,7 +2155,7 @@ class JamHostServer {
       request.busySent = true;
       final dropped = wanted.length - accepted;
       _sendTo(
-        conn.ws,
+        conn,
         ErrorMessage(
           code: ErrorCode.busy,
           message: queueRoom <= min(pendingRoom, peerRoom)
@@ -2335,7 +2413,7 @@ class JamHostServer {
     if (request == null || requester == null || request.busySent) return;
     request.busySent = true;
     _sendTo(
-      (_peers[peerId] ?? requester).ws,
+      (_peers[peerId] ?? requester),
       ErrorMessage(code: ErrorCode.busy, message: message),
     );
   }
@@ -3246,12 +3324,9 @@ class JamHostServer {
     switch (message) {
       case ClockPingMessage(:final t0):
         // §4: t1 = host receive, t2 = host send, both session-clock µs.
-        _sendTo(
-          conn.ws,
-          ClockPongMessage(t0: t0, t1: receivedUs, t2: _nowUs()),
-        );
+        _sendTo(conn, ClockPongMessage(t0: t0, t1: receivedUs, t2: _nowUs()));
       case RequestMessage():
-        _onRequest(conn, message);
+        if (_requestWithinRate(conn)) _onRequest(conn, message);
       case MediaStatusMessage():
         _onMediaStatus(conn, message);
       case HelloMessage():
@@ -3259,6 +3334,29 @@ class JamHostServer {
       default:
         break; // Unknown/unexpected types are ignored (§2).
     }
+  }
+
+  /// Whether [conn] may have one more request acted on now (§9.1, see
+  /// [maxRequestsPerSecond]). A request over the rate is answered `busy`;
+  /// one over the rate after a run of them closes the socket.
+  bool _requestWithinRate(_GuestConn conn) {
+    final requests = conn.requests;
+    if (requests == null || requests.take()) return true;
+    if (!(conn.throttled?.take() ?? true)) {
+      unawaited(
+        conn.ws.close(WebSocketStatus.policyViolation).catchError((_) {}),
+      );
+      _dropConn(conn);
+      return false;
+    }
+    _sendTo(
+      conn,
+      const ErrorMessage(
+        code: ErrorCode.busy,
+        message: 'too many requests: try again in a moment',
+      ),
+    );
+    return false;
   }
 
   /// Whether [data] is larger than [cap] bytes on the wire.
@@ -3287,7 +3385,7 @@ class JamHostServer {
   /// the part of the protocol every major version keeps for exactly this.
   void _rejectVersion(_GuestConn conn, int helloV) {
     _safeAdd(
-      conn.ws,
+      conn,
       _codec.encode(
         const RejectMessage(
           reason: RejectReason.version,
@@ -3402,7 +3500,25 @@ class JamHostServer {
     conn.peerId = peerId;
     conn.info = info;
     conn.uploadKey = _randomHex(16); // §6.4: a fresh credential per join.
-    conn.socket?.trust(); // §9.1: proved the token; no more byte budget.
+    // §9.1: proved the token, so the pre-hello byte budget is lifted — but
+    // not every bound: messages stay capped as they arrive, and bytes and
+    // frames rate-limited.
+    conn.socket?.trust(
+      maxMessageBytes: maxControlFrameBytes,
+      bytesPerSecond: maxInboundBytesPerSecond,
+      framesPerSecond: maxInboundFramesPerSecond,
+    );
+    final requestRate = maxRequestsPerSecond;
+    if (requestRate != null) {
+      conn.requests = RateBucket(
+        perSecond: requestRate,
+        capacity: requestRate * 3,
+      );
+      conn.throttled = RateBucket(
+        perSecond: requestRate,
+        capacity: requestRate * 6,
+      );
+    }
     _peers[peerId] = conn;
     _session.upsertPeer(peerId);
 
@@ -3415,7 +3531,7 @@ class JamHostServer {
     // §3.1: welcome carries the full snapshot + playlist + permissions +
     // existing peers, this peer's upload key, and whether the host is away.
     _sendTo(
-      conn.ws,
+      conn,
       WelcomeMessage(
         sessionId: sessionId,
         sessionName: sessionName,
@@ -3446,7 +3562,7 @@ class JamHostServer {
   /// finishes or the hello timeout expires — which is how a wrong-token
   /// flood would take the room's whole handshake capacity.
   void _reject(_GuestConn conn, RejectReason reason) {
-    _sendTo(conn.ws, RejectMessage(reason: reason));
+    _sendTo(conn, RejectMessage(reason: reason));
     unawaited(
       conn.ws.close(WebSocketStatus.policyViolation).catchError((_) {}),
     );
@@ -3458,7 +3574,7 @@ class JamHostServer {
     // against the peer's effective capabilities and applies or refuses it.
     if (!_requestAllowed(conn.peerId!, request)) {
       _sendTo(
-        conn.ws,
+        conn,
         ErrorMessage(
           code: ErrorCode.notAllowed,
           message: 'not allowed: ${request.action.wire}',
@@ -3502,13 +3618,10 @@ class JamHostServer {
           _onCatalogAdd(conn, request.catalogIds ?? const []);
       }
     } on StateError catch (e) {
-      _sendTo(
-        conn.ws,
-        ErrorMessage(code: ErrorCode.internal, message: e.message),
-      );
+      _sendTo(conn, ErrorMessage(code: ErrorCode.internal, message: e.message));
     } on ArgumentError catch (e) {
       _sendTo(
-        conn.ws,
+        conn,
         ErrorMessage(code: ErrorCode.mediaGone, message: '${e.message}'),
       );
     }
@@ -4212,7 +4325,7 @@ class JamHostServer {
     }
     if (!allowResume) {
       _sendTo(
-        conn.ws,
+        conn,
         const ErrorMessage(
           code: ErrorCode.kicked,
           message: 'removed from the session by the host',
@@ -4270,27 +4383,87 @@ class JamHostServer {
 
   // --- Wire helpers ----------------------------------------------------------------
 
-  void _sendTo(WebSocket ws, Message message) {
-    _safeAdd(ws, _codec.encode(message, seq: _seq++));
+  void _sendTo(_GuestConn conn, Message message) {
+    _safeAdd(conn, _codec.encode(message, seq: _seq++));
   }
 
   void _broadcast(Message message, {_GuestConn? except}) {
     final encoded = _codec.encode(message, seq: _seq++);
+    final wireBytes = _wireBytes(encoded);
     for (final conn in _peers.values) {
       if (conn == except) continue;
-      _safeAdd(conn.ws, encoded);
+      _safeAdd(conn, encoded, wireBytes);
     }
   }
 
   /// Adds a frame, swallowing the race where the socket's close handshake
   /// began between frame receipt and the reply (liveness will reap the conn).
-  static void _safeAdd(WebSocket ws, String frame) {
-    if (ws.readyState != WebSocket.open) return;
+  ///
+  /// §9.1: `dart:io`'s WebSocket has no backpressure — a frame added for a
+  /// peer that is not reading waits in memory, and so does every one after
+  /// it. So the host keeps count of what it queued for each peer
+  /// ([_GuestConn.queuedBytes]) against what the socket has handed to the
+  /// kernel ([GuardedSocket.bytesWritten]), and a peer whose backlog is
+  /// already past [maxOutboundBacklogBytes] when the next frame comes is
+  /// dropped instead of sent to. One frame always fits, however large: a
+  /// big `welcome` to a fresh socket is never the reason.
+  void _safeAdd(_GuestConn conn, String frame, [int? wireBytes]) {
+    final ws = conn.ws;
+    if (conn.overflowed || ws.readyState != WebSocket.open) return;
+    final backlog = conn.outboundBacklog;
+    final cap = maxOutboundBacklogBytes;
+    if (backlog != null && cap != null && backlog > cap) {
+      _dropSlowConn(conn);
+      return;
+    }
     try {
       ws.add(frame);
+      conn.queuedBytes += wireBytes ?? _wireBytes(frame);
     } on StateError {
       // Sink closed underneath us: the peer is going away.
     }
+  }
+
+  /// Drops [conn], whose backlog is past [maxOutboundBacklogBytes]: the
+  /// socket is destroyed at once, which is what frees the frames queued for
+  /// it (a close handshake would only queue behind them). The peer keeps
+  /// its §3.3 grace slot — a phone that stopped reading for a while can
+  /// resume. Deferred (with nothing more sent to it meanwhile): it is found
+  /// while frames are being sent, which may be mid-broadcast, and
+  /// destroying a socket can end its WebSocket — and so drop the peer —
+  /// synchronously.
+  void _dropSlowConn(_GuestConn conn) {
+    conn.overflowed = true;
+    scheduleMicrotask(() {
+      conn.socket?.destroy();
+      _dropConn(conn);
+    });
+  }
+
+  /// The bytes [frame] takes on the wire as a server-to-client text frame:
+  /// its UTF-8 length plus the frame header (unmasked, RFC 6455 §5.2).
+  /// Counted without encoding: the frame is encoded once more when sent.
+  static int _wireBytes(String frame) {
+    var bytes = 0;
+    final length = frame.length;
+    for (var i = 0; i < length; i++) {
+      final unit = frame.codeUnitAt(i);
+      if (unit < 0x80) {
+        bytes += 1;
+      } else if (unit < 0x800) {
+        bytes += 2;
+      } else if (unit >= 0xd800 &&
+          unit < 0xdc00 &&
+          i + 1 < length &&
+          (frame.codeUnitAt(i + 1) & 0xfc00) == 0xdc00) {
+        // A surrogate pair: four bytes for the two units.
+        bytes += 4;
+        i++;
+      } else {
+        bytes += 3;
+      }
+    }
+    return bytes + (bytes < 126 ? 2 : (bytes < 65536 ? 4 : 10));
   }
 
   void _emit(JamHostEvent event) {

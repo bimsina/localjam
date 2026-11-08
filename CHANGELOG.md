@@ -306,6 +306,12 @@ come.
   media planes — the enforcement half of PROTOCOL §9's "LAN interfaces only".
 - Resource caps as above, so an honest-guest threat model does not mean an
   unbounded one.
+- Joining no longer lifts the memory bounds (anyone near a discoverable room
+  can get its token): a joined guest's control message is cut off at 256 KB
+  as it arrives, not after the host has buffered it whole; its bytes,
+  frames and requests are rate-limited (requests past a 30-request burst
+  are answered `busy`, a flood is disconnected); and a guest that stops
+  reading is dropped once 4 MB is waiting for it (PROTOCOL §9.1).
 
 ### Tooling
 

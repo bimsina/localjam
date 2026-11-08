@@ -50,6 +50,12 @@ Future<JamHostServer> startHost({
   int maxPreHelloFrameBytes = 16 * 1024,
   int maxPendingConnections = 8,
   Duration helloTimeout = const Duration(seconds: 10),
+  int maxControlFrameBytes = 256 * 1024,
+  int? maxInboundBytesPerSecond = JamHostServer.defaultMaxInboundBytesPerSecond,
+  int? maxInboundFramesPerSecond =
+      JamHostServer.defaultMaxInboundFramesPerSecond,
+  int? maxRequestsPerSecond = JamHostServer.defaultMaxRequestsPerSecond,
+  int? maxOutboundBacklogBytes = JamHostServer.defaultMaxOutboundBacklogBytes,
 }) async {
   final host = JamHostServer(
     sessionName: 'HardJam',
@@ -72,6 +78,11 @@ Future<JamHostServer> startHost({
     maxPreHelloFrameBytes: maxPreHelloFrameBytes,
     maxPendingConnections: maxPendingConnections,
     helloTimeout: helloTimeout,
+    maxControlFrameBytes: maxControlFrameBytes,
+    maxInboundBytesPerSecond: maxInboundBytesPerSecond,
+    maxInboundFramesPerSecond: maxInboundFramesPerSecond,
+    maxRequestsPerSecond: maxRequestsPerSecond,
+    maxOutboundBacklogBytes: maxOutboundBacklogBytes,
   );
   await host.start(address: InternetAddress.loopbackIPv4);
   addTearDown(host.close);
