@@ -5,6 +5,12 @@ a release heading carries the day it shipped.
 
 ## Unreleased
 
+- Lifecycle hardening: disposing the app's session controller now closes the
+  live jam (server, playback, foreground service) and drops any host start or
+  join still in flight instead of attaching it; and a host add that is still
+  probing, reading tags or hashing when the room ends registers nothing and
+  leaves no cover behind.
+
 ## 1.0.0 (Android): not yet released
 
 The first public release, on Google Play, Android first (iOS and desktop run
