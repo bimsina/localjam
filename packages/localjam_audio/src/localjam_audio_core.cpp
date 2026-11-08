@@ -70,6 +70,10 @@ class ReverseLock {
 
 enum class Codec { kUnknown, kWav, kFlac, kMp3, kVorbis, kUnsupported };
 
+// The MPEG Layer III synthesis delay (528 + 1 frames) that every gapless
+// decoder removes from the start of the stream.
+constexpr uint64_t kMp3DecoderDelay = 529;
+
 // What magic-byte sniffing found, for error messages.
 struct Probe {
   Codec codec = Codec::kUnknown;
@@ -206,6 +210,16 @@ class Decoder {
         // reliable duration field, and every µs of the anchor formula depends
         // on the count being right.
         total_frames_ = drmp3_get_pcm_frame_count(&mp3_);
+        // Media frame P is the gapless frame P on every platform (README
+        // "Media position"). dr_mp3 applies a LAME tag (its delay then
+        // includes the 529-frame decoder delay), but without one it keeps
+        // the decoder delay, which Android's and Apple's decoders drop:
+        // drop it here too, or every frame plays 529 frames late against
+        // them (measured against the source, before and after).
+        if (mp3_.delayInPCMFrames == 0 && total_frames_ > kMp3DecoderDelay) {
+          mp3_.delayInPCMFrames = kMp3DecoderDelay;
+          total_frames_ -= kMp3DecoderDelay;
+        }
         break;
       case Codec::kVorbis: {
         int err = 0;

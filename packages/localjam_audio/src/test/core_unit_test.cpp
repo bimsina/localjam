@@ -486,6 +486,38 @@ void TestHash() {
         "FNV-1a 64 of \"foobar\" = 85944171f73967e8");
 }
 
+// --------------------------------------------------------- MP3 media frame 0
+
+// Media frame P is the gapless frame P on every platform (README "Media
+// position"): a LAME tag is applied, and without one the 529-frame decoder
+// delay is dropped as Android's and Apple's decoders do. The fixtures are
+// the Android test ones (tool/gapless_fixtures.sh), 3 s of audio each.
+void TestMp3MediaFrameZero() {
+  std::printf("\n=== 5. MP3 media frame 0\n");
+  std::string here = __FILE__;
+  here = here.substr(0, here.find_last_of('/'));
+  const std::string dir = here + "/../../android/src/test/resources/gapless/";
+  struct Case {
+    const char* file;
+    int64_t want_us;
+  } cases[] = {
+      // LAME-tagged: exactly the 3 s that were encoded.
+      {"lame_cbr_44100_stereo.mp3", 3000000},
+      {"lame_vbr_22050_mono.mp3", 3000000},
+      // No tag: 116 frames x 1152 minus the decoder delay.
+      {"noxing_44100_mono.mp3", (116 * 1152 - 529) * 1000000LL / 44100},
+  };
+  char err[256];
+  for (const Case& c : cases) {
+    int64_t probed = -1;
+    const lj_status s =
+        lj_probe_duration((dir + c.file).c_str(), &probed, err, sizeof(err));
+    Check(s == LJ_OK && std::llabs(probed - c.want_us) <= 1,
+          std::string(c.file) + ": " + std::to_string(probed) + " us (want " +
+              std::to_string(c.want_us) + ")");
+  }
+}
+
 }  // namespace
 
 int main() {
@@ -502,6 +534,7 @@ int main() {
   TestSizing();
   TestCraftedFiles(dir);
   TestHash();
+  TestMp3MediaFrameZero();
   std::printf("\n=== %d/%d unit checks passed\n", g_checks - g_failures,
               g_checks);
   return g_failures == 0 ? 0 : 1;

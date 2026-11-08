@@ -23,6 +23,8 @@
   tag. The decoded buffer is shifted in place to the shared window, `load`
   reports the media duration and playback stops at its end. AAC needed
   nothing (measured: Chrome is gapless for `elst` and iTunSMPB files).
+- Windows/Linux: an MP3 without a LAME tag drops the 529-frame decoder delay
+  (dr_mp3 kept it), so its media frame P matches the other platforms.
 - Android `setRate` never answers success for a speed the playing track
   refused: `rate_needs_reanchor` for a low-latency track (re-anchor with
   `playAt`; its track can time-stretch), `bad_args` as before otherwise.
