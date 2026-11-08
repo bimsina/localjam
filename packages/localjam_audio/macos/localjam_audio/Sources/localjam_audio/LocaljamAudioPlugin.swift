@@ -254,6 +254,9 @@ public class LocaljamAudioPlugin: NSObject, FlutterPlugin, FlutterStreamHandler 
   private var player: AVAudioPlayerNode?
   private var timePitch: AVAudioUnitTimePitch?
   private var file: AVAudioFile?
+  /// Which frames of `file` are media frames 0..<length (GaplessMp3): media
+  /// position P is file frame `fileWindow.offset + P`.
+  private var fileWindow = GaplessWindow.whole(0)
   private var state: PlaybackState = .idle
 
   /// Media position (µs, frame-exact) of the first frame of the scheduled
@@ -403,7 +406,9 @@ public class LocaljamAudioPlugin: NSObject, FlutterPlugin, FlutterStreamHandler 
   /// Opens `path` and checks it is something the engine can schedule. The
   /// single source of truth for both `load` and `probeDuration`, so a probe
   /// reports exactly the duration `load` would.
-  private static func openPlayableFile(_ path: String) throws -> (file: AVAudioFile, durationUs: Int64) {
+  private static func openPlayableFile(_ path: String) throws -> (
+    file: AVAudioFile, window: GaplessWindow, durationUs: Int64
+  ) {
     let audioFile: AVAudioFile
     do {
       audioFile = try AVAudioFile(forReading: URL(fileURLWithPath: path))
@@ -424,8 +429,11 @@ public class LocaljamAudioPlugin: NSObject, FlutterPlugin, FlutterStreamHandler 
     guard audioFile.length <= maxFrames else {
       throw FileProblem(message: "\(path) declares an implausible length (\(audioFile.length) frames)")
     }
-    let durationUs = clampedInt64(Double(audioFile.length) * 1_000_000.0 / sampleRate)
-    return (audioFile, durationUs)
+    // Media frame 0 is the first gapless frame (GaplessMp3): AAC already is
+    // (packet table), an MP3 LAME tag Core Audio skipped is applied here.
+    let window = GaplessMp3.window(for: audioFile, path: path)
+    let durationUs = clampedInt64(Double(window.length) * 1_000_000.0 / sampleRate)
+    return (audioFile, window, durationUs)
   }
 
   private func handleProbeDuration(_ args: [String: Any]?, _ reply: @escaping (Any?) -> Void) {
@@ -453,9 +461,10 @@ public class LocaljamAudioPlugin: NSObject, FlutterPlugin, FlutterStreamHandler 
     // under the new track's name (matches the desktop core).
     stopOutput()
     file = nil
+    fileWindow = .whole(0)
     durationUs = 0
     state = .idle
-    let opened: (file: AVAudioFile, durationUs: Int64)
+    let opened: (file: AVAudioFile, window: GaplessWindow, durationUs: Int64)
     do {
       opened = try Self.openPlayableFile(path)
     } catch {
@@ -475,6 +484,7 @@ public class LocaljamAudioPlugin: NSObject, FlutterPlugin, FlutterStreamHandler 
       return
     }
     file = opened.file
+    fileWindow = opened.window
     durationUs = opened.durationUs
     state = .loaded
     reply(durationUs)
@@ -604,7 +614,8 @@ public class LocaljamAudioPlugin: NSObject, FlutterPlugin, FlutterStreamHandler 
 
     let sampleRate = audioFile.processingFormat.sampleRate
     let startFrameExact = (startPositionUs * sampleRate / 1_000_000.0).rounded()
-    guard startFrameExact.isFinite, startFrameExact >= 0, startFrameExact < Double(audioFile.length) else {
+    let window = fileWindow
+    guard startFrameExact.isFinite, startFrameExact >= 0, startFrameExact < Double(window.length) else {
       reply(FlutterError(
         code: "bad_position",
         message: "start position \(Self.clampedInt64(startPositionUs))us is outside the file (duration \(durationUs)us)",
@@ -639,11 +650,14 @@ public class LocaljamAudioPlugin: NSObject, FlutterPlugin, FlutterStreamHandler 
         self.emitEvent("playbackFinished")
       }
     }
-    let fileLength = audioFile.length
+    // Media frames → file frames (GaplessMp3); the window ends before any
+    // encoder padding.
+    let fileLength = window.offset + window.length
+    let fileStartFrame = window.offset + startFrame
     // load refuses lengths beyond maxFrames, so this is at most 128 segments;
     // checked again here because the loop below runs on the serial queue and
     // must never be the thing a crafted file can stretch.
-    let segmentCount = (fileLength - startFrame + Self.maxSegmentFrames - 1) / Self.maxSegmentFrames
+    let segmentCount = (fileLength - fileStartFrame + Self.maxSegmentFrames - 1) / Self.maxSegmentFrames
     guard fileLength <= Self.maxFrames, segmentCount <= Self.maxFrames / Self.maxSegmentFrames else {
       reply(FlutterError(
         code: "bad_position",
@@ -653,7 +667,7 @@ public class LocaljamAudioPlugin: NSObject, FlutterPlugin, FlutterStreamHandler 
     }
     do {
       try LJObjCExceptionCatcher.catching {
-        var segmentStart = startFrame
+        var segmentStart = fileStartFrame
         while segmentStart < fileLength {
           let count = min(fileLength - segmentStart, Self.maxSegmentFrames)
           let isLast = segmentStart + count >= fileLength

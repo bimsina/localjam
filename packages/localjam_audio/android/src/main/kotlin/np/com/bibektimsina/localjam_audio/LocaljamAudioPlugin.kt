@@ -37,6 +37,10 @@ import kotlin.math.roundToLong
 
 private const val LOG_TAG = "LocaljamAudio"
 
+/** MediaFormat.KEY_ENCODER_DELAY / _PADDING (constants are API 30; the keys are older). */
+private const val KEY_ENCODER_DELAY = "encoder-delay"
+private const val KEY_ENCODER_PADDING = "encoder-padding"
+
 /**
  * How long [LocaljamAudioPlugin] waits for threads to leave the native
  * AudioTrack before releasing it. The pause()/flush() that precedes the wait
@@ -254,16 +258,22 @@ internal class AudioTrackGate(private val track: AudioTrack) {
  * hard-capped at [QUEUE_MAX_BYTES] (4 MB) — independent of file length
  * (v1 held the whole file: ~10.6 MB per stereo 44.1 kHz minute).
  *
- * Seek / frame accuracy: the decoder seeks the extractor to the anchor media
- * position with SEEK_TO_PREVIOUS_SYNC (lands on a sync frame at/before the
- * target), then reads the FIRST output buffer's presentationTimeUs —
- * container pts, the same timebase as KEY_DURATION — to learn where decode
- * actually resumed, and drops exactly startFrame − round(pts·sr/1e6) PCM
- * frames before queueing anything. The first frame the writer streams is
- * therefore frame-exact at anchorMediaUs relative to container pts (absolute
- * indexing may differ from v1's decode-from-zero count by the codec's
- * priming frames, well under the §7 nudge range and consistent across
- * re-schedules of the same file).
+ * Seek / frame accuracy: media frame P is the GAPLESS frame P — encoder
+ * delay (AAC priming from `elst`/iTunSMPB, the LAME tag's delay) excluded —
+ * the same sample AVAudioFile and the browser's decodeAudioData call P
+ * ([GaplessTimeline] has the why and the measurements). The codec is
+ * configured with the platform's own delay/padding trim OFF (it trims from
+ * wherever decoding starts and decouples pts from the PCM), so output pts
+ * describe their PCM and [GaplessTimeline.frameAt] maps them to media
+ * frames. Container files seek the extractor
+ * [GaplessTimeline.SEEK_PREROLL_US] before the
+ * target (or not at all near the start) with SEEK_TO_PREVIOUS_SYNC; MP3s are
+ * fed from an [Mp3FrameIndex] (MediaExtractor's MP3 seeks are not
+ * frame-exact) starting a few frames early for the bit reservoir. A
+ * [PcmTrimmer] then drops the pre-roll, fills silence in the (should-not-
+ * happen) case that decoding resumed past the target, and withholds the
+ * trailing padding — so the first frame the writer streams is media frame
+ * startFrame exactly.
  *
  * The silence-priming path needs no PCM: the decoder starts at playAt entry
  * and runs in parallel with priming (≥ MIN_LEAD_US), so the queue already
@@ -383,7 +393,11 @@ class LocaljamAudioPlugin :
         val srcChannels: Int,
         /** Decoder output KEY_CHANNEL_MASK when it reported one. */
         val srcChannelMask: Int?,
-        val durationUs: Long
+        val durationUs: Long,
+        /** How decoder pts map to gapless media frames ([GaplessTimeline]). */
+        val timeline: GaplessTimeline,
+        /** Frame index of an MP3 (frame-exact seeks), else null: MediaExtractor. */
+        val mp3: Mp3FrameIndex?
     ) {
         val channels get() = min(srcChannels, 2)
 
@@ -1734,11 +1748,10 @@ class LocaljamAudioPlugin :
      * MediaExtractor + MediaCodec pair (no sharing across schedules, so a new
      * playAt never fights an old decoder over extractor position).
      *
-     * Frame accuracy (see class doc): seekTo(anchorMediaUs,
-     * SEEK_TO_PREVIOUS_SYNC) rewinds to a sync frame at/before the target;
-     * the first output buffer's presentationTimeUs says where decode actually
-     * resumed; exactly startFrame − round(pts·sr/1e6) frames are dropped so
-     * the FIRST queued frame is media frame startFrame.
+     * Frame accuracy (see class doc): [openPacketSource] positions the
+     * source with pre-roll before the target; the first output buffer's
+     * presentationTimeUs, mapped by [GaplessTimeline.frameAt], anchors a
+     * [PcmTrimmer] that makes the FIRST queued frame media frame startFrame.
      *
      * Files with more than two channels are folded down to stereo here
      * ([StereoFolder]) before queueing, so the writer and the AudioTrack only
@@ -1765,6 +1778,99 @@ class LocaljamAudioPlugin :
         writerTrackFailure(sched, ScheduleFailure.DECODE, why)
     }
 
+    /** Compressed packets for one schedule's decoder (an extractor or the MP3 index). */
+    private interface PacketSource : java.io.Closeable {
+        /** Reads the current packet into [buf]; its size, or −1 at the end. */
+        fun read(buf: ByteBuffer): Int
+
+        /** Pts (µs) of the packet [read] just returned. */
+        val sampleTimeUs: Long
+
+        fun advance()
+    }
+
+    private class ExtractorSource(private val ex: MediaExtractor) : PacketSource {
+        override var sampleTimeUs = 0L
+            private set
+
+        override fun read(buf: ByteBuffer): Int {
+            sampleTimeUs = ex.sampleTime
+            return ex.readSampleData(buf, 0)
+        }
+
+        override fun advance() {
+            ex.advance()
+        }
+
+        override fun close() = ex.release()
+    }
+
+    /** Feeds MP3 frames straight from the file by [Mp3FrameIndex], pts = frame time. */
+    private class Mp3IndexSource(
+        path: String,
+        private val index: Mp3FrameIndex,
+        private var next: Int
+    ) : PacketSource {
+        private val raf = java.io.RandomAccessFile(path, "r")
+        private val scratch = ByteArray(4096)
+
+        override var sampleTimeUs = 0L
+            private set
+
+        override fun read(buf: ByteBuffer): Int {
+            if (next >= index.frameCount) return -1
+            val size = index.size(next)
+            raf.seek(index.offset(next))
+            raf.readFully(scratch, 0, size)
+            buf.clear()
+            buf.put(scratch, 0, size)
+            sampleTimeUs = index.ptsUs(next)
+            return size
+        }
+
+        override fun advance() {
+            next++
+        }
+
+        override fun close() = raf.close()
+    }
+
+    /**
+     * Opens the packet source for decoding from gapless frame [startFrame]
+     * (positioned for pre-roll) and the format to configure the codec with.
+     */
+    private fun openPacketSource(audio: LoadedAudio, startFrame: Long): Pair<PacketSource, MediaFormat> {
+        audio.mp3?.let { index ->
+            val first = index.firstFrameToFeed(startFrame)
+            val format = MediaFormat.createAudioFormat(audio.mime, index.sampleRate, index.channels)
+            format.setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, 4096)
+            return Mp3IndexSource(audio.path, index, first) to format
+        }
+        val ex = MediaExtractor()
+        try {
+            ex.setDataSource(audio.path)
+            val (trackIndex, trackFormat) = DurationProbe.findAudioTrack(ex)
+                ?: throw IllegalArgumentException("no audio track in file")
+            ex.selectTrack(trackIndex)
+            // No seek near the start: decoding from the first sample is exact
+            // and keeps clear of a shifted elst timeline's negative pts.
+            audio.timeline.seekUsFor(
+                startFrame, audio.sampleRate, GaplessTimeline.SEEK_PREROLL_US
+            )?.let {
+                ex.seekTo(it, MediaExtractor.SEEK_TO_PREVIOUS_SYNC)
+            }
+            // The platform's own delay/padding trim (SkipCutBuffer) applies
+            // from wherever decoding starts and decouples pts from the PCM;
+            // [GaplessTimeline]/[PcmTrimmer] do it exactly instead.
+            trackFormat.setInteger(KEY_ENCODER_DELAY, 0)
+            trackFormat.setInteger(KEY_ENCODER_PADDING, 0)
+            return ExtractorSource(ex) to trackFormat
+        } catch (t: Throwable) {
+            ex.release()
+            throw t
+        }
+    }
+
     private fun decoderLoop(sched: Schedule, audio: LoadedAudio) {
         val q = sched.queue
         val sr = audio.sampleRate
@@ -1772,23 +1878,26 @@ class LocaljamAudioPlugin :
         val srcBpf = 2 * audio.srcChannels // decoded frame size
         var folder: StereoFolder? =
             if (audio.srcChannels > 2) StereoFolder(audio.srcChannels, audio.srcChannelMask) else null
-        var extractor: MediaExtractor? = null
+        val timeline = audio.timeline
+        val trimmer = PcmTrimmer(
+            targetFrame = sched.startFrame,
+            bytesPerFrame = bpf,
+            holdbackFrames = timeline.paddingFrames,
+            endFrame = timeline.gaplessFrames,
+            maxFillFrames = 10L * sr
+        )
+        var source: PacketSource? = null
         var codec: MediaCodec? = null
         try {
-            val ex = MediaExtractor()
-            extractor = ex
-            ex.setDataSource(audio.path)
-            val (trackIndex, trackFormat) = DurationProbe.findAudioTrack(ex)
-                ?: throw IllegalArgumentException("no audio track in file")
-            ex.selectTrack(trackIndex)
-            ex.seekTo(sched.anchorMediaUs, MediaExtractor.SEEK_TO_PREVIOUS_SYNC)
+            val (src, format) = openPacketSource(audio, sched.startFrame)
+            source = src
             val c = MediaCodec.createDecoderByType(audio.mime)
             codec = c
-            c.configure(trackFormat, null, null, 0)
+            c.configure(format, null, null, 0)
             c.start()
 
             var pcmEncoding = AudioFormat.ENCODING_PCM_16BIT
-            var framesToDrop = -1L // unknown until the first output pts
+            var firstOutput = true
             var carry: ByteArray? = null // frame-alignment remainder (rare)
             val info = MediaCodec.BufferInfo()
             var inputDone = false
@@ -1801,15 +1910,15 @@ class LocaljamAudioPlugin :
                     if (inIdx >= 0) {
                         progressed = true
                         val buf = c.getInputBuffer(inIdx)!!
-                        val n = ex.readSampleData(buf, 0)
+                        val n = src.read(buf)
                         if (n < 0) {
                             c.queueInputBuffer(
                                 inIdx, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM
                             )
                             inputDone = true
                         } else {
-                            c.queueInputBuffer(inIdx, 0, n, ex.sampleTime, 0)
-                            ex.advance()
+                            c.queueInputBuffer(inIdx, 0, n, src.sampleTimeUs, 0)
+                            src.advance()
                         }
                     }
                 }
@@ -1849,61 +1958,64 @@ class LocaljamAudioPlugin :
                     outIdx >= 0 -> {
                         progressed = true
                         val eos = info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0
-                        var payload: ByteArray? = null
+                        var payload: List<ByteArray> = emptyList()
                         if (info.size > 0) {
                             val out = c.getOutputBuffer(outIdx)!!
                             out.position(info.offset)
                             out.limit(info.offset + info.size)
                             var chunk = pcm16Bytes(out, pcmEncoding)
-                            if (framesToDrop < 0) {
-                                // First decoded buffer after the seek: its pts
-                                // (container timebase) tells where decode
-                                // resumed; drop up to startFrame exactly.
-                                val bufStartFrame =
-                                    (info.presentationTimeUs.toDouble() * sr / 1e6).roundToLong()
-                                framesToDrop = sched.startFrame - bufStartFrame
-                                if (framesToDrop < 0) {
-                                    Log.w(
-                                        TAG,
-                                        "decoder: seek resumed PAST the target " +
-                                            "(ptsFrame=$bufStartFrame startFrame=${sched.startFrame}); " +
-                                            "media content starts ${-framesToDrop} frames late"
-                                    )
-                                    framesToDrop = 0
-                                }
-                            }
+                            // Gapless frame of this buffer's first PCM frame:
+                            // with the platform trim off, pts describes the PCM
+                            // it labels (see [GaplessTimeline]). Only the first
+                            // buffer's value anchors the trimmer.
+                            val bufFrame = timeline.frameAt(info.presentationTimeUs, sr)
                             carry?.let { chunk = it + chunk; carry = null }
                             var alignedBytes = chunk.size - chunk.size % srcBpf
                             if (alignedBytes != chunk.size) {
                                 carry = chunk.copyOfRange(alignedBytes, chunk.size)
+                                chunk = chunk.copyOfRange(0, alignedBytes)
                             }
                             folder?.let {
                                 // >2 channels: fold the whole decoded frames
                                 // to stereo; frame count is unchanged, so the
-                                // drop math below is layout-independent.
+                                // trim below is layout-independent.
                                 chunk = it.fold(chunk, 0, alignedBytes)
                                 alignedBytes = chunk.size
                             }
-                            val frames = (alignedBytes / bpf).toLong()
-                            val drop = min(framesToDrop, frames)
-                            framesToDrop -= drop
-                            val startByte = (drop * bpf).toInt()
-                            if (startByte < alignedBytes) {
-                                payload = if (startByte == 0 && alignedBytes == chunk.size) {
-                                    chunk
+                            payload = trimmer.accept(chunk, bufFrame)
+                            if (firstOutput) {
+                                firstOutput = false
+                                if (trimmer.lateFrames > 0) {
+                                    // Pre-roll should make this impossible; if
+                                    // it happens the gap is silence, so media
+                                    // frame startFrame still plays on time.
+                                    Log.w(
+                                        TAG,
+                                        "decoder: resumed ${trimmer.lateFrames} frames past the " +
+                                            "target (startFrame=${sched.startFrame} " +
+                                            "pts=${info.presentationTimeUs}us); filled with silence"
+                                    )
                                 } else {
-                                    chunk.copyOfRange(startByte, alignedBytes)
+                                    Log.d(
+                                        TAG,
+                                        "decoder: startFrame=${sched.startFrame} first pts=" +
+                                            "${info.presentationTimeUs}us = gapless frame $bufFrame"
+                                    )
                                 }
                             }
                         }
                         // Release the codec buffer BEFORE the potentially long
                         // blocking push (queue full while paused).
                         c.releaseOutputBuffer(outIdx, false)
-                        if (payload != null && !q.push(payload)) return // retired
+                        for (p in payload) {
+                            if (!q.push(p)) return // retired
+                        }
                         if (eos) {
-                            // Includes "file ends before startFrame" (metadata
-                            // duration over-reported): the queue closes with
-                            // whatever was decodable and the writer finishes.
+                            // The trimmer's withheld tail is the encoder
+                            // padding: dropped. Includes "file ends before
+                            // startFrame" (metadata duration over-reported):
+                            // the queue closes with whatever was decodable.
+                            trimmer.finish()
                             q.close()
                             return
                         }
@@ -1928,7 +2040,7 @@ class LocaljamAudioPlugin :
             } catch (_: Throwable) {
             }
             try {
-                extractor?.release()
+                source?.close()
             } catch (_: Throwable) {
             }
         }
@@ -1996,6 +2108,15 @@ class LocaljamAudioPlugin :
                 ?: throw IllegalArgumentException("no audio track in file")
             extractor.selectTrack(trackIndex)
             val mime = trackFormat.getString(MediaFormat.KEY_MIME)!!
+            // Gapless mapping inputs ([GaplessTimeline]): the first sample's
+            // pts BEFORE anything reads or seeks (negative for an `elst`
+            // timeline MPEG4Extractor shifted), and the encoder delay/padding
+            // the extractor found (elst, iTunSMPB, LAME tag).
+            // (sampleTime is −1 only when there is no sample at all.)
+            val firstSampleUs = extractor.sampleTime.let { if (it == -1L) 0L else it }
+            val encoderDelay = trackFormat.intOr(KEY_ENCODER_DELAY, 0)
+            val encoderPadding = trackFormat.intOr(KEY_ENCODER_PADDING, 0)
+            val formatSampleRate = trackFormat.intOr(MediaFormat.KEY_SAMPLE_RATE, 0)
 
             // Duration: the SAME metadata chain probeDuration uses (so a
             // probed playlist and a loaded track agree to the µs).
@@ -2086,11 +2207,46 @@ class LocaljamAudioPlugin :
             // bad_position on every playAt or an AudioTrack that never builds.
             PlaybackLimits.fileProblem(sampleRate, channels, durationUs)
                 ?.let { throw IllegalArgumentException(it) }
-            return LoadedAudio(path, mime, sampleRate, channels, channelMask, durationUs)
+            // MP3: feed the decoder from a frame index (MediaExtractor's MP3
+            // seeks are not frame-exact — see [Mp3FrameIndex]); anything the
+            // index cannot describe keeps the extractor path.
+            val mp3 = if (mime.equals(MediaFormat.MIMETYPE_AUDIO_MPEG, ignoreCase = true)) {
+                Mp3FrameIndex.build(java.io.File(path))?.takeIf {
+                    val ok = it.sampleRate == sampleRate && it.channels == channels
+                    if (!ok) {
+                        Log.w(
+                            TAG,
+                            "mp3 index ${it.sampleRate} Hz x${it.channels} != decoder " +
+                                "$sampleRate Hz x$channels; using MediaExtractor"
+                        )
+                    }
+                    ok
+                }
+            } else {
+                null
+            }
+            val timeline = mp3?.timeline() ?: GaplessTimeline.fromTrack(
+                firstSampleUs, encoderDelay, encoderPadding, formatSampleRate, sampleRate
+            )
+            Log.i(
+                TAG,
+                "load: $mime ${sampleRate}Hz x$channels firstSampleUs=$firstSampleUs " +
+                    "encoderDelay=$encoderDelay encoderPadding=$encoderPadding " +
+                    (mp3?.let {
+                        "mp3Frames=${it.frameCount} lameDelay=${it.encoderDelay} " +
+                            "lamePadding=${it.encoderPadding}"
+                    } ?: "extractor")
+            )
+            return LoadedAudio(
+                path, mime, sampleRate, channels, channelMask, durationUs, timeline, mp3
+            )
         } finally {
             extractor.release()
         }
     }
+
+    private fun MediaFormat.intOr(key: String, default: Int): Int =
+        if (containsKey(key)) getInteger(key) else default
 
     private fun MediaFormat.channelMaskOrNull(): Int? =
         if (containsKey(MediaFormat.KEY_CHANNEL_MASK)) {
