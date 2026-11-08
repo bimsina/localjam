@@ -1,5 +1,8 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
-    <!-- Control + media planes are plain sockets on the LAN (PROTOCOL.md §1). -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+    <!-- Control + media planes are plain sockets on the LAN (PROTOCOL.md §1).
+         Android grants no socket at all without INTERNET, local network
+         included; LocalJam never connects to a host on the internet. -->
     <uses-permission android:name="android.permission.INTERNET"/>
     <!-- Android 17 (API 37) gates ALL local-network traffic — incoming
          included — behind this runtime permission; INTERNET no longer
@@ -21,7 +24,8 @@
         android:icon="@mipmap/ic_launcher"
         android:allowBackup="false"
         android:dataExtractionRules="@xml/data_extraction_rules"
-        android:fullBackupContent="@xml/backup_rules">
+        android:fullBackupContent="@xml/backup_rules"
+        android:networkSecurityConfig="@xml/network_security_config">
         <activity
             android:name=".MainActivity"
             android:exported="true"
@@ -45,7 +49,13 @@
             </intent-filter>
             <!-- localjam://join?… links (QR, share sheet, messaging apps)
                  open the app straight into the room. singleTop above means a
-                 link arriving while the app runs reaches the live instance. -->
+                 link arriving while the app runs reaches the live instance.
+                 The http://<lan-ip>:<port>/join#… form is deliberately NOT
+                 claimed: its host is a LAN IP that changes per room, so it
+                 cannot be a verified App Link, and an unverified http filter
+                 would offer LocalJam as a browser for every web link. That
+                 link opens in the browser, which is the web-guest path, and
+                 the page offers localjam:// for "Open in app". -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW"/>
                 <category android:name="android.intent.category.DEFAULT"/>
@@ -53,6 +63,16 @@
                 <data android:scheme="localjam"/>
             </intent-filter>
         </activity>
+        <!-- No telemetry. The bundled ML Kit barcode scanner (mobile_scanner)
+             batches usage and diagnostics events (device model, app version,
+             per-install id, API timings) and uploads them to Google through
+             the datatransport library's CCT backend. The backend is found
+             through this service's metadata; without it the uploader has no
+             backend and drops each batch on the device instead of sending
+             it. The scheduler pieces stay, since ML Kit calls into them. -->
+        <service
+            android:name="com.google.android.datatransport.runtime.backends.TransportBackendDiscovery"
+            tools:node="remove" />
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
         <meta-data

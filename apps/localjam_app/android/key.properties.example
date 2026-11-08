@@ -1,8 +1,13 @@
 # Copy to android/key.properties (git-ignored) and fill in to sign a
-# distributable release build. Generate a keystore with:
+# distributable release build. Without it, release builds fail on purpose
+# (see app/build.gradle.kts). Full guide: docs/release/ANDROID_RELEASE.md.
 #
-#   keytool -genkey -v -keystore ~/localjam-upload.jks \
-#     -keyalg RSA -keysize 2048 -validity 10000 -alias upload
+# This is the Play *upload* key; with Play App Signing, Google holds the key
+# that signs what users install. Generate it once, keep it outside the repo,
+# and back it up:
+#
+#   keytool -genkeypair -v -keystore ~/keys/localjam-upload.jks \
+#     -keyalg RSA -keysize 4096 -validity 10000 -alias upload
 #
 # storeFile is resolved relative to the android/ directory, so an absolute
 # path is usually what you want.
