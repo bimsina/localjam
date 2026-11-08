@@ -12,6 +12,11 @@
   m4a seeks played up to one AAC frame behind (iTunSMPB files) or one to two
   frames ahead (`elst` files, also from 0), and VBR MP3 seeks were off by an
   unbounded estimate error. README "Media position".
+- iOS/macOS: LAME-tagged MP3s are gapless too. Core Audio applies the LAME
+  delay only to some files (measured: MPEG-1 stereo yes; mono and MPEG-2/2.5
+  no, which put media frame P 576 frames early against Android and Chrome);
+  the window is chosen by comparing AVAudioFile's length with the tag, and
+  `load`/`probeDuration` report the gapless duration.
 - Android `setRate` never answers success for a speed the playing track
   refused: `rate_needs_reanchor` for a low-latency track (re-anchor with
   `playAt`; its track can time-stretch), `bad_args` as before otherwise.
