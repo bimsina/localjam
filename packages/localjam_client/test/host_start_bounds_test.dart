@@ -141,9 +141,9 @@ void main() {
       );
       addTearDown(engine.close);
       final hosts = engine.joinLink.hosts;
-      // Loopback is always the last candidate: a guest on this same machine
-      // (a second simulator, the CLI) has no other path in.
-      expect(hosts.last, InternetAddress.loopbackIPv4.address);
+      // Bound to loopback, no LAN address is reachable: the link names
+      // loopback alone, the one way in for a guest on this same machine.
+      expect(hosts, [InternetAddress.loopbackIPv4.address]);
     });
 
     test('prefs that never answer cost start() at most one identity '

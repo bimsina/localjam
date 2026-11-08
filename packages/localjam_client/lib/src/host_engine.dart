@@ -554,11 +554,14 @@ class JamHostEngine extends JamEngine {
   }
 
   /// One set of join parameters carrying every candidate a guest may try,
-  /// in order (§1): the LAN addresses first — the first of them is the http
-  /// form's own host — then loopback, which is the only path that works for
-  /// a guest running on this same machine (two simulators, two emulators,
-  /// the CLI beside the app). Off-machine guests spend nothing on it — a
-  /// connect to their own loopback is refused at once.
+  /// in order (§1): the LAN addresses — the first of them is the http
+  /// form's own host. Loopback is never advertised beside them: a link is
+  /// shown to, scanned and shared with other devices, for which `127.0.0.1`
+  /// is themselves (a guest on this same machine reaches the room on its
+  /// LAN address too). Only with no LAN address at all does the link name
+  /// loopback, so it still parses and a same-machine guest (the CLI beside
+  /// the app, a test) can join; [hasLanAddress] is false then and the app
+  /// does not present it as a way in.
   static JoinLink _buildJoinLink(
     JamHostServer server,
     List<InternetAddress> lan,
@@ -567,7 +570,8 @@ class JamHostEngine extends JamEngine {
     token: server.token,
     name: server.sessionName,
     hosts: [
-      for (final a in [...lan, InternetAddress.loopbackIPv4]) a.address,
+      for (final a in lan.isEmpty ? [InternetAddress.loopbackIPv4] : lan)
+        a.address,
     ],
     port: server.port,
   );
@@ -595,9 +599,9 @@ class JamHostEngine extends JamEngine {
   /// The combined multi-interface join URL for QR codes, share text and
   /// copy/paste, in the http form (§1, 1.2: a phone camera opens it with no
   /// app installed, and this room serves its browser player there, §1.1):
-  /// the LAN candidates guests can reach right now, then loopback. Changes
-  /// when the device's networks do — listen on [joinUriListenable] and
-  /// rebuild the QR. While [hasLanAddress] is false it names loopback only
+  /// the LAN candidates guests can reach right now, never loopback beside
+  /// them ([_buildJoinLink]). Changes when the device's networks do —
+  /// listen on [joinUriListenable] and rebuild the QR. While [hasLanAddress] is false it names loopback only
   /// and must not be presented as a way in.
   Uri get joinUri => _joinUri.value;
 

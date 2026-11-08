@@ -124,8 +124,8 @@ class _FakeAddress implements InterfaceAddress {
 
 /// Points [JamHostEngine]'s interface scan at [interfaces] for this test.
 ///
-/// Only for tests where nobody joins: a guest dialling a made-up LAN address
-/// would sit out a connect timeout before falling back to loopback.
+/// A room's link then names only the made-up LAN addresses (never loopback
+/// beside them), so a guest joining in such a test dials loopback itself.
 void fakeLan(List<NetworkInterface> interfaces) {
   final previous = JamHostEngine.networkInterfaceLister;
   JamHostEngine.networkInterfaceLister = () async => interfaces;

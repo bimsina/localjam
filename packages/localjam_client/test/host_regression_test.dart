@@ -80,7 +80,7 @@ void main() {
           FakeNetworkInterface('bridge100', ['172.20.10.1']),
         ];
         await waitFor(() => engine.hasLanAddress, reason: 're-scan');
-        expect(hosts(engine), ['172.20.10.1', '127.0.0.1']);
+        expect(hosts(engine), ['172.20.10.1']);
         expect(engine.lanAddresses.value.single.address, '172.20.10.1');
 
         // And the room really is open (here: over loopback).
@@ -126,7 +126,7 @@ void main() {
       ]);
       await Future.wait([first, second]);
       expect(scans, 1);
-      expect(hosts(engine), ['10.0.0.5', '127.0.0.1']);
+      expect(hosts(engine), ['10.0.0.5']);
     });
 
     test('a failed mDNS restart after an address change is retried on the '

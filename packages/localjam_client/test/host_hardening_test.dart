@@ -324,7 +324,9 @@ void main() {
       addTearDown(engine.close);
       List<String> hosts() => engine.joinLink.hosts;
       expect(engine.hasLanAddress, isTrue);
-      expect(hosts(), ['192.168.1.7', '127.0.0.1']);
+      expect(hosts(), ['192.168.1.7'], reason: 'never loopback beside a LAN');
+      expect('${engine.joinUri}', isNot(contains('127.0.0.1')));
+      expect('${engine.localjamUri}', isNot(contains('127.0.0.1')));
 
       final uris = <Uri>[];
       engine.joinUriListenable.addListener(
@@ -335,7 +337,7 @@ void main() {
         FakeNetworkInterface('rmnet0', ['10.20.30.40']),
       ];
       await engine.refreshLanAddresses();
-      expect(hosts(), ['10.0.0.5', '127.0.0.1']);
+      expect(hosts(), ['10.0.0.5']);
       expect(uris, hasLength(1));
       expect(engine.lanAddresses.value.map((a) => a.address), ['10.0.0.5']);
 
@@ -355,7 +357,7 @@ void main() {
       JamHostEngine.networkInterfaceLister = () async =>
           throw const SocketException('refused');
       await engine.refreshLanAddresses();
-      expect(hosts(), ['10.0.0.9', '127.0.0.1']);
+      expect(hosts(), ['10.0.0.9']);
     });
 
     test('a cellular-only device has no LAN address to offer (yet), and '
