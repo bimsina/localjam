@@ -379,7 +379,10 @@ class _LibraryRowState extends State<_LibraryRow> {
       child: JamTrackRow(
         title: stripAudioExtension(track.title),
         // The one second line (N8): no "Unknown artist" filler.
-        byline: jamSongByline(artist: track.artist, album: track.album),
+        byline: jamSongByline(
+          artist: normalizeArtistCredit(track.artist),
+          album: track.album,
+        ),
         duration: ms == null ? null : Duration(milliseconds: ms),
         // Decoded at the size it is drawn, not at the file's 1400 px.
         artworkImage: cover == null
