@@ -117,6 +117,53 @@ on built-in MacBook Pro speakers), so it under-reports the §7 starting point
 there. Debug builds add the test hooks `debugSetOutputLatencyOverrideUs` and
 `debugLatencyInfo`.
 
+### Media position
+
+Media position P (`playAt`'s `positionUs`, `positionUs`, durations) is the
+**gapless** frame P on every platform: the encoder's leading delay (AAC
+priming from an `edts/elst` or iTunSMPB atom, the LAME tag's encoder delay)
+and trailing padding are not part of the timeline, and an MP3 without a LAME
+tag starts after the decoder's own 529-frame delay. A platform that disagreed
+would play every frame a constant offset away from the others while every
+drift reading stayed at ~0 — drift telemetry compares each player against its
+own timeline, never against the audio.
+
+What each decoder treats as frame 0, measured on macOS by cross-correlating
+the decoded output (also after seeking to frame 30001) against the source
+PCM; "late" means media frame P played the source's frame P − n:
+
+| | AAC m4a (`elst` / iTunSMPB) | MP3 with LAME tag | MP3 without |
+| --- | --- | --- | --- |
+| AVAudioFile (iOS/macOS) | gapless, seeks exact | gapless only for MPEG-1 stereo; else 576 (LAME's delay) late | decoder delay dropped |
+| Chrome 157 `decodeAudioData` | gapless | gapless | 529 late (FFmpeg keeps the decoder delay) |
+| dr_mp3 (Windows/Linux) | — | gapless, seeks exact | 529 late |
+| Android, before | see below | MP3Extractor seeks wrong by a TOC/bitrate estimate | same |
+
+Android (from the AOSP sources, matching the on-device logcat): MediaCodec
+trims `encoder-delay`/`encoder-padding` itself (SkipCutBuffer) from wherever
+decoding starts and only shifts bytes, so output pts stop describing the PCM —
+an iTunSMPB m4a started at 0 reports its first PCM at pts frame 3072 while it
+is gapless frame 0 — and MPEG4Extractor (Android 10+) also shifts `elst` files'
+pts by the priming, removing it twice. Seeks therefore played up to one AAC
+frame late (iTunSMPB) or one to two frames early (`elst`, even from 0).
+
+Now: Android configures the codec with the platform trim off, maps pts with
+`GaplessTimeline` (one formula for shifted and unshifted timelines), pre-rolls
+seeks 200 ms and drops to the exact frame (`PcmTrimmer`; a decode that resumes
+past the target is padded with silence, never started late), and feeds MP3s
+from its own frame index (`Mp3FrameIndex`). Apple shifts LAME MP3s Core Audio
+did not trim (`GaplessMp3`, chosen by comparing `AVAudioFile.length` with the
+tag), web shifts the decoded buffer in place (`Mp3Info.mediaWindow`; tagless
+MP3 by engine: WebKit uses Core Audio), and the desktop core drops the decoder
+delay of tagless MP3s. Fixtures: `tool/gapless_fixtures.sh`.
+
+Not verified by measurement: Android on a device (the mapping is unit-tested
+against a model of MPEG4Extractor and Codec2; check the `decoder:` logcat line
+and listen for a click track against an iPhone/Chrome), Safari (assumed to
+behave as AVAudioFile — it decodes with Core Audio), HE-AAC (delay scaled
+like the platform's SkipCutBuffer), `elst` with an initial empty edit or
+several entries, ADTS `.aac` files.
+
 ## Platforms
 
 | Platform | Engine | Formats |

@@ -114,7 +114,8 @@ class _Segment {
 ///    again: the current track decodes once, not twice, before it plays.
 ///    At most one buffer is kept; any `load`, a later kept probe and
 ///    `dispose` drop it. Durations are of the buffer as decoded, i.e.
-///    resampled to the context's rate (within a frame of the file's).
+///    resampled to the context's rate (within a frame of the file's), minus
+///    any MP3 frames that are not media (README "Media position").
 ///  * `playAt`: a past anchor (or one less than the minimum lead —
 ///    [_minLeadSec], or twice the context's `baseLatency` where that is
 ///    longer — ahead of the render clock) starts that far ahead with the
