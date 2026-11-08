@@ -1303,7 +1303,9 @@ H→G  error { code, message, fatal: bool }
 Codes: `not_allowed` (§5.6, never fatal), `kicked` (§5.6, always fatal),
 `busy` (1.3, §6.6, never fatal: the host is at a bound it will lift later —
 too many catalog adds pending, or the queue at its cap — and added what fit,
-or did not add the one that found the queue full as it landed),
+or did not add the one that found the queue full as it landed; or the guest
+is sending requests faster than the host acts on them, §9.1, and that one
+was not acted on),
 `media_gone`, `internal`, and `bad_token`, `version_unsupported`,
 `session_full` (reserved: joins are refused with `reject`, §3.1). Fatal
 errors are followed by a close. An unknown code is a generic error; `fatal`
@@ -1410,8 +1412,12 @@ a reject, a close, or a 4xx/5xx.
 | Joined peers | 32 | `reject { full }`, socket closed |
 | Half-open (pre-`hello`) sockets | 8 | `503` on the upgrade |
 | Bytes a socket may send before its `hello` is accepted, counting any sent with the upgrade request | 16 KB (+1 KB framing) | close `1008` (not upgraded, if the upgrade's own read was over) |
-| One control frame, before `hello` | 16 KB | close `1008` |
-| One control frame, joined peer | 256 KB | close `1008` |
+| One control message, before `hello`, summed over its fragments | 16 KB | close `1008` as its first frame over the cap begins |
+| One control message, joined peer, summed over its fragments | 256 KB | close `1008` as its first frame over the cap begins |
+| Bytes a joined peer's control socket sends | 256 KB/s, 1 MB bursts | close `1008` |
+| Frames a joined peer's control socket sends, WebSocket pings included | 100/s, 400 bursts | close `1008` |
+| `request`s acted on, one joined peer | 10/s, 30 bursts | `error { busy }`, not acted on; 60 more over the rate: close `1008` |
+| Bytes queued for one peer that it has not read (beyond the kernel's buffer) | 4 MB | socket destroyed, peer dropped (grace slot kept) |
 | Time to send a valid `hello` | 10 s | socket dropped |
 | One upload | 512 MB | `413` |
 | Uploads this session | 2 GB | `507` |
@@ -1469,14 +1475,33 @@ which is worse than the newest connections getting a `503`. An embedder
 that raises its descriptor limit at launch (`setrlimit(RLIMIT_NOFILE)`)
 can raise the cap with it.
 
-The per-frame caps are a different kind of limit. They are counted in
-**UTF-8 bytes**, not UTF-16 code units — a text frame of three-byte
-characters is three times its `length` — but they are applied to whole,
-reassembled messages, so what they bound is the cost of parsing and acting
-on a frame, plus how many times a sender gets to impose it (once — the
-socket goes with the frame). For a joined peer that is the only bound: it
-holds the token, and within the room §9 trusts it not to stream a gigabyte
-into one frame. The bounds that hold against anyone are the ones above.
+**Holding the token is not a memory budget.** A discoverable room hands
+the token to every neighbour that asks (§9), so a joined peer is bounded
+in bytes too. The message caps are counted in **UTF-8 bytes**, not UTF-16
+code units — a text frame of three-byte characters is three times its
+`length` — and a host MUST enforce them while the message arrives, not on
+the reassembled message: a WebSocket stack that reassembles before anyone
+looks would let one peer stream a single fragmented message until the host
+runs out of memory. The reference host reads each frame header on the raw
+stream (without compression a frame's declared length is exactly what it
+adds to the message) and closes the socket as soon as a message's
+fragments declare more than the cap, before the payload is read. The rates
+bound the rest of what a joined peer can make the host do: raw bytes and
+frames in (a WebSocket ping is a pong the host must queue), and `request`s,
+which are what turn a small frame into a broadcast to every peer — a
+reorder sends the whole playlist. An honest guest sends a few hundred
+bytes a second, a ping every two seconds and a burst of eight on joining,
+and a request per tap; a request over the rate is answered `busy` (§8) and
+can simply be repeated, and only a peer that keeps going is closed.
+
+Outbound, a WebSocket stack typically has no backpressure: what the host
+sends a peer that has stopped reading — a hostile one, or a phone gone out
+of range without a FIN — waits in host memory, and every broadcast adds to
+it. The reference host counts the bytes it queued for each peer against
+those the socket has actually handed to the kernel, and drops a peer whose
+backlog is over the bound when the next frame is due. One frame always
+goes, however large, so a big `welcome` is never the reason; the peer
+keeps its §3.3 grace slot, so a phone that comes back resumes.
 
 Compression would undo all of it — with `permessage-deflate` a cap would be
 measured after inflation, and a few hundred compressed bytes from a socket
