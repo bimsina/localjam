@@ -330,11 +330,18 @@ void main() {
         () => engine.prefetchStates.value[mp3.mediaId]?.ready ?? false,
         reason: 'the next item to get ready',
       );
-      expect(
-        host.peerMediaState(engine.selfPeerId, ogg.mediaId),
-        MediaReadiness.none,
+      // What the guest reports reaches the host a moment later, so a busy
+      // machine must not fail on a report still in flight.
+      await waitFor(
+        () => host.allPeersReady(mp3.mediaId),
+        reason: 'the host to hear the next item ready',
       );
-      expect(host.allPeersReady(mp3.mediaId), isTrue);
+      await waitFor(
+        () =>
+            host.peerMediaState(engine.selfPeerId, ogg.mediaId) ==
+            MediaReadiness.none,
+        reason: 'the host to hear the Ogg item is not coming',
+      );
       expect(await store.lookup(ogg), isNull, reason: 'its bytes are dropped');
       expect(engine.retryFetch(ogg.mediaId), isFalse);
 
@@ -476,9 +483,11 @@ void main() {
         (c) => (c['path']! as String).contains('#audio/ogg'),
       );
       expect(hungChecks, hasLength(3), reason: 'first check + 2 retries');
-      expect(
-        host.peerMediaState(engine.selfPeerId, hung.mediaId),
-        MediaReadiness.none,
+      await waitFor(
+        () =>
+            host.peerMediaState(engine.selfPeerId, hung.mediaId) ==
+            MediaReadiness.none,
+        reason: 'the host to hear the hung item is not coming',
       );
       // Its bytes are kept, and a manual retry checks them again.
       expect(engine.retryFetch(hung.mediaId), isTrue);
