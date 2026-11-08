@@ -9,6 +9,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:localjam_app/src/design/theme.dart';
 import 'package:localjam_app/src/design/typography.dart';
 import 'package:localjam_app/src/design/tokens.dart';
+import 'package:localjam_app/src/util/permissions.dart';
 import 'package:localjam_app/src/widgets/buttons.dart';
 import 'package:localjam_app/src/widgets/permission_sheet.dart';
 import 'package:localjam_app/src/widgets/sheet.dart';
@@ -28,6 +29,22 @@ Widget _host(Future<void> Function(BuildContext) onTap, {ThemeData? theme}) =>
     );
 
 void main() {
+  test('sharing the library says what the jam sees, not that nothing leaves '
+      'this phone', () {
+    // Turning on "Share my music library" once showed the picker's primer:
+    // "Songs you don't add never leave this phone", while the jam was about
+    // to see every title.
+    expect(
+      JamPermissionRationale.forKind(JamPermissionKind.audioLibraryShare),
+      JamPermissionRationale.audioLibraryShare,
+    );
+    final share = JamPermissionRationale.audioLibraryShare;
+    final words = [share.body, share.doesBullet, share.neverBullet].join(' ');
+    expect(words, isNot(contains('never leave')));
+    expect(words, contains('title, artist and cover'));
+    expect(words, contains('jam ends'));
+  });
+
   test('each primer says its own thing once, in sentence-case headings', () {
     expect(
       JamPermissionRationale.localNetwork.title,
@@ -49,6 +66,7 @@ void main() {
       JamPermissionRationale.localNetwork,
       JamPermissionRationale.notifications,
       JamPermissionRationale.audioLibrary,
+      JamPermissionRationale.audioLibraryShare,
       JamPermissionRationale.camera,
     ];
     // No two primers share their promise headings.

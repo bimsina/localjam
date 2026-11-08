@@ -128,7 +128,7 @@ class _Library extends JamCatalogSource {
 /// This platform has a library, and the permission ask answers [outcome].
 void _libraryHere(JamPermissionOutcome outcome, {void Function()? onAsk}) {
   debugJamLibraryAvailable = true;
-  jamAudioPermissionRequest = () async {
+  jamAudioPermissionRequest = ({bool sharing = false}) async {
     onAsk?.call();
     return outcome;
   };

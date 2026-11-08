@@ -890,7 +890,7 @@ class _ShareLibraryState extends State<_ShareLibrary> {
     setState(() => _pending = share);
     try {
       if (share) {
-        if (await ensureLibraryAccess(session)) {
+        if (await ensureLibraryAccess(session, sharing: true)) {
           await session.setLibraryShared(true);
         }
       } else {

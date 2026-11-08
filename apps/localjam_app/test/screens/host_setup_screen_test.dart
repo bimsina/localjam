@@ -35,13 +35,20 @@ class _Library extends JamCatalogSource {
   Future<File?> open(String catalogId) async => null;
 }
 
+/// The `sharing` flag of every library ask, in order.
+final List<bool> _askedSharing = [];
+
 /// Whether this platform has a library, and what the permission ask says.
 void _library({
   bool available = true,
   JamPermissionOutcome outcome = JamPermissionOutcome.granted,
 }) {
   debugJamLibraryAvailable = available;
-  jamAudioPermissionRequest = () async => outcome;
+  jamAudioPermissionRequest = ({bool sharing = false}) async {
+    _askedSharing.add(sharing);
+    return outcome;
+  };
+  _askedSharing.clear();
   addTearDown(() {
     debugJamLibraryAvailable = null;
     jamAudioPermissionRequest = requestAudioLibraryPermission;
@@ -407,6 +414,9 @@ void main() {
       await tester.tap(find.text(HostSetupStrings.shareLibrary));
       await tester.pumpAndSettle();
       expect(_shareRow(tester).toggled, isTrue);
+      // Asked as sharing: its rationale says what the jam will see, not the
+      // picker's "nothing leaves this phone".
+      expect(_askedSharing, [true]);
 
       await tester.tap(
         find.widgetWithText(JamTextButton, HostSetupStrings.start),

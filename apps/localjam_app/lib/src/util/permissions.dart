@@ -58,6 +58,12 @@ enum JamPermissionKind {
   /// Android's `READ_MEDIA_AUDIO`, before the first library browse.
   audioLibrary,
 
+  /// The same `READ_MEDIA_AUDIO`, asked by turning on "Share my music
+  /// library". A kind of its own because the promise is different: the
+  /// picker's "nothing leaves this phone" is untrue of a library whose titles
+  /// the jam is about to see.
+  audioLibraryShare,
+
   /// The camera, before the first QR scan.
   camera,
 }
@@ -74,7 +80,8 @@ Permission? _permissionFor(JamPermissionKind kind) => switch (kind) {
   // Nothing to ask for; the sheet is all there is.
   JamPermissionKind.localNetworkApple => null,
   JamPermissionKind.notifications => Permission.notification,
-  JamPermissionKind.audioLibrary => Permission.audio,
+  JamPermissionKind.audioLibrary ||
+  JamPermissionKind.audioLibraryShare => Permission.audio,
   JamPermissionKind.camera => Permission.camera,
 };
 
@@ -240,9 +247,18 @@ enum JamPermissionOutcome {
 
 /// Requests audio-library access (Android `READ_MEDIA_AUDIO` on 13+,
 /// `READ_EXTERNAL_STORAGE` below).
-Future<JamPermissionOutcome> requestAudioLibraryPermission() async {
+///
+/// [sharing]: asked by turning on "Share my music library", whose rationale
+/// says what the jam will see rather than the picker's "nothing leaves this
+/// phone".
+Future<JamPermissionOutcome> requestAudioLibraryPermission({
+  bool sharing = false,
+}) async {
   if (!Platform.isAndroid) return JamPermissionOutcome.unsupported;
-  if (!await jamExplainPermission(JamPermissionKind.audioLibrary)) {
+  final kind = sharing
+      ? JamPermissionKind.audioLibraryShare
+      : JamPermissionKind.audioLibrary;
+  if (!await jamExplainPermission(kind)) {
     return JamPermissionOutcome.dismissed;
   }
   try {
