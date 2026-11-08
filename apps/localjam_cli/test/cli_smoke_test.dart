@@ -7,6 +7,7 @@ library;
 import 'dart:io';
 import 'dart:math' as math;
 
+import 'package:localjam_cli/src/join_command.dart';
 import 'package:localjam_cli/src/sim_player.dart';
 import 'package:localjam_net/localjam_net.dart';
 import 'package:test/test.dart';
@@ -109,6 +110,17 @@ void main() {
 
   tearDown(() {
     tmp.deleteSync(recursive: true);
+  });
+
+  test('a host that ends the jam is reported as ending it, not as a '
+      'closed connection', () async {
+    final rig = await _startRig(tmp);
+    await rig.host.close();
+    await rig.guest.done.timeout(const Duration(seconds: 5));
+    expect(describeHostClose(rig.guest.sessionEnded), 'The host ended the jam');
+    await rig.guest.close();
+    // A host that just vanished said nothing: that is still a dropped link.
+    expect(describeHostClose(null), 'connection closed by host');
   });
 
   test('zero skew: drift stays under 1 ms over ~2 s of playback', () async {
