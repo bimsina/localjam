@@ -615,4 +615,82 @@ void main() {
     expect(await engine.transportPause(), isFalse);
     expect(await engine.transportPlay(), isFalse);
   });
+
+  group('an add that outlives its room', () {
+    /// The audio channel with `probeDuration` held until [release] — the
+    /// first await of a host add, where a long import spends its time.
+    Completer<void> holdProbes() {
+      final release = Completer<void>();
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(audioChannel, (call) async {
+            if (call.method == 'probeDuration') {
+              await release.future;
+              return 60000000;
+            }
+            if (call.method == 'nowUs') return 1000000;
+            return null;
+          });
+      addTearDown(
+        () => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(audioChannel, null),
+      );
+      return release;
+    }
+
+    test('ending the room mid-add registers nothing', () async {
+      mockAudioChannel();
+      final engine = await startEngine(address: InternetAddress.loopbackIPv4);
+      final release = holdProbes();
+      final file = await writeTempMedia(makeMediaBytes(512, seed: 7));
+
+      final add = engine.addMedia(file);
+      final outcome = add.then<Object?>((r) => r, onError: (Object e) => e);
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      await engine.close();
+      release.complete();
+
+      expect(await outcome, isA<StateError>());
+      expect(engine.playlist, isEmpty, reason: 'the closed registry');
+      expect(engine.debugServer.playlist, isEmpty);
+    });
+
+    test('a tagged add abandoned by the end of the room writes no '
+        'artwork', () async {
+      mockAudioChannel();
+      final engine = await startEngine(address: InternetAddress.loopbackIPv4);
+      final release = holdProbes();
+      final file = await makeTaggedMp3();
+
+      final add = engine.addMedia(file);
+      final outcome = add.then<Object?>((r) => r, onError: (Object e) => e);
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      await engine.close();
+      release.complete();
+
+      // Not a file-system error from a cover written into the swept upload
+      // directory: the add stopped before it wrote anything.
+      expect(await outcome, isA<StateError>());
+      expect(engine.playlist, isEmpty);
+    });
+
+    test('importFiles stops with the room, and what was in flight does not '
+        'land', () async {
+      mockAudioChannel();
+      final engine = await startEngine(address: InternetAddress.loopbackIPv4);
+      final release = holdProbes();
+      final a = await writeTempMedia(makeMediaBytes(512, seed: 8));
+      final b = await writeTempMedia(makeMediaBytes(512, seed: 9));
+
+      final job = engine.importFiles([a, b]);
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      await engine.close();
+      release.complete();
+
+      final outcomes = await job.done;
+      expect(outcomes, hasLength(1));
+      expect(outcomes.single.error, isA<StateError>());
+      expect(job.progress.value.cancelled, isTrue);
+      expect(engine.playlist, isEmpty);
+    });
+  });
 }
