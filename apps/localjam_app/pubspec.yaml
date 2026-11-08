@@ -95,7 +95,9 @@ flutter:
       fonts:
         - asset: assets/fonts/Manrope.ttf
 
-# App icon: the white headphones-and-mic mark on the raspberry gradient.
+# App icon: the white "beamed signal" mark (two notes joined by Wi-Fi arcs)
+# on the raspberry gradient. Every brand image comes from tool/render_brand.sh;
+# run it first, then:
 #   dart run flutter_launcher_icons
 flutter_launcher_icons:
   image_path: "assets/brand/icon_1024.png"
