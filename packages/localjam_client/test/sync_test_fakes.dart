@@ -153,6 +153,27 @@ class FakeLocaljamAudio extends LocaljamAudio {
     return last.positionUs + (heardSinceStartUs * last.rate).round();
   }
 
+  /// When set, [positionSample] reports this as the native instant its
+  /// position was computed for (Android's `{positionUs, nativeTimeUs}`);
+  /// null answers a bare position, as iOS/macOS/desktop/web do.
+  int Function()? sampleNativeTimeUs;
+
+  /// Runs after [positionSample] took its sample and before it answers:
+  /// e.g. advances a scripted clock by the reply's trip back.
+  void Function()? onPositionSampled;
+
+  @override
+  Future<LocaljamPositionSample?> positionSample() async {
+    final position = await positionUs();
+    final sampledAt = sampleNativeTimeUs?.call();
+    onPositionSampled?.call();
+    if (position == null) return null;
+    return LocaljamPositionSample(
+      positionUs: position,
+      nativeTimeUs: sampledAt,
+    );
+  }
+
   @override
   Future<void> setRate(double rate) async {
     calls.add('setRate');

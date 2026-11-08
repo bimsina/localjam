@@ -48,6 +48,20 @@ internal object TrackSpeed {
      * measured: 4× refused on a 3× buffer). 3× covers every drift slew;
      * faster playAt rates get room for their speed plus one.
      */
+    /** See [setRateRefusalCode]. */
+    const val RATE_NEEDS_REANCHOR = "rate_needs_reanchor"
+
+    /**
+     * `setRate`'s error code when the playing track refused the speed: a
+     * low-latency track ([lowLatency]) cannot time-stretch, but the next
+     * playAt's normal track can — [RATE_NEEDS_REANCHOR], so the caller
+     * re-anchors at once; a normal track refusing means the output cannot
+     * play that rate at all — `bad_args`. Never success: the caller would
+     * wait out a slew that is not happening.
+     */
+    fun setRateRefusalCode(lowLatency: Boolean): String =
+        if (lowLatency) RATE_NEEDS_REANCHOR else "bad_args"
+
     fun bufferFactor(rate: Double): Int = maxOf(3, ceil(rate).toInt() + 1)
 
     internal class Opened<T>(

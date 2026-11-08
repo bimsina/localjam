@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+- Android `setRate` never answers success for a speed the playing track
+  refused: `rate_needs_reanchor` for a low-latency track (re-anchor with
+  `playAt`; its track can time-stretch), `bad_args` as before otherwise.
+- Android `outputLatencyUs` (and events' `outputLatencyUs`) is 0: playAt
+  targets presented frames, so the device's hidden latency property — now
+  only in `debugLatencyInfo` — was subtracted twice. README "Latency contract".
+- `positionSample()` (`positionUs {withTime: true}`): the position with the
+  native instant it was computed for (Android); other platforms answer a bare
+  position, `nativeTimeUs` null.
+
 ## 0.4.0
 
 - Web platform (`LocaljamAudioWeb`, inline `web:` plugin) for the browser

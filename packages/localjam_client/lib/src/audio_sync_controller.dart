@@ -67,10 +67,16 @@ class DriftSample {
     required this.action,
   });
 
-  /// Where the player's heard position should read (µs) at the check
-  /// instant: the anchor formula's position plus the manual nudge (§7), which
-  /// deliberately moves what this device plays — so [errorUs] is the error
-  /// the drift loop corrects, 0 when the nudged schedule landed on time.
+  /// Where the player's heard position should read (µs) at the instant the
+  /// player measured [actualUs]: the anchor formula's position plus the
+  /// manual nudge (§7), which deliberately moves what this device plays —
+  /// so [errorUs] is the error the drift loop corrects, 0 when the nudged
+  /// schedule landed on time.
+  ///
+  /// When the player reports when it sampled
+  /// ([LocaljamPositionSample.nativeTimeUs], Android) the anchor formula is
+  /// evaluated at that instant, so the platform reply's trip back is not
+  /// read as the player running behind; otherwise at the reply's arrival.
   final int expectedUs;
 
   /// Player-measured media position (µs) at the check instant.
@@ -339,6 +345,24 @@ class AudioSyncController {
   /// that cannot time-stretch it): drift in the slew band is then corrected
   /// by re-anchoring instead. Cleared by a route change or engine restart.
   bool _slewUnsupported = false;
+
+  /// Set once a slew refused with `rate_needs_reanchor` (an Android
+  /// low-latency track without a time-stretcher) was answered with an
+  /// immediate re-anchor — whose track can slew. A second such refusal on
+  /// the same route means re-anchoring does not help here: slews are then
+  /// treated as unsupported. Cleared with [_slewUnsupported].
+  bool _reanchoredForTrackRate = false;
+
+  /// `setRate`'s refusal when only the playing track cannot play a rate
+  /// (localjam_audio README, error codes): re-anchor and it can.
+  static const String _rateNeedsReanchor = 'rate_needs_reanchor';
+
+  /// The oldest a position sample may be, by its reported native instant,
+  /// and still be compared at that instant (see [_roomPositionAtSample]).
+  /// A reply slower than this is suspect — more likely a stale clock
+  /// calibration than a real delay — so it is taken as "now", as for a
+  /// platform that reports no instant.
+  static const int _maxSampleAgeUs = 1000000;
 
   /// Local time (µs) of the last re-anchor that stood in for a slew the
   /// output refused; they are rate-limited (see [_reanchorForDrift]).
@@ -704,6 +728,11 @@ class AudioSyncController {
       return;
     }
     if (trackFinished.value) return;
+    // A bare position: the calibration a sample instant would be mapped
+    // through was just dropped (it may not have survived a sleep), and only
+    // a gross error is acted on here — a smaller one goes to checkDriftNow,
+    // which compares at the sample instant once the next schedule
+    // re-measured the clocks.
     int? actualUs;
     try {
       actualUs = await player.positionUs();
@@ -787,6 +816,7 @@ class AudioSyncController {
         _routeOutputLatencyUs = event.outputLatencyUs;
         _calibration = null;
         _slewUnsupported = false; // A new output may time-stretch fine.
+        _reanchoredForTrackRate = false;
         final previousRouteId = _currentRouteId;
         _currentRouteId = event.routeId;
         _routeEvents++;
@@ -821,6 +851,7 @@ class AudioSyncController {
         _routeOutputLatencyUs = event.outputLatencyUs;
         _calibration = null;
         _slewUnsupported = false;
+        _reanchoredForTrackRate = false;
         // The schedule the engine held is gone: nothing to measure until the
         // re-apply below re-schedules — and a position read meanwhile must
         // not pass for a healthy schedule.
@@ -1390,8 +1421,9 @@ class AudioSyncController {
         await _apply(); // Re-schedule from the current anchor.
         return;
       }
-      final actualUs = await player.positionUs();
-      if (actualUs == null || generation != _generation) return;
+      final measured = await player.positionSample();
+      if (measured == null || generation != _generation) return;
+      final actualUs = measured.positionUs;
       final nowLocalUs = localNowUs();
       _lastAudioConfirmedLocalUs = nowLocalUs;
       // The schedule is producing audio. Once it has done so for longer than
@@ -1405,8 +1437,9 @@ class AudioSyncController {
         _failures = 0;
       }
       // The player reports the heard position, which the nudge moves on
-      // purpose: compare against the nudged expectation, not the room's.
-      final roomUs = snapshot.positionAt(sessionNowUs());
+      // purpose: compare against the nudged expectation, not the room's —
+      // and the room's at the instant the player sampled, where it says.
+      final roomUs = _roomPositionAtSample(snapshot, measured);
       final expectedUs = _expectedPlayerUs(snapshot, roomUs);
       // The anchor ran past the end of the file: the track is over, not
       // drifting — a hard resync here would just re-schedule out of bounds.
@@ -1442,7 +1475,21 @@ class AudioSyncController {
             await player.setRate(snapshot.rate * rateMultiplier);
           } catch (e) {
             _slewing = false; // Never left "in flight" with no restore.
-            if (e is! PlatformException || e.code != 'bad_args') rethrow;
+            if (e is! PlatformException) rethrow;
+            if (e.code == _rateNeedsReanchor && !_reanchoredForTrackRate) {
+              // Only the playing track cannot time-stretch (an Android
+              // low-latency one); the track a re-anchor gets can. Correct
+              // now, not after waiting out a slew that is not happening,
+              // and slew normally from then on.
+              _reanchoredForTrackRate = true;
+              if (generation == _generation) {
+                await _reanchorForDrift(force: true);
+              }
+              break;
+            }
+            if (e.code != 'bad_args' && e.code != _rateNeedsReanchor) {
+              rethrow;
+            }
             // The output cannot time-stretch that rate (some Android
             // outputs refuse in-range rates and keep the old one): correct
             // by re-anchoring instead, now and for the rest of this route.
@@ -1473,6 +1520,30 @@ class AudioSyncController {
     } finally {
       _checking = false;
     }
+  }
+
+  /// The room's position at the instant [sample] was taken: its native
+  /// instant mapped to the local clock through the calibration, aged in
+  /// local µs (the session clock runs at the same rate to ppm over a
+  /// sub-second age). Without an instant, a calibration, or with one that
+  /// does not fit (in the future beyond calibration jitter, or older than
+  /// [_maxSampleAgeUs]), the room's position now — what a bare position
+  /// always got.
+  int _roomPositionAtSample(
+    PlaybackSnapshot snapshot,
+    LocaljamPositionSample sample,
+  ) {
+    final sessionNow = sessionNowUs();
+    final nativeUs = sample.nativeTimeUs;
+    final calibration = _calibration;
+    if (nativeUs == null || calibration == null) {
+      return snapshot.positionAt(sessionNow);
+    }
+    final ageUs = localNowUs() - (nativeUs - calibration.offsetUs);
+    if (ageUs <= 0 || ageUs > _maxSampleAgeUs) {
+      return snapshot.positionAt(sessionNow);
+    }
+    return snapshot.positionAt(sessionNow - ageUs);
   }
 
   /// Whether a hard resync the drift policy asked for at [nowLocalUs] runs
@@ -1508,10 +1579,15 @@ class AudioSyncController {
   /// re-anchor is an audible skip, and every 1 Hz check in the band doing
   /// one would skip every second. The band's error is tolerable meanwhile;
   /// past it the policy hard-resyncs, unthrottled.
-  Future<void> _reanchorForDrift() async {
+  ///
+  /// [force] skips that limit, for the one re-anchor that moves playback to
+  /// a track that can slew (see [_reanchoredForTrackRate]).
+  Future<void> _reanchorForDrift({bool force = false}) async {
     final nowLocalUs = localNowUs();
     final last = _lastDriftReanchorLocalUs;
-    if (last != null && nowLocalUs - last < _slewFallbackIntervalUs) return;
+    if (!force && last != null && nowLocalUs - last < _slewFallbackIntervalUs) {
+      return;
+    }
     _lastDriftReanchorLocalUs = nowLocalUs;
     _resyncCount++;
     await _apply();

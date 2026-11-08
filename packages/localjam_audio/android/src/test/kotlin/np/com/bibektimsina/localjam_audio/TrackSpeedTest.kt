@@ -107,4 +107,14 @@ internal class TrackSpeedTest {
 
         assertTrue(TrackSpeed.apply(Mockito.mock(AudioTrack::class.java), 1.05))
     }
+
+    @Test
+    fun setRateRefusal_isNeverSuccess_andALowLatencyOneAsksForAReanchor() {
+        // A low-latency track that refused a drift slew used to answer
+        // success: the caller waited out a slew that never happened and the
+        // 20–40 ms error stood. The caller re-anchors on this code at once.
+        assertEquals(TrackSpeed.RATE_NEEDS_REANCHOR, TrackSpeed.setRateRefusalCode(lowLatency = true))
+        assertEquals("rate_needs_reanchor", TrackSpeed.RATE_NEEDS_REANCHOR)
+        assertEquals("bad_args", TrackSpeed.setRateRefusalCode(lowLatency = false))
+    }
 }
