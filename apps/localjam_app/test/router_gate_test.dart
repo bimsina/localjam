@@ -5,6 +5,8 @@
 /// link that arrives before the flag has loaded is held, not dropped.
 library;
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
@@ -80,6 +82,30 @@ void main() {
     expect(find.byType(HomeScreen), findsOneWidget);
   });
 
+  testWidgets('Continue lands on Home even when the flag is slow to save', (
+    tester,
+  ) async {
+    // The redirect fires the instant the in-memory flag flips, so the intro
+    // can be gone before the write finishes — and its own `context.go` then
+    // ran on a dead context ("No GoRouter found in context"), which a deep
+    // link arriving at the same moment made likely on a fresh install.
+    final session = testSession();
+    SharedPreferences.setMockInitialValues({});
+    final onboarding = _SlowWrite();
+    await onboarding.load();
+    await pumpGated(tester, session, onboarding);
+
+    await tester.tap(find.text(OnboardingStrings.continueLabel));
+    await tester.pumpAndSettle();
+    expect(find.byType(OnboardingScreen), findsNothing);
+
+    onboarding.gate.complete();
+    await tester.pumpAndSettle();
+
+    expect(tester.takeException(), isNull);
+    expect(find.byType(HomeScreen), findsOneWidget);
+  });
+
   testWidgets('a second launch goes straight to Home', (tester) async {
     final session = testSession();
     SharedPreferences.setMockInitialValues({kOnboardingSeenKey: true});
@@ -141,4 +167,17 @@ void main() {
     expect(find.byType(HomeScreen), findsOneWidget);
     expect(find.byType(OnboardingScreen), findsNothing);
   });
+}
+
+/// Flips the flag at once, as the real one does, but holds the write until
+/// the test lets it land.
+class _SlowWrite extends JamOnboardingPrefs {
+  final Completer<void> gate = Completer<void>();
+
+  @override
+  Future<void> markSeen() async {
+    final write = super.markSeen();
+    await gate.future;
+    await write;
+  }
 }

@@ -99,7 +99,23 @@ String _rationaleKey(JamPermissionKind kind) =>
 ///
 /// Returns false only when the user actually said "Not now": that is the one
 /// answer that must stop the OS prompt from ever appearing.
-Future<bool> jamExplainPermission(JamPermissionKind kind) async {
+///
+/// Concurrent asks for one kind share a single answer. Two at once used to
+/// race: the first set the "explained" flag and showed the sheet, the second
+/// read the flag and went straight to the OS prompt — so "Not now" on the
+/// sheet was answered by the system dialog anyway.
+Future<bool> jamExplainPermission(JamPermissionKind kind) {
+  final pending = _explaining[kind];
+  if (pending != null) return pending;
+  final answer = _explain(kind);
+  _explaining[kind] = answer;
+  return answer.whenComplete(() => _explaining.remove(kind));
+}
+
+/// Rationales on screen (or being decided), so a second ask joins the first.
+final Map<JamPermissionKind, Future<bool>> _explaining = {};
+
+Future<bool> _explain(JamPermissionKind kind) async {
   final presenter = jamRationalePresenter;
   if (presenter == null) return true;
   if (_explained.contains(kind)) return true;
@@ -186,7 +202,14 @@ Future<void> ensureLocalNetworkPermission() async {
 ///
 /// Non-fatal by design: playback runs either way, so a denial costs the
 /// lock-screen controls and nothing else. Returns whether it is granted.
-Future<bool> ensureNotificationPermission() async {
+///
+/// Callers that overlap share one ask: one sheet, one OS prompt, one answer.
+Future<bool> ensureNotificationPermission() => _notificationAsk ??=
+    _askNotifications().whenComplete(() => _notificationAsk = null);
+
+Future<bool>? _notificationAsk;
+
+Future<bool> _askNotifications() async {
   if (!Platform.isAndroid) return true;
   if (!await jamExplainPermission(JamPermissionKind.notifications)) {
     return false;

@@ -122,6 +122,10 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     _finishing = true;
     final prefs = widget.prefs ?? JamOnboarding.maybeOf(context);
     await prefs?.markSeen();
+    // The gate's redirect fires the moment the flag flips, so by the time
+    // the write lands this screen may already be gone — Home is showing, and
+    // navigating from a dead context threw "No GoRouter found in context".
+    if (!mounted) return;
     widget.onDone?.call();
   }
 

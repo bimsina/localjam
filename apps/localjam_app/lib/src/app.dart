@@ -182,6 +182,23 @@ class _LocalJamAppState extends State<LocalJamApp> {
     return done.future;
   }
 
+  /// The root navigator's context, once the router has mounted it — waiting
+  /// a few frames for it (the intro handing over to Home rebuilds the tree)
+  /// rather than dropping the link. Null only if it never comes.
+  Future<BuildContext?> _mountedNavigator() async {
+    for (var frame = 0; frame < 30; frame++) {
+      final context = _router.routerDelegate.navigatorKey.currentContext;
+      if (context != null && context.mounted) return context;
+      if (!mounted) return null;
+      final next = Completer<void>();
+      WidgetsBinding.instance
+        ..addPostFrameCallback((_) => next.complete())
+        ..ensureVisualUpdate();
+      await next.future;
+    }
+    return null;
+  }
+
   /// A link is the one entry point the user did not aim: it can arrive from a
   /// chat, a web page, a QR sticker on a wall. So it is the one that has to
   /// be checked and confirmed before it opens a socket.
@@ -197,7 +214,7 @@ class _LocalJamAppState extends State<LocalJamApp> {
       _session.notify(AppStrings.notLocal, tone: JamNoticeTone.warning);
       return;
     }
-    final context = _router.routerDelegate.navigatorKey.currentContext;
+    final context = await _mountedNavigator();
     if (context == null || !context.mounted) return;
     // Never yank someone out of a running jam because a link arrived — but
     // never swallow the link either. A live jam gets the "leave it first?"
