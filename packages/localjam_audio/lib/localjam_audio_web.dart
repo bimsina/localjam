@@ -71,6 +71,8 @@ import 'package:flutter/services.dart';
 import 'package:flutter_web_plugins/flutter_web_plugins.dart';
 import 'package:web/web.dart' as web;
 
+import 'src/gapless_mp3.dart';
+
 /// Where the loaded buffer is in its life (mirrors the native engines).
 enum _State { idle, loaded, playing, paused, finished }
 
@@ -182,6 +184,10 @@ class LocaljamAudioWeb {
   /// The hidden `<audio>` element of the iOS graph, if any.
   @visibleForTesting
   web.HTMLAudioElement? get debugElement => _element;
+
+  /// The loaded buffer (media frame 0 first, see [_toMediaWindow]).
+  @visibleForTesting
+  web.AudioBuffer? get debugBuffer => _buffer;
 
   static const double _minRate = 1.0 / 32.0;
   static const double _maxRate = 32.0;
@@ -675,6 +681,8 @@ class LocaljamAudioWeb {
         details: _badBytes,
       );
     }
+    // Before decoding: decodeAudioData detaches the bytes.
+    final mp3 = _mp3Info(bytes);
     final web.AudioBuffer buffer;
     try {
       buffer = await ctx.decodeAudioData(bytes).toDart;
@@ -697,7 +705,78 @@ class LocaljamAudioWeb {
         details: _badBytes,
       );
     }
-    return (buffer, (buffer.length * 1e6 / buffer.sampleRate).round());
+    final frames = _toMediaWindow(buffer, mp3);
+    return (buffer, (frames * 1e6 / buffer.sampleRate).round());
+  }
+
+  /// Makes the buffer's first frame media frame 0 (README "Media
+  /// position"): for an MP3 whose decode did not land on the shared gapless
+  /// timeline ([Mp3Info.mediaWindow]) the samples are moved to the front in
+  /// place (no second copy of the PCM) and the tail zeroed. Returns how many
+  /// frames are media; frames past that are never played ([_playAt] passes
+  /// the media duration to `start`).
+  static int _toMediaWindow(web.AudioBuffer buffer, Mp3Info? info) {
+    final window = info?.mediaWindow(
+      decodedLength: buffer.length,
+      decodedRate: buffer.sampleRate,
+      decoderKeepsDelay: !_isWebKit(),
+    );
+    if (window == null) return buffer.length;
+    final (offset, length) = window;
+    for (var ch = 0; ch < buffer.numberOfChannels; ch++) {
+      final data = buffer.getChannelData(ch);
+      data.callMethod<JSAny?>('copyWithin'.toJS, 0.toJS, offset.toJS);
+      data.callMethod<JSAny?>('fill'.toJS, 0.toJS, length.toJS);
+    }
+    return length;
+  }
+
+  /// WebKit decodes with Core Audio (drops the MP3 decoder delay); Chrome
+  /// and Firefox with FFmpeg (keep it in a file without a LAME tag). Every
+  /// iOS browser is WebKit and reports Apple as the vendor.
+  static bool _isWebKit() => web.window.navigator.vendor.startsWith('Apple');
+
+  /// The MP3 facts of [bytes] ([Mp3Info]), or null for anything else.
+  /// Reads only the first ≤ 64 KB after any ID3v2 tags (slices, so a big
+  /// file is not copied), and never a file that is recognizably another
+  /// container (so a stray sync pattern in an m4a is not read as MP3).
+  static Mp3Info? _mp3Info(JSArrayBuffer bytes) {
+    final total = (_number(bytes, 'byteLength') ?? 0).toInt();
+    Uint8List slice(int from, int to) => bytes
+        .callMethod<JSArrayBuffer>(
+          'slice'.toJS,
+          from.toJS,
+          math.min(to, total).toJS,
+        )
+        .toDart
+        .asUint8List();
+    var pos = 0;
+    for (var i = 0; i < 8; i++) {
+      if (pos + 12 > total) return null;
+      final h = slice(pos, pos + 12);
+      String tag(int at) => String.fromCharCodes(h.sublist(at, at + 4));
+      if (i == 0 &&
+          (tag(4) == 'ftyp' ||
+              const {
+                'RIFF',
+                'OggS',
+                'fLaC',
+                'FORM',
+                'caff',
+              }.contains(tag(0)))) {
+        return null;
+      }
+      if (h[0] != 0x49 || h[1] != 0x44 || h[2] != 0x33) break;
+      pos +=
+          10 +
+          ((h[6] & 0x7F) << 21 |
+              (h[7] & 0x7F) << 14 |
+              (h[8] & 0x7F) << 7 |
+              (h[9] & 0x7F)) +
+          ((h[5] & 0x10) != 0 ? 10 : 0);
+    }
+    if (pos >= total) return null;
+    return Mp3Info.parse(slice(pos, pos + 64 * 1024));
   }
 
   /// `details` of a `load_failed` that is about the bytes themselves (empty,
@@ -863,7 +942,10 @@ class LocaljamAudioWeb {
       startSec += (earliest - when) * rate;
       when = earliest;
     }
-    if (!startSec.isFinite || startSec < 0 || startSec >= buffer.duration) {
+    // Media duration: an MP3's buffer can end with frames that are not media
+    // (moved-out encoder padding, see [_toMediaWindow]).
+    final mediaSec = math.min(_durationUs / 1e6, buffer.duration);
+    if (!startSec.isFinite || startSec < 0 || startSec >= mediaSec) {
       throw PlatformException(
         code: 'bad_position',
         message:
@@ -877,7 +959,11 @@ class LocaljamAudioWeb {
     source.connect(gain);
     final generation = ++_generation;
     source.onended = ((web.Event _) => _onEnded(generation)).toJS;
-    source.start(when, startSec);
+    if (mediaSec < buffer.duration) {
+      source.start(when, startSec, mediaSec - startSec);
+    } else {
+      source.start(when, startSec);
+    }
     _source = source;
     _segments = [_Segment(when, startSec, rate)];
     _scheduleLatencyMs = latencyMs;

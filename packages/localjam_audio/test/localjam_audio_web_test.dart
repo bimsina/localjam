@@ -6,6 +6,7 @@
 library;
 
 import 'dart:async';
+import 'dart:convert';
 import 'dart:js_interop';
 import 'dart:math' as math;
 import 'dart:typed_data';
@@ -16,6 +17,8 @@ import 'package:flutter_web_plugins/flutter_web_plugins.dart';
 import 'package:localjam_audio/localjam_audio.dart';
 import 'package:localjam_audio/localjam_audio_web.dart';
 import 'package:web/web.dart' as web;
+
+import 'gapless_fixtures_web.dart';
 
 /// A 16-bit PCM mono WAV of [frames] frames of a quiet 440 Hz sine.
 Uint8List pcmWav({required int sampleRate, required int frames}) {
@@ -309,6 +312,62 @@ void main() {
         throwsA(platformError('bad_args')),
       );
     });
+  });
+
+  group('media position (MP3 gapless)', () {
+    // 1 s MP3s from tool/gapless_fixtures.sh (embedded: the browser test
+    // runner cannot read package files).
+    Uint8List fixture(String base64) => base64Decode(base64);
+
+    /// The browser's own decode of [bytes] at the context's rate.
+    Future<web.AudioBuffer> rawDecode(Uint8List bytes) {
+      final rate = context().sampleRate;
+      final ctx = web.OfflineAudioContext(1.toJS, 1, rate);
+      return ctx.decodeAudioData(Uint8List.fromList(bytes).buffer.toJS).toDart;
+    }
+
+    /// Plugin buffer frame i must be raw decode frame i + [shift].
+    void expectShifted(web.AudioBuffer plugin, web.AudioBuffer raw, int shift) {
+      final a = plugin.getChannelData(0).toDart;
+      final b = raw.getChannelData(0).toDart;
+      for (final i in [0, 1, 1000, 4410, 30001, 40000]) {
+        expect(a[i], b[i + shift], reason: 'frame $i');
+      }
+    }
+
+    test(
+      'a LAME-tagged MP3 that Chrome decodes gaplessly is untouched',
+      () async {
+        final bytes = fixture(taggedMp3Base64);
+        final durationUs = await audio.load(blobUrl(bytes, type: 'audio/mpeg'));
+        final plugin = LocaljamAudioWeb.debugInstance!.debugBuffer!;
+        expect(durationUs, closeTo(1000000, 30)); // exactly the 1 s encoded
+        expectShifted(plugin, await rawDecode(bytes), 0);
+      },
+    );
+
+    test(
+      'a tagless MP3 drops FFmpeg\'s 529-frame decoder delay, as native does',
+      () async {
+        final bytes = fixture(taglessMp3Base64);
+        final durationUs = await audio.load(blobUrl(bytes, type: 'audio/mpeg'));
+        final plugin = LocaljamAudioWeb.debugInstance!.debugBuffer!;
+        final raw = await rawDecode(bytes);
+        final rate = raw.sampleRate;
+        final shift = (529 * rate / 44100).round();
+        expect(durationUs, closeTo((raw.length - shift) * 1e6 / rate, 1));
+        expectShifted(plugin, raw, shift);
+        // The moved-out tail is not media (checked once playAt can run).
+        if (!autoplay) return;
+        await expectLater(
+          audio.playAt(
+            nativeTimeUs: perfNowUs() + 200000,
+            positionUs: ((raw.length - shift / 2) * 1e6 / rate).round(),
+          ),
+          throwsA(platformError('bad_position')),
+        );
+      },
+    );
   });
 
   group('playAt', () {

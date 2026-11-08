@@ -17,6 +17,12 @@
   no, which put media frame P 576 frames early against Android and Chrome);
   the window is chosen by comparing AVAudioFile's length with the tag, and
   `load`/`probeDuration` report the gapless duration.
+- Web: MP3s land on the same timeline as native. Chrome/Firefox (FFmpeg)
+  keep the 529-frame decoder delay of an MP3 without a LAME tag (media frame
+  P was 529 frames late against native); WebKit (Core Audio) may skip a LAME
+  tag. The decoded buffer is shifted in place to the shared window, `load`
+  reports the media duration and playback stops at its end. AAC needed
+  nothing (measured: Chrome is gapless for `elst` and iTunSMPB files).
 - Android `setRate` never answers success for a speed the playing track
   refused: `rate_needs_reanchor` for a low-latency track (re-anchor with
   `playAt`; its track can time-stretch), `bad_args` as before otherwise.
