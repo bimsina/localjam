@@ -11,6 +11,11 @@ dependencies:
   flutter:
     sdk: flutter
 
+  # Flutter's Material and Cupertino libraries, which left the SDK as
+  # packages in Flutter 3.47 (package:flutter/material.dart and
+  # cupertino.dart are deprecated).
+  material_ui: ^1.10.0
+  cupertino_ui: ^1.1.6
   cupertino_icons: ^1.0.8
 
   # The embeddable LocalJam engine (re-exports localjam_net + localjam_audio).
@@ -19,7 +24,7 @@ dependencies:
 
   # Declarative routing + a shell for the docked room bar, and OS-level
   # localjam:// deep links (custom schemes need this on desktop too).
-  go_router: ^17.3.0
+  go_router: ^18.1.3
   app_links: ^6.4.1
 
   # Appearance preference (Light / Dark / System).
@@ -85,6 +90,7 @@ flutter:
     - assets/web/assets/fonts/
     - assets/web/assets/fonts/fallback/
     - assets/web/assets/packages/cupertino_icons/assets/
+    - assets/web/assets/packages/material_ui/shaders/
     - assets/web/assets/shaders/
     - assets/web/canvaskit/
     - assets/web/canvaskit/chromium/

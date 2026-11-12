@@ -5,13 +5,12 @@ library;
 import 'dart:io';
 import 'dart:math' as math;
 
-import 'package:flutter/cupertino.dart';
-import 'package:flutter/material.dart';
+import 'package:cupertino_ui/cupertino_ui.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:localjam_app/src/design/theme.dart';
+import 'package:localjam_app/src/design/tokens.dart';
 import 'package:localjam_app/src/state/session_controller.dart';
 import 'package:localjam_app/src/util/format.dart';
-import 'package:localjam_app/src/design/tokens.dart';
 import 'package:localjam_app/src/util/media_picking.dart';
 import 'package:localjam_app/src/widgets/buttons.dart';
 import 'package:localjam_app/src/widgets/catalog_sheet.dart';
@@ -19,6 +18,7 @@ import 'package:localjam_app/src/widgets/library_sheet.dart';
 import 'package:localjam_app/src/widgets/queue_sheet.dart';
 import 'package:localjam_app/src/widgets/track_row.dart';
 import 'package:localjam_client/localjam_client.dart';
+import 'package:material_ui/material_ui.dart';
 
 import '../fixtures.dart';
 import '../harness.dart';

@@ -15,6 +15,11 @@ dependencies:
   # The guest engine (re-exports localjam_net's guest + localjam_audio).
   localjam_client:
     path: ../../packages/localjam_client
+  # Flutter's Material and Cupertino libraries, which left the SDK as
+  # packages in Flutter 3.47 (package:flutter/material.dart and
+  # cupertino.dart are deprecated).
+  material_ui: ^1.10.0
+  cupertino_ui: ^1.1.6
   # Icons, from a font bundled with the page (no off-origin request, D8).
   cupertino_icons: ^1.0.8
   # "Open in App" navigates the page to the localjam:// link.

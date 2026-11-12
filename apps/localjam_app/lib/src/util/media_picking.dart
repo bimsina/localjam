@@ -11,8 +11,8 @@ import 'dart:collection';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:cupertino_ui/cupertino_ui.dart';
 import 'package:file_selector/file_selector.dart';
-import 'package:flutter/cupertino.dart';
 import 'package:localjam_client/localjam_client.dart';
 
 import '../state/session_controller.dart';

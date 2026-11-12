@@ -5,8 +5,7 @@ library;
 
 import 'dart:async';
 
-import 'package:flutter/cupertino.dart';
-import 'package:flutter/material.dart';
+import 'package:cupertino_ui/cupertino_ui.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:localjam_app/src/design/breakpoints.dart';
@@ -19,6 +18,7 @@ import 'package:localjam_app/src/widgets/pressable.dart';
 import 'package:localjam_app/src/widgets/progress.dart';
 import 'package:localjam_app/src/widgets/scaffold.dart';
 import 'package:localjam_app/src/widgets/switch.dart';
+import 'package:material_ui/material_ui.dart';
 
 Widget _app(Widget home, {bool dark = false}) =>
     MaterialApp(theme: dark ? jamDarkTheme() : jamLightTheme(), home: home);

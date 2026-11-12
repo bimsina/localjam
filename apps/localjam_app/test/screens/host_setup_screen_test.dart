@@ -4,9 +4,8 @@ library;
 
 import 'dart:io';
 
-import 'package:flutter/cupertino.dart';
+import 'package:cupertino_ui/cupertino_ui.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:localjam_client/localjam_client.dart';
 import 'package:localjam_app/src/design/theme.dart';
 import 'package:localjam_app/src/design/tokens.dart';
 import 'package:localjam_app/src/router.dart';
@@ -18,9 +17,10 @@ import 'package:localjam_app/src/util/permissions.dart';
 import 'package:localjam_app/src/widgets/buttons.dart';
 import 'package:localjam_app/src/widgets/guests_can.dart';
 import 'package:localjam_app/src/widgets/list.dart';
+import 'package:localjam_app/src/widgets/menu.dart';
 import 'package:localjam_app/src/widgets/text_field.dart';
 import 'package:localjam_app/src/widgets/track_row.dart';
-import 'package:localjam_app/src/widgets/menu.dart';
+import 'package:localjam_client/localjam_client.dart';
 
 import '../harness.dart';
 

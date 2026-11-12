@@ -16,7 +16,7 @@
 /// chevron.
 library;
 
-import 'package:flutter/cupertino.dart';
+import 'package:cupertino_ui/cupertino_ui.dart';
 
 import '../design/tokens.dart';
 import '../design/typography.dart';

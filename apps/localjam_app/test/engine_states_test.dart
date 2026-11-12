@@ -11,7 +11,6 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
-import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:localjam_app/src/design/theme.dart';
@@ -30,6 +29,7 @@ import 'package:localjam_app/src/widgets/session_gate.dart';
 import 'package:localjam_app/src/widgets/sync_indicator.dart';
 import 'package:localjam_app/src/widgets/transport.dart';
 import 'package:localjam_client/localjam_client.dart';
+import 'package:material_ui/material_ui.dart';
 
 import 'fixtures.dart';
 import 'harness.dart';

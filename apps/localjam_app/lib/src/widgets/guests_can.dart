@@ -14,7 +14,7 @@
 /// a name with a capability.
 library;
 
-import 'package:flutter/cupertino.dart';
+import 'package:cupertino_ui/cupertino_ui.dart';
 import 'package:localjam_client/localjam_client.dart';
 
 import '../design/tokens.dart';

@@ -2,10 +2,8 @@
 /// and where it came from — on the same paper as Nearby.
 library;
 
-import 'package:flutter/cupertino.dart';
-import 'package:flutter/material.dart';
+import 'package:cupertino_ui/cupertino_ui.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:localjam_app/src/widgets/rename_dialog.dart';
 import 'package:localjam_app/src/design/theme.dart';
 import 'package:localjam_app/src/screens/licenses_screen.dart';
 import 'package:localjam_app/src/screens/settings_screen.dart';
@@ -13,9 +11,11 @@ import 'package:localjam_app/src/state/app_settings.dart';
 import 'package:localjam_app/src/state/session_controller.dart';
 import 'package:localjam_app/src/widgets/avatar.dart';
 import 'package:localjam_app/src/widgets/list.dart';
+import 'package:localjam_app/src/widgets/rename_dialog.dart';
 import 'package:localjam_app/src/widgets/scaffold.dart';
 import 'package:localjam_app/src/widgets/section.dart';
 import 'package:localjam_app/src/widgets/switch.dart';
+import 'package:material_ui/material_ui.dart';
 
 import '../harness.dart';
 

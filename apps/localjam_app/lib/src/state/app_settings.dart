@@ -5,7 +5,7 @@
 /// does the right thing in a vehicle without anyone opening settings.
 library;
 
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 const String _themeModeKey = 'localjam.themeMode';

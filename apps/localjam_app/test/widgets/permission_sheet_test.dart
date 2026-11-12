@@ -1,19 +1,19 @@
 /// The rationale sheet, and the rule that a dismissal is not consent.
 library;
 
-import 'package:flutter/cupertino.dart' show CupertinoIcons;
-import 'package:flutter/material.dart';
+import 'package:cupertino_ui/cupertino_ui.dart' show CupertinoIcons;
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:localjam_app/src/design/theme.dart';
-import 'package:localjam_app/src/design/typography.dart';
 import 'package:localjam_app/src/design/tokens.dart';
+import 'package:localjam_app/src/design/typography.dart';
 import 'package:localjam_app/src/util/permissions.dart';
 import 'package:localjam_app/src/widgets/buttons.dart';
 import 'package:localjam_app/src/widgets/permission_sheet.dart';
 import 'package:localjam_app/src/widgets/sheet.dart';
 import 'package:localjam_app/src/widgets/wifi_glyph.dart';
+import 'package:material_ui/material_ui.dart';
 
 Widget _host(Future<void> Function(BuildContext) onTap, {ThemeData? theme}) =>
     MaterialApp(

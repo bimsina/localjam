@@ -2,11 +2,11 @@
 /// when not (DESIGN_SPEC v3 §1.2) — no dot, no pulse.
 library;
 
-import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:localjam_app/src/design/theme.dart';
 import 'package:localjam_app/src/design/tokens.dart';
 import 'package:localjam_app/src/widgets/sync_indicator.dart';
+import 'package:material_ui/material_ui.dart';
 
 Widget _host(
   JamSyncState state, {

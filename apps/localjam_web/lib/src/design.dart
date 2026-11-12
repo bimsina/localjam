@@ -10,7 +10,7 @@
 /// name, and an unnamed one is fetched from the internet (WEB_GUEST.md D8).
 library;
 
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 
 /// Semantic colours for one brightness.
 @immutable

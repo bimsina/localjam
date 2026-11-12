@@ -2,9 +2,7 @@
 /// value, a Reset, a footnote — and the sync figures as plain rows.
 library;
 
-import 'package:flutter/cupertino.dart';
-import 'package:flutter/material.dart'
-    show MaterialApp, Scaffold, TextButton, ThemeData;
+import 'package:cupertino_ui/cupertino_ui.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:localjam_app/src/design/theme.dart';
@@ -12,6 +10,8 @@ import 'package:localjam_app/src/state/session_controller.dart';
 import 'package:localjam_app/src/widgets/diagnostics_sheet.dart';
 import 'package:localjam_app/src/widgets/nudge_slider.dart';
 import 'package:localjam_app/src/widgets/sheet.dart';
+import 'package:material_ui/material_ui.dart'
+    show MaterialApp, Scaffold, TextButton, ThemeData;
 
 import '../harness.dart';
 

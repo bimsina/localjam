@@ -5,15 +5,15 @@
 /// before this pass, and nothing in the type system stops that returning.
 library;
 
-import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:localjam_app/src/design/theme.dart';
 import 'package:localjam_app/src/screens/history_screen.dart';
 import 'package:localjam_app/src/screens/home_screen.dart';
 import 'package:localjam_app/src/screens/host_setup_screen.dart';
 import 'package:localjam_app/src/screens/settings_screen.dart';
 import 'package:localjam_app/src/state/app_settings.dart';
 import 'package:localjam_app/src/state/session_controller.dart';
-import 'package:localjam_app/src/design/theme.dart';
+import 'package:material_ui/material_ui.dart';
 
 import 'harness.dart';
 

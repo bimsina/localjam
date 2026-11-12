@@ -11,9 +11,9 @@
 /// 4.5:1 or better, icons and control edges at 3:1, in all four palettes.
 library;
 
-import 'package:flutter/material.dart';
 import 'package:flutter/physics.dart';
 import 'package:flutter/services.dart';
+import 'package:material_ui/material_ui.dart';
 
 /// Semantic colours, resolved per theme. Read them from the context rather
 /// than importing the constants: `context.jamColors.tint`.

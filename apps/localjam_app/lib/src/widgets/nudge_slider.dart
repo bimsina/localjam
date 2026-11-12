@@ -13,7 +13,7 @@
 /// Done (§10.2).
 library;
 
-import 'package:flutter/cupertino.dart';
+import 'package:cupertino_ui/cupertino_ui.dart';
 import 'package:localjam_client/localjam_client.dart';
 
 import '../design/motion.dart';

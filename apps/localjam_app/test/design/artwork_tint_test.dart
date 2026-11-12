@@ -2,10 +2,10 @@ import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
-import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:localjam_app/src/design/artwork_tint.dart';
 import 'package:localjam_app/src/design/tokens.dart';
+import 'package:material_ui/material_ui.dart';
 
 Future<Uint8List> _solidPng(Color color) => _stripesPng([(color, 1)]);
 

@@ -2,15 +2,15 @@
 /// nearby.
 library;
 
-import 'package:flutter/cupertino.dart';
-import 'package:flutter/material.dart'
-    show ElevatedButton, MaterialApp, Scaffold, SnackBar, Theme, ThemeData;
+import 'package:cupertino_ui/cupertino_ui.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:localjam_app/src/design/theme.dart';
 import 'package:localjam_app/src/design/tokens.dart';
 import 'package:localjam_app/src/widgets/dialogs.dart';
 import 'package:localjam_app/src/widgets/join_link_dialog.dart';
+import 'package:material_ui/material_ui.dart'
+    show ElevatedButton, MaterialApp, Scaffold, SnackBar, Theme, ThemeData;
 
 const String _link =
     'localjam://join?host=192.168.1.4&port=7000&token=abc123&name=Van';

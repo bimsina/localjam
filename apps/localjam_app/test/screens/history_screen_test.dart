@@ -11,8 +11,7 @@ import 'dart:convert' show ascii;
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:flutter/cupertino.dart';
-import 'package:flutter/material.dart';
+import 'package:cupertino_ui/cupertino_ui.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:localjam_app/src/design/theme.dart';
 import 'package:localjam_app/src/design/tokens.dart';
@@ -30,6 +29,7 @@ import 'package:localjam_app/src/widgets/list.dart';
 import 'package:localjam_app/src/widgets/menu.dart';
 import 'package:localjam_app/src/widgets/track_row.dart';
 import 'package:localjam_client/localjam_client.dart';
+import 'package:material_ui/material_ui.dart';
 
 import '../harness.dart';
 

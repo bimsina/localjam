@@ -4,12 +4,12 @@
 /// not, because that asymmetry is easy to lose in a refactor.
 library;
 
-import 'package:flutter/cupertino.dart';
-import 'package:flutter/material.dart';
-import 'package:localjam_app/src/widgets/artwork.dart';
+import 'package:cupertino_ui/cupertino_ui.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:localjam_app/src/design/theme.dart';
+import 'package:localjam_app/src/widgets/artwork.dart';
 import 'package:localjam_app/src/widgets/room_bar.dart';
+import 'package:material_ui/material_ui.dart';
 
 Widget _host(Widget bar, {ThemeData? theme}) => MaterialApp(
   theme: theme ?? jamLightTheme(),

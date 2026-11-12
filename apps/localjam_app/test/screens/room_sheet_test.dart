@@ -5,9 +5,7 @@ library;
 
 import 'dart:io';
 
-import 'package:flutter/cupertino.dart';
-import 'package:flutter/material.dart'
-    show MaterialApp, Scaffold, Theme, ThemeData;
+import 'package:cupertino_ui/cupertino_ui.dart';
 import 'package:flutter/rendering.dart' show SemanticsAction;
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -23,13 +21,15 @@ import 'package:localjam_app/src/widgets/avatar.dart';
 import 'package:localjam_app/src/widgets/guests_can.dart';
 import 'package:localjam_app/src/widgets/jam_mark.dart';
 import 'package:localjam_app/src/widgets/list.dart';
+import 'package:localjam_app/src/widgets/menu.dart';
 import 'package:localjam_app/src/widgets/peer_row.dart';
 import 'package:localjam_app/src/widgets/room_sheet.dart';
 import 'package:localjam_app/src/widgets/section.dart';
 import 'package:localjam_app/src/widgets/sheet.dart';
 import 'package:localjam_app/src/widgets/switch.dart';
-import 'package:localjam_app/src/widgets/menu.dart';
 import 'package:localjam_client/localjam_client.dart';
+import 'package:material_ui/material_ui.dart'
+    show MaterialApp, Scaffold, Theme, ThemeData;
 import 'package:qr_flutter/qr_flutter.dart';
 
 import '../fixtures.dart';

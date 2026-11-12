@@ -13,7 +13,7 @@ import 'dart:async';
 import 'dart:collection';
 import 'dart:typed_data';
 
-import 'package:flutter/cupertino.dart';
+import 'package:cupertino_ui/cupertino_ui.dart';
 import 'package:localjam_client/localjam_client.dart';
 
 import '../design/tokens.dart';
