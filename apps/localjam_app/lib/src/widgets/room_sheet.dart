@@ -715,32 +715,31 @@ Map<String, String> jamRosterNamesById(
   };
 }
 
-/// Each person's face colour in [engine]'s jam, by peer id (D3): the jam's
-/// names through [jamPeopleColors], the host first — the order every phone
-/// in the jam agrees on — so a person is the same colour on every phone in
-/// the jam, and in the footer, the People sheet and every "Added by" credit
-/// on each, and on Past Jams afterwards.
+/// Each person's face colour in [engine]'s jam, by peer id (D3): their own
+/// display name's colour ([identityColor]) — the name as they gave it, not
+/// the "Sam 2" the roster tells a second Sam apart by, which can move when
+/// people come and go. So a person is the same colour on every phone in the
+/// jam, in the footer, the People sheet and every "Added by" credit on
+/// each, on the web guest's page and on Past Jams afterwards, whoever else
+/// joins.
 ///
-/// Before this device's own name has loaded ([selfName] empty) it is left
-/// out of the assignment, so the placeholder "You" never pushes someone off
-/// their colour for the moment it takes the name to arrive (RB-20).
+/// Before this device's own name has loaded ([selfName] empty) its face is
+/// the placeholder "You"'s colour for the moment it takes the name to
+/// arrive (RB-20).
 Map<String, Color> jamRosterColors(
   JamEngine engine, {
   required String selfName,
 }) {
+  final self = selfName.trim();
   final ids = jamRosterPeerIds(engine);
-  final names = jamRosterNames(engine, selfName: selfName);
-  final known = selfName.trim().isNotEmpty;
-  final hostIndex = engine is JamGuestEngine ? 1 : 0;
-  final byName = jamPeopleColors([
-    for (var i = 0; i < names.length; i++)
-      if (known || i != 0) names[i],
-  ], host: known || hostIndex != 0 ? names[hostIndex] : null);
+  final names = <String>[
+    self.isEmpty ? JamPeerRowStrings.you : self,
+    if (engine is JamGuestEngine) _hostName(engine),
+    for (final peer in jamPeersInOrder(engine.peers)) jamPeerName(peer),
+  ];
   return {
     for (var i = 0; i < ids.length && i < names.length; i++)
-      ids[i]:
-          (known || i != 0 ? byName[names[i]] : null) ??
-          identityColor(names[i]),
+      ids[i]: identityColor(names[i]),
   };
 }
 

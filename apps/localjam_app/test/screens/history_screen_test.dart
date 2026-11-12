@@ -251,50 +251,31 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  test('faces wear the colours the jam gave them (D3)', () {
-    // Hosted here: this device was the host, so it kept its colour and the
-    // others moved around it in name order — what the room's faces did.
+  test('faces wear the colours the jam gave them (D3): each their name\'s '
+      'own', () {
     final hosted = _record(name: 'Van Jam', peers: ['Theo', 'Mia']);
-    final room = jamPeopleColors(['Bibek', 'Theo', 'Mia'], host: 'Bibek');
     expect(jamRecordFaceColors(hosted, self: 'Bibek'), [
-      room['Mia'],
-      room['Theo'],
+      identityColor('Mia'),
+      identityColor('Theo'),
     ]);
-    // Joined: the record names who hosted, so the faces are given out as
-    // the room gave them — the host first, keeping its colour, and first in
-    // the row as in the room.
+    // Joined: the host first in the row, as in the room — in their own
+    // colour, as in the room.
     final joined = _record(
       name: 'Van Jam',
       peers: ['Theo', 'Mia', 'Zoe'],
       wasHost: false,
       host: 'Zoe',
     );
-    final joinedRoom = jamPeopleColors([
-      'Bibek',
-      'Zoe',
-      'Theo',
-      'Mia',
-    ], host: 'Zoe');
     expect(jamRecordPeople(joined), ['Zoe', 'Mia', 'Theo']);
     expect(jamRecordFaceColors(joined, self: 'Bibek'), [
-      joinedRoom['Zoe'],
-      joinedRoom['Mia'],
-      joinedRoom['Theo'],
+      identityColor('Zoe'),
+      identityColor('Mia'),
+      identityColor('Theo'),
     ]);
-    expect(jamRecordColorsByName(joined, self: 'Bibek'), joinedRoom);
-    // An older record names no host: name order alone — with this device
-    // still counted.
-    final older = _record(
-      name: 'Van Jam',
-      peers: ['Theo', 'Mia'],
-      wasHost: false,
+    expect(
+      jamRecordColorsByName(joined, self: 'Bibek'),
+      jamPeopleColors(['Bibek', 'Zoe', 'Theo', 'Mia']),
     );
-    final named = jamPeopleColors(['Mia', 'Theo', 'Bibek']);
-    expect(jamRecordPeople(older), ['Mia', 'Theo']);
-    expect(jamRecordFaceColors(older, self: 'Bibek'), [
-      named['Mia'],
-      named['Theo'],
-    ]);
   });
 
   testWidgets('a jam you joined lists its host first, in the colour the '
@@ -309,10 +290,7 @@ void main() {
     await pumpHistory(tester, session, records: [joined]);
 
     final room = jamRecordColorsByName(joined, self: 'Silky Puffin');
-    expect(
-      room,
-      jamPeopleColors(['Silky Puffin', 'Zed', 'Amber Fox', 'Mia'], host: 'Zed'),
-    );
+    expect(room, jamPeopleColors(['Silky Puffin', 'Zed', 'Amber Fox', 'Mia']));
     void expectHostFirst() {
       expect(find.text('With Zed, Amber Fox and Mia'), findsOneWidget);
       final pile = tester.widget<JamAvatarStack>(find.byType(JamAvatarStack));

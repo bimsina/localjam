@@ -104,8 +104,8 @@ class JamMark extends StatelessWidget {
   /// no badge — never a guess.
   final String? hostName;
 
-  /// The host face's colour when the jam has assigned one
-  /// (`jamPeopleColors`); otherwise their name's own.
+  /// The host face's colour when the caller has it (`jamPeopleColors`);
+  /// otherwise their name's own — the same colour.
   final Color? hostColor;
 
   /// Announced as an image when given; otherwise the mark is decorative

@@ -494,10 +494,8 @@ String? _recordHost(JamHistoryRecord record) =>
     record.wasHost ? null : record.hostName;
 
 /// The faces of [record]'s people, coloured as the jam coloured them (D3):
-/// this device ([self]) and everyone the record names, through
-/// [jamPeopleColors] with the jam's host first — this device when it
-/// hosted, else the host the record names — so each face keeps the colour
-/// and the place it had in the room. Parallel to [jamRecordPeople].
+/// each by their own name ([jamPeopleColors]), so a face keeps the colour it
+/// had in the room. Parallel to [jamRecordPeople].
 List<Color> jamRecordFaceColors(
   JamHistoryRecord record, {
   required String self,
@@ -513,10 +511,7 @@ Map<String, Color> jamRecordColorsByName(
   required String self,
 }) {
   final me = self.trim();
-  return jamPeopleColors([
-    if (me.isNotEmpty) me,
-    ...record.peerNames,
-  ], host: record.wasHost ? (me.isEmpty ? null : me) : record.hostName);
+  return jamPeopleColors([if (me.isNotEmpty) me, ...record.peerNames]);
 }
 
 // ---------------------------------------------------------------------------

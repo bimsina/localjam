@@ -309,12 +309,27 @@ class _AsyncCoverState extends State<AsyncCover> {
       Cover(bytes: _bytes, size: widget.size, radius: widget.radius);
 }
 
-/// A flat avatar: a colour from the person's display name, white initials.
-/// The colour is the app's `identityColor` (apps/localjam_app
-/// `widgets/avatar.dart`): FNV-1a over the name's UTF-16 code units into
-/// [avatarPalette], so a person has the same face in the browser as on
-/// every phone. (The app also spreads colours apart inside one jam; the
-/// page does not.)
+/// [avatarPalette]'s slot for the person called [name]: FNV-1a over the
+/// name's UTF-16 code units, modulo the palette — exactly the app's
+/// `identityColorIndex` (apps/localjam_app `widgets/avatar.dart`). The app
+/// paints every face from this alone too, so a person has the same face in
+/// the browser as on every phone; both sides' tests pin the same names to
+/// the same slots.
+int avatarColorIndex(String name) {
+  var hash = 0x811c9dc5;
+  for (final unit in name.codeUnits) {
+    hash ^= unit;
+    // × the FNV prime (2^24 + 0x193) in two halves, each well inside 2^53:
+    // compiled to JavaScript the one-step product (up to 2^56) lost its low
+    // bits to double rounding, and the web guest's page put nearly
+    // everybody in slot 0.
+    hash = (((hash << 24) & 0xFFFFFFFF) + hash * 0x193) & 0xFFFFFFFF;
+  }
+  return hash % avatarPalette.length;
+}
+
+/// A flat avatar: a colour from the person's display name
+/// ([avatarColorIndex]), white initials.
 class Avatar extends StatelessWidget {
   const Avatar({super.key, required this.name, this.size = 36});
 
@@ -329,18 +344,13 @@ class Avatar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    var hash = 0x811c9dc5;
-    for (final unit in name.codeUnits) {
-      hash ^= unit;
-      hash = (hash * 0x01000193) & 0xFFFFFFFF;
-    }
     return ExcludeSemantics(
       child: Container(
         width: size,
         height: size,
         alignment: Alignment.center,
         decoration: BoxDecoration(
-          color: avatarPalette[hash % avatarPalette.length],
+          color: avatarPalette[avatarColorIndex(name)],
           shape: BoxShape.circle,
         ),
         child: Text(

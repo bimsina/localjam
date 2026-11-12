@@ -15,6 +15,7 @@ import 'package:localjam_web/src/join_target.dart';
 import 'package:localjam_web/src/listener_app.dart';
 import 'package:localjam_web/src/room.dart';
 import 'package:localjam_web/src/room_page.dart';
+import 'package:localjam_web/src/widgets.dart';
 import 'package:material_ui/material_ui.dart';
 
 import 'fake_room.dart';
@@ -74,6 +75,27 @@ Future<void> unmount(WidgetTester tester) async {
 }
 
 void main() {
+  test('a face\'s colour is the app\'s: the same names in the same slots', () {
+    // Pinned on both sides (apps/localjam_app test/widgets/avatar_test.dart
+    // pins these exact names to these exact slots), so a person is one
+    // colour on the page and on every phone in the jam. The page runs as
+    // JavaScript, where the hash once came out wrong while the VM had it
+    // right: `flutter test --platform chrome test/page_test.dart` checks
+    // the compiled arithmetic too.
+    const slots = {
+      'Priya': 0,
+      'Theo': 1,
+      'Bibek': 2,
+      'Sam': 4,
+      'Maya': 5,
+      'Mia': 6,
+      'Zoë': 7,
+    };
+    for (final MapEntry(key: name, value: slot) in slots.entries) {
+      expect(avatarColorIndex(name), slot, reason: name);
+    }
+  });
+
   group('JoinTarget', () {
     test('joins its own origin with the fragment\'s token and keeps every '
         'candidate for Open in app', () {

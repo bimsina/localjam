@@ -83,59 +83,35 @@ void main() {
       }
     });
 
-    test('one person, one colour: the jam starts from the name\'s own', () {
-      const roster = ['Bibek', 'Mia', 'Theo'];
-      final colors = jamAvatarColors(roster);
-      expect(colors.first, identityColor('Bibek'));
-      expect(colors.toSet(), hasLength(3));
-      for (var i = 0; i < roster.length; i++) {
-        // Nobody earlier took their slot, so everyone keeps their own.
-        if (!roster
-            .take(i)
-            .any((n) => identityColor(n) == identityColor(roster[i]))) {
-          expect(colors[i], identityColor(roster[i]));
-        }
+    test('one person, one colour: a pure function of the name', () {
+      // Pinned slots, shared with the web guest's page (apps/localjam_web
+      // test/page_test.dart pins the same names to the same slots): FNV-1a
+      // over the UTF-16 code units, modulo the palette.
+      const slots = {
+        'Priya': 0,
+        'Theo': 1,
+        'Bibek': 2,
+        'Sam': 4,
+        'Maya': 5,
+        'Mia': 6,
+        'Zoë': 7,
+      };
+      for (final MapEntry(key: name, value: slot) in slots.entries) {
+        expect(identityColorIndex(name), slot, reason: name);
+        expect(identityColor(name), kJamAvatarPalette[slot], reason: name);
       }
     });
 
-    test('jam colours: stable per id, distinct while the palette lasts', () {
-      final ids = [for (var i = 0; i < 8; i++) 'client-$i'];
-      final colors = jamAvatarColors(ids);
-      expect(colors.toSet().length, 8);
-      // The first person keeps their own colour; order decides the rest.
-      expect(colors.first, identityColor(ids.first));
-      expect(jamAvatarColors(ids), colors);
-      // The same id twice is the same person.
-      expect(jamAvatarColors(['x', 'x']).toSet().length, 1);
-      // A ninth person starts the palette over rather than failing.
-      expect(jamAvatarColors([...ids, 'client-8']).length, 9);
-    });
-
-    test('a jam\'s faces: the host keeps theirs, the rest move in name '
-        'order, the same from any phone', () {
-      // Two names that start on the same colour: whoever sorts later moves.
-      String sharing(String name) {
-        for (var i = 0; ; i++) {
-          final other = 'Guest $i';
-          if (other != name && identityColor(other) == identityColor(name)) {
-            return other;
-          }
-        }
+    test('a jam\'s faces: nobody moves when somebody else joins', () {
+      // The report: a guest's colour changed when someone else joined, and
+      // Past Jams drew the same people in other colours again.
+      final before = jamPeopleColors(['Bibek', 'Mia']);
+      final after = jamPeopleColors(['Theo', 'Mia', 'Bibek', 'Priya']);
+      expect(after['Bibek'], before['Bibek']);
+      expect(after['Mia'], before['Mia']);
+      for (final MapEntry(key: name, value: color) in after.entries) {
+        expect(color, identityColor(name), reason: name);
       }
-
-      const host = 'Bibek';
-      final twin = sharing(host);
-      // The host is first whatever the order they are listed in.
-      final fromHost = jamPeopleColors([host, twin, 'Mia'], host: host);
-      final fromGuest = jamPeopleColors(['Mia', twin, host], host: host);
-      expect(fromGuest, fromHost);
-      expect(fromHost[host], identityColor(host));
-      expect(fromHost[twin], isNot(identityColor(host)));
-      expect(fromHost.values.toSet(), hasLength(3));
-      // Without a host, name order alone decides — still one answer.
-      final unhosted = jamPeopleColors(['Mia', twin, host]);
-      expect(jamPeopleColors([twin, host, 'Mia']), unhosted);
-      expect(unhosted.values.toSet(), hasLength(3));
     });
 
     testWidgets('announces the person, not their initials', (tester) async {
@@ -205,7 +181,7 @@ void main() {
       expect(find.text('SK'), findsOneWidget);
     });
 
-    testWidgets('by name, nobody in the pile shares a colour either', (
+    testWidgets('by name, each face in the pile is its name\'s own colour', (
       tester,
     ) async {
       const names = ['Bibek', 'Mia', 'Theo'];
@@ -214,9 +190,7 @@ void main() {
           .widgetList<JamAvatar>(find.byType(JamAvatar))
           .map((a) => a.resolvedColor)
           .toList();
-      final byName = jamPeopleColors(names);
-      expect(colors, [for (final n in names) byName[n]]);
-      expect(colors.toSet(), hasLength(3));
+      expect(colors, [for (final n in names) identityColor(n)]);
     });
 
     testWidgets('announces everyone', (tester) async {

@@ -14,6 +14,11 @@ a release heading carries the day it shipped.
 - A rename reaches every screen at once (Home's avatar kept the old initials
   until a restart); Home no longer flashes "No jams yet" before the history
   has loaded.
+- Face colours are a pure function of the person's name, the same in the
+  room, in Past jams and on the web guest's page; nobody's colour changes
+  when someone else joins. The web page's hash also overflowed JavaScript's
+  doubles and put nearly everyone in the first colour; it is now computed in
+  two exact halves.
 - The Android 12+ splash icon is rendered per density from the mark
   (`tool/render_brand.sh --android12-splash`) instead of downscaled.
 - Lifecycle hardening: disposing the app's session controller now closes the

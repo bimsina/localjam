@@ -878,7 +878,9 @@ void main() {
   });
 
   testWidgets('two people with one name are two people: told apart in the '
-      'roster, the People sheet and their colours', (tester) async {
+      'roster and the People sheet, coloured by the name they gave', (
+    tester,
+  ) async {
     final host = testSession();
     await tester.runAsync(() async {
       await host.startHost(sessionName: 'Van Jam', discoverable: false);
@@ -893,21 +895,22 @@ void main() {
     final names = jamRosterNames(engine, selfName: 'Silky Puffin');
     expect(names.first, 'Silky Puffin');
     expect(names.skip(1).toSet(), {'Sam', 'Sam 2', kJamUnnamedPeer});
+    // A colour is a pure function of the name someone gave (D3) — not of
+    // "Sam 2", which depends on who else is in the room — so it is the same
+    // on every surface, the web guest's page included. Two Sams share it;
+    // the words tell them apart.
     final colors = jamRosterColors(engine, selfName: 'Silky Puffin');
-    final sams = [
-      for (final peer in engine.peers)
-        if (peer.clientName == 'Sam') colors[peer.peerId],
-    ];
-    expect(sams.toSet(), hasLength(2), reason: 'one colour each');
-
-    // Before this device's own name has loaded, its placeholder "You" is
-    // left out of the assignment: nobody else's colour depends on it
-    // (RB-20).
-    final early = jamRosterColors(engine, selfName: '');
-    final others = jamPeopleColors(names.skip(1));
+    expect(colors[engine.selfPeerId], identityColor('Silky Puffin'));
     for (final peer in engine.peers) {
-      final name = jamRosterNamesById(engine, selfName: '')[peer.peerId]!;
-      expect(early[peer.peerId], others[name], reason: name);
+      expect(colors[peer.peerId], identityColor(jamPeerName(peer)));
+    }
+
+    // Before this device's own name has loaded, its face is the
+    // placeholder's, and nobody else's colour depends on it (RB-20).
+    final early = jamRosterColors(engine, selfName: '');
+    expect(early[engine.selfPeerId], identityColor(JamPeerRowStrings.you));
+    for (final peer in engine.peers) {
+      expect(early[peer.peerId], colors[peer.peerId]);
     }
 
     await _pump(tester, host, _panel(host));

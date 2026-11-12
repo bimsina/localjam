@@ -1,13 +1,19 @@
 /// Faces (D3): a flat colour per person, white Manrope initials, no ring.
 ///
-/// **One person, one colour, everywhere.** The protocol carries only a
-/// `clientName` — no avatar, no colour, and no id that every screen knows —
-/// so a face is keyed by the person's *display name*: Settings, the Nearby
-/// header, the sidebar, Past Jams and the jam itself all derive the same
-/// colour from the same name ([identityColor]). Inside a jam, colours are
-/// assigned over the roster's names ([jamAvatarColors]) so nobody in one jam
-/// shares a colour (spec §10.10); each person still starts at their own
-/// name's slot, so most people keep their everyday colour in the jam too.
+/// **One person, one colour, everywhere.** A face's colour is a pure
+/// function of the person's *display name* ([identityColor]) — the same in
+/// the room, the People sheet, every "Added by" credit, Past Jams, Settings,
+/// the sidebar and the web guest's page (apps/localjam_web `Avatar`, which
+/// hashes the same way into the same palette). Nothing about who *else* is
+/// in the jam moves it: a guest's face no longer changes colour when
+/// somebody joins, and a past jam draws everyone as the room did.
+///
+/// The name, not an id, because it is the one key every surface has: the
+/// protocol's `clientId` never leaves the host (§3.3), peer ids are minted
+/// per jam, and a history record keeps names only. The price is that two
+/// people can share a colour — eight colours, any number of people — which
+/// is why a face always carries initials, and two people with the same name
+/// are told apart by "Sam 2" in words rather than by colour.
 ///
 /// The derivation must be stable *across devices*, which is why it hashes
 /// with FNV-1a rather than [Object.hashCode] (not stable between runs or
@@ -27,82 +33,37 @@ int _stableHash(String value) {
   var hash = 0x811c9dc5;
   for (final unit in value.codeUnits) {
     hash ^= unit;
-    hash = (hash * 0x01000193) & 0xFFFFFFFF;
+    // × the FNV prime (2^24 + 0x193) in two halves, each well inside 2^53:
+    // compiled to JavaScript the one-step product (up to 2^56) lost its low
+    // bits to double rounding, and the web guest's page put nearly
+    // everybody in slot 0.
+    hash = (((hash << 24) & 0xFFFFFFFF) + hash * 0x193) & 0xFFFFFFFF;
   }
   return hash;
 }
 
-/// The identity colour for [name]. The same in both themes — [brightness]
-/// is accepted for older call sites and ignored.
+/// The identity colour for [name]: FNV-1a over its UTF-16 code units, into
+/// [kJamAvatarPalette]. The same in both themes — [brightness] is accepted
+/// for older call sites and ignored.
+///
+/// The web guest's page computes exactly this (apps/localjam_web
+/// `avatarColorIndex`); a test on each side pins the same names to the same
+/// slots, so the two cannot drift apart unnoticed.
 Color identityColor(String name, [Brightness? brightness]) =>
-    kJamAvatarPalette[_stableHash(name) % kJamAvatarPalette.length];
+    kJamAvatarPalette[identityColorIndex(name)];
 
-/// Colours for everyone in one jam, in room order (spec §10.10, D3).
-///
-/// [keys] are the roster's **display names** (this device first, then the
-/// host, then everyone else). Each name starts at its own slot — the colour
-/// [identityColor] gives it everywhere else — and moves on to the next free
-/// palette colour only when someone earlier in [keys] already has it, so no
-/// two people share a colour while the palette lasts. Past eight people the
-/// palette starts over. The same name always gets the same colour within
-/// one call.
-///
-/// Faces for a whole jam go through [jamPeopleColors], which puts the
-/// names in the one order every phone and every screen agrees on.
-List<Color> jamAvatarColors(List<String> keys) {
-  const palette = kJamAvatarPalette;
-  final n = palette.length;
-  final byKey = <String, int>{};
-  final used = <int>{};
-  final out = <Color>[];
-  for (final key in keys) {
-    final known = byKey[key];
-    if (known != null) {
-      out.add(palette[known]);
-      continue;
-    }
-    if (used.length >= n) used.clear();
-    var slot = _stableHash(key) % n;
-    while (used.contains(slot)) {
-      slot = (slot + 1) % n;
-    }
-    used.add(slot);
-    byKey[key] = slot;
-    out.add(palette[slot]);
-  }
-  return out;
-}
+/// [identityColor]'s slot in [kJamAvatarPalette], for [name].
+int identityColorIndex(String name) =>
+    _stableHash(name) % kJamAvatarPalette.length;
 
-/// Each person's face colour in one jam, by display name (D3): the one
-/// assignment every face of a jam is painted from — the room's footer, the
-/// People sheet, an "Added by" face, Past Jams, a jam mark's host.
-///
-/// Every face starts at its own name's colour ([identityColor]) and moves
-/// only to keep two people in the jam from sharing one. Who moves is decided
-/// in an order every phone agrees on — the [host] first, then everyone else
-/// by name — not in any one phone's room order, so a person is the same
-/// colour on every phone in the jam and on every screen of each. The host
-/// is never the one who moves.
-///
-/// Without a [host] (a past jam whose record names none: an older record,
-/// or a host who shared no name) everyone is in name order, which differs
-/// from the jam only where the host would have moved someone.
-Map<String, Color> jamPeopleColors(Iterable<String> people, {String? host}) {
-  final others = {
-    for (final name in people)
-      if (name != host) name,
-  }.toList()..sort(_byName);
-  final order = [?host, ...others];
-  final assigned = jamAvatarColors(order);
-  return {for (var i = 0; i < order.length; i++) order[i]: assigned[i]};
-}
-
-/// Name order, ignoring case — with case breaking a tie, so "mia" and "Mia"
-/// sort the same way on every phone.
-int _byName(String a, String b) {
-  final folded = a.toLowerCase().compareTo(b.toLowerCase());
-  return folded != 0 ? folded : a.compareTo(b);
-}
+/// Each person's face colour, by display name (D3): [identityColor] for
+/// each of [people] — nothing more. The one map every face of a jam is
+/// painted from (the room's footer, the People sheet, an "Added by" face,
+/// Past Jams, a jam mark's host), so a person is the same colour on every
+/// screen of every phone, and on the web guest's page.
+Map<String, Color> jamPeopleColors(Iterable<String> people) => {
+  for (final name in people) name: identityColor(name),
+};
 
 /// The first letter or digit in [text], upper-cased — skipping emoji,
 /// punctuation and symbols — or null when it has none. Faces and jam marks
@@ -198,8 +159,8 @@ class JamAvatar extends StatelessWidget {
   /// from.
   final String name;
 
-  /// An assigned colour — from [jamPeopleColors], so nobody in the jam
-  /// shares one. Without it, [name]'s own.
+  /// A colour picked elsewhere — from [jamPeopleColors], which is [name]'s
+  /// own. Without it, [name]'s own.
   final Color? color;
 
   /// Diameter — see [JamAvatarSize].
@@ -293,12 +254,13 @@ class JamAvatarStack extends StatelessWidget {
     this.colors,
   });
 
-  /// Display names, in room order. Without [colors] the pile colours itself
-  /// with [jamPeopleColors] over these names — distinct within the pile.
+  /// Display names, in room order. Without [colors] each face is its
+  /// name's own colour ([identityColor]).
   final List<String> names;
 
   /// Colours parallel to [names], already assigned for the whole jam
-  /// ([jamPeopleColors]), so a face here matches the same person elsewhere.
+  /// ([jamPeopleColors]) — for a pile whose labels are not the names the
+  /// colours come from ("Sam 2").
   final List<Color>? colors;
 
   /// Diameter of each face.

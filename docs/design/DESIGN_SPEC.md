@@ -90,9 +90,12 @@ no status dots or connection badges, no emoji and no filler copy.
   - There are 8 earthy hues of equal luminance (terracotta, sea, ochre,
     slate, olive, indigo, pine, plum). None is near raspberry, and white
     initials reach 4.7:1 or better on every one.
-  - A face is keyed by display name, so a person is the same colour
-    everywhere. Within a jam, `jamPeopleColors` assigns colours host first,
-    then by name, so nobody shares a colour and every phone agrees.
+  - A face's colour is a pure function of the display name (FNV-1a into the
+    palette), so a person is the same colour everywhere: every phone in the
+    jam, Past jams, and the web guest's page. Nobody else joining moves it.
+    The name is the key because it is the one every surface has (client ids
+    never leave the host); two people can therefore share a colour, and the
+    initials and names tell them apart.
   - Initials come from letters and digits only. Two people with the same name
     become "Sam" and "Sam 2".
 - **The jam mark (D4, R4, R5).** `JamMark` is a continuous-corner square.
