@@ -722,7 +722,10 @@ class LocaljamAudioPlugin :
     override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         channel.setMethodCallHandler(null)
         eventChannel.setStreamHandler(null)
-        if (JamMediaSessionManager.keepAliveChannel === keepAliveChannel) {
+        // Only the engine whose channels the manager holds owns the session;
+        // a second engine detaching must not end another one's jam.
+        val ownedSession = JamMediaSessionManager.keepAliveChannel === keepAliveChannel
+        if (ownedSession) {
             JamMediaSessionManager.keepAliveChannel = null
         }
         keepAliveChannel?.setMethodCallHandler(null)
@@ -744,6 +747,11 @@ class LocaljamAudioPlugin :
             state = State.IDLE
         }
         abandonFocus()
+        // The engine is gone, and the jam with it: Dart never got to end the
+        // session (back out of the app, task swiped away), so the keep-alive
+        // service would otherwise outlive it with its locks held. After the
+        // track is freed, as in JamMediaSessionManager.release().
+        if (ownedSession) JamMediaSessionManager.stopOrphaned()
         dormant = true
         unregisterPlatformListeners(detaching = true)
         // Probes still queued would never run: answer them, so no Dart

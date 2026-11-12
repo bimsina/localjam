@@ -156,6 +156,26 @@ internal object JamMediaSessionManager {
     }
 
     /**
+     * Stops the keep-alive when what it was keeping alive is gone without a
+     * [release]: the Flutter engine was destroyed (plugin detach) or the task
+     * was swiped out of recents. The server, the clock and the audio all live
+     * in that engine, so a service that outlived it would hold a wake lock,
+     * the Wi-Fi locks and a media notification whose buttons reach no one.
+     * Playback is the caller's to stop: on detach the plugin frees its own
+     * track, and [JamSessionService.onTaskRemoved] goes through [release].
+     */
+    fun stopOrphaned() {
+        val context = appContext ?: return
+        if (!serviceRunning) return
+        serviceRunning = false
+        try {
+            context.stopService(Intent(context, JamSessionService::class.java))
+        } catch (e: Throwable) {
+            Log.w(TAG, "stopping the orphaned keep-alive service failed", e)
+        }
+    }
+
+    /**
      * Called by the service when `startForeground` itself was refused: the
      * process has no keep-alive after all, so Dart is told rather than left
      * believing a backgrounded jam will survive.
@@ -561,6 +581,19 @@ class JamSessionService : Service() {
         // A session the OS killed is not resumed by restarting the service:
         // the engines re-acquire on the next session start.
         return START_NOT_STICKY
+    }
+
+    /**
+     * The user swiped the app out of recents. The activity, and the Flutter
+     * engine that runs the whole jam with it, are going away, so the session
+     * is over: stop the audio and the service now rather than trust the
+     * engine's own teardown to arrive (the process can be killed first, and
+     * a foreground service is what would keep a half-dead one around).
+     */
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        JamMediaSessionManager.release()
+        stopSelf()
+        super.onTaskRemoved(rootIntent)
     }
 
     override fun onDestroy() {

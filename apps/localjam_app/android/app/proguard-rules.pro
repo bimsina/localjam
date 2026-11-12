@@ -39,3 +39,11 @@
 
 # Keep annotations and generic signatures so reflective lookups still resolve.
 -keepattributes *Annotation*, Signature, InnerClasses, EnclosingMethod
+
+# --- Logging ---------------------------------------------------------------
+# Debug and verbose logs (file paths of the track being played, among others)
+# stay out of a release build's logcat. Warnings and errors are kept.
+-assumenosideeffects class android.util.Log {
+    public static int v(...);
+    public static int d(...);
+}
