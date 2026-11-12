@@ -2,14 +2,14 @@ group = "np.com.bibektimsina.localjam_audio"
 version = "1.0-SNAPSHOT"
 
 buildscript {
-    val kotlinVersion = "2.3.20"
+    val kotlinVersion = "2.4.20"
     repositories {
         google()
         mavenCentral()
     }
 
     dependencies {
-        classpath("com.android.tools.build:gradle:9.0.1")
+        classpath("com.android.tools.build:gradle:9.3.3")
         classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlinVersion")
     }
 }
@@ -26,9 +26,9 @@ plugins {
 }
 
 // The `android {}` accessor is typed with AGP's deprecated
-// com.android.build.gradle.LibraryExtension while the embedding app builds
-// with `android.newDsl=false` (Flutter's template); configuring the new DSL
-// interface directly works under both settings.
+// com.android.build.gradle.LibraryExtension when the embedding app builds
+// with `android.newDsl=false` (Flutter's template; LocalJam's apps set it to
+// true); configuring the new DSL interface directly works under both.
 extensions.configure<com.android.build.api.dsl.LibraryExtension> {
     namespace = "np.com.bibektimsina.localjam_audio"
 
@@ -80,6 +80,9 @@ kotlin {
 }
 
 dependencies {
-    testImplementation("org.jetbrains.kotlin:kotlin-test")
+    // The JUnit 5 flavour of kotlin.test, named explicitly: with AGP's
+    // built-in Kotlin nothing infers it from useJUnitPlatform() the way the
+    // Kotlin Gradle Plugin did.
+    testImplementation("org.jetbrains.kotlin:kotlin-test-junit5")
     testImplementation("org.mockito:mockito-core:5.0.0")
 }
