@@ -4,8 +4,10 @@ Listen together, in sync, over local Wi-Fi — no internet, no accounts.
 
 One person hosts a jam and shares the files; everyone nearby joins over the LAN
 or a hotspot and hears the same thing at the same instant in their own
-headphones. Measured drift between devices is about ±5 ms, corrected silently
-with pitch-corrected ±0.5 % rate slews.
+headphones. Drift is corrected silently with pitch-corrected ±0.5 % rate
+slews. Sync figures so far come from simulators, emulators and a macOS
+desktop; see `DEVICE_TESTING.md` for what physical phones still have to
+confirm.
 
 This is the Flutter UI. All the interesting machinery — transport, clock sync,
 drift correction, the OS media session, room discovery, jam history — lives in
@@ -21,8 +23,8 @@ flutter pub get
 
 flutter run                       # whatever device is attached
 flutter run -d macos
-flutter run -d windows
-flutter run -d linux
+flutter run -d linux              # builds; audio not yet tried on hardware
+flutter run -d windows            # never compiled with MSVC yet
 ```
 
 Two devices on the same network are the point — host on one, join on the other
@@ -40,8 +42,10 @@ by nearby-room discovery, QR scan, or a `localjam://join?…` link.
 
 ## Brand assets
 
-The mark is `assets/brand/logo.svg` — white headphones-with-microphone on a
-transparent ground. Everything else is derived from it:
+The mark is `assets/brand/logo.svg` — the white "beamed signal" (two beamed
+notes whose beam is the first of three Wi-Fi arcs) on a transparent ground.
+Every image below is rendered from one definition of it by
+`tool/render_brand.sh` (needs Google Chrome and ImageMagick):
 
 | File | Used for |
 | --- | --- |
@@ -51,16 +55,16 @@ transparent ground. Everything else is derived from it:
 | `splash_logo.png` | launch screen mark (≈35 % of screen width) |
 | `splash_logo_android12.png` | Android 12+ platform splash icon |
 
-Colour and type follow `docs/design/DESIGN_SPEC.md` (v3): Apple system
-neutrals, raspberry (`#D92C64` light / `#FF4F82` dark) only as the tint on
-things you can tap, and the platform's own system font — SF Pro on iOS and
-macOS, Roboto on Android, Segoe UI on Windows — at iOS text-style sizes. No
-font ships with the app. Timers use tabular figures
+Colour and type follow `docs/design/DESIGN_SPEC.md` (v4.1): warm inks,
+raspberry only for things you can tap or that are selected, Manrope (bundled,
+SIL OFL) for headings and named things, and the platform's system font for
+everything from 17 pt headline down. `lib/src/design/` (`tokens.dart`, `typography.dart`) holds the exact values.
+Timers use tabular figures
 (`FontFeature.tabularFigures()`), which is what keeps the room timer from
 jittering as it counts.
 
-Regenerate the native icon sets and launch screens after changing any of those
-PNGs — both generators are configured from `pubspec.yaml`:
+Regenerate the native icon sets and launch screens after running
+`tool/render_brand.sh` — both generators are configured from `pubspec.yaml`:
 
 ```sh
 dart run flutter_launcher_icons
