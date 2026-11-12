@@ -57,6 +57,9 @@ if [ "$1" != "--keep-all" ]; then
   rm -f "$out"/canvaskit/skwasm* "$out"/canvaskit/wimp*
   find "$out/canvaskit" -name '*.symbols' -delete
   rm -f "$out/flutter_service_worker.js"
+  # Source maps are not fetched by a guest, and from Flutter 3.50 the SDK
+  # ships flutter.js.map, whose embedded sources name the CanvasKit CDN.
+  find "$out" -name '*.js.map' -delete
 fi
 
 if grep -rlE 'gstatic|googleapis' "$out"; then
