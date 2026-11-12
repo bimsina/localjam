@@ -1,6 +1,6 @@
 # Vendored third-party sources
 
-All four libraries below are single-file, dependency-free, and available under
+All five libraries below are single-file, dependency-free, and available under
 public-domain-equivalent terms, which is why they can be checked in verbatim and
 compiled straight into the Windows/Linux plugin binaries. Each file carries its
 full licence text at the bottom of the file itself; nothing here modifies or

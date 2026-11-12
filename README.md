@@ -104,8 +104,10 @@ Honest list, for 1.0.0:
 
 ## Build from source
 
-You need Flutter **3.47.x** (CI pins 3.47.5) and, for Android, the Android SDK
-with API 37 platform and NDK 28.2 (Flutter installs what it is missing).
+You need Flutter **3.47.x** (CI pins 3.47.9 / Dart 3.13.7) and, for Android,
+the Android SDK with API 37 platform and NDK 28.2 (Flutter installs what it is
+missing). Flutter 3.50 is not supported yet: its Android toolchain minimums and
+the material/cupertino package split need a migration, so use 3.47.9.
 
 ```sh
 git clone https://github.com/bimsina/localjam.git
@@ -211,8 +213,13 @@ are tracked in [`CHANGELOG.md`](CHANGELOG.md).
 Vendored and bundled third-party code keeps its own licence:
 `packages/third_party/bonsoir_darwin` (MIT, Skyost),
 `packages/localjam_audio/src/third_party/` (miniaudio, dr_libs, stb_vorbis:
-public domain or MIT-0/MIT, see its `LICENSES.md`), and the Manrope font
-(SIL OFL 1.1, `apps/localjam_app/assets/fonts/OFL.txt`). The app lists every
-dependency's licence under Settings → Licenses.
+public domain or MIT-0/MIT, see its `LICENSES.md`), the Manrope font
+(SIL OFL 1.1, `apps/localjam_app/assets/fonts/OFL.txt`) and the Noto Sans
+Devanagari font bundled in the web guest (SIL OFL 1.1,
+`apps/localjam_web/assets/fonts/NotoSansDevanagari-OFL.txt`). The app lists
+every dependency's licence under Settings → Licenses.
+
+The Android build also bundles Google's proprietary ML Kit barcode-scanning
+library (through `mobile_scanner`) for QR scanning, under Google's own terms.
 
 Only share music you have the right to share.

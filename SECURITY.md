@@ -12,10 +12,19 @@ an honest-guest, trusted-local-network design. Traffic on the LAN is plain
 HTTP/WebSocket **by decision**, so "someone on the same network can read the
 audio stream" is a known property, not a report.
 
+The session token is the only key to a room, and it is not a secret from the
+network the room is on. A **discoverable** room advertises its token in its
+mDNS record, so anyone on the same network can join it; that is the feature,
+not a leak. With discovery off, the QR code or join link is the only way in
+that LocalJam offers, though someone who can watch the plaintext traffic on
+that network can still read the token from it. Neither of those is a report.
+
 These are in scope, and we want to hear about them:
 
-- Getting into a room without its session token, or guessing or leaking the
-  token through a side channel.
+- Getting into a room without its session token, or guessing it.
+- The token reaching anyone through a channel the design above does not
+  explain: a non-discoverable room's token in an mDNS record, a log, a web
+  request, or anywhere off the local network.
 - A host accepting control or media requests from a non-LAN address.
 - A guest doing something its room permissions forbid (adding, controlling,
   editing the queue, promoting itself, kicking others).
@@ -34,7 +43,6 @@ Please **do not open a public issue** for a vulnerability.
 - Use GitHub's private vulnerability reporting:
   **Security → Report a vulnerability** on
   <https://github.com/bimsina/localjam>.
-- Or email **[SECURITY CONTACT EMAIL]**.
 
 Include the version (Settings → Version), the devices involved, and steps or a
 proof of concept. You should get an acknowledgement within a week. Once a fix

@@ -1,10 +1,12 @@
 # LocalJam — Design Spec v3 ("as if Apple designed it")
 
-Target: `apps/localjam_app`. Supersedes v2 and its addendum (both in git
-history, commit `0559612`). Numbers are logical pixels. Reference board:
-https://claude.ai/artifact/FK4Ca6qqnR9wm5gNSWynwX
+> **Superseded by [`DESIGN_SPEC.md`](DESIGN_SPEC.md).** Kept for history; where
+> the two disagree, `DESIGN_SPEC.md` and the code are right.
 
-Decisions settled with Bibek on 2026-10-18:
+Target: `apps/localjam_app`. Supersedes v2 and its addendum (both in git
+history, commit `0559612`). Numbers are logical pixels.
+
+Decisions settled on 2026-10-18:
 
 | # | Decision |
 |---|---|

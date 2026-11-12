@@ -1,6 +1,7 @@
 name: localjam_audio
 description: "Sample-accurate scheduled audio playback for LocalJam: start a local file at an exact native-clock instant, read back precise positions, and micro-adjust rate for drift correction."
 version: 0.4.0
+publish_to: none
 
 environment:
   sdk: ^3.12.2

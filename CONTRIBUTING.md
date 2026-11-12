@@ -37,8 +37,10 @@ cd apps/localjam_app        && flutter test
 cd apps/localjam_web        && flutter test
 ```
 
-All of it runs offline and in seconds. Flutter 3.47.5 / Dart 3.13.4 is what CI
-pins; anything newer on the same major should be fine.
+All of it runs offline and in seconds. Flutter 3.47.9 / Dart 3.13.7 is what CI
+pins; other 3.47.x releases should be fine. Flutter 3.50 is not supported yet:
+its Android toolchain minimums and the material/cupertino package split need a
+migration, so use 3.47.9.
 
 Things simulators cannot prove live in [`DEVICE_TESTING.md`](DEVICE_TESTING.md).
 If you run any of that checklist, a PR adding your results (device, OS version,

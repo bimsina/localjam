@@ -75,7 +75,6 @@ invitation, in that page's own site storage.
 | Permission | Used for |
 | --- | --- |
 | Network access (Android "Internet") | Android requires this permission for any network connection, including on the local network. LocalJam uses it only to talk to the other devices in a jam. It does not connect to the internet. |
-| Local network access (Android 17+) | Finding and connecting to jams on your Wi-Fi. |
 | Music and audio (Android "Read media audio") | Showing the songs on your phone when you choose "Add from library". Not needed to pick a song with the file picker. |
 | Camera | Scanning a jam's QR code to join. Camera images are processed on the device to read the code and are never stored or sent anywhere. |
 | Notifications | Showing what is playing, with play and pause, while a jam runs. |
@@ -107,5 +106,4 @@ changelog. The history of this file is public in the source repository.
 ## Contact
 
 Questions about this policy: open an issue at
-<https://github.com/bimsina/localjam/issues>, or email
-**[PRIVACY CONTACT EMAIL]**.
+<https://github.com/bimsina/localjam/issues>.

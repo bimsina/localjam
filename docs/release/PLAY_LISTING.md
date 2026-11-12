@@ -62,7 +62,8 @@ GOOD TO KNOW
 
 - **Category:** Music & Audio
 - **Tags (pick up to 5):** Music player, Party, Social, Offline, Audio sharing
-- **Contact email:** [PUBLIC SUPPORT EMAIL]
+- **Contact email:** the developer account's public support address, entered in
+  Play Console (it is not kept in this repository)
 - **Website:** https://github.com/bimsina/localjam
 
 ## Graphics checklist

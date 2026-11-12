@@ -33,7 +33,7 @@ by nearby-room discovery, QR scan, or a `localjam://join?…` link.
 | Platform | Notes |
 | --- | --- |
 | **iOS** | Needs a real device or simulator on the same LAN. `flutter build ios --simulator --no-codesign` for a simulator-only build. Local network access is prompted on first host/join, behind the app's own rationale sheet. `UIFileSharingEnabled` + `LSSupportsOpeningDocumentsInPlace` put a **LocalJam** folder in the Files app — that is how audio gets onto a phone with no library of its own. |
-| **Android** | API 37 (Android 17) gates *all* LAN traffic behind the runtime `ACCESS_LOCAL_NETWORK` permission; the app asks at host/join time. |
+| **Android** | API 37 (Android 17) gates *all* LAN traffic behind the runtime `ACCESS_LOCAL_NETWORK` permission, but only for apps that target 37. The app targets 36, so it neither declares nor asks for it yet (see the `targetSdk` comment in `android/app/build.gradle.kts`). |
 | **macOS** | Sandboxed. The network client/server and camera entitlements are already in `macos/Runner/*.entitlements`. |
 | **Apple, both** | `pubspec.yaml` carries a `dependency_overrides` entry pointing `bonsoir_darwin` at the patched copy in `packages/third_party/` — without it the app deadlocks on the Simulator the moment it advertises a room. See that package's `PATCHES.md`. |
 | **Windows / Linux** | Desktop playback goes through miniaudio in the `localjam_audio` plugin. Linux needs GTK 3 dev packages. |
@@ -109,7 +109,7 @@ cache, artwork, jam history and device identity stay on the device.
 ## Tests
 
 ```sh
-flutter test          # 251 tests: screens, widgets, state, formatting helpers
+flutter test          # screens, widgets, state, formatting helpers
 ```
 
 They run offline and need no device. The engine's own suites live beside it in

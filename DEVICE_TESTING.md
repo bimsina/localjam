@@ -5,8 +5,9 @@
 The current UI built and ran on two iOS 27 simulators and an Android API 36.1
 emulator. Nearby discovery, joining, the shared queue, iOS guest upload,
 host pause, live guest-policy updates and deliberate session ending were
-exercised. See the [native capture report](docs/screenshots/native-2026-10-19/README.md)
-and [26 screenshots](docs/screenshots/native-2026-10-19/index.html).
+exercised. Its capture report and 26 screenshots
+(`docs/screenshots/native-2026-10-19/`) are not committed: native galleries
+are git-ignored and come only from a fresh pass on simulators or devices.
 
 **This run does not confirm audio synchronization:** Android showed Out of sync,
 with −862.6 ms drift and Resync recorded. GPU acceleration was disabled in the
@@ -18,7 +19,7 @@ historical results, not results for this design pass.
 
 What simulators could not verify — run these on real hardware. Everything
 else (sync math, transport, lifecycle, end-of-media, reconnect) is covered by
-the 600-test suite and live simulator runs (drift ≤ 10 ms across three
+the automated test suites and live simulator runs (drift ≤ 10 ms across three
 devices, iOS + Android).
 
 ## Setup
@@ -90,8 +91,11 @@ devices, iOS + Android).
     previous connection, and no ghost carried into either device's jam
     history.
 14. **Permission rationale sheets** — on a phone that has never run LocalJam,
-    every OS prompt (local network, camera, media library, notifications on
-    Android 13+) must be preceded by the app's own sheet explaining why. Deny
+    every OS prompt (local network on iOS, camera, media library,
+    notifications on Android 13+) must be preceded by the app's own sheet
+    explaining why. Android shows no local-network sheet while the app
+    targets API 36 (it neither declares nor asks for `ACCESS_LOCAL_NETWORK`;
+    the older results below predate that). Deny
     one: the sheet must come back with the "open Settings" path, and the app
     must stay usable. Re-grant from Settings and confirm the feature works
     without a restart.

@@ -293,8 +293,8 @@ targets, contrast variants and reduced-motion support.
 
 ## Review artifacts
 
-The [screen gallery](../screenshots/identity-v4/index.html) holds light and
-dark captures of pages, sheets, dialogs, host and guest states, errors,
+The screen gallery (`docs/screenshots/identity-v4/index.html`, generated and
+git-ignored, so regenerate it as below) holds light and dark captures of pages, sheets, dialogs, host and guest states, errors,
 responsive layouts, and stress cases: long names, seven people, large text,
 and extreme covers.
 

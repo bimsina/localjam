@@ -10,7 +10,7 @@ from `apps/localjam_app/` unless it says otherwise.
 | targetSdk | 36, pinned in `android/app/build.gradle.kts` (Play requires 36 from 2026-08-31) |
 | compileSdk | 37 (`permission_handler` 13 needs it for `ACCESS_LOCAL_NETWORK`) |
 | Version | `pubspec.yaml` `version: <versionName>+<versionCode>` |
-| Toolchain | Flutter 3.47.x, AGP 9.0.1, Kotlin 2.3.20, NDK 28.2 |
+| Toolchain | Flutter 3.47.x (CI pins 3.47.9 / Dart 3.13.7; 3.50 not supported yet), AGP 9.0.1, Kotlin 2.3.20, NDK 28.2 |
 
 ## 1. One-time setup
 
@@ -141,7 +141,6 @@ Play Console and the system show.
 | Permission | Kind | Why |
 | --- | --- | --- |
 | `INTERNET` | normal | Android grants no socket without it, LAN included. The host's server and every guest connection are local-network sockets; nothing connects to the internet. |
-| `ACCESS_LOCAL_NETWORK` | runtime (Android 17+) | Android 17 gates local-network traffic behind this. Asked for at host/join time behind an in-app explanation. Unknown and ignored on older Android. |
 | `CHANGE_WIFI_MULTICAST_STATE`, `ACCESS_WIFI_STATE`, `ACCESS_NETWORK_STATE` | normal | Nearby-room discovery (mDNS, `bonsoir`), the Wi-Fi lock that keeps a host reachable, and reading the device's LAN address for the join link. |
 | `READ_MEDIA_AUDIO` (`READ_EXTERNAL_STORAGE` up to API 32) | runtime | "Add from library": lists the phone's music through MediaStore. Only asked for when the user opens the library. Songs picked with the system file picker need no permission. |
 | `CAMERA` | runtime | Scanning a room's join QR code. Frames are decoded on the device and never stored. `android.hardware.camera` is `required="false"`, so phones without a camera can still install and join by link or nearby rooms. |
@@ -153,6 +152,11 @@ Play Console and the system show.
 Not requested, on purpose: `NEARBY_WIFI_DEVICES` (no Wi-Fi Direct or Wi-Fi
 scanning; discovery is mDNS on the network the phone is already on), location,
 microphone, contacts, accounts, `MANAGE_EXTERNAL_STORAGE`.
+`ACCESS_LOCAL_NETWORK` is also absent for now: Android 17 gates LAN traffic
+behind it only for apps targeting API 37, and Google's guidance is that apps
+targeting 36 or lower must neither declare nor request it. It is declared and
+asked for (behind an in-app explanation) in the same change that moves
+`targetSdk` to 37; see the comment there in `build.gradle.kts`.
 
 ### Foreground service declaration (Play Console)
 
@@ -216,7 +220,10 @@ identity stay on the install.
 
 ### Exported components and links
 
-Only `MainActivity` is exported (launcher, and `localjam://` links). The
+Only `MainActivity` is exported (launcher, and `localjam://` links), apart
+from androidx's `ProfileInstallReceiver`, which the profileinstaller library
+merges in exported but guarded by `android.permission.DUMP` (only the shell or
+system can send to it). The
 `http://<lan-ip>:<port>/join#…` join link is intentionally not claimed: its
 host is a LAN IP that changes per room, so it cannot be a verified App Link,
 and an unverified `http` filter would offer LocalJam as a browser for every
