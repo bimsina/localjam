@@ -552,6 +552,33 @@ void main() {
       }
     });
 
+    test('a refused client that reads late still reads its status', () async {
+      // The flake behind the test above: the host destroyed a refused socket
+      // the moment its status went out, with the request unread, so the
+      // kernel answered with a reset that discarded the status before a busy
+      // client got round to reading it.
+      final host = JamHostServer(
+        sessionName: 'Local',
+        admitLocalAddress: (_) => false,
+      );
+      await host.start(address: InternetAddress.loopbackIPv4);
+      addTearDown(host.close);
+      final socket = await Socket.connect(
+        InternetAddress.loopbackIPv4,
+        host.port,
+      );
+      addTearDown(socket.destroy);
+      socket.done.catchError((Object _) {});
+      socket.add(ascii.encode('GET /nope HTTP/1.1\r\n\r\n'));
+      await socket.flush();
+      // Not listening yet: everything the host sends waits in the kernel.
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      final received = await socket
+          .fold<List<int>>([], (all, bytes) => all..addAll(bytes))
+          .timeout(const Duration(seconds: 3));
+      expect(latin1.decode(received), startsWith('HTTP/1.1 403 '));
+    });
+
     test('the global cap holds across remotes', () async {
       final host = await startHost(maxConnections: 2);
       final held = [for (var i = 0; i < 2; i++) await RawConn.open(host)];

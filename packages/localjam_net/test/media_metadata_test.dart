@@ -82,16 +82,16 @@ void main() {
           file,
           maxMetadataBytes: bounded ? 8 * 1024 * 1024 : null,
         );
-        expect(tags.title, 'Kun Faya Kun');
-        expect(tags.artist, 'A.R. Rahman, Javed Ali, Mohit Chauhan');
-        expect(tags.album, 'Rockstar');
+        expect(tags.title, 'Nila Sona Nila');
+        expect(tags.artist, 'K.T. Varman, Ravi Seth, Nikhil Dharan');
+        expect(tags.album, 'Driftwood');
       });
     }
 
     test('with no track artist, the album artist stands in', () async {
       final file = await makeId3v23Mp3(leadPerformer: null);
       final tags = await readAudioTags(file);
-      expect(tags.artist, 'A.R. Rahman');
+      expect(tags.artist, 'K.T. Varman');
     });
 
     test('a declared MIME type the bytes contradict loses', () async {
@@ -112,7 +112,7 @@ void main() {
       final tags = await readAudioTags(file);
       expect(tags.hasArtwork, isFalse);
       expect(tags.artworkMime, isNull);
-      expect(tags.title, 'Kun Faya Kun');
+      expect(tags.title, 'Nila Sona Nila');
     });
   });
 
@@ -176,8 +176,8 @@ void main() {
   group('normalizeArtistCredit', () {
     test('splits ID3 slash and NUL separators into one comma list', () {
       expect(
-        normalizeArtistCredit('A.R. Rahman/Javed Ali/Mohit Chauhan'),
-        'A.R. Rahman, Javed Ali, Mohit Chauhan',
+        normalizeArtistCredit('K.T. Varman/Ravi Seth/Nikhil Dharan'),
+        'K.T. Varman, Ravi Seth, Nikhil Dharan',
       );
       expect(
         normalizeArtistCredit('Alka Yagnik\u0000Udit Narayan'),
@@ -194,8 +194,8 @@ void main() {
     test('never splits commas, drops repeats and blanks', () {
       expect(normalizeArtistCredit('Earth, Wind & Fire'), 'Earth, Wind & Fire');
       expect(
-        normalizeArtistCredit('A.R. Rahman/a.r. rahman/Javed Ali'),
-        'A.R. Rahman, Javed Ali',
+        normalizeArtistCredit('K.T. Varman/k.t. varman/Ravi Seth'),
+        'K.T. Varman, Ravi Seth',
       );
       expect(normalizeArtistCredit('﻿  \u0000 '), isNull);
       expect(normalizeArtistCredit(null), isNull);

@@ -129,11 +129,28 @@ class ConnectionGuard {
 
   /// Answers a connection that will not be served with a bare HTTP status
   /// and closes it. Nothing it sends is parsed or kept: the input is drained
-  /// into nothing until the close goes out (or a short deadline passes), so
-  /// an honest client reads a status instead of a reset.
+  /// into nothing until the client closes its end (or a short deadline
+  /// passes), so an honest client reads a status instead of a reset.
+  ///
+  /// The drain has to outlive our own close. Destroying the socket as soon
+  /// as the status went out closed it with the client's request still unread
+  /// (or still on its way), and the kernel answers that with a reset — which
+  /// on macOS and Linux throws away whatever the client had not read yet,
+  /// the status included.
   static void _refuse(Socket socket, int status, String reason) {
     try {
-      socket.listen((_) {}, onError: (Object _) {}, cancelOnError: true);
+      final deadline = Timer(const Duration(seconds: 2), socket.destroy);
+      void finish() {
+        deadline.cancel();
+        socket.destroy();
+      }
+
+      socket.listen(
+        (_) {},
+        onError: (Object _) => finish(),
+        onDone: finish,
+        cancelOnError: true,
+      );
       socket.add(
         ascii.encode(
           'HTTP/1.1 $status $reason\r\n'
@@ -141,15 +158,9 @@ class ConnectionGuard {
           'Content-Length: 0\r\n\r\n',
         ),
       );
-      final deadline = Timer(const Duration(seconds: 2), socket.destroy);
-      unawaited(
-        socket.close().then<void>((_) {}, onError: (Object _) {}).whenComplete(
-          () {
-            deadline.cancel();
-            socket.destroy();
-          },
-        ),
-      );
+      // Half-close: the status and our FIN go out, the read side stays open
+      // for the drain above.
+      unawaited(socket.close().then<void>((_) {}, onError: (Object _) {}));
     } catch (_) {
       socket.destroy();
     }

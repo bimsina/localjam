@@ -197,8 +197,8 @@ _TagFields? _fieldsOf(Object parsed) => switch (parsed) {
 /// NUL, ID3v2.3 (and most taggers, and Android's MediaStore after them)
 /// with `/`, and Vorbis comments repeat the field (the caller joins the
 /// repeats with NUL). Each artist once, in order, joined with ", ":
-/// `A.R. Rahman/Javed Ali/Mohit Chauhan` reads "A.R. Rahman, Javed Ali,
-/// Mohit Chauhan". Null when nothing is left.
+/// `K.T. Varman/Ravi Seth/Nikhil Dharan` reads "K.T. Varman, Ravi Seth,
+/// Nikhil Dharan". Null when nothing is left.
 ///
 /// A `/` splits only when every piece around it is at least three
 /// characters long, so a name with a slash in it — `AC/DC`, `N/A` — stays

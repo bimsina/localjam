@@ -96,10 +96,10 @@ List<int> _id3v23Frame(String id, List<int> body) => [
 /// 1.7 left part of in front of the image. A null value leaves its frame
 /// out; a null [picture] leaves the APIC out.
 Future<File> makeId3v23Mp3({
-  String? title = 'Kun Faya Kun',
-  String? leadPerformer = 'A.R. Rahman/Javed Ali/Mohit Chauhan',
-  String? bandOrOrchestra = 'A.R. Rahman',
-  String? album = 'Rockstar',
+  String? title = 'Nila Sona Nila',
+  String? leadPerformer = 'K.T. Varman/Ravi Seth/Nikhil Dharan',
+  String? bandOrOrchestra = 'K.T. Varman',
+  String? album = 'Driftwood',
   Uint8List? picture,
   String pictureMime = 'image/jpeg',
   String pictureDescription = 'Cover',
