@@ -21,6 +21,7 @@ import 'screens/settings_screen.dart';
 import 'state/onboarding_prefs.dart';
 import 'state/session_controller.dart';
 import 'widgets/app_sidebar.dart';
+import 'widgets/live_jam_back.dart';
 import 'widgets/notice.dart';
 import 'widgets/rename_dialog.dart';
 import 'widgets/room_bar.dart';
@@ -425,7 +426,18 @@ class _RoomBarShellState extends State<_RoomBarShell> {
 
   @override
   Widget build(BuildContext context) {
-    final hasRoom = JamSession.of(context).hasRoom;
+    final session = JamSession.of(context);
+    // This page is the bottom of the root navigator: a back that gets here
+    // has nothing left to pop, and while a jam is live it must not close the
+    // app — the jam would go with it (see [JamLiveJamBackScope]).
+    return JamLiveJamBackScope(
+      live: session.isLive || session.rejoining,
+      child: _chrome(context, session.hasRoom),
+    );
+  }
+
+  /// The sidebar, or the floating mini player, around [widget.child].
+  Widget _chrome(BuildContext context, bool hasRoom) {
     if (context.jamBreakpoint.hasSidebar) {
       // The mini player is the content pane's bottom accessory (iPadOS 26
       // Music), not a capsule squeezed into the 260 pt sidebar, where the

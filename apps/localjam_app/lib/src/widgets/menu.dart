@@ -36,9 +36,12 @@
 /// ```
 library;
 
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:cupertino_ui/cupertino_ui.dart';
+import 'package:flutter/gestures.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 
 import '../design/motion.dart';
@@ -513,6 +516,8 @@ class _JamMenuAnchorState extends State<JamMenuAnchor>
 
   @override
   void dispose() {
+    _swallowTimer?.cancel();
+    _watchPointers(false);
     _animation.dispose();
     super.dispose();
   }
@@ -537,8 +542,26 @@ class _JamMenuAnchorState extends State<JamMenuAnchor>
     ];
   }
 
+  /// Whether the menu is open (or opening), for the back handling in
+  /// [build].
+  bool _open = false;
+
+  /// Whether the next back is the menu's to swallow although the menu has
+  /// already closed — see [_onPointer].
+  bool _swallowBack = false;
+
+  /// The touch that closed the menu, while it is still down.
+  int? _closingPointer;
+
+  /// Set by a close, for the touch being dispatched right now to claim.
+  bool _claimNextDown = false;
+
+  Timer? _swallowTimer;
+  bool _watching = false;
+
   void _onOpenRequested(Offset? position, VoidCallback showOverlay) {
     showOverlay();
+    _setOpen(true);
     if (jamReducedMotion(context)) {
       _animation.value = 1;
     } else {
@@ -547,6 +570,17 @@ class _JamMenuAnchorState extends State<JamMenuAnchor>
   }
 
   void _onCloseRequested(VoidCallback hideOverlay) {
+    // A touch outside the menu closes it on the way down — including the
+    // touch that starts Android's edge-swipe back, which the system then
+    // takes over. If this close came from a touch, the touch claims it
+    // (it is being dispatched right now, and the pointer router sees it
+    // after the tap region that closed the menu did).
+    _claimNextDown = true;
+    scheduleMicrotask(() {
+      _claimNextDown = false;
+      if (mounted) _watchPointers(_open || _swallowBack);
+    });
+    _setOpen(false);
     if (!mounted || jamReducedMotion(context)) {
       _animation.value = 0;
       hideOverlay();
@@ -557,8 +591,96 @@ class _JamMenuAnchorState extends State<JamMenuAnchor>
     });
   }
 
+  /// Every touch while the menu is open, and the one that closed it.
+  ///
+  /// The close that matters is the one whose touch the system *cancels*:
+  /// that was the edge swipe of a back gesture, and the back it delivers
+  /// a moment later was meant for the menu — without this it closed the
+  /// menu on the way down and the page under it on the way out, two
+  /// things for one gesture. A touch that ends in an ordinary lift was a
+  /// tap outside, and nothing is swallowed.
+  void _onPointer(PointerEvent event) {
+    if (event is PointerDownEvent) {
+      if (_claimNextDown) {
+        _claimNextDown = false;
+        _closingPointer = event.pointer;
+        _setSwallow(true);
+      } else if (!_open && _closingPointer == null) {
+        // A new touch after all that: the moment for the back has passed.
+        _setSwallow(false);
+      }
+    } else if (event.pointer == _closingPointer) {
+      if (event is PointerUpEvent) {
+        _closingPointer = null;
+        _setSwallow(false);
+      } else if (event is PointerCancelEvent) {
+        _closingPointer = null;
+        // The system took the touch. Its back lands within moments; if it
+        // never comes (a back swipe let go of), a few seconds is enough.
+        _swallowTimer?.cancel();
+        _swallowTimer = Timer(
+          const Duration(seconds: 3),
+          () => _setSwallow(false),
+        );
+      }
+    }
+  }
+
+  void _watchPointers(bool watch) {
+    if (watch == _watching) return;
+    _watching = watch;
+    final router = GestureBinding.instance.pointerRouter;
+    if (watch) {
+      router.addGlobalRoute(_onPointer);
+    } else {
+      router.removeGlobalRoute(_onPointer);
+    }
+  }
+
+  void _setSwallow(bool swallow) {
+    if (!swallow) _swallowTimer?.cancel();
+    if (_swallowBack == swallow) return;
+    _swallowBack = swallow;
+    _rebuild();
+  }
+
+  void _setOpen(bool open) {
+    if (_open == open) return;
+    _open = open;
+    _rebuild();
+  }
+
+  void _rebuild() {
+    if (mounted) _watchPointers(_open || _swallowBack || _claimNextDown);
+    if (!mounted) return;
+    // A close can be asked for while the tree is building (the anchor's
+    // route going away); the rebuild waits for the frame to finish.
+    if (SchedulerBinding.instance.schedulerPhase ==
+        SchedulerPhase.persistentCallbacks) {
+      SchedulerBinding.instance.addPostFrameCallback((_) {
+        if (mounted) setState(() {});
+      });
+      return;
+    }
+    setState(() {});
+  }
+
+  /// An open menu is the top thing on screen, so a back puts the menu away
+  /// and nothing else. The menu lives in the root overlay, not in a route,
+  /// so without this the back went past it to the page underneath: one
+  /// press closed the menu *and* the room it was opened in.
   @override
-  Widget build(BuildContext context) => RawMenuAnchor(
+  Widget build(BuildContext context) => PopScope<Object?>(
+    canPop: !_open && !_swallowBack,
+    onPopInvokedWithResult: (didPop, _) {
+      if (didPop) return;
+      _setSwallow(false);
+      _controller.close();
+    },
+    child: _anchor(context),
+  );
+
+  Widget _anchor(BuildContext context) => RawMenuAnchor(
     controller: _controller,
     useRootOverlay: true,
     consumeOutsideTaps: true,

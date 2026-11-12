@@ -416,6 +416,104 @@ void main() {
   });
 
   group('JamMenuButton', () {
+    testWidgets('a back with the menu open closes the menu, and only the '
+        'menu', (tester) async {
+      // The report: back with the room's "More" open closed the menu and
+      // the room under it in one press.
+      final navigator = GlobalKey<NavigatorState>();
+      await tester.pumpWidget(
+        MaterialApp(
+          navigatorKey: navigator,
+          theme: jamLightTheme(),
+          home: const Scaffold(body: Text('Home')),
+        ),
+      );
+      unawaited(
+        navigator.currentState!.push(
+          CupertinoPageRoute<void>(
+            builder: (_) => const Scaffold(
+              body: Center(
+                child: JamMenuButton(
+                  groups: [
+                    [JamMenuItem(title: 'Diagnostics')],
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byType(JamMenuButton));
+      await tester.pumpAndSettle();
+      expect(find.text('Diagnostics'), findsOneWidget);
+
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+      expect(find.text('Diagnostics'), findsNothing);
+      expect(find.byType(JamMenuButton), findsOneWidget, reason: 'page kept');
+
+      // With the menu put away, back is the page's again.
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+      expect(find.byType(JamMenuButton), findsNothing);
+      expect(find.text('Home'), findsOneWidget);
+    });
+
+    testWidgets('an edge-swipe back closes the menu, and only the menu, '
+        'though its touch closed the menu first', (tester) async {
+      // Android's back gesture starts as a touch the app sees go down —
+      // which closes the menu as a tap outside — and then the system takes
+      // it (a cancel) and delivers a back.
+      final navigator = GlobalKey<NavigatorState>();
+      await tester.pumpWidget(
+        MaterialApp(
+          navigatorKey: navigator,
+          theme: jamLightTheme(),
+          home: const Scaffold(body: Text('Home')),
+        ),
+      );
+      unawaited(
+        navigator.currentState!.push(
+          CupertinoPageRoute<void>(
+            builder: (_) => const Scaffold(
+              body: Center(
+                child: JamMenuButton(
+                  groups: [
+                    [JamMenuItem(title: 'Diagnostics')],
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      Future<void> open() async {
+        await tester.tap(find.byType(JamMenuButton));
+        await tester.pumpAndSettle();
+        expect(find.text('Diagnostics'), findsOneWidget);
+      }
+
+      await open();
+      final swipe = await tester.startGesture(const Offset(2, 300));
+      await tester.pump();
+      await swipe.cancel();
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+      expect(find.text('Diagnostics'), findsNothing);
+      expect(find.byType(JamMenuButton), findsOneWidget, reason: 'page kept');
+
+      // A plain tap outside is only a tap: the back after it is the page's.
+      await open();
+      await tester.tapAt(const Offset(10, 300));
+      await tester.pumpAndSettle();
+      expect(find.text('Diagnostics'), findsNothing);
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+      expect(find.text('Home'), findsOneWidget);
+    });
+
     testWidgets('opens an iOS pull-down with groups and a red row', (
       tester,
     ) async {
