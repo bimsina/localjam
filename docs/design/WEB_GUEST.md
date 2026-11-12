@@ -122,8 +122,8 @@ hash routing would eat the fragment; use no router).
 ## Packaging
 
 - `tool/build_web_guest.sh`: runs `apps/localjam_web/tool/build.sh`
-  (`flutter build web --release --base-href /web/ --no-web-resources-cdn
-  --pwa-strategy none`, then scrubs Flutter's unused CDN defaults to
+  (`flutter build web --release --base-href /web/ --no-web-resources-cdn`,
+  deletes the never-registered service worker file, then scrubs Flutter's unused CDN defaults to
   same-origin paths, prunes what a dart2js build never loads, and fails if
   `gstatic`/`googleapis` remain; about 17 MB), then copies `build/web` into
   `apps/localjam_app/assets/web/` (committed build output is **not** wanted;

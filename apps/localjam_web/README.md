@@ -14,10 +14,11 @@ tool/build.sh          # what the host should bundle (17 MB)
 which is
 
 ```sh
-flutter build web --release --base-href /web/ --no-web-resources-cdn --pwa-strategy none
+flutter build web --release --base-href /web/ --no-web-resources-cdn
 ```
 
-plus two scrubs and a prune: the CanvasKit-CDN and font-CDN defaults that
+plus two scrubs and a prune: the service worker file Flutter always writes
+(never registered: the page's bootstrap asks for none) is deleted, the CanvasKit-CDN and font-CDN defaults that
 Flutter's loader and engine still carry (unused by this build) are replaced
 by same-origin paths, the renderers a dart2js build never loads (`skwasm*`,
 `wimp*`, `webparagraph/`) and the `*.symbols` files are removed, and the
