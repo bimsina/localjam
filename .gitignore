@@ -3,6 +3,13 @@
 build/
 test-media/
 
+# Editor, IDE and local tooling state.
+.idea/
+.vscode/
+*.iml
+.env
+.claude/
+
 # Release signing — never commit a keystore or its passwords.
 # (android/key.properties.example is the checked-in template.)
 **/android/key.properties
