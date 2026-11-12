@@ -273,10 +273,20 @@ class JamIdentity {
 
   /// Replaces the display name (a UI rename). Empty/whitespace names are
   /// rejected by reverting to the current one.
+  ///
+  /// A name that changes is announced on [changes]: the rename comes from
+  /// one screen (Settings, the sidebar), and every other one showing the
+  /// name — Home's avatar among them — kept the old initials until the app
+  /// was restarted.
   static Future<String> setDisplayName(String name) async {
     final trimmed = name.trim();
     if (trimmed.isEmpty) return displayName();
+    final renamed = _cached != trimmed;
     _cached = trimmed;
+    // Announced before the write: the name in use is the new one from here
+    // on, whatever the store does, and nobody should wait on a slow channel
+    // to see it.
+    if (renamed) (changes as _IdentityChanges).announce();
     // A rename is newer than anything on disk: never let a pending re-read
     // adopt the old stored name over it.
     _nameNeedsRead = false;

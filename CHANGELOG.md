@@ -5,6 +5,17 @@ a release heading carries the day it shipped.
 
 ## Unreleased
 
+- Back no longer ends a live jam on Android: with nothing left to pop, back
+  while hosting or in a jam sends LocalJam to the background (as Home does)
+  instead of closing it and taking the server and the audio with it. Works
+  with predictive back (Android 16, `targetSdk` 36) and 3-button navigation;
+  without a jam back exits as before. Back with a "•••" menu open now closes
+  just the menu.
+- A rename reaches every screen at once (Home's avatar kept the old initials
+  until a restart); Home no longer flashes "No jams yet" before the history
+  has loaded.
+- The Android 12+ splash icon is rendered per density from the mark
+  (`tool/render_brand.sh --android12-splash`) instead of downscaled.
 - Lifecycle hardening: disposing the app's session controller now closes the
   live jam (server, playback, foreground service) and drops any host start or
   join still in flight instead of attaching it; and a host add that is still

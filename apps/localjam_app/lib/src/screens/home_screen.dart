@@ -189,6 +189,16 @@ class _HomeScreenState extends State<HomeScreen> {
   Timer? _networkPoll;
   List<JamHistoryRecord> _recents = const [];
 
+  /// Whether the first read of the history has landed. Until it has, an
+  /// empty [_recents] means "not known yet", not "none": the empty state
+  /// ("No jams yet") flashed on every cold start of a phone with a history,
+  /// a beat before Recent replaced it.
+  bool _recentsLoaded = false;
+
+  /// Whether [_network] has been read once: the empty state says which
+  /// network you are on, so it waits for that too.
+  bool _networkRead = false;
+
   /// Rooms already on screen ([JamNearbyRoom.identity]), so only a *newly*
   /// discovered one animates in and buzzes — a rebuild is not an arrival,
   /// and nor is the same jam re-advertised under another mDNS name.
@@ -285,13 +295,22 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _loadRecents() async {
     final loader = widget.loadRecords;
-    final store = loader == null ? await JamHistoryStore.open() : null;
-    final records = loader != null
-        ? await loader()
-        : store == null
-        ? const <JamHistoryRecord>[]
-        : await store.list();
+    List<JamHistoryRecord> records;
+    try {
+      final store = loader == null ? await JamHistoryStore.open() : null;
+      records = loader != null
+          ? await loader()
+          : store == null
+          ? const <JamHistoryRecord>[]
+          : await store.list();
+    } catch (e) {
+      // A history that cannot be read is an empty one, not a Home that
+      // waits for it forever (see [_recentsLoaded]).
+      debugPrint('localjam: recent jams unavailable: $e');
+      records = const [];
+    }
     if (!mounted) return;
+    if (!_recentsLoaded) setState(() => _recentsLoaded = true);
     final next = records.take(kJamHomeRecents).toList();
     if (next.length == _recents.length &&
         next.indexed.every(
@@ -313,8 +332,12 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _refreshNetwork() async {
     final status = await (widget.networkReader ?? currentNetwork)();
-    if (mounted && status.addresses.join() != _network.addresses.join()) {
-      setState(() => _network = status);
+    if (!mounted) return;
+    if (!_networkRead || status.addresses.join() != _network.addresses.join()) {
+      setState(() {
+        _networkRead = true;
+        _network = status;
+      });
     }
   }
 
@@ -569,6 +592,9 @@ class _HomeScreenState extends State<HomeScreen> {
           SliverToBoxAdapter(child: recents),
         ];
       }
+      // Nothing yet rather than an empty state that Recent is about to
+      // replace — the reads take a frame or two.
+      if (!_recentsLoaded || !_networkRead) return const [];
       return [
         jamAnchoredEmptyState(
           _EmptyNearby(

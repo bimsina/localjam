@@ -1,6 +1,8 @@
 /// Home is the answer to "is there a jam here?", not a landing page.
 library;
 
+import 'dart:async';
+
 import 'package:cupertino_ui/cupertino_ui.dart';
 import 'package:flutter/rendering.dart' show RenderParagraph;
 import 'package:flutter_test/flutter_test.dart';
@@ -93,6 +95,20 @@ Future<void> pumpHome(
   await tester.pumpAndSettle();
 }
 
+/// Lets Home's first reads — the network, the history — land: they are
+/// real I/O, which a widget test's fake clock never finishes on its own,
+/// and Home holds its empty state until both have.
+Future<void> settleHomeReads(WidgetTester tester) async {
+  for (var i = 0; i < 20; i++) {
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 20)),
+    );
+    await tester.pump();
+    if (find.byType(JamEmptyState).evaluate().isNotEmpty) break;
+  }
+  await tester.pumpAndSettle();
+}
+
 void main() {
   testWidgets('home leads with discovery and one way to start', (tester) async {
     final session = testSession();
@@ -140,10 +156,61 @@ void main() {
     expect(find.byType(SettingsScreen), findsOneWidget);
   });
 
-  testWidgets('the empty state names the situation', (tester) async {
+  testWidgets('a rename reaches Home’s avatar at once, not after a '
+      'restart', (tester) async {
     final session = testSession();
     await pumpApp(tester, session);
     await tester.pumpAndSettle();
+    addTearDown(JamIdentity.resetCacheForTesting);
+    Finder face(String name) =>
+        find.byWidgetPredicate((w) => w is JamAvatar && w.name == name);
+    expect(face('Silky Puffin'), findsOneWidget);
+
+    // Settings renames through the same call.
+    await tester.runAsync(() => JamIdentity.setDisplayName('Maya'));
+    await tester.pumpAndSettle();
+    expect(face('Maya'), findsOneWidget);
+    expect(face('Silky Puffin'), findsNothing);
+  });
+
+  testWidgets('a cold start shows nothing, not "No jams yet", until the '
+      'history has been read', (tester) async {
+    final history = Completer<List<JamHistoryRecord>>();
+    final session = testSession();
+    await tester.pumpWidget(
+      JamSession(
+        controller: session,
+        child: MaterialApp(
+          theme: jamLightTheme(),
+          home: HomeScreen(
+            networkReader: () async => lan,
+            loadRecords: () => history.future,
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(find.byType(JamEmptyState), findsNothing);
+    expect(find.text(HomeStrings.quietTitle), findsNothing);
+
+    history.complete([record('Van Jam')]);
+    await tester.pumpAndSettle();
+    expect(find.text('Van Jam'), findsOneWidget);
+    expect(find.text(HomeStrings.quietTitle), findsNothing);
+  });
+
+  testWidgets('with no history at all, the empty state follows the read', (
+    tester,
+  ) async {
+    await pumpHome(tester, network: lan);
+    expect(find.text(HomeStrings.quietTitle), findsOneWidget);
+  });
+
+  testWidgets('the empty state names the situation', (tester) async {
+    final session = testSession();
+    await pumpApp(tester, session);
+    await settleHomeReads(tester);
 
     // Whichever branch the test machine's network lands on, the screen must
     // say something concrete rather than shrug — through the shared empty
@@ -157,6 +224,7 @@ void main() {
     );
     // Its action is quiet: Start a Jam is the only filled button.
     expect(filledButtons(tester).length, 1);
+    await tester.runAsync(session.stopBrowsing);
   });
 
   testWidgets('a discovered room is a jam card with a tinted Join', (
@@ -503,7 +571,7 @@ void main() {
     addTearDown(tester.view.reset);
     final session = testSession();
     await pumpApp(tester, session);
-    await tester.pumpAndSettle();
+    await settleHomeReads(tester);
 
     final pane = tester.getRect(find.byType(HomeScreen));
     final button = tester.getRect(find.text(HomeStrings.host));
@@ -513,9 +581,16 @@ void main() {
     expect(button.center.dx, closeTo(pane.center.dx, 1));
     // A phone's width, not a banner across the pane.
     expect(
-      tester.getRect(find.byType(JamButton)).width,
+      tester
+          .getRect(
+            find.byWidgetPredicate(
+              (w) => w is JamButton && w.variant == JamButtonVariant.filled,
+            ),
+          )
+          .width,
       lessThanOrEqualTo(400),
     );
+    await tester.runAsync(session.stopBrowsing);
   });
 
   group('who hosts a nearby jam', () {

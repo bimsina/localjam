@@ -208,4 +208,25 @@ void main() {
     expect(await JamIdentity.displayName(), 'DJ Sloth');
     expect(store.data[_nameKey], 'DJ Sloth');
   });
+
+  test('a rename is announced, so every screen showing the name '
+      'repaints', () async {
+    // The report: renamed to "Maya" in Settings, Home's avatar kept the
+    // old initials until a restart — only a late read was ever announced.
+    install(TestPrefsStore(data: {_nameKey: 'Disco Badger'}));
+    expect(await JamIdentity.displayName(), 'Disco Badger');
+    var announced = 0;
+    void listener() => announced++;
+    JamIdentity.changes.addListener(listener);
+    addTearDown(() => JamIdentity.changes.removeListener(listener));
+
+    await JamIdentity.setDisplayName('Maya');
+    expect(announced, 1);
+    expect(await JamIdentity.displayName(), 'Maya');
+
+    // Not a change: the same name again, or a blank one (rejected).
+    await JamIdentity.setDisplayName(' Maya ');
+    await JamIdentity.setDisplayName('   ');
+    expect(announced, 1);
+  });
 }
