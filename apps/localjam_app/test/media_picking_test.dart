@@ -219,16 +219,16 @@ void main() {
     test('credits like the jam: "A, B" artists, no folder-name album', () {
       const multi = JamLibraryTrack(
         id: 8,
-        title: 'Kun Faya Kun',
-        artist: 'A.R. Rahman/Javed Ali/Mohit Chauhan',
-        album: 'Rockstar',
+        title: 'Nila Sona Nila',
+        artist: 'K.T. Varman/Ravi Seth/Nikhil Dharan',
+        album: 'Driftwood',
         sizeBytes: 1,
         contentUri: 'content://media/8',
-        path: '/storage/emulated/0/Music/Rockstar/kfk.mp3',
+        path: '/storage/emulated/0/Music/Driftwood/nsn.mp3',
       );
-      final a = JamPickedTrack.fromLibrary(multi, '/cache/kfk.mp3');
-      expect(a.artist, 'A.R. Rahman, Javed Ali, Mohit Chauhan');
-      expect(a.album, 'Rockstar');
+      final a = JamPickedTrack.fromLibrary(multi, '/cache/nsn.mp3');
+      expect(a.artist, 'K.T. Varman, Ravi Seth, Nikhil Dharan');
+      expect(a.album, 'Driftwood');
 
       const untagged = JamLibraryTrack(
         id: 9,

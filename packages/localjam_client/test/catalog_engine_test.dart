@@ -551,16 +551,16 @@ void main() {
       final multi = JamMediaLibraryCatalogSource.entryFor(
         track(
           1,
-          title: 'Kun Faya Kun',
-          artist: 'A.R. Rahman/Javed Ali/Mohit Chauhan',
-          album: 'Rockstar',
-          path: '/storage/emulated/0/Music/Rockstar/04 Kun Faya Kun.mp3',
+          title: 'Nila Sona Nila',
+          artist: 'K.T. Varman/Ravi Seth/Nikhil Dharan',
+          album: 'Driftwood',
+          path: '/storage/emulated/0/Music/Driftwood/04 Nila Sona Nila.mp3',
         ),
       );
-      expect(multi.artist, 'A.R. Rahman, Javed Ali, Mohit Chauhan');
+      expect(multi.artist, 'K.T. Varman, Ravi Seth, Nikhil Dharan');
       expect(
         multi.album,
-        'Rockstar',
+        'Driftwood',
         reason: 'a tagged album that names its folder is still the album',
       );
 
