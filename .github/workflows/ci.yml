@@ -9,9 +9,9 @@ permissions:
   contents: read
 
 env:
-  FLUTTER_VERSION: 3.47.9
+  FLUTTER_VERSION: 3.50.0
   # The Dart SDK that FLUTTER_VERSION ships, for the pure-Dart jobs.
-  DART_VERSION: 3.13.7
+  DART_VERSION: 3.14.0
 
 jobs:
   # Pure Dart: no Flutter SDK, no platform toolchain, so these are cheap.
@@ -99,8 +99,9 @@ jobs:
   # The Android release: the browser player built and bundled first
   # (tool/build_web_guest.sh; its output is git-ignored, so a clean checkout
   # has only the .gitkeep placeholders), then the APK and the App Bundle.
-  # Without android/key.properties (git-ignored) Gradle signs the release
-  # with the debug key and says so; store signing happens on the release
+  # Without android/key.properties (git-ignored) a release build fails unless
+  # LOCALJAM_ALLOW_DEBUG_SIGNING=1, which these steps set: Gradle then signs
+  # with the debug key and says so. Store signing happens on the release
   # machine, so these artifacts are for testing only.
   build-android:
     name: build · android release

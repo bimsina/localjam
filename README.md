@@ -104,10 +104,9 @@ Honest list, for 1.0.0:
 
 ## Build from source
 
-You need Flutter **3.47.x** (CI pins 3.47.9 / Dart 3.13.7) and, for Android,
+You need Flutter **3.50.0** (CI pins 3.50.0 / Dart 3.14.0) and, for Android,
 the Android SDK with API 37 platform and NDK 28.2 (Flutter installs what it is
-missing). Flutter 3.50 is not supported yet: its Android toolchain minimums and
-the material/cupertino package split need a migration, so use 3.47.9.
+missing).
 
 ```sh
 git clone https://github.com/bimsina/localjam.git
