@@ -1,8 +1,7 @@
 /// The layout must change shape, not just stretch.
 library;
 
-import 'package:flutter/cupertino.dart' show CupertinoIcons;
-import 'package:flutter/material.dart';
+import 'package:cupertino_ui/cupertino_ui.dart' show CupertinoIcons;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:localjam_app/src/design/breakpoints.dart';
 import 'package:localjam_app/src/design/theme.dart';
@@ -14,6 +13,7 @@ import 'package:localjam_app/src/widgets/drag_to_dismiss.dart';
 import 'package:localjam_app/src/widgets/queue_sheet.dart';
 import 'package:localjam_app/src/widgets/room_bar.dart';
 import 'package:localjam_app/src/widgets/room_sheet.dart';
+import 'package:material_ui/material_ui.dart';
 
 import 'harness.dart';
 
@@ -58,8 +58,15 @@ void main() {
     expect(find.text(AppSidebarStrings.settings), findsOneWidget);
     // Start a Jam is still the page's one filled action.
     expect(find.text(HomeStrings.host), findsOneWidget);
-    // Identity lives in the sidebar, so the nav bar carries no avatar.
-    expect(find.bySemanticsLabel('Settings'), findsNothing);
+    // Identity lives in the sidebar, so the nav bar carries no avatar: the
+    // only "Settings" node is the sidebar's own row. (go_router 18 keeps
+    // shell chrome such as the sidebar in the semantics tree.)
+    final settings = find.bySemanticsLabel('Settings');
+    expect(settings, findsOneWidget);
+    expect(
+      find.descendant(of: find.byType(AppSidebar), matching: settings),
+      findsOneWidget,
+    );
   });
 
   testWidgets('the sidebar is plain: identity, then rows, no brand tile', (

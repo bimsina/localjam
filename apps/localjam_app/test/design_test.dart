@@ -1,9 +1,9 @@
 import 'dart:math' as math;
 
-import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:localjam_app/src/design/theme.dart';
 import 'package:localjam_app/src/design/tokens.dart';
+import 'package:material_ui/material_ui.dart';
 
 void main() {
   test('both themes carry the JamColors extension', () {

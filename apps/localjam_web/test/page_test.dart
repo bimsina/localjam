@@ -7,8 +7,7 @@ library;
 
 import 'dart:async';
 
-import 'package:flutter/cupertino.dart' show CupertinoActivityIndicator;
-import 'package:flutter/material.dart';
+import 'package:cupertino_ui/cupertino_ui.dart' show CupertinoActivityIndicator;
 import 'package:flutter/semantics.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:localjam_client/localjam_client.dart';
@@ -16,6 +15,7 @@ import 'package:localjam_web/src/join_target.dart';
 import 'package:localjam_web/src/listener_app.dart';
 import 'package:localjam_web/src/room.dart';
 import 'package:localjam_web/src/room_page.dart';
+import 'package:material_ui/material_ui.dart';
 
 import 'fake_room.dart';
 

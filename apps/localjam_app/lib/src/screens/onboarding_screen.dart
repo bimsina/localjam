@@ -14,10 +14,10 @@ library;
 
 import 'dart:async';
 
-import 'package:flutter/cupertino.dart';
-import 'package:flutter/material.dart' show Scaffold, Theme;
+import 'package:cupertino_ui/cupertino_ui.dart';
 import 'package:flutter/services.dart';
 import 'package:localjam_client/localjam_client.dart' show JamIdentity;
+import 'package:material_ui/material_ui.dart' show Scaffold, Theme;
 
 import '../design/motion.dart';
 import '../design/theme.dart';

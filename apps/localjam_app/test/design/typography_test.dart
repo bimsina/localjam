@@ -1,10 +1,10 @@
 import 'dart:math' as math;
 
-import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:localjam_app/src/design/theme.dart';
 import 'package:localjam_app/src/design/tokens.dart';
 import 'package:localjam_app/src/design/typography.dart';
+import 'package:material_ui/material_ui.dart';
 
 /// Relative luminance per WCAG 2.1, with a translucent foreground composited
 /// over its ground first.

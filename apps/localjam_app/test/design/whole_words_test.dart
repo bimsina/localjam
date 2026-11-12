@@ -2,13 +2,13 @@
 /// "Golde / n Hour / Drive" and Home's header "Recen / t" beside See all.
 library;
 
-import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:localjam_app/src/design/theme.dart';
 import 'package:localjam_app/src/design/typography.dart';
 import 'package:localjam_app/src/widgets/buttons.dart';
 import 'package:localjam_app/src/widgets/section.dart';
+import 'package:material_ui/material_ui.dart';
 
 const _style = TextStyle(fontSize: 20, height: 1.2);
 

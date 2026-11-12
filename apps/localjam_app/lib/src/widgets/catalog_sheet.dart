@@ -15,7 +15,7 @@ library;
 import 'dart:async';
 import 'dart:typed_data';
 
-import 'package:flutter/cupertino.dart';
+import 'package:cupertino_ui/cupertino_ui.dart';
 import 'package:flutter/foundation.dart' show ValueListenable, debugPrint;
 import 'package:localjam_client/localjam_client.dart';
 

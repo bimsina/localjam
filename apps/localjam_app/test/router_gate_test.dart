@@ -7,7 +7,6 @@ library;
 
 import 'dart:async';
 
-import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 import 'package:localjam_app/src/design/theme.dart';
@@ -17,6 +16,7 @@ import 'package:localjam_app/src/screens/onboarding_screen.dart';
 import 'package:localjam_app/src/state/app_settings.dart';
 import 'package:localjam_app/src/state/onboarding_prefs.dart';
 import 'package:localjam_app/src/state/session_controller.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'harness.dart';

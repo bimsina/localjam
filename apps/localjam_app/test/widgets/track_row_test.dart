@@ -1,5 +1,4 @@
-import 'package:flutter/cupertino.dart';
-import 'package:flutter/material.dart';
+import 'package:cupertino_ui/cupertino_ui.dart';
 import 'package:flutter/rendering.dart' show RenderParagraph;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:localjam_app/src/design/theme.dart';
@@ -10,6 +9,7 @@ import 'package:localjam_app/src/widgets/list.dart';
 import 'package:localjam_app/src/widgets/progress.dart';
 import 'package:localjam_app/src/widgets/section.dart';
 import 'package:localjam_app/src/widgets/track_row.dart';
+import 'package:material_ui/material_ui.dart';
 
 Future<void> pumpRow(WidgetTester tester, Widget child, {bool dark = false}) {
   final theme = dark ? jamDarkTheme() : jamLightTheme();

@@ -1,13 +1,13 @@
-import 'package:flutter/cupertino.dart';
-import 'package:flutter/material.dart' show MaterialApp, Scaffold, Theme;
+import 'package:cupertino_ui/cupertino_ui.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:localjam_app/src/design/theme.dart';
 import 'package:localjam_app/src/design/tokens.dart';
+import 'package:localjam_app/src/util/format.dart';
 import 'package:localjam_app/src/widgets/avatar.dart';
 import 'package:localjam_app/src/widgets/glass.dart';
 import 'package:localjam_app/src/widgets/menu.dart';
-import 'package:localjam_app/src/util/format.dart';
 import 'package:localjam_app/src/widgets/peer_row.dart';
+import 'package:material_ui/material_ui.dart' show MaterialApp, Scaffold, Theme;
 
 Future<void> pumpRow(WidgetTester tester, Widget child, {bool dark = false}) {
   final theme = dark ? jamDarkTheme() : jamLightTheme();

@@ -1,11 +1,9 @@
 /// Home is the answer to "is there a jam here?", not a landing page.
 library;
 
-import 'package:flutter/cupertino.dart';
-import 'package:flutter/material.dart' show Icons, MaterialApp;
+import 'package:cupertino_ui/cupertino_ui.dart';
 import 'package:flutter/rendering.dart' show RenderParagraph;
 import 'package:flutter_test/flutter_test.dart';
-import 'package:localjam_client/localjam_client.dart';
 import 'package:localjam_app/src/design/theme.dart';
 import 'package:localjam_app/src/design/tokens.dart';
 import 'package:localjam_app/src/screens/history_screen.dart';
@@ -23,6 +21,8 @@ import 'package:localjam_app/src/widgets/permission_sheet.dart';
 import 'package:localjam_app/src/widgets/progress.dart';
 import 'package:localjam_app/src/widgets/room_sheet.dart';
 import 'package:localjam_app/src/widgets/wifi_glyph.dart';
+import 'package:localjam_client/localjam_client.dart';
+import 'package:material_ui/material_ui.dart' show Icons, MaterialApp;
 
 import '../harness.dart';
 

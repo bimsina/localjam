@@ -3,8 +3,7 @@
 /// states is that the screen still works when there is no camera anywhere.
 library;
 
-import 'package:flutter/cupertino.dart';
-import 'package:flutter/material.dart';
+import 'package:cupertino_ui/cupertino_ui.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:localjam_app/src/design/theme.dart';
 import 'package:localjam_app/src/design/tokens.dart';
@@ -13,6 +12,7 @@ import 'package:localjam_app/src/util/permissions.dart';
 import 'package:localjam_app/src/widgets/buttons.dart';
 import 'package:localjam_app/src/widgets/empty_state.dart';
 import 'package:localjam_app/src/widgets/join_link_dialog.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
 Future<void> pumpUnavailable(

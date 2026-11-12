@@ -3,7 +3,6 @@
 library;
 
 import 'package:flutter/foundation.dart';
-import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:localjam_app/src/design/theme.dart';
 import 'package:localjam_app/src/widgets/buttons.dart';
@@ -14,6 +13,7 @@ import 'package:localjam_app/src/widgets/switch.dart';
 import 'package:localjam_app/src/widgets/text_field.dart';
 import 'package:localjam_app/src/widgets/track_row.dart';
 import 'package:localjam_client/localjam_client.dart';
+import 'package:material_ui/material_ui.dart';
 
 const _entries = [
   CatalogEntry(

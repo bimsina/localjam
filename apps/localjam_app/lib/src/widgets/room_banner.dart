@@ -14,7 +14,7 @@
 /// sentences when you are somewhere else in the app.
 library;
 
-import 'package:flutter/cupertino.dart';
+import 'package:cupertino_ui/cupertino_ui.dart';
 import 'package:localjam_client/localjam_client.dart';
 
 import '../design/tokens.dart';

@@ -2,12 +2,12 @@
 /// at large text sizes its action moves under it instead of squeezing it.
 library;
 
-import 'package:flutter/cupertino.dart';
-import 'package:flutter/material.dart';
+import 'package:cupertino_ui/cupertino_ui.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:localjam_app/src/design/theme.dart';
 import 'package:localjam_app/src/widgets/room_banner.dart';
+import 'package:material_ui/material_ui.dart';
 
 void main() {
   Future<void> pumpBanner(

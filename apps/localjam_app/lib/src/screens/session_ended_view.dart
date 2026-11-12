@@ -5,10 +5,10 @@
 /// and what happened to it, and offers the one next step that can work.
 library;
 
-import 'package:flutter/cupertino.dart';
-import 'package:flutter/material.dart' show Theme;
+import 'package:cupertino_ui/cupertino_ui.dart';
 import 'package:flutter/services.dart';
 import 'package:localjam_client/localjam_client.dart';
+import 'package:material_ui/material_ui.dart' show Theme;
 
 import '../design/theme.dart';
 import '../design/tokens.dart';

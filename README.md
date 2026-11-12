@@ -157,9 +157,9 @@ report vulnerabilities privately as described in [`SECURITY.md`](SECURITY.md).
 
 ## Building from source
 
-You need **Flutter 3.47.9** (Dart 3.13.7), which CI pins; other 3.47.x
-releases should work. **Flutter 3.50 is not supported yet**: its Android
-toolchain minimums and the material/cupertino package split need a migration.
+You need **Flutter 3.50.0** (Dart 3.14.0), which CI pins. Older Flutter
+releases do not build it: the app uses the `material_ui` and `cupertino_ui`
+packages and the Android toolchain 3.50 requires.
 For Android you also need the Android SDK (API 37 platform, NDK 28.2; Flutter
 installs what is missing). iOS and macOS need Xcode. Linux needs
 `clang cmake ninja-build pkg-config libgtk-3-dev`.

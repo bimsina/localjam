@@ -10,7 +10,7 @@ from `apps/localjam_app/` unless it says otherwise.
 | targetSdk | 36, pinned in `android/app/build.gradle.kts` (Play requires 36 from 2026-08-31) |
 | compileSdk | 37 (`permission_handler` 13 needs it for `ACCESS_LOCAL_NETWORK`) |
 | Version | `pubspec.yaml` `version: <versionName>+<versionCode>` |
-| Toolchain | Flutter 3.47.x (CI pins 3.47.9 / Dart 3.13.7; 3.50 not supported yet), AGP 9.0.1, Kotlin 2.3.20, NDK 28.2 |
+| Toolchain | Flutter 3.50.0 (CI pins 3.50.0 / Dart 3.14.0), Gradle 9.5.1, AGP 9.3.3, Kotlin 2.4.20 (AGP built-in Kotlin), JDK 17, NDK 28.2 |
 
 ## 1. One-time setup
 

@@ -61,9 +61,9 @@ declared_dirs() {
 
 echo "build_web_guest: building apps/localjam_web"
 # The page's own build script owns the flags (--base-href /web/,
-# --no-web-resources-cdn, --pwa-strategy none), scrubs Flutter's unused CDN
+# --no-web-resources-cdn), deletes the service worker file, scrubs Flutter's unused CDN
 # defaults to same-origin paths, prunes what a dart2js build never loads
-# (skwasm/wimp, webparagraph, *.symbols, the service worker) and fails if
+# (skwasm/wimp, webparagraph, *.symbols) and fails if
 # anything still names an internet host (D8).
 "$web_app/tool/build.sh"
 [[ -f "$build_out/index.html" ]] ||

@@ -4,8 +4,13 @@
 #
 #   tool/build.sh [--keep-all]
 #
-# 1. `flutter build web --release --base-href /web/ --no-web-resources-cdn
-#    --pwa-strategy none` into build/web.
+# 1. `flutter build web --release --base-href /web/ --no-web-resources-cdn`
+#    into build/web, then deletes flutter_service_worker.js: the page
+#    registers no service worker (D8). `--pwa-strategy none` used to empty
+#    it; the flag is deprecated with no replacement (flutter/flutter#156910),
+#    and without it Flutter writes a worker that only unregisters itself.
+#    Nothing registers it: web/flutter_bootstrap.js passes the loader no
+#    serviceWorkerSettings. Step 4 checks both.
 # 2. Scrubs the two internet defaults Flutter's own code still carries
 #    although this build never uses them: the CanvasKit CDN in the loader
 #    (unused: the build config says useLocalCanvasKit) and the font-fallback
@@ -19,11 +24,12 @@
 #    25 MB the host app would otherwise carry in its APK. A browser loads
 #    canvaskit/canvaskit.* (Safari, Firefox, Chrome on a plain-http LAN page)
 #    or canvaskit/chromium/* (Chrome on a secure origin such as localhost).
-# 4. Fails if anything in build/web still names gstatic or googleapis.
+# 4. Fails if anything in build/web still names gstatic or googleapis, or
+#    if a service worker file or registration is left in the build.
 # 5. Fails if the loader or the engine would ever turn `preferWebParagraph`
 #    on by default (it would then load canvaskit/webparagraph/, deleted in 3).
 #
-# What this depends on in Flutter's own output (checked with Flutter 3.47;
+# What this depends on in Flutter's own output (checked with Flutter 3.50;
 # re-check on an upgrade — a change shows up as a failure of 4 or 5, never
 # as a silently broken page):
 #  * The exact CDN strings scrubbed in 2: `https://fonts.gstatic.com/s/` (the
@@ -40,9 +46,9 @@
 #    config (Flutter's build config or web/flutter_bootstrap.js) setting it.
 set -e
 cd "$(dirname "$0")/.."
-flutter build web --release --base-href /web/ --no-web-resources-cdn \
-  --pwa-strategy none
+flutter build web --release --base-href /web/ --no-web-resources-cdn
 out=build/web
+rm -f "$out/flutter_service_worker.js"
 
 for file in "$out/main.dart.js" "$out/flutter.js" "$out/flutter_bootstrap.js"; do
   sed -i.bak \
@@ -56,7 +62,6 @@ if [ "$1" != "--keep-all" ]; then
   rm -rf "$out/canvaskit/webparagraph"
   rm -f "$out"/canvaskit/skwasm* "$out"/canvaskit/wimp*
   find "$out/canvaskit" -name '*.symbols' -delete
-  rm -f "$out/flutter_service_worker.js"
   # Source maps are not fetched by a guest, and from Flutter 3.50 the SDK
   # ships flutter.js.map, whose embedded sources name the CanvasKit CDN.
   find "$out" -name '*.js.map' -delete
@@ -64,6 +69,15 @@ fi
 
 if grep -rlE 'gstatic|googleapis' "$out"; then
   echo "build.sh: the files above still name an internet host" >&2
+  exit 1
+fi
+
+# No service worker: none in the output, and neither the page's bootstrap
+# nor index.html asks for one (Flutter's loader registers a worker only when
+# load() is given serviceWorkerSettings).
+if [ -e "$out/flutter_service_worker.js" ] ||
+  grep -q 'serviceWorker' web/flutter_bootstrap.js "$out/index.html"; then
+  echo "build.sh: the build would register a service worker" >&2
   exit 1
 fi
 

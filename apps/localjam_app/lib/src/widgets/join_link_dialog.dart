@@ -19,7 +19,7 @@
 ///   paste, which is exactly when it is needed.
 library;
 
-import 'package:flutter/cupertino.dart';
+import 'package:cupertino_ui/cupertino_ui.dart';
 import 'package:flutter/services.dart';
 
 import '../design/theme.dart';

@@ -6,11 +6,11 @@
 /// marqueed and nothing else held still either.
 library;
 
-import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:localjam_app/src/design/motion.dart';
 import 'package:localjam_app/src/widgets/marquee.dart';
+import 'package:material_ui/material_ui.dart';
 
 const _long = 'Kun Jaat Ko Ho Timi (feat. Bipul Chettri)';
 

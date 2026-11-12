@@ -3,7 +3,6 @@
 /// and keeps its mark in one place whatever the news.
 library;
 
-import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:localjam_app/src/design/theme.dart';
 import 'package:localjam_app/src/screens/history_screen.dart';
@@ -13,6 +12,7 @@ import 'package:localjam_app/src/widgets/buttons.dart';
 import 'package:localjam_app/src/widgets/jam_mark.dart';
 import 'package:localjam_app/src/widgets/wifi_glyph.dart';
 import 'package:localjam_client/localjam_client.dart';
+import 'package:material_ui/material_ui.dart';
 
 const _jam = 'Sunday at home';
 

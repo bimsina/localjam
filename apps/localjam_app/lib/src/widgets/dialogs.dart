@@ -15,7 +15,7 @@ library;
 
 import 'dart:ui' show ImageFilter;
 
-import 'package:flutter/cupertino.dart';
+import 'package:cupertino_ui/cupertino_ui.dart';
 
 import '../design/theme.dart';
 import '../design/tokens.dart';

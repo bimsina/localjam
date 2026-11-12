@@ -1,13 +1,13 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
-import 'package:flutter/cupertino.dart';
-import 'package:flutter/material.dart';
+import 'package:cupertino_ui/cupertino_ui.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:localjam_app/src/design/artwork_tint.dart';
 import 'package:localjam_app/src/design/theme.dart';
 import 'package:localjam_app/src/design/tokens.dart';
 import 'package:localjam_app/src/widgets/artwork.dart';
+import 'package:material_ui/material_ui.dart';
 
 /// A 1×1 PNG — enough for the tile to have real bytes to render.
 final Uint8List _pixel = base64Decode(

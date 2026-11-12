@@ -28,18 +28,18 @@ import 'dart:async';
 import 'dart:math' as math;
 import 'dart:ui' show lerpDouble;
 
-import 'package:flutter/cupertino.dart';
-import 'package:flutter/material.dart'
+import 'package:cupertino_ui/cupertino_ui.dart';
+import 'package:flutter/rendering.dart';
+import 'package:flutter/services.dart';
+import 'package:go_router/go_router.dart';
+import 'package:localjam_client/localjam_client.dart';
+import 'package:material_ui/material_ui.dart'
     show
         Material,
         MaterialBasedCupertinoThemeData,
         MaterialType,
         Theme,
         ThemeData;
-import 'package:flutter/rendering.dart';
-import 'package:flutter/services.dart';
-import 'package:go_router/go_router.dart';
-import 'package:localjam_client/localjam_client.dart';
 
 import '../design/breakpoints.dart';
 import '../design/motion.dart';

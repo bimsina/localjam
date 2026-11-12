@@ -22,7 +22,7 @@ library;
 
 import 'dart:async';
 
-import 'package:flutter/cupertino.dart';
+import 'package:cupertino_ui/cupertino_ui.dart';
 
 import '../design/motion.dart';
 import '../design/tokens.dart';

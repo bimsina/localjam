@@ -6,9 +6,9 @@ library;
 
 import 'dart:typed_data';
 
-import 'package:flutter/cupertino.dart' show CupertinoActivityIndicator;
-import 'package:flutter/cupertino.dart' show CupertinoIcons;
-import 'package:flutter/material.dart';
+import 'package:cupertino_ui/cupertino_ui.dart' show CupertinoActivityIndicator;
+import 'package:cupertino_ui/cupertino_ui.dart' show CupertinoIcons;
+import 'package:material_ui/material_ui.dart';
 
 import 'design.dart';
 

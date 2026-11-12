@@ -2,10 +2,8 @@
 /// it writes the flag exactly once.
 library;
 
-import 'package:flutter/cupertino.dart';
-import 'package:flutter/material.dart';
+import 'package:cupertino_ui/cupertino_ui.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:localjam_client/localjam_client.dart' show JamIdentity;
 import 'package:localjam_app/src/design/theme.dart';
 import 'package:localjam_app/src/design/tokens.dart';
 import 'package:localjam_app/src/screens/onboarding_screen.dart';
@@ -15,6 +13,8 @@ import 'package:localjam_app/src/widgets/brand.dart';
 import 'package:localjam_app/src/widgets/buttons.dart';
 import 'package:localjam_app/src/widgets/rename_dialog.dart';
 import 'package:localjam_app/src/widgets/scaffold.dart';
+import 'package:localjam_client/localjam_client.dart' show JamIdentity;
+import 'package:material_ui/material_ui.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 Future<JamOnboardingPrefs> pumpOnboarding(

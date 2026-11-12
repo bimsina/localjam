@@ -1,13 +1,13 @@
 /// The one trailing swipe action Past Jams, Start a Jam and the queue share.
 library;
 
-import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show SemanticsAction;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:localjam_app/src/design/theme.dart';
 import 'package:localjam_app/src/design/tokens.dart';
 import 'package:localjam_app/src/widgets/list.dart';
 import 'package:localjam_app/src/widgets/swipe_action.dart';
+import 'package:material_ui/material_ui.dart';
 
 Widget _host(Widget child) => MaterialApp(
   theme: jamLightTheme(),

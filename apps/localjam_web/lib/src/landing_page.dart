@@ -4,8 +4,8 @@
 /// Its tap is the user gesture that lets the page make sound.
 library;
 
-import 'package:flutter/cupertino.dart' show CupertinoIcons;
-import 'package:flutter/material.dart';
+import 'package:cupertino_ui/cupertino_ui.dart' show CupertinoIcons;
+import 'package:material_ui/material_ui.dart';
 
 import 'design.dart';
 import 'widgets.dart';

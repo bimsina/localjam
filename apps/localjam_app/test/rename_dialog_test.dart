@@ -5,10 +5,10 @@
 /// whole test.
 library;
 
-import 'package:flutter/cupertino.dart' show CupertinoTextField;
-import 'package:flutter/material.dart';
+import 'package:cupertino_ui/cupertino_ui.dart' show CupertinoTextField;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:localjam_app/src/widgets/rename_dialog.dart';
+import 'package:material_ui/material_ui.dart';
 
 void main() {
   testWidgets('saving a new name survives the dialog exit animation', (

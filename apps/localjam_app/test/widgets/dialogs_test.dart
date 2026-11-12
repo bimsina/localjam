@@ -4,12 +4,12 @@
 /// kept building. Every prompt test below pumps that transition to the end.
 library;
 
-import 'package:flutter/cupertino.dart';
-import 'package:flutter/material.dart';
+import 'package:cupertino_ui/cupertino_ui.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:localjam_app/src/design/theme.dart';
 import 'package:localjam_app/src/design/tokens.dart';
 import 'package:localjam_app/src/widgets/dialogs.dart';
+import 'package:material_ui/material_ui.dart';
 
 List<JamAlertAction> _actions(WidgetTester tester) => tester
     .widgetList<JamAlertButton>(find.byType(JamAlertButton))

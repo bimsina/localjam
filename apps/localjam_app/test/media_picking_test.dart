@@ -7,9 +7,8 @@ library;
 
 import 'dart:io';
 
-import 'package:flutter/cupertino.dart' show CupertinoActionSheet;
+import 'package:cupertino_ui/cupertino_ui.dart' show CupertinoActionSheet;
 import 'package:flutter/foundation.dart';
-import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:localjam_app/src/design/theme.dart';
 import 'package:localjam_app/src/util/format.dart';
@@ -17,6 +16,7 @@ import 'package:localjam_app/src/util/media_picking.dart';
 import 'package:localjam_app/src/widgets/list.dart';
 import 'package:localjam_app/src/widgets/sheet.dart';
 import 'package:localjam_client/localjam_client.dart';
+import 'package:material_ui/material_ui.dart';
 
 import 'fixtures.dart';
 
