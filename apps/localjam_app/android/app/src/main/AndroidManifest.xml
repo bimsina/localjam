@@ -4,11 +4,12 @@
          Android grants no socket at all without INTERNET, local network
          included; LocalJam never connects to a host on the internet. -->
     <uses-permission android:name="android.permission.INTERNET"/>
-    <!-- Android 17 (API 37) gates ALL local-network traffic — incoming
-         included — behind this runtime permission; INTERNET no longer
-         implies LAN. Harmlessly unknown on older releases. Requested at
-         host/join time (dart:io will never request it for us). -->
-    <uses-permission android:name="android.permission.ACCESS_LOCAL_NETWORK"/>
+    <!-- No ACCESS_LOCAL_NETWORK: Google says apps targeting API 36 or lower
+         must neither declare nor request it, and INTERNET still covers the
+         LAN for them. Declare it here (and flip
+         androidRequestsLocalNetwork in lib/src/util/permissions.dart) in
+         the same change that moves targetSdk to 37 — see the targetSdk
+         comment in build.gradle.kts. -->
     <!-- Device music library ("add from library", JamMediaLibrary). -->
     <uses-permission android:name="android.permission.READ_MEDIA_AUDIO"/>
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"

@@ -44,7 +44,8 @@ abstract final class JamPermissionCopy {
 /// up in the widget layer) can map one to its rationale copy without this
 /// file depending on any widget at all.
 enum JamPermissionKind {
-  /// Android 17's `ACCESS_LOCAL_NETWORK`, before hosting or joining.
+  /// Android 17's `ACCESS_LOCAL_NETWORK`, before hosting or joining. Unused
+  /// while [androidRequestsLocalNetwork] is off.
   localNetwork,
 
   /// The local network on iOS and macOS, where nothing is requestable: the
@@ -189,11 +190,22 @@ void resetExplainedPermissionsForTesting() {
   _declined.clear();
 }
 
+/// Whether Android asks for `ACCESS_LOCAL_NETWORK` before hosting or joining.
+///
+/// Off while the app targets API 36: Google's guidance is that apps targeting
+/// 36 or lower must neither declare nor request it (INTERNET still covers the
+/// LAN for them), and the rationale sheet would explain a permission that
+/// does nothing for such an app on any Android release. Turn it on in the same change that moves
+/// `targetSdk` to 37 and declares the permission in the manifest — see the
+/// `targetSdk` comment in `android/app/build.gradle.kts`.
+const bool androidRequestsLocalNetwork = false;
+
 /// Prepares local-network access before hosting or joining.
 ///
 /// Two platforms, two different jobs. On Android 17 (API 37) there is a real
 /// permission to request — it blocks ALL local-network traffic, incoming
-/// included, and dart:io will never ask for it. On iOS and macOS there is
+/// included, and dart:io will never ask for it — though only for apps that
+/// target 37 (see [androidRequestsLocalNetwork]). On iOS and macOS there is
 /// nothing to request and the system asks by itself, so the only thing to do
 /// is get in front of it (see below). Everywhere else this resolves
 /// immediately.
@@ -215,7 +227,7 @@ Future<void> ensureLocalNetworkPermission() async {
     await jamExplainPermission(JamPermissionKind.localNetworkApple);
     return;
   }
-  if (!Platform.isAndroid) return;
+  if (!Platform.isAndroid || !androidRequestsLocalNetwork) return;
   if (!await jamExplainPermission(JamPermissionKind.localNetwork)) return;
   try {
     await Permission.accessLocalNetwork.request();

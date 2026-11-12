@@ -48,8 +48,12 @@ android {
         // upgrade cannot silently move the app onto new platform behaviour.
         // Google Play requires API 36 for new apps and updates from
         // 2026-08-31. Moving to 37 changes local-network enforcement
-        // (ACCESS_LOCAL_NETWORK gates LAN sockets): re-run DEVICE_TESTING.md
-        // on an Android 17 device before bumping.
+        // (ACCESS_LOCAL_NETWORK gates LAN sockets). Apps targeting 36 or
+        // lower must not declare or request it, so it is off for now; the
+        // bump to 37 must, in the same change, declare it in
+        // AndroidManifest.xml, set androidRequestsLocalNetwork in
+        // lib/src/util/permissions.dart to true, and re-run DEVICE_TESTING.md
+        // on an Android 17 device.
         targetSdk = 36
         // From pubspec.yaml `version: x.y.z+N`: N is the versionCode and must
         // grow with every upload to Play.

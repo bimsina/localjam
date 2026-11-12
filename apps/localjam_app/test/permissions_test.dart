@@ -132,6 +132,24 @@ void main() {
     }, skip: _notApple);
   });
 
+  test('Android asks for ACCESS_LOCAL_NETWORK exactly when it targets 37', () {
+    // Apps targeting 36 or lower must neither declare nor request it; one
+    // targeting 37 is cut off from the LAN without it. The flag, the
+    // manifest and targetSdk move together.
+    final gradle = File('android/app/build.gradle.kts').readAsStringSync();
+    final targetSdk = int.parse(
+      RegExp(r'targetSdk = (\d+)').firstMatch(gradle)!.group(1)!,
+    );
+    final manifest = File(
+      'android/app/src/main/AndroidManifest.xml',
+    ).readAsStringSync();
+    final declared = manifest.contains(
+      '<uses-permission android:name="android.permission.ACCESS_LOCAL_NETWORK"',
+    );
+    expect(androidRequestsLocalNetwork, targetSdk >= 37);
+    expect(declared, androidRequestsLocalNetwork);
+  });
+
   group('the Apple rationale copy', () {
     test('says the system is about to ask', () {
       final rationale = JamPermissionRationale.forKind(
