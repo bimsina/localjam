@@ -8,7 +8,16 @@
 # splash_logo*}.png and the web guest's favicon and touch icon, then the
 # platform icons and launch screens still need:
 #   (cd apps/localjam_app && dart run flutter_launcher_icons \
-#     && dart run flutter_native_splash:create)
+#     && dart run flutter_native_splash:create \
+#     && tool/render_brand.sh --android12-splash)
+#
+# That last step is this script again. flutter_native_splash makes Android
+# 12+'s splash icon by scaling one 1152 px PNG down to every density, and
+# the resampling left the mark soft (0.75× on an xxhdpi phone). With
+# --android12-splash the script renders each density's icon from the mark
+# itself at that density's exact size (288 dp: 288 px at mdpi to 1152 at
+# xxxhdpi), over what the generator wrote, and touches nothing else; a full
+# run does it too.
 #
 # Needs Google Chrome (headless, for anti-aliased SVG rendering) and
 # ImageMagick (to drop the alpha channel the App Store rejects).
@@ -18,6 +27,7 @@ APP="$(cd "$(dirname "$0")/.." && pwd)"
 BRAND="$APP/assets/brand"
 WEB="$APP/../localjam_web/web"
 CHROME="${CHROME:-/Applications/Google Chrome.app/Contents/MacOS/Google Chrome}"
+RES="$APP/android/app/src/main/res"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
@@ -72,6 +82,29 @@ render() { # <name> <w> <h>
     "file://$WORK/$1.svg" >/dev/null 2>&1
 }
 
+# Android 12+ splash icon (windowSplashScreenAnimatedIcon), per density: the
+# same 1152 canvas and 574 px mark as splash_logo_android12*, in 288 dp —
+# raspberry by day, white at night.
+android12_splash() {
+  local density px h
+  for density in mdpi:288 hdpi:432 xhdpi:576 xxhdpi:864 xxxhdpi:1152; do
+    px="${density#*:}"
+    h=$(echo "scale=4; $px * 574 / 1152" | bc)
+    square "android12splash_$px" "$px" "$h" "#D92C64"
+    square "android12splash_night_$px" "$px" "$h" "#FFFFFF"
+    cp "$WORK/android12splash_$px.png" \
+      "$RES/drawable-${density%%:*}/android12splash.png"
+    cp "$WORK/android12splash_night_$px.png" \
+      "$RES/drawable-night-${density%%:*}/android12splash.png"
+  done
+}
+
+if [[ "${1:-}" == "--android12-splash" ]]; then
+  android12_splash
+  echo "Rendered the Android 12+ splash icon into $RES"
+  exit 0
+fi
+
 # Brand symbol for the wordmark and nameless jams; the app recolours it.
 {
   echo '<svg xmlns="http://www.w3.org/2000/svg" width="65" height="71.7" viewBox="17.5 19.3 65 71.7">'
@@ -104,4 +137,7 @@ square Icon-192 192 113 "#FFFFFF" gradient
 magick "$WORK/favicon.png" -alpha off "$WEB/favicon.png"
 magick "$WORK/Icon-192.png" -alpha off "$WEB/icons/Icon-192.png"
 
-echo "Rendered brand images into $BRAND and $WEB"
+# Android 12+ splash icon, per density (see the top of this file).
+android12_splash
+
+echo "Rendered brand images into $BRAND, $WEB and $RES"
