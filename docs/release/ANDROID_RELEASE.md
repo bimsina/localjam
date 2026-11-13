@@ -239,7 +239,6 @@ Adaptive icon with background colour, foreground and a **monochrome** layer
 
 ## Privacy policy URL
 
-Play needs a public URL. The simplest one that stays in sync with the code:
-the rendered [`PRIVACY.md`](../../PRIVACY.md) on GitHub once the repo is
-public (`https://github.com/bimsina/localjam/blob/main/PRIVACY.md`), or a
-GitHub Pages copy of it.
+Play needs a public URL: <https://localjam.bimsina.dev/privacy>, the website's
+copy of [`PRIVACY.md`](../../PRIVACY.md) (source in the `localjam_website`
+repository). Change both together.

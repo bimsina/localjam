@@ -61,10 +61,11 @@ GOOD TO KNOW
 ## Category and tags
 
 - **Category:** Music & Audio
-- **Tags (pick up to 5):** Music player, Party, Social, Offline, Audio sharing
+- **Tags:** Music & audio, Social (Play's tag list has no match for music
+  player, party, offline or audio sharing)
 - **Contact email:** the developer account's public support address, entered in
   Play Console (it is not kept in this repository)
-- **Website:** https://github.com/bimsina/localjam
+- **Website:** https://localjam.bimsina.dev
 
 ## Graphics checklist
 

@@ -5,7 +5,8 @@
 <h1 align="center">LocalJam</h1>
 
 <p align="center">
-  Listen together, in sync, over local Wi-Fi. No internet, no accounts.
+  Listen together, in sync, over local Wi-Fi. No internet, no accounts.<br>
+  <a href="https://localjam.bimsina.dev">localjam.bimsina.dev</a>
 </p>
 
 <p align="center">

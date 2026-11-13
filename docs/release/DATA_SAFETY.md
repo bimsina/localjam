@@ -43,7 +43,7 @@ encrypted in transit: yes, required: yes (no in-app opt-out). Update
 | Privacy policy | URL of `PRIVACY.md` (see `ANDROID_RELEASE.md`, "Privacy policy URL") |
 | Ads | No, the app contains no ads |
 | App access | All functionality is available without special access. No login. Note for reviewers: "LocalJam needs two devices on the same Wi-Fi network for the core feature. One device can host a jam alone: tap Host, add a song from the device, press play." |
-| Content rating (IARC questionnaire) | Category: Music / audio player utility. No violence, sexual content, profanity, drugs, gambling. **User-generated content / users can interact: yes**, because users share music and see each other's chosen names, but only with people on the same local network; no chat, no public sharing, no online interaction. Expect a low (Everyone / PEGI 3) rating. |
+| Content rating (IARC questionnaire) | Category: All Other App Types. No violence, sexual content, profanity, drugs, gambling. **User-generated content / users can interact: yes**, because users share music and see each other's chosen names, but only with people on the same local network; no chat, no public sharing, no online interaction. "Shared user content is the main source of content": yes; block and report: no; can be limited to invited friends: yes ("Show to people nearby" off). Rated ESRB Teen, PEGI Parental Guidance, 12+ elsewhere (saved 2026-11-13). |
 | Target audience | 13+ (not designed for children; avoids the Families policy requirements) |
 | News app | No |
 | COVID-19 contact tracing / status | No |
