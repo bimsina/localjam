@@ -38,7 +38,7 @@ flutter:
   plugin:
     platforms:
       android:
-        package: np.com.bibektimsina.localjam_audio
+        package: dev.bimsina.localjam_audio
         pluginClass: LocaljamAudioPlugin
       ios:
         pluginClass: LocaljamAudioPlugin

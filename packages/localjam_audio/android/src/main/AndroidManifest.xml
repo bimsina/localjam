@@ -1,5 +1,5 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-  package="np.com.bibektimsina.localjam_audio">
+  package="dev.bimsina.localjam_audio">
   <!-- Session keep-alive (JamSessionService): foreground service holding
        wake/Wi-Fi locks + the media notification while a jam is active.
        Merged into every embedding app's manifest. -->

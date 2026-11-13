@@ -1,4 +1,4 @@
-group = "np.com.bibektimsina.localjam_audio"
+group = "dev.bimsina.localjam_audio"
 version = "1.0-SNAPSHOT"
 
 buildscript {
@@ -30,7 +30,7 @@ plugins {
 // with `android.newDsl=false` (Flutter's template; LocalJam's apps set it to
 // true); configuring the new DSL interface directly works under both.
 extensions.configure<com.android.build.api.dsl.LibraryExtension> {
-    namespace = "np.com.bibektimsina.localjam_audio"
+    namespace = "dev.bimsina.localjam_audio"
 
     compileSdk = 36
 

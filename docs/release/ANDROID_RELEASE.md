@@ -5,7 +5,7 @@ from `apps/localjam_app/` unless it says otherwise.
 
 | | |
 | --- | --- |
-| Application id | `np.com.bibektimsina.localjam` (cannot change after the first upload) |
+| Application id | `dev.bimsina.localjam` (cannot change after the first upload) |
 | minSdk | 24 (Android 7.0), Flutter's floor |
 | targetSdk | 36, pinned in `android/app/build.gradle.kts` (Play requires 36 from 2026-08-31) |
 | compileSdk | 37 (`permission_handler` 13 needs it for `ACCESS_LOCAL_NETWORK`) |

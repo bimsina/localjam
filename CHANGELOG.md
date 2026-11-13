@@ -5,6 +5,9 @@ a release heading carries the day it shipped.
 
 ## Unreleased
 
+- The application id, namespace and Apple bundle identifier are
+  `dev.bimsina.localjam` on every platform, and the audio plugin's package is
+  `dev.bimsina.localjam_audio`. Nothing was published under the earlier id.
 - Back no longer ends a live jam on Android: with nothing left to pop, back
   while hosting or in a jam sends LocalJam to the background (as Home does)
   instead of closing it and taking the server and the audio with it. Works
@@ -309,7 +312,7 @@ come.
   `outputLatencyUs` is 0 (its schedules already target presented frames), so a
   device that reports a latency no longer plays that much early; drift checks
   compare the position at the instant it was sampled; Kotlin unit tests in CI.
-- Application id and namespace are now `np.com.bibektimsina.localjam`.
+- Application id and namespace are now `dev.bimsina.localjam`.
 - `allowBackup="false"` with matching data-extraction and backup rules: the
   media cache, artwork, jam history and device identity never leave the
   install.

@@ -8,7 +8,7 @@
 PRODUCT_NAME = localjam_audio_example
 
 // The application's bundle identifier
-PRODUCT_BUNDLE_IDENTIFIER = np.com.bibektimsina.localjamAudioExample
+PRODUCT_BUNDLE_IDENTIFIER = dev.bimsina.localjamAudioExample
 
 // The copyright displayed in application information
-PRODUCT_COPYRIGHT = Copyright © 2026 np.com.bibektimsina. All rights reserved.
+PRODUCT_COPYRIGHT = Copyright © 2026 dev.bimsina. All rights reserved.

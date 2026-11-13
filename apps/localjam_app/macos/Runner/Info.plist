@@ -24,7 +24,7 @@
 			<key>CFBundleTypeRole</key>
 			<string>Viewer</string>
 			<key>CFBundleURLName</key>
-			<string>np.com.bibektimsina.localjam</string>
+			<string>dev.bimsina.localjam</string>
 			<key>CFBundleURLSchemes</key>
 			<array>
 				<string>localjam</string>

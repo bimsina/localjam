@@ -14,7 +14,7 @@ drift correction, the OS media session, room discovery, jam history — lives in
 `packages/localjam_client` and is re-exported through one `JamHostEngine` /
 `JamGuestEngine` pair. See the repo root `README.md` and `PROTOCOL.md`.
 
-Application id on every platform: **`np.com.bibektimsina.localjam`**.
+Application id on every platform: **`dev.bimsina.localjam`**.
 
 ## Running it
 

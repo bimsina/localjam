@@ -15,8 +15,8 @@
 # JamSessionService is named in the merged manifest, and the plugin class is
 # instantiated reflectively by GeneratedPluginRegistrant. JamSession/
 # JamMediaLibrary hold the AudioTrack + MediaStore paths reached from JNI.
--keep class np.com.bibektimsina.localjam_audio.** { *; }
--keep class np.com.bibektimsina.localjam.MainActivity { *; }
+-keep class dev.bimsina.localjam_audio.** { *; }
+-keep class dev.bimsina.localjam.MainActivity { *; }
 
 # Android media-session callbacks are invoked reflectively by the framework.
 -keep class android.support.v4.media.** { *; }

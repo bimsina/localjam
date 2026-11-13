@@ -66,7 +66,7 @@ The wire protocol is specified in [`PROTOCOL.md`](PROTOCOL.md).
 
 | Platform | Get it | Notes |
 | --- | --- | --- |
-| **Android** | [![Google Play: coming soon](https://img.shields.io/badge/Google_Play-coming_soon-lightgrey?logo=googleplay)](https://play.google.com/store/apps/details?id=np.com.bibektimsina.localjam) <br> [APK on GitHub Releases](https://github.com/bimsina/localjam/releases/latest) | The main release. |
+| **Android** | [![Google Play: coming soon](https://img.shields.io/badge/Google_Play-coming_soon-lightgrey?logo=googleplay)](https://play.google.com/store/apps/details?id=dev.bimsina.localjam) <br> [APK on GitHub Releases](https://github.com/bimsina/localjam/releases/latest) | The main release. |
 | **macOS** | [GitHub Releases](https://github.com/bimsina/localjam/releases/latest) (`.zip`) | Preview. Not notarized: the first time, right-click the app and choose **Open**. |
 | **Linux** (x64) | [GitHub Releases](https://github.com/bimsina/localjam/releases/latest) (`.tar.gz`) | Experimental. Builds; audio not yet tried on real hardware. Needs GTK 3. |
 | **Windows** (x64) | [GitHub Releases](https://github.com/bimsina/localjam/releases/latest) (`.zip`) | Experimental. Built by the release workflow; nobody has run it yet. |

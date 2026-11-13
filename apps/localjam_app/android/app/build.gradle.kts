@@ -29,7 +29,7 @@ val allowDebugSigning =
         (findProperty("localjam.allowDebugSigning") as String?)?.toBoolean() == true
 
 android {
-    namespace = "np.com.bibektimsina.localjam"
+    namespace = "dev.bimsina.localjam"
     // permission_handler 13 (ACCESS_LOCAL_NETWORK support) needs API 37.
     compileSdk = maxOf(flutter.compileSdkVersion, 37)
     ndkVersion = flutter.ndkVersion
@@ -40,7 +40,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "np.com.bibektimsina.localjam"
+        applicationId = "dev.bimsina.localjam"
         // Android 7.0, Flutter's own floor: the MediaStore library, the
         // foreground service and AudioTrack timestamps all work from here.
         minSdk = flutter.minSdkVersion
