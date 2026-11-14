@@ -5,7 +5,8 @@ Android captures in `docs/screenshots/android/` (1080 × 2160, captured on the
 Pixel_10_Pro_XL emulator at an emulated 1080 × 2160 / 420 dpi display, demo-mode
 status bar). Re-run the script after replacing any raw capture. Every file is
 PNG without an alpha channel. See `docs/release/PLAY_LISTING.md` for the
-listing copy.
+listing copy. The live listing is
+<https://play.google.com/store/apps/details?id=dev.bimsina.localjam>.
 
 | File | Size | Shows | Caption |
 | --- | --- | --- | --- |

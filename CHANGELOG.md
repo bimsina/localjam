@@ -49,6 +49,8 @@ from source). Everything below, down to the end of this file, is in it.
 - A shared queue with "added by", room presets (Open, Jam, Listen-only),
   co-hosts and per-person permissions, background playback with a media
   card, jam history, and a browser listener page for guests without the app.
+- On Google Play as **LocalJam: Listen Together** (`dev.bimsina.localjam`):
+  <https://play.google.com/store/apps/details?id=dev.bimsina.localjam>.
 
 ### Release readiness (Android, open source)
 

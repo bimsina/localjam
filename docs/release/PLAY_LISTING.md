@@ -1,6 +1,8 @@
-# Play Store listing (draft)
+# Play Store listing
 
-Draft copy for the Google Play listing of LocalJam 1.0.0. Limits are Play's:
+The copy of LocalJam's Google Play listing,
+<https://play.google.com/store/apps/details?id=dev.bimsina.localjam>. It was entered for 1.0.0; when
+the listing changes in Play Console, change it here too. Limits are Play's:
 title 30 characters, short description 80, full description 4000.
 
 Keep it honest: every claim here should be true of the build being uploaded.

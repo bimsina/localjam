@@ -6,6 +6,7 @@ from `apps/localjam_app/` unless it says otherwise.
 | | |
 | --- | --- |
 | Application id | `dev.bimsina.localjam` (cannot change after the first upload) |
+| Play listing | <https://play.google.com/store/apps/details?id=dev.bimsina.localjam> (**LocalJam: Listen Together**) |
 | minSdk | 24 (Android 7.0), Flutter's floor |
 | targetSdk | 36, pinned in `android/app/build.gradle.kts` (Play requires 36 from 2026-08-31) |
 | compileSdk | 37 (`permission_handler` 13 needs it for `ACCESS_LOCAL_NETWORK`) |
@@ -16,7 +17,27 @@ from `apps/localjam_app/` unless it says otherwise.
 
 ### Play Console
 
-1. Create the app in Play Console: name **LocalJam**, app (not game), free.
+**Status.** Done for 1.0.0: the app is created under `dev.bimsina.localjam`
+with Play App Signing on, the listing is filled in, the foreground-service
+declaration has been submitted with a demo video, and a build is live on the
+internal testing track. Production is the next step. The certificate
+fingerprints (public, safe to share; Play Console → Test and release → App
+integrity → App signing):
+
+| Certificate | SHA-256 |
+| --- | --- |
+| Upload key (signs what is uploaded, and the GitHub APK) | `0D:E0:6E:D2:97:E2:84:5D:9E:62:00:7E:F4:D4:5C:5C:41:55:7A:53:3A:8F:DC:84:13:B3:39:95:BA:86:71:5E` |
+| App-signing key (held by Google, signs what Play users install) | `02:D7:0C:23:31:60:CE:CB:10:CD:F6:CC:34:2C:BB:8E:A0:E7:C9:FD:D6:DF:45:22:5E:16:1F:01:A7:25:37:EF` |
+
+The two differ, which is why a GitHub APK and a Play install cannot update
+each other. A universal APK signed with the Play app-signing key (one that
+*can* update a Play install) can be downloaded per release from Play Console →
+App bundle explorer → the release → Downloads → Signed, universal APK.
+
+The original steps, for reference:
+
+1. Create the app in Play Console: name **LocalJam: Listen Together**, app (not
+   game), free.
 2. Turn on **Play App Signing** (the default for new apps). Google keeps the
    key that signs what users install; you keep an **upload key** that only
    proves an upload came from you. If the upload key is ever lost or leaked,
@@ -172,7 +193,8 @@ Answer:
   with play/pause and stops when the user ends or leaves the jam."
 - **User-initiated, user-visible, stoppable:** yes. It starts when the user
   hosts or joins a jam and stops when they end or leave it.
-- **Video:** Play may ask for a short screen recording: start a jam, play a
+- **Video:** submitted with the 1.0.0 declaration. If Play asks again, a
+  short screen recording: start a jam, play a
   song, background the app, show the notification, pause from it, end the jam.
 
 ### Cleartext traffic

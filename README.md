@@ -6,7 +6,7 @@
 
 <p align="center">
   Listen together, in sync, over local Wi-Fi. No internet, no accounts.<br>
-  <a href="https://localjam.bimsina.dev">localjam.bimsina.dev</a>
+  <a href="https://localjam.bimsina.dev">localjam.bimsina.dev</a> · <a href="https://play.google.com/store/apps/details?id=dev.bimsina.localjam">Get it on Google Play</a>
 </p>
 
 <p align="center">
@@ -41,7 +41,9 @@ the songs. Everyone else joins from **Nearby**, a **QR code** or a **link**.
 A friend without the app scans the QR and listens in the browser.
 
 It is open source, Android first, and honest about what it has and has not
-been tested on. Version **1.0.0** is not released yet; see
+been tested on. The Android app is on
+[Google Play](https://play.google.com/store/apps/details?id=dev.bimsina.localjam) as **LocalJam: Listen
+Together**, and as an APK on GitHub Releases; see [Download](#download) and
 [Platforms](#platforms).
 
 ## How it works
@@ -67,7 +69,7 @@ The wire protocol is specified in [`PROTOCOL.md`](PROTOCOL.md).
 
 | Platform | Get it | Notes |
 | --- | --- | --- |
-| **Android** | [![Google Play: coming soon](https://img.shields.io/badge/Google_Play-coming_soon-lightgrey?logo=googleplay)](https://play.google.com/store/apps/details?id=dev.bimsina.localjam) <br> [APK on GitHub Releases](https://github.com/bimsina/localjam/releases/latest) | The main release. |
+| **Android** | [![Get it on Google Play](https://img.shields.io/badge/Google_Play-Get_it-414141?logo=googleplay)](https://play.google.com/store/apps/details?id=dev.bimsina.localjam) <br> [APK on GitHub Releases](https://github.com/bimsina/localjam/releases/latest) | The main release. |
 | **macOS** | [GitHub Releases](https://github.com/bimsina/localjam/releases/latest) (`.zip`) | Preview. Not notarized: the first time, right-click the app and choose **Open**. |
 | **Linux** (x64) | [GitHub Releases](https://github.com/bimsina/localjam/releases/latest) (`.tar.gz`) | Experimental. Builds; audio not yet tried on real hardware. Needs GTK 3. |
 | **Windows** (x64) | [GitHub Releases](https://github.com/bimsina/localjam/releases/latest) (`.zip`) | Experimental. Built by the release workflow; nobody has run it yet. |
@@ -76,6 +78,8 @@ The wire protocol is specified in [`PROTOCOL.md`](PROTOCOL.md).
 
 - **The GitHub APK and the Google Play build are signed with different keys**
   and cannot update each other. Uninstall one before installing the other.
+- If the Play listing does not open for you (it is not available in every
+  country or to every account), the GitHub APK is the same app.
 - **Windows and Linux play mp3, flac, wav and ogg only.** m4a/AAC is not
   supported there yet. Android, iOS and macOS play whatever the OS decodes.
 - A desktop build that fails is left out of a release rather than holding
@@ -107,7 +111,7 @@ The wire protocol is specified in [`PROTOCOL.md`](PROTOCOL.md).
 
 | Platform | Status |
 | --- | --- |
-| **Android** | 1.0.0 target. Verified on an API 36 emulator: host and guest, the phone's music library, the media notification, background playback, process-death recovery. Physical-phone verification is in progress. |
+| **Android** | 1.0.0, on [Google Play](https://play.google.com/store/apps/details?id=dev.bimsina.localjam) and GitHub Releases. Verified on an API 36 emulator: host and guest, the phone's music library, the media notification, background playback, process-death recovery. Physical-phone verification is in progress. |
 | **iOS** | Runs from source. Verified on simulators: host and guest, Nearby join, background audio, media controls. |
 | **macOS** | Runs from source. Joined a live jam at −0.4 ms measured drift. |
 | **Browser** (guest only) | Built and checked in headless Chrome. Not yet tried on real phones. Safari cannot play Ogg Vorbis/Opus. |

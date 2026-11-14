@@ -14,7 +14,9 @@ drift correction, the OS media session, room discovery, jam history — lives in
 `packages/localjam_client` and is re-exported through one `JamHostEngine` /
 `JamGuestEngine` pair. See the repo root `README.md` and `PROTOCOL.md`.
 
-Application id on every platform: **`dev.bimsina.localjam`**.
+Application id on every platform: **`dev.bimsina.localjam`**. On Google Play
+as **LocalJam: Listen Together**:
+<https://play.google.com/store/apps/details?id=dev.bimsina.localjam>.
 
 ## Running it
 
