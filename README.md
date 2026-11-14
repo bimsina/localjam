@@ -71,8 +71,8 @@ The wire protocol is specified in [`PROTOCOL.md`](PROTOCOL.md).
 | --- | --- | --- |
 | **Android** | [![Get it on Google Play](https://img.shields.io/badge/Google_Play-Get_it-414141?logo=googleplay)](https://play.google.com/store/apps/details?id=dev.bimsina.localjam) <br> [APK on GitHub Releases](https://github.com/bimsina/localjam/releases/latest) | The main release. |
 | **macOS** | [GitHub Releases](https://github.com/bimsina/localjam/releases/latest) (`.zip`) | Preview. Not notarized: the first time, right-click the app and choose **Open**. |
-| **Linux** (x64) | [GitHub Releases](https://github.com/bimsina/localjam/releases/latest) (`.tar.gz`) | Experimental. Builds; audio not yet tried on real hardware. Needs GTK 3. |
-| **Windows** (x64) | [GitHub Releases](https://github.com/bimsina/localjam/releases/latest) (`.zip`) | Experimental. Built by the release workflow; nobody has run it yet. |
+| **Linux** (x64) | [Build from source](#building-from-source) | Experimental. Builds; audio not yet tried on real hardware. Needs GTK 3. Not in current releases. |
+| **Windows** (x64) | [Build from source](#building-from-source) | Experimental. Nobody has built or run it yet. Not in current releases. |
 | **iOS** | [Build from source](#building-from-source) | Needs your own Apple developer team. Verified on simulators. Not on the App Store yet. |
 | **Any browser** | Scan the host's QR code | Listen only. No install. |
 
@@ -248,13 +248,17 @@ README: [core](packages/localjam_core/README.md),
 
 ## Releasing
 
-Push a tag `vX.Y.Z` that matches `version:` in
-`apps/localjam_app/pubspec.yaml`.
-[`.github/workflows/release.yml`](.github/workflows/release.yml) then builds
-the signed Android APK and App Bundle plus macOS, Linux and Windows, and
-attaches them to a **draft** GitHub release, which is published by hand. A
-desktop build that fails is left out rather than blocking Android. Signing,
-Play upload and the store checklist are in
+Releases are built on the maintainer's machine for now: GitHub Actions is
+switched off for this repository. Bump `version:` in
+`apps/localjam_app/pubspec.yaml`, commit, push, then run
+[`tool/release.sh`](tool/release.sh). It builds the signed Android APK and
+App Bundle and the macOS app, checks the APK against the upload certificate,
+tags `vX.Y.Z` and attaches the files to a **draft** GitHub release
+(`--publish` publishes it straight away, `--dry-run` only builds). Linux and
+Windows are not built that way and are missing from current releases.
+[`.github/workflows/release.yml`](.github/workflows/release.yml) does the
+same on all four platforms from a pushed tag, and is kept for when Actions is
+back on. Signing, Play upload and the store checklist are in
 [`docs/release/ANDROID_RELEASE.md`](docs/release/ANDROID_RELEASE.md).
 
 ## Contributing

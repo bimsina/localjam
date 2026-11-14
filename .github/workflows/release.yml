@@ -1,5 +1,8 @@
 name: Release
 
+# DISABLED in the repository settings for now (`gh workflow enable release.yml`
+# turns it back on); releases are made with tool/release.sh meanwhile.
+#
 # Push a tag `vX.Y.Z` that matches `version:` in apps/localjam_app/pubspec.yaml
 # and this builds Android, macOS, Linux and Windows and attaches them to a
 # DRAFT GitHub release: nothing is public until the draft is published by hand.

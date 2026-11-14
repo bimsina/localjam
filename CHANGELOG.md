@@ -5,6 +5,9 @@ a release heading carries the day it shipped.
 
 ## Unreleased
 
+- Releases are built locally with `tool/release.sh` (signed Android APK and
+  App Bundle, macOS zip, draft GitHub release) while GitHub Actions is off
+  for the repository; the release workflow is kept but disabled.
 - The application id, namespace and Apple bundle identifier are
   `dev.bimsina.localjam` on every platform, and the audio plugin's package is
   `dev.bimsina.localjam_audio`. Nothing was published under the earlier id.
