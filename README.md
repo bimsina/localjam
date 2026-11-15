@@ -36,6 +36,18 @@ Friends join from **Nearby**, a **QR code** or a **link**. Someone without
 the app scans the QR code and listens in their browser. Nothing leaves the
 room.
 
+## Why
+
+LocalJam started on a trip to Pokhara. A group of us wanted the same music
+in everyone's earphones, and there was no way to do it. iPhones can share
+audio, but only with AirPods or Beats, and only two pairs. Samsung's Dual
+Audio stops at two Bluetooth devices. Nothing works across every phone and
+every pair of headphones.
+
+LocalJam does not send audio over Bluetooth at all. Each person listens on
+their own device, with whatever headphones they already have, and the
+devices keep each other in time.
+
 ## Features
 
 - **Join in seconds.** Nearby, QR code or link. Every device gets a friendly
